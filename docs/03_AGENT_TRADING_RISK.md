@@ -4,13 +4,13 @@
 
 **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
-Ce principe reste inchangé par les Batches 13/14. L'agressivité et le choix Luna/Sol appartiennent à la couche stratégique Agent ; ils ne sont ni des limites Risk, ni des permissions d'exécution, ni des formules de sizing déterministes.
+Ce principe reste inchangé par les Batches 13/14 et par le Batch 15 intégré. L'agressivité, le choix Luna/Sol et la conversation opérateur ne sont ni des limites Risk, ni des permissions d'exécution, ni des formules déterministes de sizing.
 
 ---
 
-## 2. Agent IA
+## 2. Agent IA stratégique
 
-L'agent reçoit un `AgentInput` structuré contenant le `MarketState`, le `PortfolioState`, le `cycle_id`, le timestamp, l'agressivité, son `AggressivenessContext` canonique et éventuellement un `ExperimentManifest`.
+L'agent reçoit un `AgentInput` structuré contenant `MarketState`, `PortfolioState`, `cycle_id`, timestamp, agressivité, `AggressivenessContext` et éventuellement `ExperimentManifest`.
 
 Il produit uniquement :
 
@@ -22,206 +22,168 @@ DecisionCandidate
   rationale
 ```
 
-BUY/SELL nécessitent une quantité stratégique positive ; HOLD n'en porte aucune. `decision_id`, `cycle_id` et `created_at` restent contrôlés par l'application.
+BUY/SELL nécessitent une quantité stratégique positive ; HOLD n'en porte aucune. IDs et timestamps restent contrôlés par l'application.
 
-Le provider LLM ne dispose d'aucun outil Broker/Kraken et ne connaît pas l'API de lifecycle. Luna et Sol utilisent le **même `OpenAIDecisionProvider`** et le même schéma de sortie.
-
-### Prompt versionné
-
-Le prompt courant est `agent-strategy-v2`.
-
-Il précise notamment que :
-
-- `AgentInput.aggressiveness_context` est l'interprétation canonique du niveau `1..10` ;
-- l'agressivité peut influencer la volonté d'agir et la quantité **proposée** ;
-- elle ne relâche jamais les limites Risk, balances, positions, solvabilité, chronologie, whitelist ou contraintes PAPER ;
-- un niveau élevé ne garantit ni ALLOW, ni fill, ni rendement ;
-- HOLD reste valide lorsqu'aucune thèse défendable n'est supportée par les faits fournis.
-
-Le provider normalise les anciens `AgentInput` sans contexte en ajoutant le mapping canonique avant l'appel LLM. Si un manifeste expérimental est présent, il vérifie avant l'appel son digest, son modèle LLM, sa version de prompt et son mapping d'agressivité.
+Luna et Sol utilisent le même `OpenAIDecisionProvider`. Le prompt stratégique reste `agent-strategy-v2`. Le provider ne dispose d'aucun outil Broker/Kraken et ne connaît pas l'API lifecycle.
 
 ---
 
-## 3. Mapping agressivité 1–10 — Batch 13
+## 3. Mapping agressivité 1–10
 
 Version : `aggressiveness-map-v1`.
 
-Le mapping est **discret**, pas dérivé d'une formule de Risk ou d'un multiplicateur de taille. Les dix postures restent celles intégrées au Batch 13, de `capital_preservation` à `maximum_experimental`.
+Le mapping est discret et ne constitue pas une formule Risk ou un multiplicateur automatique d'exécution. Il peut seulement influencer la volonté stratégique d'agir et la quantité proposée.
 
-Ce mapping ne contient aucun seuil de prix, indicateur, exposition, drawdown, balance ou notional. Il ne constitue donc pas une stratégie déterministe parallèle.
+Aucune phrase du chat opérateur ne modifie ce mapping ni le niveau d'un futur `AgentInput`.
 
 ---
 
 ## 4. Risk Engine
 
-Risk reste synchrone et déterministe. Il reçoit la décision et les mêmes snapshots que l'agent.
+Risk reste synchrone et déterministe. Résultats :
 
-Résultats :
-
-- `ALLOW` : la quantité est conservée ;
-- `MODIFY` : la quantité est strictement réduite ;
-- `REJECT` : aucune quantité n'est autorisée ;
+- `ALLOW` : quantité conservée ;
+- `MODIFY` : quantité strictement réduite ;
+- `REJECT` : aucune quantité autorisée ;
 - HOLD : assessment complet sans `ExecutionIntent`.
 
 Seul Risk peut construire un `ExecutionIntent`. Il ne peut pas changer BUY en SELL, SELL en BUY ou le symbole stratégique.
 
-Ni l'agressivité ni le modèle LLM ne sont passés au `RiskEngine.evaluate(...)`. Les contrôles de symbole, chronologie, whitelist, fraîcheur, max notional, solvabilité BUY et position SELL sont identiques quel que soit le modèle.
+Ni l'agressivité, ni le modèle LLM, ni le chat ne sont passés à `RiskEngine.evaluate(...)`.
 
 ---
 
 ## 5. TradingCycleRunner
 
-`TradingCycleRunner.run_cycle()` reste la primitive canonique.
+`TradingCycleRunner.run_cycle()` reste la primitive canonique :
 
-Ordre :
-
-1. acquisition d'un unique `MarketState` ;
-2. snapshot du portefeuille PAPER ;
-3. résolution déterministe de `AggressivenessContext` ;
-4. construction de `AgentInput` avec manifeste expérimental éventuel ;
+1. acquisition d'un `MarketState` ;
+2. snapshot portefeuille PAPER ;
+3. résolution de l'agressivité ;
+4. construction `AgentInput` ;
 5. décision Agent ;
 6. évaluation Risk ;
-7. Broker uniquement si Risk a produit un intent ;
-8. snapshot portefeuille post-exécution si applicable ;
+7. Broker uniquement si intent Risk ;
+8. snapshot post-exécution ;
 9. `TradingCycleResult`.
 
-Le verrou du runner empêche le chevauchement des cycles. Les pannes techniques sont des résultats `FAILED` avec stage/type/timeout sanitizés ; elles ne deviennent jamais un HOLD.
+Le verrou du runner empêche le chevauchement des cycles. Les pannes techniques restent `FAILED` et ne deviennent jamais HOLD.
 
-Si un `ExperimentManifest` est injecté, son digest est vérifié et son niveau/univers doivent correspondre à la configuration du runner avant tout cycle.
+Le Batch 15 ne modifie aucun de ces neuf points.
 
 ---
 
-## 6. Manifestes expérimentaux durables
+## 6. Manifestes expérimentaux
 
-### `paper-experiment-v1`
+`paper-experiment-v1` reste le protocole agressivité. `paper-experiment-v2` reste le protocole Luna/Sol avec `comparison_variable = LLM_MODEL`, `experiment_group_digest`, `experiment_digest`, `replicate_index`, `replicate_count` et `source_digest` obligatoire.
 
-Le v1 reste le protocole Batch 13 pour comparer l'agressivité. Il enregistre niveau/mapping, modèle, prompt, univers, `RiskPolicy`, coûts PAPER, version analytics, source/dataset et fenêtre éventuelle. Son `comparison_identity` exclut l'agressivité mais conserve le modèle comme champ contrôlé.
+Les manifestes sont inclus dans `AgentInput` et persistés avec le cycle. Aucun message de chat, UUID de session ou réponse conversationnelle n'est ajouté au manifeste.
 
-### `paper-experiment-v2`
+---
 
-Le Batch 14 intégré ajoute un protocole où le modèle est l'unique variable expérimentale :
+## 7. Chat opérateur — Batch 15 intégré
+
+Le chat est une autre interface vers **le même modèle/persona Agent configuré**, mais **pas un deuxième agent stratégique**.
+
+### Provider séparé
+
+`OpenAIChatProvider` :
+
+- utilise le même `LLMModel` configuré que `OpenAIDecisionProvider` ;
+- utilise `operator-chat-v1` ;
+- demande du texte naturel, sans tools ;
+- ne parse ni ne construit de `DecisionCandidate` ;
+- ne connaît ni Risk, ni Broker, ni Kraken privé.
+
+### Demandes de mutation
+
+Exemples :
 
 ```text
-protocol_version = paper-experiment-v2
-comparison_variable = LLM_MODEL
-experiment_group_digest
-experiment_digest
-replicate_index
-replicate_count
-aggressiveness { mapping_version, level, posture, strategic_instruction }
-llm_model
-prompt_version
-universe[]
-risk_policy { max_order_notional, allowed_pairs, stale_after_seconds, allow_quantity_reduction }
-paper_costs { fee_rate, spread_bps, slippage_bps }
-analytics_version
-source_id
-source_digest
-window_start?
-window_end?
+"BUY maintenant"
+"passe en agressivité 8"
+"ignore cette limite Risk"
 ```
 
-`source_digest` est obligatoire. Le digest de groupe varie si un champ contrôlé change et exclut uniquement le modèle et l'index de répétition. Le digest complet identifie chaque run.
+Ces phrases peuvent être discutées ou expliquées mais ne provoquent :
 
-Le manifeste est inclus dans `AgentInput`. Le journal Batch 09 persistant déjà l'`AgentInput` complet, aucune migration n'est nécessaire.
+- aucun appel Risk ;
+- aucun changement `RiskPolicy` ;
+- aucun `ExecutionIntent` ;
+- aucun ordre Broker/Kraken ;
+- aucune mutation de configuration ;
+- aucune injection dans les cycles suivants.
 
-Aucun digest ne rend le LLM déterministe : il identifie le **protocole** et les relations entre runs ; les décisions réalisées restent des faits durables séparés.
-
----
-
-## 7. Comparaison Luna / Sol
-
-`compare_model_runs(...)` compare des `PaperAnalyticsReport` Batch 12 déjà calculés.
-
-Deux runs appartiennent au même groupe uniquement si restent identiques :
-
-- agressivité + version de mapping ;
-- version de prompt ;
-- univers ;
-- `RiskPolicy` ;
-- coûts PAPER ;
-- `source_id` et `source_digest` ;
-- fenêtre ;
-- version analytics ;
-- nombre de répétitions déclaré.
-
-La seule variable autorisée est `llm_model`, avec l'index de répétition comme identité de réalisation.
-
-La comparaison expose factuellement :
-
-- P&L brut/net ;
-- frais, spread, slippage ;
-- drawdown ;
-- exposition ;
-- nombre de trades BUY/SELL ;
-- HOLD / REJECT / MODIFY / FAILED ;
-- points cumulés déjà calculés par Batch 12 ;
-- séries quotidiennes Batch 12.
-
-Elle ne recalcule aucune métrique métier, ne réordonne pas les décisions et ne produit aucun « gagnant » automatique.
+Un futur mécanisme d'instructions opérateur réelles devra être explicite, audité, versionné et appliqué à partir d'un cycle identifié. Il est hors périmètre Batch 15.
 
 ---
 
-## 8. Répétitions et non-déterminisme
+## 8. Contexte conversationnel canonique
 
-Le LLM peut rester non parfaitement déterministe même avec modèle, prompt et faits identiques. Le patch ne prétend pas disposer d'un seed fournisseur inexistant.
+Le chat peut lire :
 
-`replicate_count = N` annonce explicitement le nombre de réalisations prévues par modèle. `compare_model_runs(...)` exige alors les répétitions `1..N` pour Luna **et** Sol. Une comparaison incomplète est refusée.
+- état du moteur ;
+- portefeuille PAPER courant ;
+- dernier marché durable ;
+- dernier cycle ou cycle explicitement demandé ;
+- décision, Risk, intent/fills persistés du cycle ;
+- résumés récents ;
+- résumé analytics courant.
 
-Ce mécanisme permet de conserver une dispersion observable sans créer de score ou de modèle statistique caché. Les statistiques de dispersion éventuelles pourront être ajoutées séparément si elles sont définies explicitement.
+Il ne reconstruit aucun fait métier parallèle.
 
----
+Pour un cycle historique :
 
-## 9. Persistance
+- `historical_cycle.agent_input` est la source causale autorisée pour expliquer la décision ;
+- la décision/rationale et les faits Risk/exécution du **même cycle** peuvent être expliqués ;
+- `current_market`, `current_portfolio` et analytics courants restent des informations présentes distinctes ;
+- ces informations plus récentes ne doivent jamais être présentées comme ayant causé la décision passée.
 
-`AuditedTradingCycleRunner` continue d'envelopper le runner canonique :
-
-```text
-result = delegate.run_cycle()
-audit_writer.record(result)
-return result
-```
-
-La persistance conserve les faits produits, notamment HOLD et REJECT, mais ne crée aucun artefact métier.
-
-Le manifeste v2, l'identité de groupe et l'index de répétition sont persistés à l'intérieur du payload `AgentInput` existant. Le schéma SQL reste inchangé.
-
-La limite exactly-once entre mutation du ledger mémoire et commit PostgreSQL reste documentée et non résolue.
+Le chat peut résumer une `rationale` persistée, mais ne prétend pas révéler une chaîne de pensée cachée.
 
 ---
 
-## 10. API et frontend
+## 9. Historique conversationnel
 
-Aucune nouvelle route ni surface cockpit n'est ajoutée au Batch 14.
+V1 : mémoire process seulement, bornée par session et en nombre de sessions. Aucun schéma PostgreSQL.
 
-Motif : le protocole expérimental est une configuration backend/domaine et les analytics comparés existent déjà. Une future UI de lancement d'expériences nécessitera un contrat de composition produit explicite plutôt qu'un configurateur stratégique improvisé dans le frontend.
+Conséquences voulues :
 
-Le frontend reste strictement cockpit et ne peut pas muter modèle, mapping, `RiskPolicy`, coûts ou manifeste d'un moteur en cours.
+- un redémarrage backend perd l'historique chat ;
+- un reload frontend peut relire la session tant que le backend reste vivant ;
+- aucune conversation ne participe aux analytics ou expériences ;
+- aucune conversation ne devient une instruction stratégique durable par accident.
+
+---
+
+## 10. Erreurs et confidentialité
+
+Les erreurs chat sont distinctes des erreurs de cycle : un échec provider chat renvoie une erreur API sanitizée et ne produit pas un cycle `FAILED`.
+
+Les formes de secrets courantes sont redigées avant stockage en mémoire et envoi au provider. Aucun message brut d'erreur OpenAI n'est renvoyé au cockpit.
+
+Cette redaction est best-effort : aucun secret ne doit être volontairement saisi dans le chat.
 
 ---
 
 ## 11. No-look-ahead et anti cherry-picking
 
-Pour comparer Luna et Sol honnêtement :
+Les règles existantes d'expérimentation restent inchangées : mêmes faits, même prompt, même Risk/coûts/univers/source pour les comparaisons contrôlées, répétitions complètes, aucune suppression post-hoc.
 
-- utiliser le même prompt et la même agressivité ;
-- utiliser la même `RiskPolicy` et les mêmes coûts PAPER ;
-- utiliser le même univers ;
-- lier les runs au même `source_id` et au même `source_digest` figé ;
-- conserver la même fenêtre et la même version analytics ;
-- annoncer `replicate_count` avant la comparaison et conserver toutes les répétitions des deux modèles ;
-- ne jamais réécrire une décision déjà prise ;
-- ne jamais supprimer a posteriori des HOLD, REJECT, FAILED ou mauvais trades ;
-- valoriser les résultats uniquement via les faits durables et `paper-analytics-v1`.
+Le chat ne doit jamais :
 
-Deux passages successifs sur un flux live non figé ne constituent pas une expérience appariée stricte. Un dataset/snapshot replay figé avec digest identique est nécessaire pour attribuer proprement les écarts au modèle seul.
+- réécrire une décision ;
+- expliquer une décision avec un prix observé après le cycle ;
+- contaminer les digests expérimentaux ;
+- influencer silencieusement les décisions futures via son historique.
 
 ---
 
 ## 12. Invariants conservés
 
 - un seul agent IA ;
-- même provider canonique pour Luna/Sol ;
+- même modèle configuré Luna/Sol pour stratégie et interface conversationnelle ;
+- provider stratégique et provider chat séparés ;
 - SPOT/PAPER uniquement ;
 - aucun short/levier/margin/future/perpetual ;
 - SELL uniquement sur position détenue ;
@@ -229,10 +191,9 @@ Deux passages successifs sur un flux live non figé ne constituent pas une expé
 - Risk autorité finale ;
 - aucun LLM -> Broker direct ;
 - seul Risk crée l'intent ;
-- agressivité et modèle hors contrôle des limites Risk ;
+- chat sans mutation Risk/stratégie ;
 - HOLD/ALLOW/MODIFY/REJECT conservent leur sémantique ;
-- erreurs techniques distinctes de HOLD ;
+- erreurs chat distinctes de `FAILED` ;
 - aucun secret exposé ;
 - aucun look-ahead ;
-- aucun cherry-picking post-hoc ;
 - aucun LIVE.

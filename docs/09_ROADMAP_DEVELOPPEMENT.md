@@ -8,81 +8,61 @@ La roadmap décrit l'ordre de construction. Un batch n'est considéré **intégr
 
 ## Batch 00 — Documentation initiale
 
-**État : intégré.**
-
-Vision, invariants, architecture cible et méthode de travail.
+**État : intégré.** Vision, invariants, architecture cible et méthode de travail.
 
 ---
 
 ## Batch 01 — Bootstrap backend/frontend
 
-**État : intégré.**
-
-FastAPI/Python et Next.js initialisés en applications séparées.
+**État : intégré.** FastAPI/Python et Next.js initialisés en applications séparées.
 
 ---
 
 ## Batch 02 — Contrats domaine et configuration
 
-**État : intégré.**
-
-Pydantic strict, horloge injectable, ports, PAPER, Luna/Sol et agressivité 1–10.
+**État : intégré.** Pydantic strict, horloge injectable, ports, PAPER, Luna/Sol et agressivité 1–10.
 
 ---
 
 ## Batch 03 — Kraken Market Data
 
-**État : intégré.**
-
-APIs publiques Kraken SPOT, normalisation et aucune clé privée.
+**État : intégré.** APIs publiques Kraken SPOT, normalisation et aucune clé privée.
 
 ---
 
 ## Batch 04 — Market State
 
-**État : intégré.**
-
-Market State déterministe, multi-horizon, historique borné et sans look-ahead.
+**État : intégré.** Market State déterministe, multi-horizon, historique borné et sans look-ahead.
 
 ---
 
 ## Batch 05 — Portfolio State + Paper Broker
 
-**État : intégré.**
-
-Ledger PAPER mémoire, état initial injecté, pricing explicite, frais/spread/slippage.
+**État : intégré.** Ledger PAPER mémoire, état initial injecté, pricing explicite, frais/spread/slippage.
 
 ---
 
 ## Batch 06 — Risk Engine
 
-**État : intégré.**
-
-ALLOW/MODIFY/REJECT, HOLD audité, checks déterministes, seul Risk produit `ExecutionIntent`.
+**État : intégré.** ALLOW/MODIFY/REJECT, HOLD audité, checks déterministes, seul Risk produit `ExecutionIntent`.
 
 ---
 
 ## Batch 07 — Agent Luna
 
-**État : intégré.**
-
-Provider Luna/Sol unique, prompt versionné, Structured Outputs stricts, aucune exécution directe.
+**État : intégré.** Provider Luna/Sol unique, prompt versionné, Structured Outputs stricts, aucune exécution directe.
 
 ---
 
 ## Batch 08 — Boucle autonome PAPER
 
-**État : intégré.**
-
-`TradingCycleRunner.run_cycle()` + `TradingEngine`, cycles séquentiels, timeouts bornés et stop coopératif.
+**État : intégré.** `TradingCycleRunner.run_cycle()` + `TradingEngine`, cycles séquentiels, timeouts bornés et stop coopératif.
 
 ---
 
 ## Batch 09 — Persistance et journal d'audit
 
-**État : intégré fonctionnellement.**
-
-SQLAlchemy async + PostgreSQL + `asyncpg` + Alembic, journal durable corrélé par `cycle_id`, idempotence et transactions.
+**État : intégré fonctionnellement.** SQLAlchemy async + PostgreSQL + `asyncpg` + Alembic, journal durable corrélé par `cycle_id`, idempotence et transactions.
 
 Limite conservée : pas encore d'exactly-once global entre ledger mémoire et commit PostgreSQL.
 
@@ -90,17 +70,13 @@ Limite conservée : pas encore d'exactly-once global entre ledger mémoire et co
 
 ## Batch 10 — API FastAPI de contrôle et d'observation
 
-**État : intégré.**
-
-Façade REST d'observation/lifecycle, query service durable, start/stop uniquement sur le moteur canonique, aucune logique Agent/Risk/Broker parallèle.
+**État : intégré.** Façade REST d'observation/lifecycle, query service durable, start/stop uniquement sur le moteur canonique, aucune logique Agent/Risk/Broker parallèle.
 
 ---
 
 ## Batch 11 — Frontend cockpit
 
-**État : intégré.**
-
-Cockpit Next.js/shadcn, polling présentatif borné, vues moteur/portfolio/marché/cycles/Risk/exécutions, aucune logique stratégique frontend.
+**État : intégré.** Cockpit Next.js/shadcn, polling présentatif borné, vues moteur/portfolio/marché/cycles/Risk/exécutions, aucune logique stratégique frontend.
 
 ---
 
@@ -108,27 +84,7 @@ Cockpit Next.js/shadcn, polling présentatif borné, vues moteur/portfolio/march
 
 **État : intégré.**
 
-### Objectif
-
-Mesurer les performances PAPER honnêtement à partir des faits durables sans modifier la stratégie ni réécrire les décisions.
-
-### Périmètre intégré
-
-- P&L brut et net ;
-- frais, spread et slippage cumulés depuis les fills persistés ;
-- equity et drawdown ;
-- exposition mark-to-market ;
-- nombre de trades BUY/SELL effectivement fillés ;
-- comptages HOLD, REJECT, MODIFY et FAILED ;
-- séries temporelles par cycle ;
-- performance quotidienne UTC et cumulée ;
-- endpoint `GET /api/v1/analytics` ;
-- panneau analytics dans le cockpit ;
-- version de calcul et digest SHA-256 des faits sources.
-
-### Limite de reproductibilité
-
-Le Batch 12 reproduit **les métriques** à partir des faits immuables. Il ne prétend pas rejouer une décision LLM sous protocole complet.
+P&L brut/net, coûts, equity/drawdown, exposition, trades, compteurs HOLD/REJECT/MODIFY/FAILED, séries par cycle/daily UTC, endpoint analytics, panneau cockpit et digest/version reproductibles.
 
 ---
 
@@ -136,85 +92,99 @@ Le Batch 12 reproduit **les métriques** à partir des faits immuables. Il ne pr
 
 **État : intégré** au commit fonctionnel `1747beb5efd1fe9763bc9b2d23f3a115575daaec`.
 
-### Objectif
+- `aggressiveness-map-v1` discret ;
+- `AggressivenessContext` dans `AgentInput` ;
+- prompt `agent-strategy-v2` ;
+- `paper-experiment-v1` + digest ;
+- identité du protocole : niveau/mapping, modèle, prompt, univers, Risk, coûts, source et analytics ;
+- aucune migration ;
+- comparaison factuelle de rapports Batch 12 ;
+- aucun changement API/frontend.
 
-Figer un protocole expérimental explicite, versionné, reproductible et mesurable pour l'agressivité `1..10`, sans déplacer l'autorité stratégique vers un bot déterministe et sans contourner Risk.
-
-### Périmètre intégré
-
-- mapping **discret** `aggressiveness-map-v1` ;
-- dix postures stratégiques explicites, sans seuil Risk ni multiplicateur d'exécution ;
-- `AggressivenessContext` persisté dans `AgentInput` ;
-- prompt Agent `agent-strategy-v2` ;
-- manifeste `paper-experiment-v1` avec digest SHA-256 ;
-- identité enregistrée : niveau/mapping, modèle, prompt, univers, `RiskPolicy`, coûts PAPER, source/dataset, fenêtre éventuelle et version analytics ;
-- aucune nouvelle table ni migration : le journal Batch 09 persiste déjà `AgentInput` en JSON/JSONB ;
-- comparaison factuelle de plusieurs niveaux à partir des `PaperAnalyticsReport` Batch 12 existants ;
-- comparaison refusée si un champ contrôlé hors agressivité diffère ;
-- aucune API ni modification frontend dans ce batch.
-
-### Reproductibilité
-
-Le digest du manifeste identifie le protocole/configuration. Il ne garantit pas une sortie LLM bit-à-bit identique. Pour isoler strictement l'agressivité, les runs doivent partager les mêmes faits sources ; un dataset figé avec `source_digest` identique est préférable à deux passages live successifs.
-
-### Validation d'intégration
-
-- Python local : **3.13.14** ;
-- `pytest backend` : **249 tests passés**, 2 warnings externes ;
-- Ruff : **All checks passed** ;
-- mypy : **81 fichiers sans erreur** ;
-- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- commit/push confirmé : `1747beb5efd1fe9763bc9b2d23f3a115575daaec` ;
-- working tree propre après push.
+Validation : **249 tests backend**, Ruff OK, mypy 81 fichiers, `git diff --check` OK, commit/push confirmé.
 
 ---
 
 ## Batch 14 — Comparaison Luna / Sol
 
-**État : intégré** au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`.
+**État : intégré** au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`, suivi du commit documentaire `b2c74672744639f86c38e873f25d56c77f899c76`.
 
-### Objectif
-
-Comparer GPT-5.6 Luna et GPT-5.6 Sol avec **le modèle comme unique variable contrôlée**, en réutilisant le provider Agent canonique, le Risk Engine existant, les analytics PAPER Batch 12 et la persistance/manifeste Batch 13.
-
-### Périmètre intégré
-
-- maintien de `paper-experiment-v1` pour les comparaisons d'agressivité existantes ;
+- maintien de `paper-experiment-v1` pour l'agressivité ;
 - `paper-experiment-v2` avec `comparison_variable = LLM_MODEL` ;
-- `experiment_group_digest` pour les champs contrôlés communs et `experiment_digest` comme identité complète du run ;
-- `replicate_index` / `replicate_count` pour plusieurs réalisations par modèle ;
-- `source_digest` obligatoire pour une identité de dataset figée ;
-- refus de comparaison si agressivité, prompt, RiskPolicy, coûts PAPER, dataset/source, univers, fenêtre, version analytics ou nombre de répétitions diffèrent ;
-- exigence de toutes les répétitions `1..N` pour Luna et Sol ;
-- comparaison factuelle basée uniquement sur les `PaperAnalyticsReport` Batch 12 ;
-- aucun score composite, ranking ou sélection automatique d'un « meilleur modèle » ;
-- compatibilité des payloads `paper-experiment-v1` préservée ;
-- aucune migration DB, API ou modification frontend.
+- `experiment_group_digest` + `experiment_digest` ;
+- répétitions `replicate_index/count` appariées Luna/Sol ;
+- `source_digest` obligatoire ;
+- comparaison factuelle via `PaperAnalyticsReport` ;
+- aucun score/ranking/gagnant automatique ;
+- aucune migration/API/frontend.
 
-### Décisions expérimentales
-
-- Un dataset/replay figé est **nécessaire pour une comparaison strictement appariée** ; le v2 impose son `source_digest`, mais le moteur de replay concret reste hors de ce batch.
-- Le non-déterminisme éventuel du LLM est traité par répétitions explicites, pas par un faux seed fournisseur.
-- Les répétitions sont conservées brutes ; aucune agrégation de dispersion n'est inventée dans le batch.
-- L'absence d'une répétition annoncée pour l'un des modèles invalide la comparaison afin de limiter le cherry-picking post-hoc.
-
-### Validation d'intégration
-
-- `pytest backend` : **266 tests passés**, 2 warnings externes ;
-- Ruff : **All checks passed** ;
-- mypy : **81 fichiers sans erreur** ;
-- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- commit/push confirmé : `dc60033f60bf5d98a68e6131a9320e575d46cc8d` ;
-- working tree propre après push ;
-- préparation ChatGPT : **34 tests ciblés** et `py_compile` réussis.
+Validation : **266 tests backend**, Ruff OK, mypy 81 fichiers, `git diff --check` OK, commit/push confirmé.
 
 ---
 
-## Batch 15 — Préparation éventuelle du LIVE
+## Batch 15 — Chat opérateur avec l'Agent
+
+**État : intégré et validé — commit fonctionnel `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6`.**
+
+### Objectif
+
+Permettre à l'opérateur de dialoguer avec le même modèle Agent configuré pendant que le moteur PAPER reste actif, afin d'obtenir des explications sur décisions, marché, portefeuille, Risk, cycles et analytics, sans créer de voie alternative d'exécution.
+
+### Périmètre intégré
+
+- package `ai_spot_trader.chat` séparé du provider stratégique ;
+- `OpenAIChatProvider` utilisant le même `LLMModel` Luna/Sol ;
+- prompt `operator-chat-v1` ;
+- REST uniquement : envoi message + lecture historique session ;
+- contexte lu depuis runtime, portefeuille, journal durable et analytics canoniques ;
+- ancrage optionnel sur un `cycle_id` historique ;
+- distinction stricte entre `historical_cycle` et état courant ;
+- historique chat mémoire seulement, borné, sans migration PostgreSQL ;
+- redaction best-effort des secrets ;
+- erreurs chat sanitizées et séparées des cycles `FAILED` ;
+- panneau Chat Next.js et session UUID locale ;
+- aucune commande lifecycle dans le code Chat.
+
+### Invariants vérifiés par conception
+
+```text
+Market -> Agent -> DecisionCandidate -> Risk -> ExecutionIntent -> Paper Broker
+```
+
+reste le seul chemin d'exécution.
+
+Le chat :
+
+- ne construit pas `DecisionCandidate` pour le moteur ;
+- ne construit pas `RiskAssessment`/`ExecutionIntent` ;
+- n'importe pas Risk/Broker/Kraken/trading ;
+- ne modifie pas `RiskPolicy` ;
+- n'injecte pas son historique dans `AgentInput` ;
+- ne déclenche pas un BUY/SELL à partir d'un message ;
+- ne modifie pas les digests expérimentaux Luna/Sol ou agressivité.
+
+### Validation confirmée
+
+Validation locale finale du 21 septembre 2026 :
+
+- `pytest backend` : **277 tests passés**, 2 warnings externes ;
+- `ruff check backend` : **All checks passed** ;
+- `mypy backend/src backend/tests` : **89 fichiers sans erreur** ;
+- `pnpm lint` : **réussi** ;
+- `pnpm typecheck` : **réussi** ;
+- `pnpm build` : **réussi** ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- commit/push fonctionnel : `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6`.
+
+---
+
+## Batch 16 — Préparation éventuelle du LIVE
 
 **État : hors périmètre jusqu'à décision explicite.**
 
 Readiness, adaptateur privé Kraken, réconciliation, permissions minimales sans retrait, garde-fous LIVE et activation volontaire séparée.
+
+Le changement de numéro est volontaire : la préparation LIVE qui était historiquement notée « Batch 15 » est repoussée après le chat opérateur afin de conserver PAPER comme seul mode pendant les premiers tests réels.
 
 ---
 
@@ -251,7 +221,9 @@ Readiness, adaptateur privé Kraken, réconciliation, permissions minimales sans
   |
 14 Luna/Sol comparison
   |
-15 Optional LIVE readiness
+15 Operator Agent chat
+  |
+16 Optional LIVE readiness
 ```
 
 ---
@@ -262,12 +234,14 @@ Readiness, adaptateur privé Kraken, réconciliation, permissions minimales sans
 - univers initial de paires ;
 - valeur produit de cadence ;
 - valeurs produit des limites Risk ;
-- limites avancées d'exposition/drawdown utilisées comme **contraintes Risk** ;
+- limites avancées d'exposition/drawdown comme contraintes Risk ;
 - valeurs de référence fee/spread/slippage ;
 - politique de rétention ;
 - reconstruction du ledger et réconciliation après crash ;
-- choix/format concret d'un dataset/replay canonique pour exécuter les comparaisons strictement appariées ;
-- statistiques descriptives éventuelles de dispersion des répétitions LLM ;
-- source d'événements et protocole d'un futur WebSocket ;
-- auth/déploiement pour une exposition non locale ;
+- dataset/replay canonique pour comparaisons strictement appariées ;
+- statistiques descriptives éventuelles de dispersion LLM ;
+- éventuelle persistance durable du chat ;
+- mécanisme audité/versionné d'instructions opérateur modifiant réellement la stratégie ;
+- source d'événements/protocole d'un futur WebSocket ;
+- auth/déploiement pour exposition non locale ;
 - éventuel LIVE.

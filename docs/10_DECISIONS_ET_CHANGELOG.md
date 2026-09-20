@@ -6,6 +6,8 @@ Ce document conserve les décisions architecturales durables et un changelog syn
 
 Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 
+Le Batch 15 ci-dessous est **intégré et validé** au commit fonctionnel `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6` sur `main`.
+
 ---
 
 ## 2. Décisions acceptées existantes
@@ -47,7 +49,7 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 **ACCEPTÉE.** Luna pour les premiers essais ; Sol sélectionnable par configuration.
 
 ### ADR-013 — Agressivité configurable de 1 à 10
-**ACCEPTÉE.** La plage `1..10` est canonique et aucune valeur ne contourne Risk. Le mapping exact `aggressiveness-map-v1` est intégré avec le Batch 13.
+**ACCEPTÉE.** La plage `1..10` est canonique ; `aggressiveness-map-v1` est intégré depuis Batch 13.
 
 ### ADR-014 — Cible expérimentale de +4 % par jour
 **ACCEPTÉE.** Cible de recherche, jamais garantie ni obligation de trader.
@@ -128,10 +130,10 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 **ACCEPTÉE.** Pas de tool-calling ni de réparation stratégique silencieuse.
 
 ### ADR-040 — Adapter OpenAI minimal sur httpx, secrets via SecretStr
-**ACCEPTÉE.** Même provider pour Luna/Sol, pas de retry automatique au Batch 07.
+**ACCEPTÉE.** Même provider stratégique pour Luna/Sol, pas de retry automatique au Batch 07.
 
 ### ADR-041 — Boucle autonome séquentielle sur snapshots cohérents
-**ACCEPTÉE.** `TradingCycleRunner.run_cycle()` est canonique ; `TradingEngine` le répète, avec un seul cycle à la fois et un stop coopératif.
+**ACCEPTÉE.** `TradingCycleRunner.run_cycle()` est canonique ; `TradingEngine` le répète avec un seul cycle à la fois et stop coopératif.
 
 ### ADR-042 — SQLAlchemy async + asyncpg + Alembic pour PostgreSQL
 **ACCEPTÉE.** `aiosqlite` reste réservé aux tests offline.
@@ -153,195 +155,158 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 ## 3. Décisions acceptées au Batch 10
 
 ### ADR-047 — Façade REST séparée du métier de trading
-- **Statut : ACCEPTÉE**
-- FastAPI expose observation et lifecycle, mais ne crée aucun artefact Agent/Risk/Broker.
-- Les modèles HTTP sont dédiés et n'exposent pas directement les records ORM.
+**ACCEPTÉE.** FastAPI expose observation/lifecycle mais ne crée aucun artefact Agent/Risk/Broker.
 
 ### ADR-048 — Query service de lecture durable
-- **Statut : ACCEPTÉE**
-- `CycleAuditReader` constitue la frontière de lecture.
-- `SqlAlchemyCycleAuditQueryService` est l'implémentation SQLAlchemy.
-- Les routes FastAPI ne doivent pas dépendre directement des records SQLAlchemy.
+**ACCEPTÉE.** `CycleAuditReader` est la frontière de lecture ; SQLAlchemy reste derrière son implémentation.
 
 ### ADR-049 — Start/stop uniquement sur moteur canonique injecté
-- **Statut : ACCEPTÉE**
-- L'API peut appeler `TradingEngine.start()` / `stop()` mais ne construit aucune boucle alternative.
-- Aucun auto-start au lifecycle FastAPI.
-- Sans moteur injecté, la commande est indisponible explicitement.
+**ACCEPTÉE.** L'API appelle seulement `TradingEngine.start()/stop()` ; aucun auto-start ni boucle alternative.
 
 ### ADR-050 — Pas de WebSocket au Batch 10
-- **Statut : ACCEPTÉE**
-- Aucun bus d'événements canonique n'existe encore.
-- REST est suffisant pour le premier cockpit.
-- Un WebSocket sera ajouté uniquement avec une source d'événements et un besoin de fréquence explicitement définis.
+**ACCEPTÉE.** REST suffit tant qu'aucun bus d'événements canonique n'existe.
 
 ### ADR-051 — Réutiliser le schéma Batch 09 sans migration API
-- **Statut : ACCEPTÉE**
-- Les besoins de lecture du Batch 10 sont satisfaits par `0001_audit_journal`.
-- Le schéma ne doit pas être modifié uniquement pour simplifier les routes.
+**ACCEPTÉE.** Le schéma durable n'est pas modifié pour simplifier les routes.
 
 ### ADR-052 — Erreurs API sanitizées et DB lifecycle explicite
-- **Statut : ACCEPTÉE**
-- Erreur de cycle : `stage`, `error_type`, `timed_out` seulement.
-- Aucun message brut, DSN ou secret dans les réponses.
-- Si FastAPI crée la DB depuis `database_url`, il en possède la fermeture.
+**ACCEPTÉE.** Aucun message brut/DSN/secret ; la DB possédée par FastAPI est fermée explicitement.
 
 ---
 
 ## 4. Décisions acceptées au Batch 11
 
-Ces décisions sont intégrées avec le Batch 11 au commit fonctionnel `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`, après validation locale et smoke test runtime.
+Batch 11 intégré au commit fonctionnel `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`.
 
 ### ADR-053 — Rewrite Next.js same-origin vers FastAPI
-- **Statut : ACCEPTÉE**
-- Le navigateur appelle uniquement `/backend/*` sur l'origine Next.js.
-- Next.js réécrit ces appels vers `AI_SPOT_TRADER_BACKEND_URL`, par défaut `http://127.0.0.1:8000`.
-- Aucune modification CORS backend n'est nécessaire pour le développement standard.
-- L'adresse backend n'est pas exposée via une variable `NEXT_PUBLIC_*`.
+**ACCEPTÉE.** Le navigateur appelle `/backend/*`; Next.js réécrit vers l'URL backend non publique.
 
 ### ADR-054 — Polling cockpit borné et purement présentatif
-- **Statut : ACCEPTÉE**
-- Le cockpit relit les ressources REST toutes les 10 secondes lorsque l'onglet est visible.
-- Le polling s'arrête implicitement lorsque l'onglet n'est pas visible et ne pilote jamais la cadence du moteur.
-- Aucun WebSocket n'est ajouté au Batch 11.
+**ACCEPTÉE.** Polling 10 s lorsque l'onglet est visible, jamais cadence moteur.
 
-### ADR-055 — Types frontend alignés sur les contrats HTTP Batch 10
-- **Statut : ACCEPTÉE**
-- Les types TypeScript du cockpit reflètent `api/schemas.py` sans inventer de champ métier.
-- UUID/timestamps restent des chaînes JSON et les `Decimal` sérialisés restent des chaînes côté frontend.
-- Le frontend se limite au formatage d'affichage.
+### ADR-055 — Types frontend alignés sur les contrats HTTP
+**ACCEPTÉE.** UUID/timestamps en chaînes JSON, `Decimal` en chaînes, formatage présentatif seulement.
 
 ### ADR-056 — États d'indisponibilité explicites dans le cockpit
-- **Statut : ACCEPTÉE**
-- 404 = donnée encore absente ; 503 = ressource non configurée/indisponible ; échec réseau = backend inaccessible.
-- Les listes vides restent des états métier normaux.
-- Les boutons Start/Stop sont verrouillés pendant une commande et désactivés lorsque l'état ne l'autorise pas.
-- Aucune stack trace ni payload brut inutile n'est affiché.
+**ACCEPTÉE.** 404/503/offline différenciés, boutons lifecycle verrouillés pendant commande.
 
 ---
 
 ## 5. Décisions acceptées au Batch 12
 
-Ces décisions sont intégrées avec le Batch 12 au commit fonctionnel `3f39999736b6fc3800ecfd36ddee0253c734d25d`, après validation locale backend/frontend et push confirmé.
+Batch 12 intégré au commit `3f39999736b6fc3800ecfd36ddee0253c734d25d`.
 
 ### ADR-057 — Journal durable comme source canonique des analytics
-- **Statut : ACCEPTÉE**
-- Les analytics dérivent uniquement des faits déjà persistés par le journal Batch 09.
-- L'état courant du ledger mémoire ne sert pas à reconstruire l'historique.
-- Aucune décision Agent/Risk n'est modifiée par les analytics.
+**ACCEPTÉE.** Les analytics dérivent uniquement des faits persistés.
 
 ### ADR-058 — Analytics calculés à la volée par un reducer pur
-- **Statut : ACCEPTÉE**
-- `build_paper_analytics_report` est déterministe et sans I/O/horloge courante.
-- `SqlAlchemyPaperAnalyticsQueryService` charge les faits puis délègue le calcul.
-- Pas de table/vue matérialisée ni migration tant que le volume ne justifie pas cette complexité.
+**ACCEPTÉE.** Pas de table/vue dédiée tant que le volume ne le justifie pas.
 
 ### ADR-059 — Définitions PAPER du P&L, drawdown et exposition
-- **Statut : ACCEPTÉE**
-- P&L net = equity marquée - equity initiale durable.
-- P&L brut = P&L net + frais + spread + slippage cumulés.
-- Les coûts sont les valeurs des fills durables, jamais une réestimation avec la configuration actuelle.
-- Drawdown sur l'equity nette ; exposition = valeur des positions / equity positive.
-- Un trade est une exécution ayant produit un fill ; HOLD/REJECT ne sont pas des trades.
+**ACCEPTÉE.** P&L net/brut, coûts, drawdown/exposition et définition du trade fixés par les faits durables.
 
 ### ADR-060 — UTC et no look-ahead pour les séries historiques
-- **Statut : ACCEPTÉE**
-- La frontière de journée analytics est UTC.
-- Chaque point est valorisé au prix du `MarketState` durable du même cycle.
-- Aucun dernier prix futur/courant n'est appliqué rétroactivement.
-- Une rupture de continuité portefeuille ou un actif non valorisable est une erreur d'intégrité explicite.
+**ACCEPTÉE.** Chaque point utilise le `MarketState` durable du même cycle.
 
 ### ADR-061 — Reproductibilité versionnée des métriques
-- **Statut : ACCEPTÉE**
-- La réponse analytics contient `calculation_version` et un SHA-256 de la séquence ordonnée `(cycle_id, result_digest)`.
-- À faits et version identiques, le rapport doit être identique, quel que soit l'ordre d'entrée.
-- Cette garantie ne couvre pas le rejeu déterministe du LLM.
+**ACCEPTÉE.** `calculation_version` + SHA-256 de `(cycle_id, result_digest)` ordonné.
 
 ---
 
 ## 5 bis. Décisions acceptées au Batch 13
 
-Ces décisions sont intégrées avec le Batch 13 au commit fonctionnel `1747beb5efd1fe9763bc9b2d23f3a115575daaec`, après validation locale complète et push confirmé.
+Batch 13 intégré au commit `1747beb5efd1fe9763bc9b2d23f3a115575daaec`.
 
 ### ADR-062 — Mapping discret d'agressivité versionné
-- **Statut : ACCEPTÉE**
-- Les niveaux `1..10` sont mappés explicitement par `aggressiveness-map-v1`.
-- Le mapping décrit une posture et une instruction stratégique, pas un seuil Risk ni une formule de sizing déterministe.
-- Tout changement sémantique futur du mapping exige une nouvelle version.
+**ACCEPTÉE.** `aggressiveness-map-v1`, sans seuil Risk ni formule déterministe de sizing.
 
 ### ADR-063 — Agressivité limitée à la stratégie Agent
-- **Statut : ACCEPTÉE**
-- L'agressivité peut influencer la volonté d'agir et la quantité proposée par l'Agent.
-- Elle n'est jamais passée comme paramètre au `RiskEngine.evaluate(...)`.
-- Elle ne peut modifier balance, position, max notional, whitelist, fraîcheur, solvabilité ou coûts PAPER.
-- Seul Risk continue de créer un `ExecutionIntent`.
+**ACCEPTÉE.** Elle n'est jamais passée à `RiskEngine.evaluate(...)`.
 
 ### ADR-064 — Prompt Agent `agent-strategy-v2`
-- **Statut : ACCEPTÉE**
-- Le prompt explicite le mapping d'agressivité comme contexte stratégique uniquement.
-- Le provider vérifie modèle, prompt et digest du manifeste avant l'appel LLM lorsqu'un manifeste est présent.
-- Les anciens `AgentInput` sans contexte restent lisibles ; le provider peut normaliser le contexte avant appel.
+**ACCEPTÉE.** Mapping stratégique explicite ; validation du manifeste avant appel LLM.
 
 ### ADR-065 — Manifeste expérimental durable dans AgentInput
-- **Statut : ACCEPTÉE**
-- `paper-experiment-v1` enregistre niveau/mapping, modèle, prompt, univers, snapshot RiskPolicy, coûts PAPER, source/dataset, fenêtre et version analytics.
-- Le manifeste porte un digest SHA-256 de sa représentation canonique.
-- Il est persisté via le payload `AgentInput` existant ; aucune migration n'est requise.
-- Le digest identifie le protocole, pas une garantie de déterminisme LLM.
+**ACCEPTÉE.** `paper-experiment-v1` + digest, persistance dans JSON/JSONB existant.
 
 ### ADR-066 — Comparaison d'agressivité par réutilisation directe de Batch 12
-- **Statut : ACCEPTÉE**
-- Les comparaisons consomment des `PaperAnalyticsReport` déjà calculés.
-- Aucun recalcul divergent de P&L/drawdown/coûts/exposition n'est introduit.
-- Les runs doivent être identiques sur tous les champs contrôlés hors agressivité.
-- La sortie reste factuelle et ne produit ni classement automatique ni sélection rétrospective.
+**ACCEPTÉE.** Aucun recalcul divergent ni ranking automatique.
 
 ### ADR-067 — Pas d'API/frontend expérimental au Batch 13
-- **Statut : ACCEPTÉE**
-- Le protocole expérimental reste backend/domaine.
-- Le cockpit n'obtient pas encore de configurateur d'agressivité/Risk/coûts.
-- Une surface de lancement d'expériences sera décidée séparément si elle devient nécessaire.
+**ACCEPTÉE.** Le cockpit ne mute pas agressivité/Risk/coûts.
 
 ---
 
 ## 5 ter. Décisions acceptées au Batch 14
 
-Ces décisions sont intégrées avec le Batch 14 au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`, après validation locale complète, push confirmé et working tree propre.
+Batch 14 intégré au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`.
 
 ### ADR-068 — Versionner la comparaison modèle en `paper-experiment-v2`
-- **Statut : ACCEPTÉE**
-- `paper-experiment-v1` reste le contrat Batch 13 et continue d'exclure uniquement l'agressivité de son identité de comparaison.
-- `paper-experiment-v2` fixe `comparison_variable = LLM_MODEL` afin que Luna/Sol soit l'unique variable autorisée.
-- Les champs v2 sont optionnels dans `ExperimentManifest` pour conserver la lecture des anciens payloads v1.
-- Le digest v1 exclut explicitement les nouveaux champs afin de préserver l'identité des manifestes déjà persistés.
+**ACCEPTÉE.** `comparison_variable = LLM_MODEL`, compatibilité v1 préservée.
 
 ### ADR-069 — Séparer identité de groupe et identité de run
-- **Statut : ACCEPTÉE**
-- `experiment_group_digest` identifie les champs contrôlés communs d'une expérience Luna/Sol.
-- Il exclut `llm_model` et `replicate_index`, mais inclut agressivité, prompt, univers, RiskPolicy, coûts PAPER, source/dataset, fenêtre, version analytics et `replicate_count`.
-- `experiment_digest` reste l'identité complète de chaque run et inclut modèle, groupe et index de répétition.
-- La persistance reste le JSON/JSONB `AgentInput` existant ; aucune table/migration dédiée n'est créée.
+**ACCEPTÉE.** `experiment_group_digest` pour les champs contrôlés ; `experiment_digest` pour le run complet.
 
 ### ADR-070 — Dataset figé obligatoire pour une comparaison modèle stricte
-- **Statut : ACCEPTÉE**
-- `source_digest` est obligatoire dans `paper-experiment-v2`.
-- Deux passages live successifs non figés ne sont pas traités comme une comparaison strictement appariée.
-- Le batch formalise l'identité du dataset ; il n'ajoute pas de moteur de replay historique parallèle.
-- Toute fenêtre/univers/source différente fait changer le groupe et invalide la comparaison.
+**ACCEPTÉE.** `source_digest` obligatoire en v2 ; pas de replay parallèle ajouté.
 
 ### ADR-071 — Répétitions appariées pour le non-déterminisme LLM
-- **Statut : ACCEPTÉE**
-- `replicate_index` et `replicate_count` sont persistés dans le manifeste v2.
-- `compare_model_runs(...)` exige les répétitions `1..N` pour Luna et Sol et refuse un groupe incomplet.
-- Le protocole ne prétend pas disposer d'un seed fournisseur exact.
-- Les répétitions restent des observations brutes ; aucune sélection post-hoc ou exclusion d'une répétition n'est autorisée par le comparateur.
+**ACCEPTÉE.** `1..N` requis pour Luna et Sol ; pas de seed fictif ni suppression post-hoc.
 
 ### ADR-072 — Comparaison modèle factuelle sans score ni gagnant automatique
+**ACCEPTÉE.** Réutilisation de `PaperAnalyticsReport`, aucun ranking automatique.
+
+---
+
+## 5 quater. Décisions acceptées au Batch 15
+
+Ces décisions sont acceptées après validation locale complète et intégration du commit fonctionnel sur `main`.
+
+### ADR-073 — Chat opérateur comme interface conversationnelle séparée du provider stratégique
 - **Statut : ACCEPTÉE**
-- Le comparateur réutilise directement les `PaperAnalyticsReport` Batch 12.
-- Les métriques exposées incluent P&L brut/net, coûts, drawdown, exposition, trades BUY/SELL, HOLD/REJECT/MODIFY/FAILED, points cumulés et daily.
-- Aucune formule P&L parallèle, score composite, ranking ou choix automatique d'un « meilleur modèle » n'est introduit.
-- API et frontend restent inchangés au Batch 14.
+- `OpenAIChatProvider` est distinct de `OpenAIDecisionProvider`.
+- Les deux utilisent le même `LLMModel` configuré afin de conserver Luna/Sol comme identité de modèle Agent.
+- Le provider chat ne retourne que du texte conversationnel et n'utilise aucun schéma stratégique ni tool-calling.
+- Aucun deuxième agent stratégique n'est créé.
+
+### ADR-074 — Le chat n'est jamais un chemin d'exécution ou de mutation implicite
+- **Statut : ACCEPTÉE**
+- Le package `chat` n'importe ni Risk, ni Broker, ni Kraken, ni trading.
+- Il ne construit pas `DecisionCandidate`, `RiskAssessment`, `ExecutionIntent` ou `RiskPolicy`.
+- « BUY maintenant », « agressivité 8 » et « ignore Risk » restent non exécutables depuis le chat.
+- Toute future instruction opérateur réellement mutante nécessitera un mécanisme explicite, audité, versionné et rattaché à un cycle d'application.
+
+### ADR-075 — Historique chat mémoire seulement et borné pour la V1
+- **Statut : ACCEPTÉE**
+- Par défaut : 20 messages par session, 32 sessions process-locales, éviction des plus anciennes.
+- Aucun schéma PostgreSQL ni migration.
+- Les messages chat ne participent ni au journal de trading, ni aux digests expérimentaux, ni aux analytics.
+- Un redémarrage backend perd les sessions, comportement assumé pour cette V1.
+
+### ADR-076 — Contexte chat construit uniquement depuis les surfaces canoniques de lecture
+- **Statut : ACCEPTÉE**
+- Le contexte lit `AppRuntime`, le portefeuille, `CycleAuditReader` et `PaperAnalyticsReader`.
+- Un cycle historique expose son `agent_input` persisté exact.
+- L'état courant est séparé du cycle historique et ne peut pas être invoqué comme cause rétroactive.
+- Pour un cycle historique explicite, la liste `recent_cycles` est omise afin de réduire le risque de mélange temporel.
+
+### ADR-077 — REST sans streaming pour le Chat V1
+- **Statut : ACCEPTÉE**
+- `POST /api/v1/chat/messages` et `GET /api/v1/chat/sessions/{session_id}` suffisent.
+- Aucun WebSocket/SSE n'est introduit sans besoin mesuré.
+- Les erreurs fournisseur chat sont sanitizées et séparées des cycles `FAILED`.
+
+### ADR-078 — Le frontend Chat reste indépendant du lifecycle moteur
+- **Statut : ACCEPTÉE**
+- Le hook/panneau Chat n'appelle ni `startEngine` ni `stopEngine`.
+- Recharger ou fermer le frontend ne stoppe pas le backend.
+- Le navigateur ne conserve que l'UUID de session ; l'historique reste côté service backend mémoire.
+
+### ADR-079 — Redaction best-effort avant conservation conversationnelle
+- **Statut : ACCEPTÉE**
+- Les formes courantes de clés/tokens/secrets sont redigées avant historique et provider.
+- Les messages bruts d'erreur LLM ne sont jamais renvoyés à l'API.
+- Cette défense ne remplace pas la règle « aucun secret dans le chat ».
 
 ---
 
@@ -369,109 +334,97 @@ Ces décisions sont intégrées avec le Batch 14 au commit fonctionnel `dc60033f
 - valeur produit de cadence ;
 - données marché supplémentaires ;
 - valeurs chiffrées des limites Risk ;
-- limites d'exposition/drawdown quand les données le permettent ;
+- limites d'exposition/drawdown ;
 - valeurs expérimentales fee/spread/slippage ;
-- dataset/replay canonique concret pour exécuter les comparaisons strictement appariées ;
-- éventuelles statistiques descriptives de dispersion des répétitions LLM ;
+- dataset/replay canonique pour comparaisons appariées ;
+- statistiques descriptives de dispersion LLM ;
 - politique de rétention PostgreSQL ;
-- reconstruction du ledger et stratégie de reprise après panne ;
+- reconstruction du ledger et reprise après panne ;
+- éventuelle persistance durable du chat ;
+- contrat d'un futur mécanisme d'instructions opérateur mutantes ;
 - auth et déploiement ;
 - logs structurés ;
-- source d'événements/protocole d'un futur WebSocket ;
+- source d'événements/protocole futur WebSocket ;
 - éventuel LIVE.
 
 ---
 
 ## 8. Changelog
 
+### 2026-09-21 — Batch 15 Chat opérateur avec l'Agent
+
+**État : intégré et validé. Commit fonctionnel : `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6` (`feat: add operator agent chat`).**
+
+- Resynchronisation initiale confirmée sur le commit documentaire Batch 14 `b2c74672744639f86c38e873f25d56c77f899c76`, puis intégration fonctionnelle Batch 15 sur `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6`.
+- Ajout d'un package conversationnel séparé du provider stratégique.
+- Même `settings.llm_model` Luna/Sol utilisé par le chat ; aucune duplication d'agent stratégique.
+- Extension du client Responses API avec un appel texte `store=false`, sans tools ni schéma de décision.
+- Prompt `operator-chat-v1` avec séparation explicite conversation/exécution et règles no-look-ahead.
+- Contexte canonique en lecture seule depuis moteur, portefeuille, audit et analytics.
+- Cycle historique explicite ancré sur son `AgentInput` durable exact ; présent séparé.
+- Sessions mémoire bornées, aucune migration PostgreSQL, aucune contamination des digests/analytics.
+- Redaction best-effort des secrets et erreurs fournisseur chat sanitizées.
+- Routes REST Chat ajoutées ; aucun WebSocket/SSE.
+- Panneau Chat cockpit ajouté ; aucun chemin frontend Chat vers start/stop moteur.
+- Tests Batch 15 ajoutés pour les invariants conversation/exécution, Luna/Sol, no-look-ahead, non-contamination d'`AgentInput`, Risk immuable, erreurs distinctes et bornage historique.
+- La préparation LIVE auparavant nommée Batch 15 est déplacée au Batch 16 et reste hors périmètre.
+
+Validation exécutée par ChatGPT sur le patch isolé :
+
+- `py_compile` des fichiers Python modifiés/ajoutés : **réussi** ;
+- contrôle AST du package `chat` contre imports/symboles d'exécution interdits : **réussi** ;
+- contrôle statique frontend Chat contre `startEngine`/`stopEngine` : **réussi**.
+
+Validation locale finale confirmée avant le commit fonctionnel :
+
+- `pytest backend` : **277 tests passés**, 2 warnings externes ;
+- Ruff : **All checks passed** ;
+- mypy : **89 fichiers sans erreur** ;
+- `pnpm lint` : **réussi** après correction de l'unique erreur initiale `react-hooks/set-state-in-effect` dans `use-chat.ts` ;
+- `pnpm typecheck` : **réussi** ;
+- `pnpm build` : **réussi** ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- commit/push fonctionnel : `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6`.
+
 ### 2026-09-21 — Batch 14 Comparaison contrôlée GPT-5.6 Luna / GPT-5.6 Sol
 
-**État : intégré sur `main` au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d` (`feat: add controlled Luna Sol experiments`).**
+**État : intégré sur `main` au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`, suivi du commit documentaire `b2c74672744639f86c38e873f25d56c77f899c76`.**
 
-- Référence GitHub de départ : `655b66b639c4e9c1803cef3920c9a96e7dd16055` (`docs: record Batch 13 integration`).
-- Audit du manifeste Batch 13, du comparateur d'agressivité, des analytics Batch 12, du provider Luna/Sol, du runner et de la persistance JSON/JSONB.
-- `paper-experiment-v1` conservé pour l'agressivité ; `paper-experiment-v2` intégré pour l'axe `LLM_MODEL`.
-- `experiment_group_digest` intégré pour les champs contrôlés et `experiment_digest` conservé comme identité complète du run.
-- `replicate_index` / `replicate_count` intégrés avec obligation d'un ensemble complet de répétitions Luna/Sol.
-- `source_digest` obligatoire en v2 pour identifier un dataset/snapshot figé ; aucun replay historique parallèle ajouté.
-- Comparaison Luna/Sol basée uniquement sur `PaperAnalyticsReport`, sans score composite ni ranking automatique.
-- Compatibilité v1 conservée ; aucune migration PostgreSQL, aucun changement API/frontend, aucun LIVE.
-
-Validation locale finale confirmée :
-
-- `pytest backend` : **266 tests passés**, 2 warnings de dépréciation externes ;
-- Ruff : **All checks passed** ;
-- mypy : **Success: no issues found in 81 source files** ;
-- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- commit/push confirmé sur `main` : `dc60033f60bf5d98a68e6131a9320e575d46cc8d` ;
-- working tree confirmé propre après push.
-
-Validation de préparation ChatGPT : **34 tests ciblés** et `py_compile` réussis.
+- `paper-experiment-v2`, groupe/répétitions, `source_digest` obligatoire et comparaison appariée Luna/Sol.
+- Aucun score composite/ranking, aucune migration/API/frontend, aucun LIVE.
+- Validation finale : **266 tests backend**, Ruff OK, mypy 81 fichiers, `git diff --check` OK.
 
 ### 2026-09-21 — Batch 13 Expérimentation agressivité 1–10
 
-**État : intégré sur `main` au commit fonctionnel `1747beb5efd1fe9763bc9b2d23f3a115575daaec` (`feat: add versioned aggressiveness experiments`).**
+**État : intégré sur `main` au commit `1747beb5efd1fe9763bc9b2d23f3a115575daaec`.**
 
-- Référence GitHub de départ : `bc1b06ad25a2aa0ba7781d50c9e642dc113850ad` (`docs: record Batch 12 integration`).
-- Mapping discret intégré : `aggressiveness-map-v1` avec dix postures stratégiques.
-- `AggressivenessContext` et `ExperimentManifest` ajoutés aux contrats `AgentInput`, avec compatibilité des anciens payloads grâce à des champs optionnels.
-- Prompt Agent intégré : `agent-strategy-v2`.
-- Manifeste `paper-experiment-v1` avec digest SHA-256 déterministe.
-- Snapshot de `RiskPolicy` et des coûts PAPER enregistré dans l'identité expérimentale ; aucune valeur produit inventée.
-- Persistance via le JSON/JSONB `AgentInput` existant ; aucune migration.
-- Comparaison pure de runs via `PaperAnalyticsReport`, sans recalcul divergent des métriques Batch 12 et sans ranking automatique.
-- Comparaison refusée si modèle, prompt, Risk, coûts, univers, source/dataset, fenêtre ou version analytics diffèrent hors dimension expérimentale autorisée.
-- Aucun changement API/frontend, aucun LIVE, aucune API Kraken privée.
-- Limite conservée : même manifeste + mêmes faits ne garantit pas une sortie LLM bit-à-bit identique.
-
-Validation locale finale confirmée :
-
-- Python : **3.13.14** ;
-- `pytest backend` : **249 tests passés**, 2 warnings de dépréciation externes ;
-- Ruff : **All checks passed** ;
-- mypy : **Success: no issues found in 81 source files** ;
-- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- commit/push confirmé sur `main` : `1747beb5efd1fe9763bc9b2d23f3a115575daaec` ;
-- working tree confirmé propre après push.
+- `aggressiveness-map-v1`, `AggressivenessContext`, `paper-experiment-v1`, prompt `agent-strategy-v2`.
+- Validation finale : **249 tests backend**, Ruff OK, mypy 81 fichiers.
 
 ### 2026-09-20 — Batch 12 Analytics et expérimentation reproductible
 
-**État : intégré sur `main` au commit fonctionnel `3f39999736b6fc3800ecfd36ddee0253c734d25d` (`feat: add reproducible paper analytics`).**
+**État : intégré** au commit `3f39999736b6fc3800ecfd36ddee0253c734d25d`.
 
-- Journal durable utilisé comme source des analytics.
-- Reducer PAPER pur avec P&L brut/net, coûts, drawdown, exposition, trades, HOLD/REJECT/MODIFY/FAILED, séries par cycle et daily UTC.
-- No look-ahead par valorisation au prix durable de chaque cycle.
-- Reproductibilité via `paper-analytics-v1` + digest des `result_digest`.
-- Endpoint analytics et panneau cockpit ajoutés sans modifier Agent/Risk/Broker.
-
-Validation finale locale confirmée : `pytest backend` **231 passés**, Ruff OK, mypy **76 fichiers sans erreur**, frontend lint/typecheck/build réussis et `git diff --check` sans erreur.
+Journal durable comme source analytics, reducer PAPER pur, no-look-ahead, endpoint/panneau analytics.
 
 ### 2026-09-20 — Batch 11 Frontend cockpit
 
-**État : intégré sur `main` au commit fonctionnel `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7` (`feat: add frontend paper cockpit`).**
+**État : intégré** au commit `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`.
 
-Cockpit Next.js/shadcn, client REST centralisé, polling borné, états 404/503/offline, Start/Stop via FastAPI uniquement, aucune logique stratégique frontend.
+Cockpit Next.js/shadcn, client REST, polling borné, Start/Stop via FastAPI uniquement.
 
 ### 2026-09-20 — Batch 10 API FastAPI de contrôle/observation
 
-**État : intégré sur `main` au commit fonctionnel `e6bcfd4dd345c934769b2f90fa7822232a80dd80`.**
+**État : intégré** au commit `e6bcfd4dd345c934769b2f90fa7822232a80dd80`.
 
-Façade REST, query service durable, lifecycle moteur injecté, erreurs sanitizées, aucune migration/API Kraken privée/LIVE.
+Façade REST, query service durable, lifecycle moteur injecté, erreurs sanitizées.
 
 ### 2026-09-20 — Batch 09 Persistance et journal d'audit
 
-**État : intégré fonctionnellement sur `main` au commit `c53d04f14bcda82359d11c2e14fc1eb601ed14e0`.**
+**État : intégré fonctionnellement** au commit `c53d04f14bcda82359d11c2e14fc1eb601ed14e0`.
 
-SQLAlchemy async + `asyncpg` + Alembic, journal cycles/décisions/Risk/intents/fills, snapshots et erreurs sanitizées, idempotence par `cycle_id`, transaction/rollback, PostgreSQL Docker Compose.
+SQLAlchemy async + PostgreSQL + Alembic, journal cycles/décisions/Risk/intents/fills.
 
-### 2026-09-20 — Batch 08 Boucle autonome PAPER
+### 2026-09-20 — Batches 08 à 00
 
-**État : intégré.** `TradingCycleRunner` + `TradingEngine`, snapshots cohérents, cycles séquentiels, timeouts explicites et stop coopératif.
-
-### 2026-09-20 — Batches 07 à 01
-
-**État : intégrés.** Agent Luna/Sol, Risk Engine, Portfolio/Paper Broker, Market State, Kraken public, contrats domaine/configuration et bootstrap ont été intégrés successivement avec validations locales documentées lors de chaque batch.
-
-### 2026-09-20 — Batch 00 Documentation initiale
-
-**État : intégré.**
+**État : intégrés.** Boucle autonome, Agent Luna/Sol, Risk, Portfolio/Paper Broker, Market State, Kraken public, contrats, bootstrap et documentation initiale ont été intégrés successivement avec validations documentées.

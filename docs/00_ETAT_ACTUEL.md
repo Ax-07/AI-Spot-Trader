@@ -6,43 +6,44 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD fonctionnel Batch 14 confirmé : `dc60033f60bf5d98a68e6131a9320e575d46cc8d` (`feat: add controlled Luna Sol experiments`).
-- Batch 13 : **intégré** au commit fonctionnel `1747beb5efd1fe9763bc9b2d23f3a115575daaec`.
-- Batch 14 : **intégré** après validation locale complète, commit, push et working tree propre confirmés.
+- HEAD fonctionnel Batch 15 : `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6` (`feat: add operator agent chat`).
+- Référence précédente : Batch 14 fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`, documentation Batch 14 `b2c74672744639f86c38e873f25d56c77f899c76`.
+- Le commit fonctionnel Batch 15 a été poussé sur `origin/main` le 21 septembre 2026.
 
 ## État intégré confirmé
 
-- Backend PAPER autonome : Kraken public, Agent Luna/Sol via le même provider canonique, Risk Engine déterministe, Paper Broker et boucle séquentielle.
-- Seul Risk produit `ExecutionIntent` ; HOLD/REJECT restent des issues métier auditées ; les erreurs techniques restent distinctes.
-- Analytics PAPER `paper-analytics-v1` : P&L brut/net, coûts, drawdown, exposition, trades, HOLD/REJECT/MODIFY/FAILED, séries par cycle et daily UTC.
-- Agressivité `1..10` figée par `aggressiveness-map-v1` ; prompt Agent courant `agent-strategy-v2`.
-- `paper-experiment-v1` reste le protocole de comparaison d'agressivité.
-- `paper-experiment-v2` compare Luna/Sol avec `LLM_MODEL` comme unique variable contrôlée, `experiment_group_digest`, `experiment_digest` et répétitions appariées.
-- `source_digest` est obligatoire en v2 ; prompt, agressivité, univers, `RiskPolicy`, coûts PAPER, fenêtre, version analytics et nombre de répétitions restent contrôlés.
-- `compare_model_runs(...)` réutilise les `PaperAnalyticsReport` Batch 12 sans score composite, ranking ni « meilleur modèle » automatique.
-- Persistance inchangée via `AgentInput` JSON/JSONB ; aucune migration, aucun changement API/frontend, aucun LIVE.
+- Backend PAPER autonome : Kraken public -> Agent Luna/Sol -> Risk déterministe -> Paper Broker.
+- Seul Risk produit `ExecutionIntent`; HOLD/REJECT restent audités; erreurs techniques distinctes.
+- Journal PostgreSQL, API REST, cockpit Next.js et analytics `paper-analytics-v1` intégrés.
+- `aggressiveness-map-v1`, prompt `agent-strategy-v2`, `paper-experiment-v1/v2` et comparaison Luna/Sol appariée intégrés.
+- Chat opérateur V1 intégré : même `LLMModel` Luna/Sol, provider conversationnel séparé, REST, historique mémoire borné, contexte canonique en lecture seule.
+- Le chat ne rejoint jamais `AgentInput`, Risk, Broker, Kraken privé ou `ExecutionIntent`; aucune instruction conversationnelle ne modifie la stratégie future.
+- Pour un cycle historique, le chat s'ancre sur l'`AgentInput` persisté exact et sépare explicitement l'état courant afin d'éviter le look-ahead.
+- Le panneau Chat reste indépendant du lifecycle moteur ; fermer ou recharger le frontend ne stoppe pas le moteur backend.
 
-## Validation Batch 14
+## Validation Batch 15
 
 Validation locale confirmée le 21 septembre 2026 :
 
-- `pytest backend` : **266 tests passés**, 2 warnings de dépréciation externes ;
+- `pytest backend` : **277 tests passés**, 2 warnings de dépréciation externes ;
 - Ruff : **All checks passed** ;
-- mypy : **81 fichiers sans erreur** ;
+- mypy : **89 fichiers sans erreur** ;
+- `pnpm lint` : **réussi** ;
+- `pnpm typecheck` : **réussi** ;
+- `pnpm build` : **réussi** ;
 - `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- commit/push confirmé : `dc60033f60bf5d98a68e6131a9320e575d46cc8d` ;
-- working tree propre après push.
+- commit/push fonctionnel confirmé : `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6`.
 
-Préparation ChatGPT également exécutée : 34 tests ciblés Batch 14 et `py_compile` des fichiers Python modifiés.
+Le premier passage de `pnpm lint` a détecté une unique erreur `react-hooks/set-state-in-effect` dans `use-chat.ts`; le correctif a été appliqué puis lint, typecheck et build ont tous réussi avant le commit fonctionnel.
 
 ## Limites conservées
 
-- Pas d'exactly-once global entre ledger PAPER mémoire et commit PostgreSQL ; recovery/réconciliation différés.
-- Le digest du manifeste identifie le protocole/configuration, **pas** une décision LLM bit-à-bit déterministe.
-- `paper-experiment-v2` exige l'identité d'un dataset figé mais n'ajoute pas de moteur de replay historique.
-- Les répétitions sont conservées factuellement ; aucune agrégation statistique ou conclusion automatique « meilleur modèle » n'est inventée.
-- Capital PAPER, devise de référence produit, cadence, univers initial et valeurs de coûts/Risk restent injectés ; aucun défaut produit n'est inventé.
+- Historique chat non durable : un redémarrage backend perd les sessions V1.
+- Redaction de secrets best-effort : le chat ne doit jamais servir à transmettre des secrets.
+- Pas de mutation de stratégie via conversation ; un futur mécanisme opérateur devra être explicite, audité, versionné et appliqué à partir d'un cycle identifié.
+- Pas d'exactly-once global entre ledger PAPER mémoire et commit PostgreSQL ; recovery/réconciliation restent différés.
+- Aucun LIVE, aucune API Kraken privée, aucune modification du protocole expérimental.
 
 ## Prochaine étape
 
-Définir le prochain batch avant implémentation. Le LIVE reste séparé et hors périmètre tant qu'aucune décision explicite ne l'ouvre.
+Finaliser le commit documentaire Batch 15, puis lancer les premiers essais PAPER réels. La préparation LIVE reste séparée et correspond au Batch 16 éventuel.

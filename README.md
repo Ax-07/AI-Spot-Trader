@@ -4,7 +4,7 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut :** le **Batch 14 — Comparaison contrôlée GPT-5.6 Luna / GPT-5.6 Sol est intégré** sur GitHub `main` au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d` (`feat: add controlled Luna Sol experiments`), après validation locale complète, push confirmé et working tree propre. Le Batch 13 reste référencé par `1747beb5efd1fe9763bc9b2d23f3a115575daaec`.
+> **Statut :** le **Batch 15 — Chat opérateur avec l'Agent est intégré** sur GitHub `main` au commit fonctionnel `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6` (`feat: add operator agent chat`), après validation locale complète. Le Batch 14 reste la référence précédente au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`, suivi du commit documentaire `b2c74672744639f86c38e873f25d56c77f899c76`.
 
 ## Principes
 
@@ -23,6 +23,7 @@ Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading a
 - Les erreurs techniques restent distinctes des décisions métier.
 - Aucun secret dans prompts, logs, réponses API ou fichiers versionnés.
 - Aucun look-ahead ni réécriture post-hoc.
+- Le chat opérateur est **informatif uniquement** : il ne modifie jamais silencieusement la stratégie et n'est jamais injecté dans les cycles suivants.
 
 Principe central : **l'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
@@ -81,6 +82,16 @@ Kraken public data
                                           Next.js cockpit
 ```
 
+Le Batch 15 ajoute un chemin conversationnel **latéral et en lecture seule** :
+
+```text
+Cockpit Chat -> FastAPI /api/v1/chat -> OperatorChatService
+                                      |-> faits canoniques runtime/audit/analytics
+                                      `-> OpenAIChatProvider -> même LLMModel Luna/Sol
+
+Ce chemin ne rejoint jamais Risk, Broker, Kraken privé ou ExecutionIntent.
+```
+
 ## Agent IA
 
 Le port canonique reste :
@@ -97,19 +108,32 @@ Le Batch 13 fixe une interprétation **discrète et versionnée** des niveaux `1
 
 L'agressivité peut influencer uniquement la **volonté stratégique d'agir** et la **quantité proposée par l'Agent**. Elle ne modifie jamais `RiskPolicy`, les balances, les positions détenues, la solvabilité BUY, les contraintes temporelles, les coûts PAPER ou l'autorité finale de Risk.
 
-Le prompt Agent devient `agent-strategy-v2` afin de rendre cette frontière explicite. Une expérience contrôlée peut attacher à chaque `AgentInput` un `ExperimentManifest` `paper-experiment-v1` contenant notamment : niveau/mapping, modèle, prompt, univers, snapshot `RiskPolicy`, coûts PAPER, version analytics et identité des faits/dataset. Le digest SHA-256 du manifeste identifie la configuration expérimentale sans prétendre rendre le LLM déterministe.
-
-Les comparaisons d'agressivité réutilisent directement les rapports `paper-analytics-v1` du Batch 12 : aucune métrique n'est recalculée avec une formule parallèle et aucun classement automatique n'est produit.
+Le prompt Agent devient `agent-strategy-v2`. Une expérience contrôlée peut attacher à chaque `AgentInput` un `ExperimentManifest` `paper-experiment-v1`. Les comparaisons d'agressivité réutilisent directement les rapports `paper-analytics-v1` du Batch 12 : aucun classement automatique n'est produit.
 
 ### Comparaison Luna / Sol — Batch 14 intégré
 
 Le Batch 14 conserve `paper-experiment-v1` pour l'axe agressivité et introduit `paper-experiment-v2` pour une expérience dont **le modèle LLM est l'unique variable contrôlée**.
 
-`paper-experiment-v2` ajoute une identité de groupe et une identité de répétition : `comparison_variable = LLM_MODEL`, `experiment_group_digest`, `replicate_index` et `replicate_count`. Pour une comparaison Luna/Sol, `source_digest` devient obligatoire afin d'identifier un dataset/snapshot figé. Le digest de groupe inclut agressivité, prompt, univers, `RiskPolicy`, coûts PAPER, source/dataset, fenêtre, version analytics et nombre de répétitions, mais exclut volontairement le modèle et l'index de répétition. Le digest complet du manifeste reste l'identité durable de chaque run.
+`paper-experiment-v2` ajoute `comparison_variable = LLM_MODEL`, `experiment_group_digest`, `replicate_index` et `replicate_count`. `source_digest` devient obligatoire afin d'identifier un dataset/snapshot figé. `compare_model_runs(...)` réutilise directement `PaperAnalyticsReport` (`paper-analytics-v1`) et ne produit ni score composite, ni classement, ni « meilleur modèle » automatique.
 
-`compare_model_runs(...)` exige un protocole apparié complet : toutes les répétitions déclarées doivent être présentes pour **Luna et Sol**. Il réutilise directement `PaperAnalyticsReport` (`paper-analytics-v1`) et expose factuellement P&L brut/net, coûts, drawdown, exposition, trades BUY/SELL, HOLD, REJECT, MODIFY, FAILED, points cumulés et séries quotidiennes. Il ne produit ni score composite, ni classement, ni « meilleur modèle » automatique.
+### Chat opérateur — Batch 15 intégré
 
-Le support de plusieurs répétitions sert à conserver la dispersion observable du LLM sans prétendre à un déterminisme fournisseur. Aucune sélection post-hoc de répétitions n'est autorisée par le comparateur apparié.
+Le Batch 15 ajoute une interface conversationnelle vers **le même modèle Agent configuré** (`LLMModel.LUNA` ou `LLMModel.SOL`) sans créer un deuxième agent stratégique.
+
+Contrat :
+
+- provider conversationnel distinct de `OpenAIDecisionProvider` ;
+- prompt conversationnel versionné `operator-chat-v1` ;
+- historique borné et process-local pour la V1 ;
+- `POST /api/v1/chat/messages` pour envoyer un message ;
+- `GET /api/v1/chat/sessions/{session_id}` pour relire l'historique de la session ;
+- lecture des faits canoniques du runtime, du journal et des analytics ;
+- contexte d'un cycle historique chargé depuis son `AgentInput` persisté exact ;
+- état courant étiqueté séparément et interdit comme justification rétroactive d'une décision historique ;
+- aucune instruction conversationnelle n'est ajoutée à `AgentInput` ni au manifeste expérimental ;
+- « BUY maintenant », « agressivité 8 » ou « ignore Risk » restent conversationnels et ne déclenchent aucune mutation.
+
+L'historique chat n'est pas persisté en PostgreSQL dans cette V1. Cette décision minimise les risques de contamination des digests expérimentaux et maintient une séparation explicite entre conversation et faits de trading.
 
 ## Trading PAPER canonique
 
@@ -120,29 +144,21 @@ Le support de plusieurs répétitions sert à conserver la dispersion observable
 - MODIFY utilise exactement la quantité autorisée par Risk.
 - ALLOW transmet l'intent produit par Risk.
 - Les erreurs Market/Portfolio/Agent/Risk/Broker restent des cycles `FAILED`, jamais des HOLD synthétiques.
-- Le changement Luna/Sol ne modifie aucun chemin d'exécution : l'Agent continue de produire un `DecisionCandidate`, jamais un `ExecutionIntent`.
+- Les erreurs de chat restent des erreurs HTTP/chat séparées et ne marquent aucun cycle `FAILED`.
 
 ## Persistance durable — Batch 09 intégré
 
 Le package `ai_spot_trader.persistence` utilise SQLAlchemy async, PostgreSQL et Alembic. `AuditedTradingCycleRunner` persiste le `TradingCycleResult` après le runner canonique sans dupliquer l'orchestration.
 
-Le schéma `0001_audit_journal` conserve :
-
-- `audit_cycles` ;
-- `audit_decisions` ;
-- `audit_risk_assessments` ;
-- `audit_execution_intents` ;
-- `audit_fills`.
+Le schéma `0001_audit_journal` conserve `audit_cycles`, `audit_decisions`, `audit_risk_assessments`, `audit_execution_intents` et `audit_fills`.
 
 Le graphe est transactionnel et idempotent par `cycle_id`. La persistance ne garantit pas encore un exactly-once global entre la mutation du ledger PAPER mémoire et le commit PostgreSQL ; la reconstruction/réconciliation après crash reste différée.
 
-Les Batches 13/14 n'ajoutent pas de table ni de migration : `AgentInput` est déjà persisté intégralement en JSON/JSONB, donc le mapping, le manifeste, l'identité de groupe et les répétitions deviennent des faits durables et participent au `result_digest` du cycle.
+Les Batches 13/14 n'ajoutent pas de table ni de migration. Le Batch 15 n'ajoute également **aucune migration** : les messages chat restent en mémoire et ne participent ni au `result_digest`, ni aux digests expérimentaux, ni aux analytics historiques.
 
-## API FastAPI — Batch 10 intégré
+## API FastAPI
 
-Le Batch 10 expose une façade REST versionnée `/api/v1` sans seconde logique de trading.
-
-### Observation
+La façade REST versionnée `/api/v1` expose notamment :
 
 - `GET /health`
 - `GET /api/v1/engine`
@@ -156,32 +172,24 @@ Le Batch 10 expose une façade REST versionnée `/api/v1` sans seconde logique d
 - `GET /api/v1/errors/latest`
 - `GET /api/v1/market/latest`
 - `GET /api/v1/analytics`
+- `POST /api/v1/chat/messages` — Batch 15 intégré
+- `GET /api/v1/chat/sessions/{session_id}` — Batch 15 intégré
 
-Le Batch 14 n'ajoute aucun endpoint : le protocole expérimental reste une responsabilité backend/domaine, et le cockpit demeure une surface d'observation.
+Les routes chat n'exposent aucune méthode de mutation Risk/Broker/stratégie et leurs erreurs fournisseur sont sanitizées (`502`) sans fuite du message brut.
 
-## Frontend cockpit — Batch 11 intégré
+## Frontend cockpit
 
-Le cockpit affiche l'état backend/moteur, portefeuille, marché durable, cycles, décisions, Risk, exécutions/fills, erreurs sanitizées et analytics PAPER. Il ne contient aucune logique Agent/Risk/Broker et n'est pas modifié au Batch 14.
+Le cockpit affiche l'état backend/moteur, portefeuille, marché durable, cycles, décisions, Risk, exécutions/fills, erreurs sanitizées et analytics PAPER.
+
+Le Batch 15 ajoute un panneau Chat séparé. Le navigateur ne possède aucun chemin chat vers `startEngine`, `stopEngine`, Risk, Broker ou Kraken. Recharger/fermer le frontend n'arrête donc pas le moteur backend ; une session chat mémoire peut en revanche expirer si le **backend** redémarre, ce qui est intentionnel en V1.
 
 ## Analytics PAPER — Batch 12 intégré
 
 Le reducer analytics reste **pur, déterministe et en lecture seule** au-dessus du journal durable. Les coûts sont lus dans les fills persistés, chaque point est valorisé au `MarketState` durable du même cycle et la reproductibilité des métriques repose sur `paper-analytics-v1` + digest des `result_digest`.
 
-Les Batches 13/14 réutilisent ces rapports tels quels pour comparer factuellement l'axe expérimental autorisé : P&L brut/net, coûts, drawdown, exposition, trades, HOLD, REJECT, MODIFY, FAILED et séries quotidiennes/cumulées.
+Le chat peut lire un résumé analytics courant, mais ce résumé n'est jamais utilisé comme cause d'une décision historique et les messages chat ne modifient aucune métrique.
 
 ## Validation
-
-### Batch 13 intégré
-
-```text
-Python                                  : 3.13.14
-pytest backend                          : 249 tests passés, 2 warnings externes
-ruff check backend                      : All checks passed
-mypy backend/src backend/tests          : 81 fichiers sans erreur
-git diff --check                        : aucune erreur, warnings LF -> CRLF uniquement
-commit/push                             : 1747beb5efd1fe9763bc9b2d23f3a115575daaec
-working tree après push                 : propre
-```
 
 ### Batch 14 intégré
 
@@ -194,7 +202,24 @@ commit/push                             : dc60033f60bf5d98a68e6131a9320e575d46cc
 working tree après push                 : propre
 ```
 
-La préparation ChatGPT avait également exécuté **34 tests ciblés** et `py_compile` sur les fichiers Python modifiés. Aucun test frontend additionnel n'était requis puisque le frontend n'a pas été modifié.
+### Batch 15 intégré
+
+Le Batch 15 ajoute des tests dédiés couvrant l'activité moteur pendant le chat, Luna/Sol, absence de chemin Risk/Broker/Kraken/`ExecutionIntent`, non-contamination de `AgentInput`, requêtes BUY/Risk non exécutables, no-look-ahead historique, erreurs chat séparées, historique borné et absence de lifecycle moteur dans le frontend Chat.
+
+Validation locale finale confirmée le 21 septembre 2026 :
+
+```text
+pytest backend                          : 277 tests passés, 2 warnings externes
+ruff check backend                      : All checks passed
+mypy backend/src backend/tests          : 89 fichiers sans erreur
+pnpm lint                               : réussi
+pnpm typecheck                          : réussi
+pnpm build                              : réussi
+git diff --check                        : aucune erreur, warnings LF -> CRLF uniquement
+commit/push fonctionnel                 : 1c182b829c141c20be5cc8e62a3f8afa6f71b4d6
+```
+
+Le correctif frontend final a supprimé l'unique erreur ESLint `react-hooks/set-state-in-effect` dans `use-chat.ts` avant le commit fonctionnel.
 
 ## Sécurité
 
@@ -202,7 +227,8 @@ La préparation ChatGPT avait également exécuté **34 tests ciblés** et `py_c
 - Une future clé Kraken ne devra jamais disposer du droit de retrait.
 - PAPER et LIVE restent explicitement séparés.
 - Toute exécution doit continuer à passer par Risk.
-- Le bind API par défaut reste local (`127.0.0.1`). Toute exposition distante des commandes lifecycle devra être protégée explicitement avant usage.
+- Le chat redige les formes de secrets courantes avant de conserver le message en mémoire et n'expose pas les erreurs brutes du fournisseur.
+- Le bind API par défaut reste local (`127.0.0.1`). Toute exposition distante des commandes lifecycle/chat devra être protégée explicitement avant usage.
 
 ## Avertissement
 
