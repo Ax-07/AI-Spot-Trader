@@ -4,7 +4,7 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut du projet :** le Batch 07 — Agent Luna est intégré. Le Batch 08 — Boucle autonome est préparé dans cette livraison mais **n'est pas encore intégré**. Le HEAD GitHub `main` audité au départ du Batch 08 est `6415064b0f9bb0ee625cc42e8209cdf4388167e0` (`docs: record Batch 07 integration`). Les premières versions restent exclusivement en **PAPER trading**.
+> **Statut du projet :** le Batch 08 — Boucle autonome est intégré sur `main` au commit `8deb72faeeaa1ac065189480c64ba16410c0d451` (`feat: add autonomous trading loop`). La prochaine étape prévue est le Batch 09 — Persistance et journal d'audit. Les premières versions restent exclusivement en **PAPER trading**.
 
 ## Principes du projet
 
@@ -157,7 +157,7 @@ Elle ne tente jamais de rattraper une cadence dépassée. La valeur de cadence e
 
 `start()` refuse une seconde loop simultanée. `stop()` réveille immédiatement l'attente de cadence et attend coopérativement le cycle borné déjà en cours. `AppRuntime` peut posséder un moteur injecté et l'arrête lors du shutdown FastAPI. Aucun moteur réel n'est démarré automatiquement à l'import ou à la création de l'application.
 
-## État backend après application du patch Batch 08
+## État backend après intégration du Batch 08
 
 ```text
 backend/

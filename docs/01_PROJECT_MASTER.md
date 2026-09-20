@@ -51,7 +51,7 @@ V0 est atteinte lorsque le backend peut, sans frontend obligatoire :
 10. journaliser durablement les cycles ;
 11. exposer suffisamment d'état via FastAPI.
 
-Le Batch 08 prépare le point 9. Le Batch 09 apportera le journal durable du point 10.
+Le Batch 08 réalise le point 9. Le Batch 09 apportera le journal durable du point 10.
 
 ### V1 — cockpit et expérimentation instrumentée
 
@@ -236,7 +236,7 @@ Le même `MarketState` imbriqué dans `AgentInput` est réutilisé pour Risk pui
 
 ---
 
-## 11. Orchestration autonome — Batch 08 préparé, non intégré
+## 11. Orchestration autonome — Batch 08 intégré
 
 ### Primitive un-cycle
 

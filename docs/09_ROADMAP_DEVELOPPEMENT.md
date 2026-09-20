@@ -91,67 +91,42 @@ Validation locale Windows finale :
 
 ## Batch 08 — Boucle autonome
 
-**Statut : patch préparé dans cette livraison, non encore intégré.**
+**Statut : intégré sur `main` au commit `8deb72faeeaa1ac065189480c64ba16410c0d451` (`feat: add autonomous trading loop`).**
 
-HEAD intégré de départ audité : `6415064b0f9bb0ee625cc42e8209cdf4388167e0`.
+HEAD intégré de départ audité : `6415064b0f9bb0ee625cc42e8209cdf4388167e0` (`docs: record Batch 07 integration`).
 
-Objectif : orchestrer explicitement `MarketState + PortfolioState + Agent + Risk + Paper Broker`, fournir un cycle testable et le répéter de manière strictement séquentielle.
-
-Patch préparé :
+Intégré :
 
 - package `ai_spot_trader.trading` ;
 - `TradingCycleRunner.run_cycle()` comme primitive un-cycle ;
-- `TradingEngine` comme boucle autonome séquentielle ;
-- `cycle_id` via factory injectable ;
-- même `MarketState` pour Agent/Risk/Broker ;
-- même `PortfolioState` pré-cycle pour Agent/Risk ;
-- aucun refresh marché caché ;
-- verrou de cycle partagé entre appels manuels et loop ;
-- HOLD traverse Risk et n'appelle jamais Broker ;
-- REJECT traité comme résultat métier normal ;
-- MODIFY/ALLOW transmettent uniquement l'`ExecutionIntent` produit par Risk ;
-- `TradingCycleResult` mémoire pour audit futur ;
+- `TradingEngine` comme boucle autonome strictement séquentielle ;
+- `cycle_id`, horloge, cadence et timeouts injectables ;
+- même `MarketState` pour Agent/Risk/Broker et même `PortfolioState` pré-cycle pour Agent/Risk ;
+- aucun refresh marché caché ni chevauchement entre cycle manuel et loop ;
+- HOLD traverse Risk sans Broker ; REJECT reste un résultat métier normal ;
+- MODIFY/ALLOW exécutent uniquement l'`ExecutionIntent` produit par Risk ;
 - erreurs techniques par étape, sans faux HOLD ;
-- timeouts explicites Market/Agent/Broker via `asyncio.timeout` ;
-- Risk sans timeout artificiel ;
-- cadence explicitement injectée et positive ;
-- aucun rattrapage de cadence par concurrence ;
-- start double interdit ;
-- stop coopératif et réveil immédiat pendant l'attente de cadence ;
-- `AppRuntime` arrête un moteur injecté au shutdown FastAPI ;
-- aucun démarrage automatique de trading ;
-- aucune valeur produit de paire/capital/cadence/Risk/coûts inventée ;
-- aucune persistance durable, aucune API de contrôle trading, aucun frontend et aucun LIVE.
+- timeouts explicites Market/Agent/Broker, aucun timeout artificiel Risk ;
+- aucun rattrapage concurrent de cadence ; start double interdit ; stop coopératif ;
+- `AppRuntime` arrête un moteur injecté au shutdown FastAPI sans démarrage automatique ;
+- aucune persistance durable, API de contrôle trading, API Kraken privée, frontend additionnel ou fonctionnalité LIVE.
 
-Validation réellement exécutée dans l'environnement ChatGPT :
+Validation locale Windows finale confirmée :
 
-- `pytest -q backend/tests/test_trading_engine.py` : **34 tests passés** ;
-- `pytest -q backend/tests/test_health.py backend/tests/test_trading_engine.py` : **37 tests passés** ;
-- aucun appel OpenAI/Kraken réel ;
-- `compileall` ciblé : OK ; lignes Python <= 100 et espaces de fin de ligne : OK.
-
-Validation locale Windows confirmée par l'utilisateur avant le correctif Ruff final :
-
+- `ruff check backend` : **All checks passed** ;
 - `pytest backend` : **203 tests passés** ;
 - mypy : **Success: no issues found in 57 source files** ;
 - `git diff --check` : aucune erreur ;
 - 2 warnings de dépréciation FastAPI/Starlette sans échec ;
-- Ruff a relevé uniquement `SIM105` dans `trading/engine.py` et un ordre d'imports dans `test_trading_engine.py`.
+- `git status --short` vide après commit/push.
 
-Le correctif de cette livraison traite ces deux défauts. Avant intégration, relancer au minimum :
-
-```powershell
-ruff check backend
-pytest backend
-```
-
-Le Batch 08 ne devra être marqué intégré qu'après confirmation finale puis commit/push sur `main`.
+Validation complémentaire exécutée dans l'environnement ChatGPT : suite ciblée Health + Trading **37/37**, `compileall` ciblé et contrôles statiques ; aucun appel OpenAI/Kraken réel.
 
 ---
 
 ## Batch 09 — Persistance et journal d'audit
 
-**Prochaine étape après validation et intégration du Batch 08.**
+**Prochaine étape prévue.**
 
 Objectif : PostgreSQL, schéma/migrations, cycles, décisions, `RiskAssessment`, intents, fills, erreurs techniques, métriques et reprise cohérente.
 

@@ -230,10 +230,9 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 
 ### 2026-09-20 — Batch 08 Boucle autonome
 
-**État : patch préparé, non encore intégré.**
+**État : intégré sur `main` au commit `8deb72faeeaa1ac065189480c64ba16410c0d451` (`feat: add autonomous trading loop`).**
 
-- Resynchronisation confirmée sur GitHub `main` au HEAD `6415064b0f9bb0ee625cc42e8209cdf4388167e0` (`docs: record Batch 07 integration`).
-- Correction de `docs/00_ETAT_ACTUEL.md` : le commit documentaire post-intégration devient la référence HEAD auditée ; le commit fonctionnel Batch 07 reste `caff3851...`.
+- Resynchronisation initiale sur GitHub `main` au HEAD `6415064b0f9bb0ee625cc42e8209cdf4388167e0` (`docs: record Batch 07 integration`).
 - Ajout du package `ai_spot_trader.trading` avec `TradingCycleRunner`, `TradingEngine`, timeouts et résultat de cycle mémoire.
 - Un seul `MarketState` est acquis par cycle et réutilisé par Agent/Risk/Broker ; un seul `PortfolioState` pré-cycle est utilisé par Agent/Risk.
 - Verrou global de cycle pour empêcher tout chevauchement entre appel manuel et loop autonome.
@@ -247,9 +246,9 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 - Aucun paramètre produit de capital, paire, cadence, RiskPolicy ou coûts PAPER ajouté silencieusement.
 - Aucune persistance durable, API de contrôle, API Kraken privée ou fonctionnalité LIVE.
 
-Validation réellement exécutée dans l'environnement ChatGPT : `pytest -q backend/tests/test_trading_engine.py` **34/34** puis suite ciblée Health + Trading **37/37**. Aucun appel réseau réel.
+Validation finale locale Windows confirmée avant intégration : `ruff check backend` **All checks passed**, `pytest backend` **203/203**, mypy **Success: no issues found in 57 source files**, `git diff --check` sans erreur ; 2 warnings de dépréciation FastAPI/Starlette sans échec. Le commit/push sur `main` a été confirmé et `git status --short` était vide après intégration.
 
-Validation locale Windows confirmée par l'utilisateur avant le correctif Ruff final : `pytest backend` **203/203**, mypy **Success: no issues found in 57 source files**, `git diff --check` sans erreur et 2 warnings FastAPI/Starlette sans échec. Ruff a signalé uniquement `SIM105` dans la boucle de cadence et un ordre d'imports dans le test Trading ; le correctif suivant traite ces deux points. `ruff check backend` reste à relancer localement avant intégration.
+Validation complémentaire réellement exécutée dans l'environnement ChatGPT : suite ciblée Health + Trading **37/37**, `compileall` ciblé et contrôles statiques. Aucun appel OpenAI/Kraken réel.
 
 ### 2026-09-20 — Batch 07 Agent Luna
 
