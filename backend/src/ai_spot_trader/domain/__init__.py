@@ -8,11 +8,19 @@ from ai_spot_trader.domain.models import (
     DecisionCandidate,
     ExecutionIntent,
     Fill,
+    MarketContext,
+    MarketObservation,
     MarketState,
+    MarketWindowStats,
     PortfolioState,
     RiskAssessment,
 )
-from ai_spot_trader.domain.ports import Broker, LLMProvider, MarketDataSource
+from ai_spot_trader.domain.ports import (
+    Broker,
+    LLMProvider,
+    MarketDataSource,
+    MarketObservationSource,
+)
 
 __all__ = [
     "AgentInput",
@@ -25,8 +33,12 @@ __all__ = [
     "Fill",
     "LLMModel",
     "LLMProvider",
+    "MarketContext",
     "MarketDataSource",
+    "MarketObservation",
+    "MarketObservationSource",
     "MarketState",
+    "MarketWindowStats",
     "PortfolioState",
     "RiskAssessment",
     "RiskDecision",

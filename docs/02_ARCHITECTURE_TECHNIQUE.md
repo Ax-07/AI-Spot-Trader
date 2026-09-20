@@ -33,14 +33,17 @@ Ce document complète le Project Master avec une vue technique. Il ne remplace p
 +------------v---------------------------------------+
 |                 Backend trading                    |
 |                                                    |
-|  Market Data -> Market State                       |
-|                     |                              |
-|  Portfolio State ---+--> Agent -> Risk -> Broker   |
+| Kraken -> normalized observations -> Market State  |
 |                                      |             |
-|                                      v             |
-|                               Journal / Metrics    |
-|                                      |             |
-|                                  PostgreSQL        |
+| Portfolio State ---------------------+--> Agent    |
+|                                            |       |
+|                                            v       |
+|                                           Risk     |
+|                                            |       |
+|                                            v       |
+|                                           Broker   |
+|                                            |       |
+|                                    Journal/Metrics |
 +----------------------------------------------------+
 ```
 
@@ -50,13 +53,9 @@ Le backend est un processus/service autonome. Le frontend peut disparaître sans
 
 ## 3. Découpage logique backend
 
-### Confirmé après Batch 01 / Batch 02
+### Confirmé après Batch 04
 
-Le backend reste une application Python unique sous layout `src/`.
-
-### Introduit par le Batch 03
-
-Le patch Batch 03 ajoute une intégration Kraken dédiée sans créer de microservice ni dupliquer les contrats de domaine :
+Le backend reste une application Python unique sous layout `src/` :
 
 ```text
 backend/
@@ -79,6 +78,9 @@ backend/
           rest.py
           symbols.py
           websocket.py
+      market/
+        errors.py
+        state.py
       main.py
 ```
 
@@ -88,8 +90,9 @@ Responsabilités :
 - `integrations/kraken/rest.py` : découverte publique des paires Spot ;
 - `integrations/kraken/symbols.py` : normalisation fournisseur vers symbole canonique ;
 - `integrations/kraken/websocket.py` : connexion Spot WebSocket v2, abonnement `ticker`, parsing, heartbeat et retry ;
-- `integrations/kraken/market_data.py` : implémentation du port `MarketDataSource` et conversion finale en `MarketState` ;
-- `market` : futur Batch 04, pour construction/enrichissement du contexte marché, pas pour parler directement à Kraken.
+- `integrations/kraken/market_data.py` : conversion du ticker Kraken en `MarketObservation` fournisseur-agnostique et compatibilité avec le `MarketState` minimal du port existant ;
+- `market/state.py` : historique mémoire borné, fenêtres temporelles, statistiques descriptives, fraîcheur et construction du `MarketState` enrichi ;
+- `market/errors.py` : erreurs génériques de construction d'état de marché.
 
 Les futurs domaines `portfolio`, `agent`, `risk`, `broker`, `trading`, `persistence`, `analytics` et `observability` ne sont créés que lorsqu'un batch le nécessite.
 
@@ -97,23 +100,22 @@ Les futurs domaines `portfolio`, `agent`, `risk`, `broker`, `trading`, `persiste
 
 ## 4. Contrats de domaine
 
-### Confirmé au Batch 02 et préservé au Batch 03
+### Confirmé au Batch 04
 
 Les échanges critiques utilisent des contrats Pydantic explicites, stricts et `extra="forbid"` dans `ai_spot_trader.domain`.
 
-Contrats initiaux canoniques :
+Contrats marché :
 
-- `MarketState` : `market_state_id`, `as_of`, `symbol`, `last_price` ;
-- `PortfolioState` : `portfolio_state_id`, `as_of`, mode PAPER, balances et positions minimales ;
-- `AgentInput` : `cycle_id`, `created_at`, `market_state`, `portfolio_state`, `aggressiveness` ;
-- `DecisionCandidate` : `decision_id`, `cycle_id`, `created_at`, `action`, `symbol`, `rationale` optionnelle ;
-- `RiskAssessment` : `risk_assessment_id`, `cycle_id`, `decision_id`, `assessed_at`, `status`, `reasons` ;
-- `ExecutionIntent` : corrélation cycle/décision/risk, timestamp, mode PAPER, action BUY/SELL, symbole et quantité positive ;
-- `Fill` : `fill_id`, `execution_id`, timestamp, action BUY/SELL, symbole, quantité et prix positifs.
+- `MarketObservation` : `observed_at`, `symbol`, `last_price` ;
+- `MarketState` : `market_state_id`, `as_of`, `symbol`, `last_price`, `context?` ;
+- `MarketContext` : `last_observed_at`, `data_age_seconds`, `stale_after_seconds?`, `is_stale?`, `windows` ;
+- `MarketWindowStats` : horizon, début de fenêtre, nombre d'observations, complétude et statistiques descriptives disponibles.
 
-Le Batch 03 ne modifie pas `MarketState`. Les structures REST/WebSocket Kraken restent confinées à `integrations/kraken` et sont normalisées avant exposition au domaine.
+Les autres contrats canoniques restent `PortfolioState`, `AgentInput`, `DecisionCandidate`, `RiskAssessment`, `ExecutionIntent` et `Fill`.
 
-Les types monétaires/quantitatifs utilisent `Decimal`. Les timestamps du domaine restent timezone-aware et normalisés UTC.
+Les structures REST/WebSocket Kraken restent confinées à `integrations/kraken`. La couche `market` ne dépend d'aucun type Kraken.
+
+Les types monétaires/quantitatifs et les statistiques du Batch 04 utilisent `Decimal`. Les timestamps du domaine restent timezone-aware et normalisés UTC.
 
 ---
 
@@ -121,58 +123,57 @@ Les types monétaires/quantitatifs utilisent `Decimal`. Les timestamps du domain
 
 ### 5.1 Kraken
 
-**Confirmé :** Kraken est l'exchange initial et reste isolé derrière le port :
+**Confirmé :** Kraken est l'exchange initial.
+
+Le port historique reste :
 
 ```text
 MarketDataSource.snapshot(symbol) -> MarketState
 ```
 
-### Adapter public retenu au Batch 03
+Le Batch 04 ajoute le port fournisseur-agnostique :
+
+```text
+MarketObservationSource.observation(symbol) -> MarketObservation
+```
+
+`KrakenMarketDataSource` implémente les deux pour conserver la compatibilité du Batch 03 tout en permettant au futur moteur de consommer directement des observations normalisées avant agrégation.
 
 ```text
 Kraken Spot public APIs
         |
-        +-- REST /0/public/AssetPairs?assetVersion=1
-        |      |
-        |      v
-        |  KrakenPairRegistry
-        |  alias Kraken -> symbole canonique
+        +-- REST AssetPairs -> KrakenPairRegistry
         |
-        +-- WebSocket v2 / ticker
-               |
-               v
-          KrakenTicker
-               |
-               v
-       KrakenMarketDataSource
-               |
-               v
-          MarketState minimal
+        +-- WebSocket v2 ticker -> KrakenTicker
+                                  |
+                                  v
+                           provider normalization
+                                  |
+                                  v
+                           MarketObservation
+                                  |
+                                  v
+                         MarketStateBuilder
+                                  |
+                                  v
+                            MarketState
 ```
 
 Règles :
 
-- REST est utilisé uniquement pour la découverte/normalisation des paires Spot ;
-- `assetVersion=1` fournit les noms d'affichage slash-separated comme représentation canonique côté intégration ;
-- les alias `altname` et `wsname` sont enregistrés à partir des métadonnées Kraken, ce qui évite les conversions dispersées codées en dur ;
-- WebSocket Spot v2 `ticker` fournit le dernier prix et le timestamp nécessaires au `MarketState` minimal ;
-- `heartbeat` et les messages système non pertinents ne produisent pas de donnée de domaine ;
-- l'abonnement public ne contient ni token, ni clé, ni secret ;
-- `snapshot()` consomme le premier ticker utile puis ferme la connexion WebSocket ; aucune tâche de fond persistante n'est démarrée au Batch 03 ;
-- en cas de rupture réseau, la connexion est réessayée un nombre borné et configurable de fois, avec délai configurable ;
-- les payloads Kraken invalides lèvent des erreurs d'intégration dédiées plutôt que de traverser le domaine.
-
-Le Batch 03 n'utilise aucune API privée Kraken et ne contient aucune logique d'ordre ou de trading.
+- aucune structure Kraken n'entre dans `market` ou dans les calculs génériques ;
+- aucune API Kraken privée ;
+- aucune clé ;
+- aucun ordre ;
+- aucune tâche de fond persistante lancée automatiquement.
 
 ### 5.2 LLM
-
-**Confirmé :** Luna puis Sol sont isolés derrière une interface dédiée.
 
 ```text
 LLMProvider.generate_decision(agent_input) -> DecisionCandidate
 ```
 
-Le provider réel, le SDK, le prompt et la politique de retry restent hors Batch 03.
+Le provider réel, le SDK, le prompt et la politique de retry restent hors Batch 04.
 
 ### 5.3 Broker
 
@@ -180,169 +181,177 @@ Le provider réel, le SDK, le prompt et la politique de retry restent hors Batch
 Broker.execute(execution_intent) -> tuple[Fill, ...]
 ```
 
-`ExecutionIntent` ne peut être qu'en `PAPER` dans l'état actuel, ce qui interdit un chemin LIVE implicite.
+`ExecutionIntent` ne peut être qu'en `PAPER` dans l'état actuel.
 
 ---
 
-## 6. Orchestration asynchrone
+## 6. Market State builder
 
-### Confirmé
+### 6.1 Historique mémoire
 
-`asyncio` est le socle asynchrone. Les ports externes susceptibles d'effectuer de l'I/O sont asynchrones.
+`MarketStateBuilder` conserve un historique ordonné pour **un seul symbole canonique par instance**.
 
-Au Batch 03, l'adapter Kraken suit un lifecycle borné par appel : ouverture WebSocket, abonnement, réception asynchrone, éventuel retry, puis fermeture dans un `finally`. Cela évite toute tâche orpheline et ne lance aucune boucle de trading.
+- limite par défaut : 10 000 observations ;
+- limite surchargeable au constructeur ;
+- purge déterministe des observations les plus anciennes ;
+- aucun PostgreSQL, Redis ou cache externe ;
+- aucun démarrage FastAPI nécessaire ;
+- aucun lien avec le frontend.
 
-Le futur moteur pourra séparer réception de marché, construction/rafraîchissement d'état, trading loop, publication cockpit et persistance. L'usage exact de tâches, queues ou bus interne reste à décider lors des batches concernés.
+Une observation dont le symbole change est rejetée. Les timestamps doivent être strictement croissants : doublon et insertion hors ordre sont des erreurs explicites.
 
----
+### 6.2 Horizons
 
-## 7. API FastAPI
-
-### Confirmé
-
-FastAPI fournit le plan de contrôle/observation du backend. Le bootstrap `GET /health` du Batch 01 reste inchangé et couvert par les tests.
-
-Le Batch 03 n'ajoute pas de route de marché et ne démarre pas automatiquement l'adapter Kraken dans le lifecycle FastAPI.
-
-### Proposé
-
-Premiers domaines d'API futurs :
+Deux horizons par défaut :
 
 ```text
-GET  /health
-GET  /status
-GET  /market
-GET  /portfolio
-GET  /decisions
-GET  /performance
-
-POST /engine/start
-POST /engine/stop
-PATCH /settings/...
+5 minutes
+30 minutes
 ```
 
-Les routes ne sont pas encore figées. Le frontend ne modifie jamais directement l'état de trading.
+Ils sont surchargeables et triés. Les doublons, durées nulles ou négatives sont rejetés.
+
+Ces horizons sont des **fenêtres de calcul**. Ils ne fixent ni cadence de trading, ni cadence d'ingestion, ni fréquence de décision.
+
+### 6.3 Statistiques
+
+Pour chaque horizon :
+
+- `observation_count` ;
+- `min_price` ;
+- `max_price` ;
+- `price_range = max - min` ;
+- `return_fraction = last / first - 1` à partir de deux observations ;
+- `realized_volatility` à partir de trois observations, définie comme l'écart-type population des returns simples consécutifs.
+
+Tout le calcul reste en `Decimal`. Aucun passage silencieux en `float` n'est utilisé.
+
+Une statistique impossible à calculer reste `None`. Une fenêtre sans observation a un compteur à zéro et aucun prix factice.
+
+### 6.4 Complétude
+
+`is_complete` indique que l'historique retenu atteint ou précède le début de la fenêtre et qu'au moins une observation se situe dans cette fenêtre.
+
+Cette propriété ne garantit pas l'absence de trous entre ticks : aucune cadence attendue n'est encore définie, donc le Batch 04 ne prétend pas détecter des gaps de marché sans référentiel de fréquence.
+
+### 6.5 Fraîcheur
+
+Le contexte expose :
+
+- timestamp de la dernière observation utilisée ;
+- âge de cette observation en secondes ;
+- seuil `stale_after` si le builder en reçoit un ;
+- résultat `is_stale` uniquement lorsque ce seuil a réellement été évalué.
+
+Le seuil par défaut reste absent. Le Batch 04 ne définit donc aucune règle Risk globale de refus de trader.
+
+### 6.6 No look-ahead
+
+Pour `build(as_of=T)` :
+
+```text
+observations utilisées = observations avec observed_at <= T
+```
+
+Toute observation postérieure à `T` est exclue même si elle se trouve déjà dans l'historique. Cela permet d'utiliser le même code en temps réel et en replay.
 
 ---
 
-## 8. Persistance et transactions
+## 7. Orchestration asynchrone
 
 ### Confirmé
 
-PostgreSQL est la cible.
+`asyncio` reste le socle asynchrone. Les frontières externes I/O sont asynchrones.
 
-### Proposé
+Le `MarketStateBuilder` est volontairement déterministe et synchrone : il calcule sur des observations déjà normalisées et ne fait aucun I/O.
 
-La persistance devra permettre l'audit des décisions/exécutions, la lecture d'états récents, la reconstruction des métriques et des migrations versionnées.
-
-**À décider :** ORM, migrations, event sourcing éventuel, snapshots et politique de rétention.
+Le Batch 04 ne démarre aucune boucle persistante ni scheduler. L'orchestration entre ingestion, builder et cycle de trading reste au Batch 08.
 
 ---
 
-## 9. Frontend
+## 8. API FastAPI
 
-### Confirmé
+FastAPI fournit le plan de contrôle/observation du backend. `GET /health` reste inchangé.
 
-- Next.js ;
-- TypeScript ;
-- shadcn/ui ;
-- Tailwind CSS ;
-- cockpit uniquement ;
-- `pnpm` comme gestionnaire de paquets canonique.
+Le Batch 04 n'ajoute pas de route marché et ne lance aucune tâche de marché dans le lifecycle FastAPI.
 
-Le frontend n'est pas modifié par le Batch 03.
+---
+
+## 9. Persistance et transactions
+
+PostgreSQL reste la cible future.
+
+Le Batch 04 ne crée ni ORM, ni migration, ni table, ni pipeline de persistance. L'historique mémoire du builder est un mécanisme technique borné, pas la politique finale de stockage.
 
 ---
 
 ## 10. Configuration
 
-### Confirmé au Batch 02
+La configuration existante reste inchangée au Batch 04.
 
-La configuration comprend environnement applicatif, host/port API, log level, mode PAPER, modèle LLM et agressivité optionnelle 1–10.
+Aucune nouvelle variable d'environnement n'est ajoutée pour les horizons, la taille de l'historique ou le stale du builder. Ces paramètres sont des valeurs de construction explicites et testables ; les defaults techniques sont versionnés dans le code.
 
-### Ajout Batch 03
-
-Configuration publique Kraken uniquement :
-
-- `kraken_rest_url` : `https://api.kraken.com` ;
-- `kraken_ws_url` : `wss://ws.kraken.com/v2` ;
-- timeout REST ;
-- timeout de réception WebSocket ;
-- nombre maximal de reconnexions ;
-- délai entre reconnexions ;
-- `kraken_stale_after_seconds` optionnel.
-
-Le seuil stale reste `None` par défaut : l'intégration sait tester/rejeter une donnée périmée lorsqu'un seuil est fourni, mais le Batch 03 ne transforme pas un choix technique local en règle métier globale.
-
-Aucune clé API Kraken, aucun secret, aucun mode LIVE, aucun capital PAPER, aucun univers d'actifs, aucune cadence de trading et aucune limite Risk ne sont ajoutés.
+Aucun capital PAPER, univers d'actifs, cadence de trading, sizing ou seuil Risk n'est ajouté.
 
 ---
 
 ## 11. Horloge, timestamps et reproductibilité
 
-### Confirmé
+`Clock` / `SystemClock` restent le seam temporel canonique.
 
-`Clock` / `SystemClock` fournissent le seam temporel. Les timestamps de ticker Kraken RFC3339 sont normalisés en UTC avant construction du `MarketState`.
-
-La stale detection technique compare le timestamp fournisseur à `Clock.now()`. Le seuil est injecté/configuré ; il n'est pas fixé par le domaine au Batch 03.
-
-**À décider :** frontière de journée pour les métriques quotidiennes et seuils métier de fraîcheur pour le futur Market State/Risk Engine.
+- observations et snapshots : UTC aware ;
+- `build()` peut utiliser `Clock.now()` ou un `as_of` explicite ;
+- tout `as_of` aware est normalisé UTC ;
+- un timestamp naïf est rejeté ;
+- le calcul d'âge utilise `Decimal` et les microsecondes sans conversion float.
 
 ---
 
 ## 12. Résilience
 
-### Confirmé pour l'intégration Kraken du Batch 03
+La résilience Kraken du Batch 03 reste inchangée : timeout, retries bornés, fermeture propre, heartbeat, stale technique optionnel.
 
-- timeout explicite REST et WebSocket ;
-- reconnexion WebSocket bornée ;
-- délai de retry configurable ;
-- réabonnement après reconnexion ;
-- heartbeat Kraken accepté sans créer de faux snapshot ;
-- payload mal formé rejeté ;
-- fermeture WebSocket dans tous les chemins ;
-- aucune boucle infinie de retry ;
-- stale detection disponible avec horloge injectable.
+La couche `market` ajoute des garde-fous déterministes :
 
-Un circuit breaker, des connexions redondantes et une politique opérationnelle avancée restent hors périmètre.
+- historique vide explicite ;
+- données futures exclues ;
+- données hors ordre rejetées ;
+- doublons temporels rejetés ;
+- symbole différent rejeté ;
+- historique mémoire borné ;
+- statistiques absentes plutôt que fabriquées.
 
 ---
 
 ## 13. Dépendances externes
 
-### Batch 03
+Aucune dépendance runtime supplémentaire n'est introduite au Batch 04.
 
-- `httpx` devient une dépendance runtime directe pour le REST public Kraken ;
-- `websockets` est ajouté comme dépendance runtime asynchrone directe pour Spot WebSocket v2.
+Les calculs utilisent uniquement la bibliothèque standard (`datetime`, `decimal`, collections/typing) et Pydantic déjà présent pour les contrats de domaine.
 
-Aucun SDK Kraken lourd n'est ajouté. Les tests réseau ne sont pas requis pour la suite par défaut ; les tests d'intégration sont offline via fixtures, `httpx.MockTransport` et faux WebSocket.
+NumPy, Pandas, TA-Lib et bibliothèques d'analyse technique ne sont pas ajoutés.
 
 ---
 
 ## 14. Sécurité technique
 
-### Confirmé
+Invariants préservés :
 
 - pas de secrets versionnés ;
-- pas de secrets dans les prompts/logs ;
+- pas de secrets dans prompts/logs ;
 - aucune clé Kraken avec retrait ;
 - LIVE séparé ;
-- `ExecutionMode` ne contient actuellement que `PAPER` ;
-- le Batch 03 ne définit aucun champ de clé/secret Kraken et n'utilise aucune API privée.
-
-La configuration sensible future reste côté backend et le frontend ne reçoit jamais de clés d'exchange ou de fournisseur LLM.
+- `ExecutionMode` reste PAPER uniquement ;
+- aucun accès exchange depuis le LLM ;
+- aucune sortie de statistique du Market State ne devient une commande de trading.
 
 ---
 
 ## 15. Déploiement
 
-### À décider
+Toujours à décider : local, Docker Compose, VM, etc.
 
-Le mode de déploiement initial n'est pas encore figé : local, Docker Compose, VM, etc.
-
-Contraintes confirmées : backend indépendant du frontend, PostgreSQL durable à terme, secrets hors repository, logs récupérables et mode PAPER explicite.
-
-Kubernetes, microservices et orchestration complexe sont hors périmètre tant qu'un besoin n'est pas démontré.
+Le Batch 04 n'introduit ni microservice, ni worker séparé, ni infrastructure de cache.
 
 ---
 
@@ -359,5 +368,6 @@ Chaque batch doit préserver :
 - pas de stratégie déterministe cachée dans les indicateurs ;
 - corrélation explicite des décisions ;
 - timestamps non ambigus ;
+- no look-ahead ;
 - testabilité offline ;
 - remplacement Luna/Sol par configuration sans refonte métier.

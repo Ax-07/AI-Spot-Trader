@@ -13,7 +13,10 @@ from ai_spot_trader.domain.models import (
     DecisionCandidate,
     ExecutionIntent,
     Fill,
+    MarketContext,
+    MarketObservation,
     MarketState,
+    MarketWindowStats,
     PortfolioState,
     RiskAssessment,
 )
@@ -219,4 +222,51 @@ def test_extra_fields_are_rejected() -> None:
                 "last_price": Decimal("50000"),
                 "unexpected": True,
             }
+        )
+
+
+def test_market_observation_requires_positive_price_and_aware_timestamp() -> None:
+    with pytest.raises(ValidationError):
+        MarketObservation(
+            observed_at=datetime(2026, 9, 20, 10, 30),
+            symbol="BTC/EUR",
+            last_price=Decimal("1"),
+        )
+    with pytest.raises(ValidationError):
+        MarketObservation(observed_at=NOW, symbol="BTC/EUR", last_price=Decimal("0"))
+
+
+def test_market_window_rejects_fake_statistics_for_empty_history() -> None:
+    with pytest.raises(ValidationError):
+        MarketWindowStats(
+            horizon_seconds=Decimal("300"),
+            window_start=NOW - timedelta(minutes=5),
+            observation_count=0,
+            is_complete=False,
+            min_price=Decimal("1"),
+        )
+
+
+def test_market_context_requires_consistent_stale_evaluation() -> None:
+    with pytest.raises(ValidationError):
+        MarketContext(
+            last_observed_at=NOW,
+            data_age_seconds=Decimal("11"),
+            stale_after_seconds=Decimal("10"),
+            is_stale=False,
+        )
+
+
+def test_market_state_rejects_future_context_observation() -> None:
+    context = MarketContext(
+        last_observed_at=NOW + timedelta(seconds=1),
+        data_age_seconds=Decimal("0"),
+    )
+    with pytest.raises(ValidationError):
+        MarketState(
+            market_state_id=uuid4(),
+            as_of=NOW,
+            symbol="BTC/EUR",
+            last_price=Decimal("50000"),
+            context=context,
         )

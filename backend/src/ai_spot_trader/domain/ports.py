@@ -5,12 +5,19 @@ from ai_spot_trader.domain.models import (
     DecisionCandidate,
     ExecutionIntent,
     Fill,
+    MarketObservation,
     MarketState,
 )
 
 
+class MarketObservationSource(Protocol):
+    """Boundary implemented by providers that emit normalized market observations."""
+
+    async def observation(self, symbol: str) -> MarketObservation: ...
+
+
 class MarketDataSource(Protocol):
-    """Boundary implemented by normalized market-data providers."""
+    """Boundary implemented by components exposing canonical market snapshots."""
 
     async def snapshot(self, symbol: str) -> MarketState: ...
 

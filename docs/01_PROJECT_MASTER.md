@@ -94,11 +94,15 @@ V1 ajoute cockpit Next.js/shadcn, historique décisions/exécutions, analytics P
 9. **PAPER uniquement pour les premières versions.** Aucun chemin LIVE implicite.
 10. **PostgreSQL cible.** Schéma et ORM restent à décider.
 11. **Pas de Rust sans besoin mesuré.**
+12. **No look-ahead.** Tout snapshot historique ne peut utiliser que des observations datées à son instant de coupure ou avant.
 
 ### 5.2 Flux de confiance
 
 ```text
 Kraken public data
+        |
+        v
+normalized observations
         |
         v
 Market State ------+
@@ -163,21 +167,24 @@ Le frontend affiche et contrôle l'état autorisé mais ne contient pas la strat
 
 ### 7.2 Points à décider
 
-Cadence, déclenchement temporel/événementiel/hybride, nombre de paires par cycle, budget de latence LLM, politique sur données périmées, retries et durée d'ordres PAPER restent ouverts.
+Cadence, déclenchement temporel/événementiel/hybride, nombre de paires par cycle, budget de latence LLM, politique métier sur données périmées, retries et durée d'ordres PAPER restent ouverts.
 
 ---
 
-## 8. Contrats de domaine initiaux — Batch 02
+## 8. Contrats de domaine
 
 ### 8.1 Principe confirmé
 
 Les frontières critiques reposent sur des modèles Pydantic stricts, `extra="forbid"`, avec UUID explicites et timestamps timezone-aware normalisés en UTC.
 
-### 8.2 Contrats canoniques initiaux
+### 8.2 Contrats canoniques
 
-- `MarketState` : identifiant, timestamp, symbole, dernier prix positif.
+- `MarketObservation` : observation normalisée fournisseur-agnostique avec timestamp, symbole et dernier prix positif.
+- `MarketState` : identifiant, timestamp de snapshot, symbole, dernier prix positif et `MarketContext` optionnel.
+- `MarketContext` : dernière observation utilisée, âge des données, seuil technique stale éventuellement évalué et fenêtres descriptives.
+- `MarketWindowStats` : horizon, bornes temporelles disponibles, nombre d'observations, complétude d'historique, min/max/amplitude, return et volatilité lorsque calculables.
 - `PortfolioState` : identifiant, timestamp, mode PAPER, balances et positions minimales non négatives.
-- `AgentInput` : cycle, timestamp, `MarketState`, `PortfolioState`, agressivité optionnelle validée de 1 à 10, sans valeur par défaut décidée.
+- `AgentInput` : cycle, timestamp, `MarketState`, `PortfolioState`, agressivité validée de 1 à 10.
 - `DecisionCandidate` : décision, cycle, timestamp, action, symbole, rationale optionnelle.
 - `RiskAssessment` : évaluation, cycle, décision, timestamp, statut `ALLOW|MODIFY|REJECT`, raisons.
 - `ExecutionIntent` : exécution corrélée au cycle/décision/risk, PAPER uniquement, `BUY|SELL`, quantité positive.
@@ -200,17 +207,63 @@ Le LIVE ne peut pas être configuré dans l'état actuel du code.
 
 ## 9. Market State
 
-Le `MarketState` est le snapshot déterministe présenté à l'agent.
+Le `MarketState` est le snapshot déterministe présenté aux couches supérieures et, plus tard, à l'agent.
 
-### Confirmé au Batch 02
+### Confirmé au Batch 04
 
-Le sous-ensemble canonique initial comprend : `market_state_id`, `as_of`, `symbol`, `last_price`.
+Le contrat conserve un unique `MarketState`. Le noyau historique reste :
 
-### À décider/étendre lors des batches marché
+```text
+market_state_id
+as_of
+symbol
+last_price
+```
 
-Bid/ask, spread, bougies, volume, qualité/fraîcheur, indicateurs, horizons, profondeur de carnet, univers initial et normalisation des symboles Kraken.
+Il est enrichi par un `MarketContext` optionnel afin de conserver la compatibilité avec le snapshot minimal du Batch 03 tout en distinguant clairement un état agrégé :
 
-Les indicateurs ne déclenchent jamais eux-mêmes `BUY` ou `SELL`.
+```text
+MarketContext
+- last_observed_at
+- data_age_seconds
+- stale_after_seconds?
+- is_stale?
+- windows[]
+```
+
+Deux horizons descriptifs par défaut sont versionnés dans le code du Batch 04 : **5 minutes** et **30 minutes**. Ils sont surchargeables lors de l'instanciation du builder. Ils ne représentent ni une cadence de décision, ni une fréquence de tick Kraken, ni une règle d'entrée/sortie.
+
+Pour chaque horizon, le Batch 04 calcule uniquement des faits descriptifs :
+
+- nombre d'observations ;
+- minimum ;
+- maximum ;
+- amplitude absolue `max - min` ;
+- return simple entre première et dernière observation disponibles dans la fenêtre lorsque deux observations existent ;
+- volatilité réalisée simple comme écart-type population des returns simples consécutifs lorsque trois observations existent.
+
+Les calculs utilisent `Decimal`, y compris `sqrt`, et n'introduisent pas NumPy/Pandas.
+
+### Complétude, données manquantes et fraîcheur
+
+- Une fenêtre est marquée complète uniquement si l'historique retenu atteint ou précède le début de l'horizon et qu'au moins une observation existe dans la fenêtre.
+- Cette complétude signifie **couverture temporelle de l'historique retenu**, pas garantie d'une cadence de tick sans trou ; aucune fréquence attendue n'est figée au Batch 04.
+- Une fenêtre vide reste représentée avec `observation_count = 0` et statistiques indisponibles ; aucune interpolation n'est effectuée.
+- Avec une seule observation, min/max sont disponibles mais return et volatilité restent indisponibles.
+- `data_age_seconds` est toujours descriptif. `is_stale` n'est évalué que si un seuil technique `stale_after` est explicitement fourni au builder.
+- Le seuil métier final de refus de trader reste la responsabilité du futur Risk Engine.
+
+### Historique et ordre temporel
+
+Le builder garde un historique en mémoire borné à **10 000 observations par instance** par défaut, valeur technique surchargeable. Les observations sont ajoutées en ordre strictement croissant ; doublons temporels, données hors ordre et symboles différents dans une même instance sont rejetés explicitement.
+
+Pour un snapshot à l'instant `T`, toute observation postérieure à `T` est ignorée, même si elle a déjà été injectée dans l'historique. Le même calcul peut donc servir au temps réel et au replay sans look-ahead.
+
+### Principe stratégique
+
+Aucune statistique du Market State ne produit `BUY`, `SELL`, `HOLD`, score de trading, label bullish/bearish ou autre signal. L'agent IA conserve la décision stratégique.
+
+Bid/ask, spread, volume, bougies, carnet, profondeur et autres données restent à ajouter uniquement si un besoin concret le justifie.
 
 ---
 
@@ -242,7 +295,7 @@ L'agent prend la décision stratégique à partir d'un contexte préparé par le
 - **Confirmé :** GPT-5.6 Sol sélectionnable par configuration.
 - **À décider :** paramètres exacts, budget tokens, retries et outils éventuels.
 
-### 11.3 Port confirmé au Batch 02
+### 11.3 Port confirmé
 
 ```text
 LLMProvider.generate_decision(AgentInput) -> DecisionCandidate
@@ -262,7 +315,7 @@ Le Risk Engine déterministe est **l'autorité finale** avant exécution. Il peu
 
 Actifs autorisés, taille maximale, exposition, cash minimum, quantité avant SELL, drawdown/perte, fraîcheur, fréquence/turnover, cooldown, précision/minimum Kraken.
 
-Aucune valeur chiffrée n'est décidée au Batch 02.
+Le Batch 04 expose les informations de fraîcheur mais ne fige aucun seuil métier Risk.
 
 ---
 
@@ -306,8 +359,6 @@ La frontière exacte d'une journée, la devise de référence et le calcul du ca
 
 Toutes les décisions sont journalisées, y compris `HOLD`.
 
-### Confirmé au Batch 02
-
 Les contrats portent des identifiants corrélables pour snapshots, cycles, décisions, évaluations de risque, exécutions et fills. Les timestamps techniques sont UTC-aware.
 
 ### Toujours à décider
@@ -326,7 +377,7 @@ PostgreSQL est la base cible.
 
 Cycles, snapshots/références de marché et portefeuille, décisions agent, résultats Risk Engine, exécutions/fills PAPER, métriques P&L, configuration/version d'expérience et erreurs utiles.
 
-ORM, migrations, granularité de conservation et rétention restent à décider.
+ORM, migrations, granularité de conservation et rétention restent à décider. Le Batch 04 conserve seulement un historique mémoire borné et ne crée aucune persistance.
 
 ---
 
@@ -349,17 +400,19 @@ ORM, migrations, granularité de conservation et rétention restent à décider.
 
 Le passage en LIVE doit être explicite, séparé et ultérieur. Le mode ne doit jamais être déduit d'une clé présente ou de l'environnement.
 
-Au Batch 02, le choix est plus strict : `ExecutionMode` ne possède que la valeur `PAPER`, donc `LIVE` n'est pas activable.
+`ExecutionMode` ne possède que la valeur `PAPER`, donc `LIVE` n'est pas activable.
 
 ---
 
-## 20. Horloge et timestamps
+## 20. Horloge, timestamps et no look-ahead
 
-### Confirmé au Batch 02
+### Confirmé
 
-Une interface `Clock.now()` et une implémentation `SystemClock` UTC fournissent un point d'injection minimal pour tests déterministes, futurs replays et prévention du look-ahead.
+Une interface `Clock.now()` et une implémentation `SystemClock` UTC fournissent un point d'injection pour tests déterministes et replays.
 
-Les timestamps techniques sont stockés/échangés en UTC après normalisation. Cette convention **ne décide pas** de la frontière journalière des métriques.
+Les timestamps techniques sont stockés/échangés en UTC après normalisation. Cette convention ne décide pas de la frontière journalière des métriques.
+
+Le Batch 04 rend la règle temporelle explicite : un snapshot construit à `T` ne peut utiliser que les observations avec `observed_at <= T`. Les observations futures déjà présentes dans l'historique d'un replay restent exclues. Aucune interpolation rétrospective n'est réalisée.
 
 ---
 
@@ -370,7 +423,8 @@ Les timestamps techniques sont stockés/échangés en UTC après normalisation. 
 - ne jamais présenter un test non exécuté comme réussi ;
 - tester les composants déterministes indépendamment du LLM/Kraken ;
 - ne pas nécessiter le frontend pour tester le moteur ;
-- éviter toute exécution LIVE dans les suites automatiques.
+- éviter toute exécution LIVE dans les suites automatiques ;
+- tester explicitement absence de look-ahead, ordre temporel, fenêtres partielles et historique borné.
 
 Pyramide : unitaires, contrats, intégration offline, intégration réseau publique contrôlée, replay, frontend/API, expérimentation modèles.
 
@@ -395,10 +449,11 @@ Conserver pertes et périodes défavorables, versionner configurations, ne pas r
 - capital PAPER et devise de référence ;
 - univers initial de paires Kraken ;
 - fréquence de décision ;
-- horizons et indicateurs ;
-- enrichissement du `MarketState` ;
+- éventuelle évolution des horizons 5 min / 30 min ;
+- données marché supplémentaires réellement nécessaires (spread, volume, bougies, etc.) ;
 - représentation du sizing dans `DecisionCandidate` ;
 - limites chiffrées du Risk Engine ;
+- seuil métier global de fraîcheur ;
 - mapping agressivité 1–10 ;
 - modèle d'exécution PAPER ;
 - persistance des données de marché ;

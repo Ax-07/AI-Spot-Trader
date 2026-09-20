@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from ai_spot_trader.core.clock import Clock, SystemClock
 from ai_spot_trader.core.config import Settings
-from ai_spot_trader.domain.models import MarketState
+from ai_spot_trader.domain.models import MarketObservation, MarketState
 from ai_spot_trader.integrations.kraken.errors import KrakenPayloadError, StaleMarketDataError
 from ai_spot_trader.integrations.kraken.models import KrakenTicker
 from ai_spot_trader.integrations.kraken.rest import KrakenPublicRestClient
@@ -23,7 +23,7 @@ class TickerSource(Protocol):
 
 
 class KrakenMarketDataSource:
-    """Kraken public Spot implementation of the domain MarketDataSource port."""
+    """Kraken public Spot source exposing normalized observations and snapshots."""
 
     def __init__(
         self,
@@ -40,7 +40,7 @@ class KrakenMarketDataSource:
         self._stale_after = stale_after
         self._registry = registry
 
-    async def snapshot(self, symbol: str) -> MarketState:
+    async def observation(self, symbol: str) -> MarketObservation:
         registry = await self._pair_registry()
         canonical_symbol = registry.normalize(symbol)
         ticker = await self._websocket_client.first_ticker(canonical_symbol)
@@ -50,11 +50,19 @@ class KrakenMarketDataSource:
         if self.is_stale(ticker.timestamp):
             raise StaleMarketDataError(f"Kraken market data is stale for {canonical_symbol}")
 
-        return MarketState(
-            market_state_id=uuid4(),
-            as_of=ticker.timestamp,
+        return MarketObservation(
+            observed_at=ticker.timestamp,
             symbol=canonical_symbol,
             last_price=ticker.last_price,
+        )
+
+    async def snapshot(self, symbol: str) -> MarketState:
+        observation = await self.observation(symbol)
+        return MarketState(
+            market_state_id=uuid4(),
+            as_of=observation.observed_at,
+            symbol=observation.symbol,
+            last_price=observation.last_price,
         )
 
     def is_stale(self, as_of: datetime) -> bool:
