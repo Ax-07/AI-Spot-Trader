@@ -188,7 +188,39 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 
 ---
 
-## 4. Propositions historiques
+## 4. Décisions proposées au Batch 11
+
+Ces décisions accompagnent le patch Batch 11. Elles ne deviennent la référence intégrée qu'après validation locale puis commit/push confirmé.
+
+### ADR-053 — Rewrite Next.js same-origin vers FastAPI
+- **Statut : PROPOSÉE**
+- Le navigateur appelle uniquement `/backend/*` sur l'origine Next.js.
+- Next.js réécrit ces appels vers `AI_SPOT_TRADER_BACKEND_URL`, par défaut `http://127.0.0.1:8000`.
+- Aucune modification CORS backend n'est nécessaire pour le développement standard.
+- L'adresse backend n'est pas exposée via une variable `NEXT_PUBLIC_*`.
+
+### ADR-054 — Polling cockpit borné et purement présentatif
+- **Statut : PROPOSÉE**
+- Le cockpit relit les ressources REST toutes les 10 secondes lorsque l'onglet est visible.
+- Le polling s'arrête implicitement lorsque l'onglet n'est pas visible et ne pilote jamais la cadence du moteur.
+- Aucun WebSocket n'est ajouté au Batch 11.
+
+### ADR-055 — Types frontend alignés sur les contrats HTTP Batch 10
+- **Statut : PROPOSÉE**
+- Les types TypeScript du cockpit reflètent `api/schemas.py` sans inventer de champ métier.
+- UUID/timestamps restent des chaînes JSON et les `Decimal` sérialisés restent des chaînes côté frontend.
+- Le frontend se limite au formatage d'affichage.
+
+### ADR-056 — États d'indisponibilité explicites dans le cockpit
+- **Statut : PROPOSÉE**
+- 404 = donnée encore absente ; 503 = ressource non configurée/indisponible ; échec réseau = backend inaccessible.
+- Les listes vides restent des états métier normaux.
+- Les boutons Start/Stop sont verrouillés pendant une commande et désactivés lorsque l'état ne l'autorise pas.
+- Aucune stack trace ni payload brut inutile n'est affiché.
+
+---
+
+## 5. Propositions historiques
 
 ### ADR-P001 — Contrats Pydantic versionnés entre composants
 **SUPERSEDÉE par ADR-020** pour le principe des contrats stricts ; version de schéma explicite encore à décider si nécessaire.
@@ -204,7 +236,7 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 
 ---
 
-## 5. Décisions encore ouvertes
+## 6. Décisions encore ouvertes
 
 - capital PAPER initial produit ;
 - devise de référence produit ;
@@ -225,13 +257,27 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 
 ---
 
-## 6. Changelog
+## 7. Changelog
+
+### 2026-09-20 — Batch 11 Frontend cockpit — patch préparé
+
+**État : non intégré ; validation locale, commit et push encore requis.**
+
+- Resynchronisation confirmée sur GitHub `main` au HEAD `f29c51545cd63763ea9fefbfd37d441e52850609` (`docs: record Batch 10 integration`).
+- Correction de la référence courte qui indiquait encore `e6bcfd4` comme HEAD au lieu du commit documentaire post-intégration.
+- Remplacement du cockpit Batch 01 par une interface de contrôle/observation PAPER.
+- Ajout d'un client REST centralisé et de types TypeScript alignés sur les schémas HTTP Batch 10.
+- Ajout du rewrite `/backend/*` vers une URL FastAPI configurable côté serveur Next.js.
+- Ajout du polling d'affichage borné, de la gestion 404/503/offline et de la protection des commandes Start/Stop.
+- Ajout des vues portefeuille, marché durable, cycles, décisions, Risk, executions/fills et dernière erreur.
+- Aucun appel OpenAI/Kraken, aucune logique Risk, aucun WebSocket, aucun LIVE et aucune modification backend.
+- Les validations `pnpm --dir frontend lint`, `typecheck` et `build` restent à exécuter localement avant intégration.
 
 ### 2026-09-20 — Batch 10 API FastAPI de contrôle/observation
 
-**État : intégré sur `main` au commit `e6bcfd4dd345c934769b2f90fa7822232a80dd80`.**
+**État : intégré sur `main` au commit fonctionnel `e6bcfd4dd345c934769b2f90fa7822232a80dd80`, avec commit documentaire post-intégration `f29c51545cd63763ea9fefbfd37d441e52850609`.**
 
-- Resynchronisation confirmée sur GitHub `main` au HEAD `328cdcea155905e2859e73ab3c46a195dc52047e` (`docs: record Batch 09 integration`).
+- Resynchronisation initiale Batch 10 confirmée sur GitHub `main` au HEAD `328cdcea155905e2859e73ab3c46a195dc52047e` (`docs: record Batch 09 integration`).
 - Référence fonctionnelle Batch 09 confirmée : `c53d04f14bcda82359d11c2e14fc1eb601ed14e0`.
 - Ajout de modèles HTTP Pydantic dédiés.
 - Ajout d'un `CycleAuditReader` et d'un query service SQLAlchemy pour le journal durable.
@@ -248,9 +294,7 @@ Validation finale locale confirmée :
 - `pytest backend` : **222 tests passés**, 2 warnings de dépréciation non bloquants ;
 - Ruff : **All checks passed** ;
 - mypy : **Success: no issues found in 70 source files** ;
-- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- commit/push fonctionnel confirmé sur `main` : `e6bcfd4dd345c934769b2f90fa7822232a80dd80` (`feat: add paper control and observation api`) ;
-- working tree local confirmé propre après push.
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement.
 
 ### 2026-09-20 — Batch 09 Persistance et journal d'audit
 

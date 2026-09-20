@@ -5,14 +5,14 @@
 
 :root {
   --radius: 0.625rem;
-  --background: oklch(0.985 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --border: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --background: oklch(0.975 0.003 260);
+  --foreground: oklch(0.18 0.01 260);
+  --card: oklch(0.995 0.002 260);
+  --card-foreground: oklch(0.18 0.01 260);
+  --muted: oklch(0.945 0.006 260);
+  --muted-foreground: oklch(0.48 0.015 260);
+  --border: oklch(0.89 0.008 260);
+  --ring: oklch(0.57 0.03 260);
 }
 
 @theme inline {
@@ -34,7 +34,15 @@
   @apply border-border outline-ring/50;
 }
 
+html {
+  background: var(--background);
+}
+
 body {
   @apply bg-background text-foreground antialiased;
   font-family: Arial, Helvetica, sans-serif;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--foreground) 18%, transparent);
 }

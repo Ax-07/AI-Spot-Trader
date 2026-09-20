@@ -94,7 +94,7 @@ Limite conservée : pas encore d'exactly-once global entre ledger mémoire et co
 
 ### Objectif
 
-Fournir au futur cockpit une façade REST cohérente sans déplacer l'autorité du backend ni du Risk Engine.
+Fournir au cockpit une façade REST cohérente sans déplacer l'autorité du backend ni du Risk Engine.
 
 ### Périmètre intégré
 
@@ -123,21 +123,58 @@ Fournir au futur cockpit une façade REST cohérente sans déplacer l'autorité 
 
 ### Validation d'intégration
 
-Validation locale confirmée :
-
 - `pytest backend` : **222 tests passés**, 2 warnings non bloquants ;
 - Ruff : **All checks passed** ;
 - mypy : **70 fichiers sans erreur** ;
 - `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- commit/push confirmé : `e6bcfd4dd345c934769b2f90fa7822232a80dd80`.
+- commit fonctionnel : `e6bcfd4dd345c934769b2f90fa7822232a80dd80` ;
+- commit documentaire post-intégration / HEAD audité : `f29c51545cd63763ea9fefbfd37d441e52850609`.
 
 ---
 
 ## Batch 11 — Frontend cockpit
 
-**État : futur.**
+**État : patch préparé, à valider localement, non intégré.**
 
-Dashboard marché, portefeuille, décisions, Risk, exécutions, erreurs et lifecycle. Le frontend reste un client du backend, jamais le propriétaire du moteur.
+### Objectif
+
+Remplacer le bootstrap Batch 01 par un cockpit Next.js réellement utilisable, exclusivement client des interfaces Batch 10.
+
+### Périmètre proposé
+
+- état backend et audit store ;
+- état moteur et commandes Start/Stop ;
+- portefeuille PAPER courant ;
+- dernier marché durable ;
+- dernier cycle et cycles récents ;
+- décisions BUY/SELL/HOLD ;
+- résultats Risk ALLOW/MODIFY/REJECT ;
+- executions/intents et fills ;
+- dernière erreur technique ;
+- gestion explicite des 404, 503, listes vides, backend hors ligne et erreurs API génériques ;
+- responsive desktop/mobile sans librairie de graphiques.
+
+### Architecture retenue dans le patch
+
+- types TypeScript alignés sur `api/schemas.py` ;
+- client HTTP centralisé sous `frontend/src/lib/api/` ;
+- rewrite Next.js `/backend/:path*` vers `AI_SPOT_TRADER_BACKEND_URL` ;
+- aucune configuration CORS backend nécessaire pour le développement standard ;
+- polling de présentation toutes les 10 secondes, suspendu lorsque l'onglet n'est pas visible ;
+- commandes lifecycle désactivées pendant leur exécution pour éviter les doubles clics ;
+- aucune logique Agent/Risk/Broker/market data dans le frontend ;
+- aucun WebSocket.
+
+### Validation requise avant intégration
+
+```powershell
+pnpm --dir frontend lint
+pnpm --dir frontend typecheck
+pnpm --dir frontend build
+git diff --check
+```
+
+Une validation manuelle avec backend configuré et non configuré est également requise avant de marquer le batch intégré.
 
 ---
 

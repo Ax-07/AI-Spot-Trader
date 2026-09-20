@@ -53,11 +53,13 @@ V0 est atteinte lorsque le backend peut, sans frontend obligatoire :
 10. journaliser durablement les cycles ;
 11. exposer suffisamment d'état via FastAPI.
 
-Le Batch 08 réalise le point 9. Le Batch 09 réalise le socle durable du point 10. Le Batch 10 réalise le socle REST du point 11 et est **intégré sur `main`** au commit `e6bcfd4dd345c934769b2f90fa7822232a80dd80`.
+Le Batch 08 réalise le point 9. Le Batch 09 réalise le socle durable du point 10. Le Batch 10 réalise le socle REST du point 11 et est **intégré sur `main`** au commit fonctionnel `e6bcfd4dd345c934769b2f90fa7822232a80dd80`. Le HEAD GitHub audité après documentation Batch 10 est `f29c51545cd63763ea9fefbfd37d441e52850609`.
 
 ### V1 — cockpit et expérimentation instrumentée
 
 V1 ajoute le cockpit Next.js/shadcn, historique, analytics P&L/drawdown/coûts/exposition, replay reproductible, expérimentations d'agressivité et comparaison Luna/Sol. Le LIVE n'est pas une condition de V1.
+
+Le Batch 11 fournit le socle cockpit comme patch à valider localement ; il n'est pas encore intégré tant que la validation, le commit et le push ne sont pas confirmés.
 
 ---
 
@@ -95,11 +97,17 @@ PortfolioState --+--> AgentInput --> Agent IA --> DecisionCandidate
                                              |
                                              v
                                   durable audit persistence
+                                             |
+                                             v
+                                       FastAPI REST
+                                             |
+                                             v
+                                    Next.js cockpit
 ```
 
 Principe absolu : **l'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
-Le package Agent ne possède aucun chemin direct vers Risk, Broker, Kraken, FastAPI ou une base de données. Le package d'orchestration relie explicitement les composants canoniques sans réimplémenter leur métier. La persistance ne décide rien et ne modifie aucun artefact métier.
+Le package Agent ne possède aucun chemin direct vers Risk, Broker, Kraken, FastAPI ou une base de données. Le package d'orchestration relie explicitement les composants canoniques sans réimplémenter leur métier. La persistance ne décide rien et ne modifie aucun artefact métier. Le frontend ne décide rien non plus : il observe et déclenche seulement les commandes lifecycle exposées par FastAPI.
 
 ---
 
@@ -440,7 +448,84 @@ Aucun WebSocket n'est ajouté. Tant qu'il n'existe pas de bus d'événements can
 
 ---
 
-## 15. Sécurité et séparation PAPER / LIVE
+## 15. Frontend cockpit — Batch 11 proposé pour validation
+
+Le Batch 11 transforme le bootstrap Next.js en cockpit PAPER utilisable, sans modifier les responsabilités backend.
+
+### Communication frontend/backend
+
+Le navigateur appelle des chemins same-origin `/backend/*`. `next.config.ts` les réécrit vers `AI_SPOT_TRADER_BACKEND_URL`, avec `http://127.0.0.1:8000` comme valeur locale par défaut.
+
+Conséquences :
+
+- aucune configuration CORS backend n'est nécessaire pour le développement standard ;
+- l'adresse FastAPI n'est pas une variable `NEXT_PUBLIC_*` ;
+- le frontend n'appelle jamais Kraken ni OpenAI ;
+- toutes les commandes passent par FastAPI.
+
+### Client HTTP et types
+
+`frontend/src/lib/api/` porte :
+
+- les types TypeScript correspondant aux modèles HTTP du Batch 10 ;
+- un client REST centralisé ;
+- le formatage présentatif des timestamps, UUID et `Decimal` sérialisés.
+
+Le frontend n'invente pas de champs métier et ne reconstruit pas une représentation de domaine parallèle. Les payloads JSON détaillés ne sont pas interprétés stratégiquement.
+
+### Rafraîchissement
+
+Le cockpit utilise un polling de présentation toutes les 10 secondes, uniquement lorsque l'onglet est visible. Une actualisation manuelle reste possible.
+
+Ce polling :
+
+- ne crée aucun cycle ;
+- ne règle pas la cadence du moteur ;
+- ne remplace pas l'orchestrateur ;
+- ne constitue pas un bus d'événements.
+
+### États de ressources
+
+Les états UI distinguent :
+
+- chargement ;
+- donnée disponible ;
+- donnée vide/404 ;
+- ressource non configurée ou indisponible/503 ;
+- erreur réseau/API.
+
+Les erreurs techniques sont affichées uniquement à partir des métadonnées sanitizées déjà exposées par FastAPI.
+
+### Contrôle moteur
+
+Start/Stop appellent uniquement :
+
+```text
+POST /api/v1/engine/start
+POST /api/v1/engine/stop
+```
+
+Les boutons sont désactivés selon l'état du moteur et pendant une commande pour éviter les doubles clics. Fermer ou recharger le cockpit n'arrête jamais le moteur.
+
+### Vues cockpit
+
+Le patch affiche :
+
+- disponibilité backend et audit store ;
+- moteur et dernier cycle ;
+- portefeuille PAPER ;
+- dernier marché durable ;
+- cycles récents ;
+- décisions BUY/SELL/HOLD ;
+- assessments ALLOW/MODIFY/REJECT ;
+- executions/intents et fills ;
+- dernière erreur technique.
+
+Les analytics P&L/drawdown restent hors Batch 11.
+
+---
+
+## 16. Sécurité et séparation PAPER / LIVE
 
 `ExecutionMode` ne contient que `PAPER`. Le LIVE reste non représentable et nécessitera une décision dédiée. Aucune clé Kraken privée n'est requise.
 
@@ -450,9 +535,11 @@ La base PostgreSQL ne doit recevoir aucun secret. `database_url` est chargée de
 
 Le Batch 10 n'ajoute pas d'authentification complexe. Le bind API par défaut reste local (`127.0.0.1`) ; l'exposition réseau distante des commandes lifecycle devra être protégée explicitement avant tout usage non local.
 
+Le Batch 11 n'ajoute aucun secret frontend. `AI_SPOT_TRADER_BACKEND_URL` est une adresse de service côté serveur Next.js, pas un credential.
+
 ---
 
-## 16. Stratégie de tests
+## 17. Stratégie de tests
 
 Les tests restent déterministes et offline autant que possible.
 
@@ -486,11 +573,20 @@ Validation finale Batch 10 confirmée localement avant intégration :
 - Ruff : **All checks passed** ;
 - mypy : **70 fichiers sans erreur** ;
 - `git diff --check` : aucune erreur, seulement warnings LF -> CRLF ;
-- commit/push confirmé sur `main` : `e6bcfd4dd345c934769b2f90fa7822232a80dd80`.
+- commit fonctionnel confirmé sur `main` : `e6bcfd4dd345c934769b2f90fa7822232a80dd80` ;
+- HEAD documentaire audité : `f29c51545cd63763ea9fefbfd37d441e52850609`.
+
+Validation Batch 11 requise avant intégration :
+
+- `pnpm --dir frontend lint` ;
+- `pnpm --dir frontend typecheck` ;
+- `pnpm --dir frontend build` ;
+- `git diff --check` ;
+- vérification manuelle des états backend disponible/indisponible, moteur non configuré, audit vide/503 et données PAPER présentes.
 
 ---
 
-## 17. Questions ouvertes prioritaires
+## 18. Questions ouvertes prioritaires
 
 - capital PAPER et devise de référence produit ;
 - univers initial de paires ;

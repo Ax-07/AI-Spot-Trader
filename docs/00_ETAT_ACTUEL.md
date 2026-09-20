@@ -6,12 +6,12 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub / commit fonctionnel Batch 10 : `e6bcfd4dd345c934769b2f90fa7822232a80dd80`
-- Commit : `feat: add paper control and observation api`
+- HEAD GitHub audité : `f29c51545cd63763ea9fefbfd37d441e52850609` (`docs: record Batch 10 integration`).
+- Commit fonctionnel Batch 10 : `e6bcfd4dd345c934769b2f90fa7822232a80dd80` (`feat: add paper control and observation api`).
 - Batch 10 — API FastAPI de contrôle/observation : **intégré sur `main`**.
-- Working tree local confirmé propre après push.
+- Batch 11 — Frontend cockpit : **patch préparé pour validation locale, non intégré**.
 
-## État backend intégré
+## État intégré confirmé
 
 - Kraken public SPOT et `MarketState` déterministe, sans look-ahead.
 - `PaperPortfolioLedger` et `PaperBroker` avec frais, spread et slippage injectables.
@@ -20,20 +20,33 @@
 - `TradingCycleRunner.run_cycle()` orchestre un cycle PAPER cohérent ; `TradingEngine` le répète séquentiellement.
 - HOLD et REJECT restent des issues métier complètes ; erreurs techniques distinctes.
 - Persistance durable PostgreSQL via SQLAlchemy async + `asyncpg` + Alembic.
-- Journal corrélé par `cycle_id` avec décision, Risk, intent éventuel, fills, snapshots et erreurs sanitizées.
 - API REST `/api/v1` pour état moteur, start/stop, portefeuille, cycles, décisions, Risk, exécutions/fills, dernière erreur et dernier marché durable.
-- `CycleAuditReader` / `SqlAlchemyCycleAuditQueryService` séparent les routes FastAPI des modèles ORM.
-- Aucun auto-start du moteur, aucune migration Batch 10, aucun WebSocket, aucune API Kraken privée et aucun LIVE.
+- Aucun auto-start du moteur, aucun WebSocket, aucune API Kraken privée et aucun LIVE.
 
-## Validation finale Batch 10
+## Batch 11 proposé
 
-Validation locale Windows confirmée le 20 septembre 2026 :
+- Next.js consomme uniquement FastAPI via un rewrite same-origin `/backend/*` vers `AI_SPOT_TRADER_BACKEND_URL`.
+- Polling d'affichage borné à 10 s et suspendu lorsque l'onglet n'est pas visible.
+- Cockpit : disponibilité backend/audit, lifecycle moteur, portefeuille PAPER, marché durable, cycles, décisions, Risk, exécutions/fills et dernière erreur.
+- États `loading`, vide, non configuré/503, 404 et erreur réseau explicites.
+- Aucun calcul de stratégie, aucun appel OpenAI/Kraken, aucun `ExecutionIntent` et aucun moteur local dans le frontend.
 
-- `pytest backend` : **222 tests passés**, 2 warnings de dépréciation FastAPI/Starlette non bloquants ;
+## Dernière validation intégrée
+
+Batch 10, Windows, 20 septembre 2026 :
+
+- `pytest backend` : **222 tests passés**, 2 warnings de dépréciation non bloquants ;
 - `ruff check backend` : **All checks passed** ;
-- mypy : **Success: no issues found in 70 source files** ;
-- `git diff --check` : aucune erreur, uniquement warnings LF -> CRLF ;
-- commit/push confirmé sur `main` : `e6bcfd4`.
+- mypy : **70 fichiers sans erreur** ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement.
+
+## À valider avant intégration du Batch 11
+
+- `pnpm --dir frontend lint`
+- `pnpm --dir frontend typecheck`
+- `pnpm --dir frontend build`
+- `git diff --check`
+- comportement réel avec backend configuré, non configuré et audit store vide/indisponible.
 
 ## Limite de reprise
 
@@ -41,7 +54,7 @@ Le journal durable ne garantit pas encore un exactly-once global entre mutation 
 
 ## Prochaine étape
 
-**Batch 11 — Frontend cockpit** : construire le cockpit Next.js/shadcn comme client du backend existant, sans rendre le frontend propriétaire du moteur.
+Valider localement le Batch 11, puis commit/push. Le Batch 12 — analytics et expérimentation reproductible — reste futur tant que cette intégration n'est pas confirmée.
 
 ## Points encore à décider
 

@@ -4,7 +4,7 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut :** le Batch 10 — API FastAPI de contrôle et d'observation est **intégré sur `main`** au commit `e6bcfd4dd345c934769b2f90fa7822232a80dd80` (`feat: add paper control and observation api`). La prochaine étape est le Batch 11 — Frontend cockpit.
+> **Statut :** le Batch 10 — API FastAPI de contrôle et d'observation est **intégré sur `main`**. Le HEAD GitHub audité est `f29c51545cd63763ea9fefbfd37d441e52850609` (`docs: record Batch 10 integration`) et le commit fonctionnel Batch 10 est `e6bcfd4dd345c934769b2f90fa7822232a80dd80`. Le Batch 11 — Frontend cockpit est **préparé dans le patch courant mais n'est pas intégré** tant que la validation locale, le commit et le push ne sont pas confirmés.
 
 ## Principes
 
@@ -35,7 +35,7 @@ Stack :
 - backend : Python, `asyncio`, FastAPI, Pydantic ;
 - persistance : PostgreSQL, SQLAlchemy 2 async, `asyncpg`, Alembic ;
 - frontend : Next.js, TypeScript, shadcn/ui, Tailwind CSS ;
-- communication : REST et WebSocket uniquement lorsqu'un besoin réel le justifie ;
+- communication : REST tant qu'aucun besoin réel et bus d'événements canonique ne justifient un WebSocket ;
 - Kraken et le fournisseur LLM restent derrière des interfaces dédiées.
 
 ```text
@@ -73,6 +73,9 @@ Kraken public data
                                                       |
                                                       v
                                        FastAPI read/query layer
+                                                      |
+                                                      v
+                                          Next.js cockpit
 ```
 
 ## Agent IA
@@ -85,7 +88,7 @@ LLMProvider.generate_decision(agent_input: AgentInput) -> DecisionCandidate
 
 Le fournisseur ne produit que `action`, `symbol`, `proposed_quantity` et `rationale`. Les IDs et timestamps restent sous contrôle applicatif. GPT-5.6 Luna est le modèle initial ; Sol reste sélectionnable par configuration.
 
-L'agressivité est un entier de 1 à 10. Son mapping produit exact n'est pas encore figé et n'est pas inventé par l'API.
+L'agressivité est un entier de 1 à 10. Son mapping produit exact n'est pas encore figé et n'est pas inventé par l'API ni par le cockpit.
 
 ## Trading PAPER canonique
 
@@ -113,7 +116,7 @@ Le graphe est transactionnel et idempotent par `cycle_id`. La persistance ne gar
 
 ## API FastAPI — Batch 10 intégré
 
-Le Batch 10 ajoute une façade REST versionnée `/api/v1` sans seconde logique de trading.
+Le Batch 10 expose une façade REST versionnée `/api/v1` sans seconde logique de trading.
 
 ### Observation
 
@@ -148,11 +151,39 @@ Les erreurs techniques sont exposées sous forme sanitizée (`stage`, `error_typ
 
 Lorsque `AI_SPOT_TRADER_DATABASE_URL` est configurée et qu'aucun reader n'est injecté, FastAPI crée le `Database` et le query service pendant son lifespan, sans requête automatique et sans démarrer le trading. La connexion est disposée à l'arrêt. Une DB absente ou indisponible produit une erreur API générique sans fuite d'URL ou de secret.
 
-Aucune nouvelle migration n'est nécessaire pour le Batch 10.
+## Frontend cockpit — Batch 11 proposé
 
-### WebSocket
+Le patch Batch 11 remplace le bootstrap technique du Batch 01 par un cockpit de contrôle/observation PAPER.
 
-Aucun WebSocket n'est ajouté dans ce batch. Il n'existe pas encore de bus d'événements canonique à diffuser ; ajouter un socket maintenant créerait une mécanique parallèle ou du polling déguisé. REST suffit au socle cockpit, et le temps réel sera décidé lorsque sa source d'événements sera explicitement cadrée.
+Il affiche notamment :
+
+- disponibilité FastAPI et audit store ;
+- état `RUNNING` / `STOPPED` / `UNAVAILABLE` ;
+- Start/Stop via les endpoints Batch 10 uniquement ;
+- portefeuille PAPER ;
+- dernier marché durable ;
+- cycles récents ;
+- décisions BUY/SELL/HOLD ;
+- résultats Risk ALLOW/MODIFY/REJECT ;
+- executions/intents et fills ;
+- dernière erreur technique sanitizée.
+
+Le navigateur n'appelle pas directement FastAPI sur une autre origine. Next.js expose un chemin same-origin `/backend/*` et le réécrit vers l'adresse configurée côté serveur :
+
+```text
+browser -> /backend/api/v1/... -> Next.js rewrite -> FastAPI
+```
+
+Configuration locale :
+
+```powershell
+Copy-Item frontend\.env.example frontend\.env.local
+# puis ajuster AI_SPOT_TRADER_BACKEND_URL si FastAPI n'écoute pas sur http://127.0.0.1:8000
+```
+
+Le polling du cockpit est borné à 10 secondes et suspendu lorsque l'onglet n'est pas visible. Il sert uniquement à l'affichage et ne devient jamais l'ordonnanceur du moteur.
+
+Le frontend ne contient aucun appel OpenAI/Kraken, aucune `RiskPolicy`, aucune création de décision ou d'`ExecutionIntent`, aucune simulation de fill et aucun LIVE.
 
 ## PostgreSQL local
 
@@ -168,27 +199,25 @@ Le mot de passe versionné dans `docker-compose.yml` est uniquement une valeur l
 
 ## Validation
 
-Batch 10 intégré, validation locale Windows confirmée avant commit/push :
+Dernière validation intégrée confirmée : Batch 10.
 
 ```text
 pytest backend                  222 tests passés, 2 warnings de dépréciation non bloquants
 ruff check backend              All checks passed
-mypy backend\src backend\tests  Success: no issues found in 70 source files
+mypy backend\src backend\tests  70 fichiers sans erreur
 git diff --check                aucune erreur ; warnings LF -> CRLF uniquement
 ```
 
-Commit/push confirmé sur `main` : `e6bcfd4dd345c934769b2f90fa7822232a80dd80` (`feat: add paper control and observation api`).
-
-Commandes minimales :
+Pour valider le Batch 11 avant commit/push :
 
 ```powershell
-backend\.venv\Scripts\python.exe -m pytest backend
-backend\.venv\Scripts\python.exe -m ruff check backend
-backend\.venv\Scripts\python.exe -m mypy backend\src backend\tests
+pnpm --dir frontend lint
+pnpm --dir frontend typecheck
+pnpm --dir frontend build
 git diff --check
 ```
 
-Aucun appel OpenAI ou Kraken réel n'est requis pour les tests automatisés du Batch 10.
+Le frontend doit également être vérifié avec : backend accessible, moteur non configuré, audit vide, audit indisponible et données PAPER présentes.
 
 ## Sécurité
 
