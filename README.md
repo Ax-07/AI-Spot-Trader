@@ -4,7 +4,7 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut :** GitHub `main` est au commit fonctionnel Batch 12 `3f39999736b6fc3800ecfd36ddee0253c734d25d` (`feat: add reproducible paper analytics`). Le **Batch 12 — Analytics et expérimentation reproductible est intégré** après validation locale backend/frontend et push confirmé. La prochaine étape est le Batch 13 — Expérimentation agressivité 1–10.
+> **Statut :** GitHub `main` est resynchronisé au HEAD documentaire Batch 12 `bc1b06ad25a2aa0ba7781d50c9e642dc113850ad` (`docs: record Batch 12 integration`), avec commit fonctionnel Batch 12 `3f39999736b6fc3800ecfd36ddee0253c734d25d`. Le **patch Batch 13 — Expérimentation agressivité 1–10 est préparé mais non intégré** tant que la validation locale complète, le commit et le push ne sont pas confirmés.
 
 ## Principes
 
@@ -91,7 +91,15 @@ LLMProvider.generate_decision(agent_input: AgentInput) -> DecisionCandidate
 
 Le fournisseur ne produit que `action`, `symbol`, `proposed_quantity` et `rationale`. Les IDs et timestamps restent sous contrôle applicatif. GPT-5.6 Luna est le modèle initial ; Sol reste sélectionnable par configuration.
 
-L'agressivité est un entier de 1 à 10. Son mapping produit exact n'est pas encore figé et n'est pas inventé par l'API ni par le cockpit.
+### Agressivité — patch Batch 13
+
+Le patch Batch 13 fixe une interprétation **discrète et versionnée** des niveaux `1..10` sous `aggressiveness-map-v1`. Chaque niveau fournit un `AggressivenessContext` explicite (posture + instruction stratégique) transmis dans `AgentInput`.
+
+L'agressivité peut influencer uniquement la **volonté stratégique d'agir** et la **quantité proposée par l'Agent**. Elle ne modifie jamais `RiskPolicy`, les balances, les positions détenues, la solvabilité BUY, les contraintes temporelles, les coûts PAPER ou l'autorité finale de Risk.
+
+Le prompt Agent devient `agent-strategy-v2` afin de rendre cette frontière explicite. Une expérience contrôlée peut attacher à chaque `AgentInput` un `ExperimentManifest` `paper-experiment-v1` contenant notamment : niveau/mapping, modèle, prompt, univers, snapshot `RiskPolicy`, coûts PAPER, version analytics et identité des faits/dataset. Le digest SHA-256 du manifeste identifie la configuration expérimentale sans prétendre rendre le LLM déterministe.
+
+Les comparaisons d'agressivité réutilisent directement les rapports `paper-analytics-v1` du Batch 12 : aucune métrique n'est recalculée avec une formule parallèle et aucun classement automatique n'est produit.
 
 ## Trading PAPER canonique
 
@@ -102,6 +110,7 @@ L'agressivité est un entier de 1 à 10. Son mapping produit exact n'est pas enc
 - MODIFY utilise exactement la quantité autorisée par Risk.
 - ALLOW transmet l'intent produit par Risk.
 - Les erreurs Market/Portfolio/Agent/Risk/Broker restent des cycles `FAILED`, jamais des HOLD synthétiques.
+- Le patch Batch 13 n'ajoute aucun chemin d'exécution et ne permet jamais à l'agressivité de produire un `ExecutionIntent`.
 
 ## Persistance durable — Batch 09 intégré
 
@@ -116,6 +125,8 @@ Le schéma `0001_audit_journal` conserve :
 - `audit_fills`.
 
 Le graphe est transactionnel et idempotent par `cycle_id`. La persistance ne garantit pas encore un exactly-once global entre la mutation du ledger PAPER mémoire et le commit PostgreSQL ; la reconstruction/réconciliation après crash reste différée.
+
+Le patch Batch 13 n'ajoute pas de table ni de migration : `AgentInput` est déjà persisté intégralement en JSON/JSONB, donc le mapping et le manifeste expérimental éventuel deviennent automatiquement des faits durables et participent au `result_digest` du cycle.
 
 ## API FastAPI — Batch 10 intégré
 
@@ -134,108 +145,31 @@ Le Batch 10 expose une façade REST versionnée `/api/v1` sans seconde logique d
 - `GET /api/v1/executions`
 - `GET /api/v1/errors/latest`
 - `GET /api/v1/market/latest`
+- `GET /api/v1/analytics`
 
-Les listes utilisent `limit`, `offset`, un ordre déterministe `asc|desc` et des filtres simples. Les routes ne requêtent pas directement les modèles SQLAlchemy : `SqlAlchemyCycleAuditQueryService` fournit une frontière de lecture dédiée.
-
-### Lifecycle
-
-- `POST /api/v1/engine/start`
-- `POST /api/v1/engine/stop`
-
-Ces commandes appellent uniquement le `TradingEngine` canonique injecté dans le runtime. FastAPI ne démarre jamais automatiquement le moteur. Si aucun moteur n'est injecté, l'API l'indique explicitement au lieu d'inventer une configuration de capital, paire ou cadence.
-
-### Portefeuille et marché
-
-Le portefeuille courant vient du `PaperPortfolioLedger` injecté. Le dernier marché exposé par l'API d'audit est le dernier `MarketState` durable déjà utilisé par un cycle ; l'endpoint ne déclenche aucun refresh Kraken.
-
-### Erreurs et DB
-
-Les erreurs techniques sont exposées sous forme sanitizée (`stage`, `error_type`, `timed_out`) sans message brut potentiellement sensible.
-
-Lorsque `AI_SPOT_TRADER_DATABASE_URL` est configurée et qu'aucun reader n'est injecté, FastAPI crée le `Database` et le query service pendant son lifespan, sans requête automatique et sans démarrer le trading. La connexion est disposée à l'arrêt. Une DB absente ou indisponible produit une erreur API générique sans fuite d'URL ou de secret.
+Le patch Batch 13 n'ajoute aucun endpoint : le protocole expérimental reste une responsabilité backend/domaine, et le cockpit demeure une surface d'observation.
 
 ## Frontend cockpit — Batch 11 intégré
 
-Le Batch 11 remplace le bootstrap technique du Batch 01 par un cockpit de contrôle/observation PAPER.
-
-Il affiche notamment :
-
-- disponibilité FastAPI et audit store ;
-- état `RUNNING` / `STOPPED` / `UNAVAILABLE` ;
-- Start/Stop via les endpoints Batch 10 uniquement ;
-- portefeuille PAPER ;
-- dernier marché durable ;
-- cycles récents ;
-- décisions BUY/SELL/HOLD ;
-- résultats Risk ALLOW/MODIFY/REJECT ;
-- executions/intents et fills ;
-- dernière erreur technique sanitizée.
-
-Le navigateur n'appelle pas directement FastAPI sur une autre origine. Next.js expose un chemin same-origin `/backend/*` et le réécrit vers l'adresse configurée côté serveur :
-
-```text
-browser -> /backend/api/v1/... -> Next.js rewrite -> FastAPI
-```
-
-Configuration locale :
-
-```powershell
-Copy-Item frontend\.env.example frontend\.env.local
-# puis ajuster AI_SPOT_TRADER_BACKEND_URL si FastAPI n'écoute pas sur http://127.0.0.1:8000
-```
-
-Le polling du cockpit est borné à 10 secondes et suspendu lorsque l'onglet n'est pas visible. Il sert uniquement à l'affichage et ne devient jamais l'ordonnanceur du moteur.
-
-Le frontend ne contient aucun appel OpenAI/Kraken, aucune `RiskPolicy`, aucune création de décision ou d'`ExecutionIntent`, aucune simulation de fill et aucun LIVE.
+Le cockpit affiche l'état backend/moteur, portefeuille, marché durable, cycles, décisions, Risk, exécutions/fills, erreurs sanitizées et analytics PAPER. Il ne contient aucune logique Agent/Risk/Broker et n'est pas modifié au Batch 13.
 
 ## Analytics PAPER — Batch 12 intégré
 
-Le Batch 12 ajoute un reducer analytics **pur, déterministe et en lecture seule** au-dessus du journal durable existant. Aucune migration n'est requise et aucune décision de trading n'est recalculée ou modifiée.
+Le reducer analytics reste **pur, déterministe et en lecture seule** au-dessus du journal durable. Les coûts sont lus dans les fills persistés, chaque point est valorisé au `MarketState` durable du même cycle et la reproductibilité des métriques repose sur `paper-analytics-v1` + digest des `result_digest`.
 
-Conventions intégrées :
+Le patch Batch 13 réutilise ces rapports tels quels pour comparer factuellement les niveaux : P&L brut/net, coûts, drawdown, exposition, trades, HOLD, REJECT, MODIFY, FAILED et séries quotidiennes/cumulées.
 
-- source canonique : faits immuables du journal PostgreSQL (`AgentInput`, décision/Risk, fills, portfolio post-cycle) ;
-- P&L net : equity marquée au prix durable du cycle moins l'equity initiale durable ;
-- P&L brut : P&L net + frais + spread + slippage cumulés ;
-- coûts : sommes des valeurs effectivement persistées dans les fills, jamais réestimées avec une configuration courante ;
-- drawdown : calculé sur l'equity nette marquée ;
-- exposition : valeur des positions au prix durable du cycle rapportée à l'equity lorsque celle-ci est positive ;
-- trade : exécution effectivement fillée ; HOLD et REJECT sont comptés séparément ;
-- cycles `FAILED` : comptés séparément et valorisés uniquement lorsque les faits marché/portefeuille nécessaires sont durables ;
-- frontière quotidienne : **UTC** ;
-- historique : chaque point utilise uniquement le `MarketState` durable du cycle concerné, sans dernier prix futur ;
-- reproductibilité : `calculation_version` + SHA-256 de la séquence durable `(cycle_id, result_digest)` ;
-- incohérence de continuité ou actif non valorisable : erreur explicite plutôt qu'une métrique inventée.
+## Validation du patch Batch 13 dans cet environnement
 
-L'API intégrée expose `GET /api/v1/analytics`. Le cockpit affiche P&L, coûts, drawdown, exposition, activité et performances quotidiennes sans recalcul métier dans le navigateur. La reproduction d'une **décision LLM** sous protocole expérimental complet (modèle/prompt/RiskPolicy/configuration) n'est pas prétendue par ce batch et reste du ressort des Batches 13/14.
-
-## PostgreSQL local
-
-Depuis la racine du repository :
-
-```powershell
-docker compose up -d
-$env:AI_SPOT_TRADER_DATABASE_URL="postgresql+asyncpg://ai_spot_trader:local_dev_password@localhost:5432/ai_spot_trader"
-backend\.venv\Scripts\python.exe -m alembic -c backend\alembic.ini upgrade head
-```
-
-Le mot de passe versionné dans `docker-compose.yml` est uniquement une valeur locale de développement.
-
-## Validation
-
-Batch 12 validé localement puis intégré sur `main` au commit `3f39999736b6fc3800ecfd36ddee0253c734d25d`.
+Exécuté réellement pendant la préparation :
 
 ```text
-pytest backend                     231 tests passés ; 2 warnings de dépréciation externes
-ruff check backend                 All checks passed
-mypy backend/src backend/tests     Success: no issues found in 76 source files
-pnpm --dir frontend lint           réussi
-pnpm --dir frontend typecheck      réussi
-pnpm --dir frontend build          réussi — Next.js 16.3.3, route / statique compilée
-git diff --check                   aucune erreur ; warnings LF -> CRLF uniquement
+pytest ciblé test_experiments.py + test_agent_provider.py : 47 tests réussis
+python -m py_compile sur les fichiers Python du patch       : réussi
+smoke TradingCycleRunner niveau 10 + manifeste + REJECT Risk : réussi
 ```
 
-Le commit/push `3f39999736b6fc3800ecfd36ddee0253c734d25d` est confirmé et le working tree était propre après push. Aucun smoke test PostgreSQL/runtime Batch 12 distinct n'a été fourni dans la validation d'intégration ; il n'est donc pas revendiqué ici.
+Ruff n'était pas installé dans l'environnement de préparation. La suite backend complète, Ruff, mypy et `git diff --check` doivent être exécutés localement dans le repository réel avant toute intégration. Aucun test frontend n'est requis puisque le frontend n'est pas modifié.
 
 ## Sécurité
 

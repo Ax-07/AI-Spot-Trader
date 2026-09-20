@@ -10,10 +10,15 @@ from uuid import UUID, uuid4
 
 from ai_spot_trader.core.clock import Clock, SystemClock
 from ai_spot_trader.domain.enums import RiskDecision, TradingAction
+from ai_spot_trader.domain.experiments import (
+    aggressiveness_context,
+    validate_experiment_manifest_digest,
+)
 from ai_spot_trader.domain.models import (
     AgentInput,
     DecisionCandidate,
     ExecutionIntent,
+    ExperimentManifest,
     Fill,
     MarketState,
     PortfolioState,
@@ -128,12 +133,20 @@ class TradingCycleRunner:
         symbol: str,
         aggressiveness: int,
         timeouts: TradingCycleTimeouts,
+        experiment_manifest: ExperimentManifest | None = None,
         clock: Clock | None = None,
         cycle_id_factory: CycleIdFactory = uuid4,
     ) -> None:
         parse_canonical_symbol(symbol)
-        if not 1 <= aggressiveness <= 10:
-            raise ValueError("aggressiveness must be between 1 and 10")
+        context = aggressiveness_context(aggressiveness)
+        if experiment_manifest is not None:
+            validate_experiment_manifest_digest(experiment_manifest)
+            if experiment_manifest.aggressiveness != context:
+                raise ValueError(
+                    "experiment manifest aggressiveness must match the runner configuration"
+                )
+            if symbol not in experiment_manifest.universe:
+                raise ValueError("runner symbol must belong to the experiment universe")
         self._market_data = market_data
         self._portfolio = portfolio
         self._agent = agent
@@ -141,6 +154,8 @@ class TradingCycleRunner:
         self._broker = broker
         self._symbol = symbol
         self._aggressiveness = aggressiveness
+        self._aggressiveness_context = context
+        self._experiment_manifest = experiment_manifest
         self._timeouts = timeouts
         self._clock = clock or SystemClock()
         self._cycle_id_factory = cycle_id_factory
@@ -182,6 +197,8 @@ class TradingCycleRunner:
                 market_state=market_state,
                 portfolio_state=portfolio_state,
                 aggressiveness=self._aggressiveness,
+                aggressiveness_context=self._aggressiveness_context,
+                experiment_manifest=self._experiment_manifest,
             )
             market_state = agent_input.market_state
             portfolio_state = agent_input.portfolio_state

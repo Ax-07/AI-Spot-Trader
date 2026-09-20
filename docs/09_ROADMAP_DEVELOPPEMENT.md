@@ -92,43 +92,7 @@ Limite conservée : pas encore d'exactly-once global entre ledger mémoire et co
 
 **État : intégré.**
 
-### Objectif
-
-Fournir au cockpit une façade REST cohérente sans déplacer l'autorité du backend ni du Risk Engine.
-
-### Périmètre intégré
-
-- état moteur ;
-- start/stop uniquement via le `TradingEngine` canonique injecté ;
-- portefeuille PAPER courant ;
-- historique durable des cycles ;
-- détail d'un cycle ;
-- décisions Agent ;
-- assessments Risk ;
-- intents/fills ;
-- dernière erreur technique sanitizée ;
-- dernier `MarketState` durable disponible ;
-- pagination, ordre et filtres déterministes ;
-- lifecycle DB FastAPI explicite.
-
-### Décisions retenues
-
-- modèles Pydantic HTTP dédiés ;
-- `CycleAuditReader` + `SqlAlchemyCycleAuditQueryService` entre routes et ORM ;
-- aucune nouvelle migration ;
-- aucun démarrage automatique du moteur ;
-- endpoints moteur/portfolio explicitement non configurés si leurs composants canoniques ne sont pas injectés ;
-- DB absente/indisponible gérée sans fuite de secrets ;
-- pas de WebSocket tant qu'aucun bus d'événements canonique n'existe.
-
-### Validation d'intégration
-
-- `pytest backend` : **222 tests passés**, 2 warnings non bloquants ;
-- Ruff : **All checks passed** ;
-- mypy : **70 fichiers sans erreur** ;
-- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- commit fonctionnel : `e6bcfd4dd345c934769b2f90fa7822232a80dd80` ;
-- commit documentaire post-intégration / HEAD audité : `f29c51545cd63763ea9fefbfd37d441e52850609`.
+Façade REST d'observation/lifecycle, query service durable, start/stop uniquement sur le moteur canonique, aucune logique Agent/Risk/Broker parallèle.
 
 ---
 
@@ -136,43 +100,7 @@ Fournir au cockpit une façade REST cohérente sans déplacer l'autorité du bac
 
 **État : intégré.**
 
-### Objectif
-
-Remplacer le bootstrap Batch 01 par un cockpit Next.js réellement utilisable, exclusivement client des interfaces Batch 10.
-
-### Périmètre intégré
-
-- état backend et audit store ;
-- état moteur et commandes Start/Stop ;
-- portefeuille PAPER courant ;
-- dernier marché durable ;
-- dernier cycle et cycles récents ;
-- décisions BUY/SELL/HOLD ;
-- résultats Risk ALLOW/MODIFY/REJECT ;
-- executions/intents et fills ;
-- dernière erreur technique ;
-- gestion explicite des 404, 503, listes vides, backend hors ligne et erreurs API génériques ;
-- responsive desktop/mobile sans librairie de graphiques.
-
-### Architecture retenue
-
-- types TypeScript alignés sur `api/schemas.py` ;
-- client HTTP centralisé sous `frontend/src/lib/api/` ;
-- rewrite Next.js `/backend/:path*` vers `AI_SPOT_TRADER_BACKEND_URL` ;
-- aucune configuration CORS backend nécessaire pour le développement standard ;
-- polling de présentation toutes les 10 secondes, suspendu lorsque l'onglet n'est pas visible ;
-- commandes lifecycle désactivées pendant leur exécution pour éviter les doubles clics ;
-- aucune logique Agent/Risk/Broker/market data dans le frontend ;
-- aucun WebSocket.
-
-### Validation d'intégration
-
-- `pnpm --dir frontend lint` : **réussi** ;
-- `pnpm --dir frontend typecheck` : **réussi** ;
-- `pnpm --dir frontend build` : **réussi** avec Next.js 16.3.3 ;
-- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- smoke test runtime : backend accessible, moteur non configuré, données vides/503 et backend hors ligne gérés proprement ;
-- commit/push confirmé : `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`.
+Cockpit Next.js/shadcn, polling présentatif borné, vues moteur/portfolio/marché/cycles/Risk/exécutions, aucune logique stratégique frontend.
 
 ---
 
@@ -196,52 +124,59 @@ Mesurer les performances PAPER honnêtement à partir des faits durables sans mo
 - performance quotidienne UTC et cumulée ;
 - endpoint `GET /api/v1/analytics` ;
 - panneau analytics dans le cockpit ;
-- version de calcul et digest SHA-256 des faits sources pour vérifier la reproductibilité du recalcul.
-
-### Architecture retenue
-
-- reducer `analytics.paper` pur, sans I/O ni horloge courante ;
-- `SqlAlchemyPaperAnalyticsQueryService` en lecture seule au-dessus du journal Batch 09 ;
-- aucune nouvelle table, vue matérialisée ou migration ;
-- valorisation historique au `MarketState.last_price` du cycle concerné uniquement ;
-- refus explicite d'une continuité portefeuille incohérente ou d'un actif non valorisable ;
-- frontend strictement présentatif, sans recalcul métier.
-
-### Conventions retenues
-
-- P&L net = equity courante marquée - equity initiale durable ;
-- P&L brut = P&L net + frais + spread + slippage cumulés ;
-- drawdown = baisse de l'equity nette depuis son plus haut historique ;
-- exposition = valeur des positions / equity lorsque l'equity est positive ;
-- trade = exécution avec fill ; HOLD/REJECT ne sont pas des trades ;
-- jours = UTC ;
-- cycles FAILED comptés et valorisés seulement lorsque leurs faits permettent un replay déterministe.
+- version de calcul et digest SHA-256 des faits sources.
 
 ### Limite de reproductibilité
 
-Le Batch 12 reproduit **les métriques** à partir des faits immuables. Il ne prétend pas encore rejouer une décision LLM sous un manifeste complet modèle/prompt/RiskPolicy/coûts : cette expérimentation contrôlée reste le périmètre des Batches 13/14.
-
-### Validation d'intégration
-
-- `pytest backend` : **231 tests passés**, 2 warnings de dépréciation externes ;
-- Ruff : **All checks passed** ;
-- mypy : **76 fichiers sans erreur** ;
-- `pnpm --dir frontend lint` : **réussi** ;
-- `pnpm --dir frontend typecheck` : **réussi** ;
-- `pnpm --dir frontend build` : **réussi** avec Next.js 16.3.3 ;
-- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- commit/push confirmé : `3f39999736b6fc3800ecfd36ddee0253c734d25d` ;
-- working tree confirmé propre après push.
-
-Aucun smoke test PostgreSQL/runtime Batch 12 distinct n'a été fourni ; il n'est pas revendiqué.
+Le Batch 12 reproduit **les métriques** à partir des faits immuables. Il ne prétend pas rejouer une décision LLM sous protocole complet.
 
 ---
 
 ## Batch 13 — Expérimentation agressivité 1–10
 
-**État : futur.**
+**État : patch préparé, non intégré.**
 
-Figer un mapping versionné et comparer les niveaux sous protocole identique. Aucune agressivité ne contourne Risk.
+### Objectif
+
+Figer un protocole expérimental explicite, versionné, reproductible et mesurable pour l'agressivité `1..10`, sans déplacer l'autorité stratégique vers un bot déterministe et sans contourner Risk.
+
+### Architecture retenue dans le patch
+
+- mapping **discret** `aggressiveness-map-v1` ;
+- dix postures stratégiques explicites, sans seuil Risk ni multiplicateur d'exécution ;
+- `AggressivenessContext` persisté dans `AgentInput` ;
+- prompt Agent `agent-strategy-v2` ;
+- manifeste `paper-experiment-v1` avec digest SHA-256 ;
+- identité enregistrée : niveau/mapping, modèle, prompt, univers, `RiskPolicy`, coûts PAPER, source/dataset, fenêtre éventuelle et version analytics ;
+- aucune nouvelle table ni migration : le journal Batch 09 persiste déjà `AgentInput` en JSON/JSONB ;
+- comparaison factuelle de plusieurs niveaux à partir des `PaperAnalyticsReport` Batch 12 existants ;
+- comparaison refusée si un champ contrôlé hors agressivité diffère ;
+- aucune API ni modification frontend dans ce batch.
+
+### Invariants spécifiques
+
+- l'agressivité peut influencer uniquement la décision stratégique et la quantité proposée par l'Agent ;
+- `RiskEngine.evaluate(...)` ne reçoit pas l'agressivité ;
+- niveau 10 ne modifie ni balance, ni position, ni max notional, ni solvabilité, ni whitelist, ni fraîcheur ;
+- aucun niveau ne crée directement un `ExecutionIntent` ;
+- HOLD / REJECT / MODIFY / ALLOW conservent exactement leur sémantique ;
+- erreurs techniques != HOLD ;
+- coûts PAPER inchangés et enregistrés dans le manifeste ;
+- aucune sélection rétrospective de décisions ou de cycles.
+
+### Reproductibilité
+
+Le digest du manifeste identifie le protocole/configuration. Il ne garantit pas une sortie LLM bit-à-bit identique. Pour isoler strictement l'agressivité, les runs doivent partager les mêmes faits sources ; un dataset figé avec `source_digest` identique est préférable à deux passages live successifs.
+
+### Validation réellement exécutée pendant préparation
+
+- tests ciblés `test_experiments.py` + `test_agent_provider.py` : **47 réussis** ;
+- compilation Python (`py_compile`) des fichiers du patch : **réussie** ;
+- smoke `TradingCycleRunner` niveau 10 + manifeste : **REJECT Risk confirmé, Broker non appelé** ;
+- Ruff : non exécuté dans l'environnement de préparation (outil absent) ;
+- suite backend complète, mypy et `git diff --check` : à exécuter localement avant intégration.
+
+Ne pas passer cet état à **intégré** avant validation locale complète, commit et push confirmés.
 
 ---
 
@@ -249,7 +184,7 @@ Figer un mapping versionné et comparer les niveaux sous protocole identique. Au
 
 **État : futur.**
 
-Comparer les modèles sur snapshots, RiskPolicy, coûts PAPER, prompts et configuration expérimentale identiques.
+Comparer les modèles sur snapshots/faits sources, RiskPolicy, coûts PAPER, prompt et configuration expérimentale contrôlés. Le manifeste Batch 13 sert de socle : le changement de modèle devra être explicite et empêcher toute attribution erronée à l'agressivité.
 
 ---
 
@@ -306,11 +241,11 @@ Readiness, adaptateur privé Kraken, réconciliation, permissions minimales sans
 - valeur produit de cadence ;
 - valeurs produit des limites Risk ;
 - limites avancées d'exposition/drawdown utilisées comme **contraintes Risk** ;
-- mapping agressivité ;
 - valeurs de référence fee/spread/slippage ;
 - politique de rétention ;
 - reconstruction du ledger et réconciliation après crash ;
-- manifeste expérimental complet pour rejouer/comparer les décisions ;
+- choix d'un dataset/replay canonique pour comparaisons strictement appariées ;
+- politique éventuelle de répétitions LLM pour estimer la variance stochastique ;
 - source d'événements et protocole d'un futur WebSocket ;
 - auth/déploiement pour une exposition non locale ;
 - éventuel LIVE.

@@ -6,10 +6,11 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD fonctionnel Batch 12 confirmé : `3f39999736b6fc3800ecfd36ddee0253c734d25d` (`feat: add reproducible paper analytics`).
-- Batch 11 : **intégré** au commit `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`.
-- Batch 12 : **intégré** après validation locale et push confirmé.
-- Working tree local confirmé propre après push du commit Batch 12.
+- HEAD GitHub `main` resynchronisé avant Batch 13 : `bc1b06ad25a2aa0ba7781d50c9e642dc113850ad` (`docs: record Batch 12 integration`).
+- HEAD fonctionnel Batch 12 : `3f39999736b6fc3800ecfd36ddee0253c734d25d` (`feat: add reproducible paper analytics`).
+- Écart confirmé : `bc1b06ad...` est un commit documentaire uniquement, 1 commit au-dessus du HEAD fonctionnel Batch 12.
+- Batch 12 : **intégré**.
+- Batch 13 : **patch préparé, non intégré** tant que validation locale complète + commit/push ne sont pas confirmés.
 
 ## État intégré confirmé
 
@@ -17,32 +18,38 @@
 - Seul Risk produit `ExecutionIntent` ; HOLD/REJECT restent des issues métier auditées ; les erreurs techniques restent distinctes.
 - Journal durable PostgreSQL SQLAlchemy/Alembic, API REST `/api/v1` et cockpit Next.js/shadcn intégrés.
 - Analytics PAPER déterministes dérivés des faits durables : P&L brut/net, coûts, drawdown, exposition, trades, séries par cycle et daily UTC.
-- `GET /api/v1/analytics` et panneau analytics cockpit intégrés.
 - Reproductibilité des métriques par `paper-analytics-v1` + digest des `result_digest`, sans look-ahead.
 - Aucun LIVE, Kraken privé, stratégie frontend ou WebSocket.
 
-## Validation Batch 12
+## Patch Batch 13 préparé
 
-Validation locale confirmée le 20 septembre 2026 :
+- mapping discret canonique `1..10` sous `aggressiveness-map-v1` ;
+- chaque niveau porte une posture et une instruction stratégique explicite ;
+- `AgentInput` accepte un `AggressivenessContext` versionné et un `ExperimentManifest` optionnel ;
+- prompt Agent proposé : `agent-strategy-v2` ;
+- manifeste `paper-experiment-v1` : niveau/mapping, modèle, prompt, univers, snapshot `RiskPolicy`, coûts PAPER, source/dataset, fenêtre éventuelle, version analytics et digest SHA-256 ;
+- `TradingCycleRunner` persiste automatiquement ce contexte via l'`AgentInput` déjà journalisé ;
+- aucune migration : le payload `AgentInput` existant suffit ;
+- comparaison factuelle réutilisant directement les `PaperAnalyticsReport` Batch 12, sans formule divergente ni ranking ;
+- aucune modification API/frontend ;
+- aucune agressivité n'entre dans le Risk Engine ni ne peut produire directement un intent.
 
-- `pytest backend` : **231 tests passés**, 2 warnings de dépréciation externes ;
-- Ruff : **All checks passed** ;
-- mypy : **76 fichiers sans erreur** ;
-- `pnpm --dir frontend lint` : **réussi** ;
-- `pnpm --dir frontend typecheck` : **réussi** ;
-- `pnpm --dir frontend build` : **réussi**, Next.js 16.3.3 ;
-- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- commit/push confirmé : `3f39999736b6fc3800ecfd36ddee0253c734d25d` ;
-- working tree propre après push.
+## Validation réellement exécutée pendant préparation
 
-Aucun smoke test PostgreSQL/runtime Batch 12 distinct n'a été fourni ; il n'est pas revendiqué.
+- tests ciblés `backend/tests/test_experiments.py` + `backend/tests/test_agent_provider.py` sur sous-ensemble reconstruit depuis `main` : **47 réussis** ;
+- `python -m py_compile` sur tous les fichiers Python du patch : **réussi** ;
+- smoke `TradingCycleRunner` niveau 10 + manifeste : **REJECT Risk confirmé, Broker non appelé** ;
+- Ruff : **non exécuté**, binaire absent de l'environnement ;
+- suite backend complète / mypy / `git diff --check` : **à exécuter localement** dans le repository complet ;
+- frontend : non modifié, donc aucune validation frontend spécifique ajoutée au patch.
 
 ## Limites conservées
 
 - Pas d'exactly-once global entre ledger PAPER mémoire et commit PostgreSQL ; recovery/réconciliation différés.
-- Pas encore de manifeste expérimental complet permettant de rejouer une décision LLM avec modèle/prompt/RiskPolicy/config identiques ; Batches 13/14.
-- Capital PAPER, devise de référence produit et valeurs de coûts/Risk restent injectés, sans défaut produit inventé.
+- Le digest du manifeste reproduit l'identité du protocole/configuration, **pas** la décision LLM : Luna/Sol peuvent rester non parfaitement déterministes à entrées identiques.
+- Un `source_digest` est recommandé pour un dataset figé ; avec un flux live non figé, l'identité du protocole reste reproductible mais les faits réalisés diffèrent naturellement.
+- Capital PAPER, devise de référence produit, cadence, univers initial et valeurs de coûts/Risk restent injectés ; Batch 13 ne leur invente aucun défaut produit.
 
 ## Prochaine étape
 
-**Batch 13 — Expérimentation agressivité 1–10** : figer un mapping versionné et comparer les niveaux sous protocole identique, sans jamais contourner Risk.
+Valider le patch Batch 13 dans le repository local complet, corriger si nécessaire, puis commit/push. Ne marquer Batch 13 intégré qu'après confirmation du push et working tree propre.

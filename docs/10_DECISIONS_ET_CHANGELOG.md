@@ -47,7 +47,7 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 **ACCEPTÉE.** Luna pour les premiers essais ; Sol sélectionnable par configuration.
 
 ### ADR-013 — Agressivité configurable de 1 à 10
-**ACCEPTÉE.** Mapping exact encore à décider ; aucune valeur ne contourne Risk.
+**ACCEPTÉE.** La plage `1..10` est canonique et aucune valeur ne contourne Risk. Le mapping exact est proposé au Batch 13 sous `aggressiveness-map-v1` et ne devient accepté qu'après intégration du batch.
 
 ### ADR-014 — Cible expérimentale de +4 % par jour
 **ACCEPTÉE.** Cible de recherche, jamais garantie ni obligation de trader.
@@ -255,7 +255,52 @@ Ces décisions sont intégrées avec le Batch 12 au commit fonctionnel `3f399997
 - **Statut : ACCEPTÉE**
 - La réponse analytics contient `calculation_version` et un SHA-256 de la séquence ordonnée `(cycle_id, result_digest)`.
 - À faits et version identiques, le rapport doit être identique, quel que soit l'ordre d'entrée.
-- Cette garantie ne couvre pas encore le rejeu LLM d'une décision ; les manifestes/protocoles d'expérimentation restent Batches 13/14.
+- Cette garantie ne couvre pas le rejeu déterministe du LLM.
+
+---
+
+## 5 bis. Décisions proposées au Batch 13
+
+Ces décisions appartiennent au patch Batch 13. Elles restent **PROPOSÉES** tant que la validation locale complète et le commit/push ne sont pas confirmés.
+
+### ADR-062 — Mapping discret d'agressivité versionné
+- **Statut : PROPOSÉE**
+- Les niveaux `1..10` sont mappés explicitement par `aggressiveness-map-v1`.
+- Le mapping décrit une posture et une instruction stratégique, pas un seuil Risk ni une formule de sizing déterministe.
+- Tout changement sémantique futur du mapping exige une nouvelle version.
+
+### ADR-063 — Agressivité limitée à la stratégie Agent
+- **Statut : PROPOSÉE**
+- L'agressivité peut influencer la volonté d'agir et la quantité proposée par l'Agent.
+- Elle n'est jamais passée comme paramètre au `RiskEngine.evaluate(...)`.
+- Elle ne peut modifier balance, position, max notional, whitelist, fraîcheur, solvabilité ou coûts PAPER.
+- Seul Risk continue de créer un `ExecutionIntent`.
+
+### ADR-064 — Prompt Agent `agent-strategy-v2`
+- **Statut : PROPOSÉE**
+- Le prompt explicite le mapping d'agressivité comme contexte stratégique uniquement.
+- Le provider vérifie modèle, prompt et digest du manifeste avant l'appel LLM lorsqu'un manifeste est présent.
+- Les anciens `AgentInput` sans contexte restent lisibles ; le provider peut normaliser le contexte avant appel.
+
+### ADR-065 — Manifeste expérimental durable dans AgentInput
+- **Statut : PROPOSÉE**
+- `paper-experiment-v1` enregistre niveau/mapping, modèle, prompt, univers, snapshot RiskPolicy, coûts PAPER, source/dataset, fenêtre et version analytics.
+- Le manifeste porte un digest SHA-256 de sa représentation canonique.
+- Il est persisté via le payload `AgentInput` existant ; aucune migration n'est requise.
+- Le digest identifie le protocole, pas une garantie de déterminisme LLM.
+
+### ADR-066 — Comparaison d'agressivité par réutilisation directe de Batch 12
+- **Statut : PROPOSÉE**
+- Les comparaisons consomment des `PaperAnalyticsReport` déjà calculés.
+- Aucun recalcul divergent de P&L/drawdown/coûts/exposition n'est introduit.
+- Les runs doivent être identiques sur tous les champs contrôlés hors agressivité.
+- La sortie reste factuelle et ne produit ni classement automatique ni sélection rétrospective.
+
+### ADR-067 — Pas d'API/frontend expérimental au Batch 13
+- **Statut : PROPOSÉE**
+- Le protocole expérimental reste backend/domaine.
+- Le cockpit n'obtient pas encore de configurateur d'agressivité/Risk/coûts.
+- Une surface de lancement d'expériences sera décidée séparément si elle devient nécessaire.
 
 ---
 
@@ -284,9 +329,9 @@ Ces décisions sont intégrées avec le Batch 12 au commit fonctionnel `3f399997
 - données marché supplémentaires ;
 - valeurs chiffrées des limites Risk ;
 - limites d'exposition/drawdown quand les données le permettent ;
-- mapping agressivité 1–10 ;
 - valeurs expérimentales fee/spread/slippage ;
-- manifeste expérimental complet pour rejeu/comparaison des décisions ;
+- dataset/replay canonique pour comparaisons strictement appariées ;
+- stratégie de répétitions pour mesurer la variance LLM éventuelle ;
 - politique de rétention PostgreSQL ;
 - reconstruction du ledger et stratégie de reprise après panne ;
 - auth et déploiement ;
@@ -297,6 +342,31 @@ Ces décisions sont intégrées avec le Batch 12 au commit fonctionnel `3f399997
 ---
 
 ## 8. Changelog
+
+### 2026-09-20 — Batch 13 Expérimentation agressivité 1–10
+
+**État : patch préparé, non intégré. Référence GitHub resynchronisée : `bc1b06ad25a2aa0ba7781d50c9e642dc113850ad`.**
+
+- HEAD fonctionnel Batch 12 confirmé : `3f39999736b6fc3800ecfd36ddee0253c734d25d` ; le commit `bc1b06ad...` est documentaire uniquement.
+- Audit confirmé : agressivité déjà validée `1..10` et passée à `AgentInput`, mais mapping exact absent ; prompt `agent-luna-v1` indiquait explicitement que la politique numérique n'était pas fixée.
+- Mapping discret proposé : `aggressiveness-map-v1` avec dix postures stratégiques.
+- Ajout de `AggressivenessContext` et `ExperimentManifest` aux contrats `AgentInput`, en restant compatibles avec les anciens payloads grâce à des champs optionnels.
+- Prompt proposé : `agent-strategy-v2`.
+- Manifeste `paper-experiment-v1` et digest SHA-256 déterministe.
+- Snapshot de `RiskPolicy` et des coûts PAPER enregistré dans l'identité expérimentale ; aucune valeur produit inventée.
+- Persistance via le JSON/JSONB `AgentInput` existant ; aucune migration.
+- Comparaison pure de runs via `PaperAnalyticsReport`, sans recalcul des métriques Batch 12.
+- Comparaison refusée si modèle, prompt, Risk, coûts, univers, source/dataset, fenêtre ou version analytics diffèrent.
+- Aucun changement API/frontend, aucun LIVE, aucune API Kraken privée.
+- Limite explicitée : même manifeste + mêmes faits ne garantit pas une sortie LLM bit-à-bit identique.
+
+Validation réellement exécutée dans l'environnement de préparation :
+
+- tests ciblés `test_experiments.py` + `test_agent_provider.py` : **47 réussis** ;
+- compilation Python des fichiers du patch : **réussie** ;
+- smoke `TradingCycleRunner` niveau 10 + manifeste : **REJECT Risk confirmé, Broker non appelé** ;
+- Ruff : non exécuté, binaire absent ;
+- suite backend complète, mypy et `git diff --check` restent à exécuter localement.
 
 ### 2026-09-20 — Batch 12 Analytics et expérimentation reproductible
 
@@ -332,56 +402,21 @@ Aucun smoke test PostgreSQL/runtime Batch 12 distinct n'a été fourni ; il n'es
 
 **État : intégré sur `main` au commit fonctionnel `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7` (`feat: add frontend paper cockpit`).**
 
-- Resynchronisation initiale confirmée sur GitHub `main` au HEAD `f29c51545cd63763ea9fefbfd37d441e52850609` (`docs: record Batch 10 integration`).
 - Remplacement du cockpit Batch 01 par une interface de contrôle/observation PAPER.
-- Ajout d'un client REST centralisé et de types TypeScript alignés sur les schémas HTTP Batch 10.
-- Ajout du rewrite `/backend/*` vers une URL FastAPI configurable côté serveur Next.js.
-- Polling d'affichage borné à 10 secondes, suspendu onglet masqué, sans rôle d'ordonnanceur.
-- Gestion explicite des états 404, 503, listes vides, backend hors ligne et erreurs API.
-- Start/Stop uniquement via les routes lifecycle Batch 10, avec protection contre les doubles clics.
-- Vues intégrées : portefeuille, marché durable, cycles, décisions, Risk, executions/fills et dernière erreur.
-- Aucun appel OpenAI/Kraken direct, aucune logique Risk, aucun WebSocket, aucun LIVE et aucune modification backend.
-
-Validation finale locale confirmée :
-
-- `pnpm --dir frontend lint` : **réussi** ;
-- `pnpm --dir frontend typecheck` : **réussi** ;
-- `pnpm --dir frontend build` : **réussi**, Next.js 16.3.3 ;
-- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- smoke test runtime confirmé pour backend accessible, moteur non configuré, données vides/503 et backend hors ligne ;
-- commit/push confirmé sur `main` : `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7` ;
-- working tree confirmé propre après push.
+- Client REST centralisé, types alignés sur Batch 10, polling borné, états 404/503/offline, Start/Stop via FastAPI uniquement.
+- Aucun appel OpenAI/Kraken direct, aucune logique Risk, aucun WebSocket, aucun LIVE.
 
 ### 2026-09-20 — Batch 10 API FastAPI de contrôle/observation
 
 **État : intégré sur `main` au commit fonctionnel `e6bcfd4dd345c934769b2f90fa7822232a80dd80`, avec commit documentaire post-intégration `f29c51545cd63763ea9fefbfd37d441e52850609`.**
 
-- Resynchronisation initiale Batch 10 confirmée sur GitHub `main` au HEAD `328cdcea155905e2859e73ab3c46a195dc52047e` (`docs: record Batch 09 integration`).
-- Référence fonctionnelle Batch 09 confirmée : `c53d04f14bcda82359d11c2e14fc1eb601ed14e0`.
-- Ajout de modèles HTTP Pydantic dédiés.
-- Ajout d'un `CycleAuditReader` et d'un query service SQLAlchemy pour le journal durable.
-- Endpoints intégrés pour moteur, portefeuille, cycles, décisions, Risk, exécutions/fills, dernière erreur et dernier marché durable.
-- Pagination `limit`/`offset`, ordre déterministe et filtres simples.
-- Start/stop uniquement via le moteur canonique injecté ; aucun auto-start.
-- Lifecycle DB possédé par FastAPI seulement lorsque créé depuis `database_url`.
-- Erreurs DB et cycle sanitizées ; aucun secret exposé.
-- Aucune nouvelle migration, aucun WebSocket, aucune API Kraken privée, aucun LIVE.
-- Le bootstrap produit (capital/paire/cadence/RiskPolicy) reste volontairement non inventé.
-
-Validation finale locale confirmée :
-
-- `pytest backend` : **222 tests passés**, 2 warnings de dépréciation non bloquants ;
-- Ruff : **All checks passed** ;
-- mypy : **Success: no issues found in 70 source files** ;
-- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement.
+Façade REST, query service durable, lifecycle moteur injecté, erreurs sanitizées, aucune migration/API Kraken privée/LIVE.
 
 ### 2026-09-20 — Batch 09 Persistance et journal d'audit
 
 **État : intégré fonctionnellement sur `main` au commit `c53d04f14bcda82359d11c2e14fc1eb601ed14e0`.**
 
 SQLAlchemy async + `asyncpg` + Alembic, journal cycles/décisions/Risk/intents/fills, snapshots et erreurs sanitizées, idempotence par `cycle_id`, transaction/rollback, PostgreSQL Docker Compose.
-
-Validation locale confirmée : **209 tests**, Ruff OK, mypy 63 fichiers OK, `git diff --check` OK et migration PostgreSQL `0001_audit_journal` validée.
 
 ### 2026-09-20 — Batch 08 Boucle autonome PAPER
 

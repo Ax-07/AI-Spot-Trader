@@ -17,6 +17,7 @@ from ai_spot_trader.agent import (
     LLMOutputValidationError,
     OpenAIDecisionProvider,
 )
+from ai_spot_trader.broker.pricing import PaperExecutionCostModel
 from ai_spot_trader.core.config import Settings
 from ai_spot_trader.domain.enums import LLMModel, TradingAction
 from ai_spot_trader.domain.models import (
@@ -27,6 +28,8 @@ from ai_spot_trader.domain.models import (
     MarketState,
     PortfolioState,
 )
+from ai_spot_trader.experiments import build_experiment_manifest
+from ai_spot_trader.risk.policy import RiskPolicy
 
 CYCLE_ID = UUID("10000000-0000-0000-0000-000000000001")
 DECISION_ID = UUID("20000000-0000-0000-0000-000000000002")
@@ -324,6 +327,7 @@ def test_provider_receives_only_structured_agent_input_and_prompt() -> None:
     assert call["model"] is LLMModel.LUNA
     assert sent_input["cycle_id"] == str(CYCLE_ID)
     assert sent_input["market_state"]["symbol"] == "BTC/EUR"
+    assert sent_input["aggressiveness_context"]["mapping_version"] == "aggressiveness-map-v1"
     assert "Kraken" not in sent_input
     assert call["instructions"] == AGENT_SYSTEM_PROMPT
     assert call["schema"]["additionalProperties"] is False
@@ -348,6 +352,35 @@ def test_sol_uses_the_same_provider_without_agent_duplication() -> None:
     assert client.calls[0]["model"] is LLMModel.SOL
 
 
+def test_experiment_manifest_model_mismatch_is_rejected_before_llm() -> None:
+    provider, client = _provider(_json_output(), model=LLMModel.LUNA)
+    base = _agent_input()
+    manifest = build_experiment_manifest(
+        aggressiveness=5,
+        llm_model=LLMModel.SOL,
+        prompt_version=AGENT_PROMPT_VERSION,
+        universe=("BTC/EUR",),
+        risk_policy=RiskPolicy(),
+        paper_costs=PaperExecutionCostModel(
+            fee_rate=Decimal("0"),
+            spread_bps=Decimal("0"),
+            slippage_bps=Decimal("0"),
+        ),
+        source_id="provider-test",
+    )
+    enriched = base.model_copy(
+        update={
+            "aggressiveness_context": manifest.aggressiveness,
+            "experiment_manifest": manifest,
+        }
+    )
+
+    with pytest.raises(AgentContractViolationError, match="LLM model"):
+        _generate(provider, enriched)
+
+    assert client.calls == []
+
+
 def test_agent_package_has_no_risk_broker_or_kraken_imports() -> None:
     package_dir = Path(agent_package.__file__).parent
     forbidden = (
@@ -368,7 +401,7 @@ def test_agent_package_has_no_risk_broker_or_kraken_imports() -> None:
 
 
 def test_agent_prompt_is_versioned_and_contains_absolute_constraints() -> None:
-    assert AGENT_PROMPT_VERSION == "agent-luna-v1"
+    assert AGENT_PROMPT_VERSION == "agent-strategy-v2"
     for required in (
         "SPOT only",
         "PAPER only",
@@ -378,6 +411,8 @@ def test_agent_prompt_is_versioned_and_contains_absolute_constraints() -> None:
         "margin",
         "futures",
         "perpetuals",
+        "Aggressiveness is strategic context only",
+        "deterministic Risk limits",
         "+4% daily target",
         "Do not invent",
         "only for the symbol",

@@ -15,17 +15,20 @@ from pydantic import (
 
 from ai_spot_trader.domain.enums import (
     ExecutionMode,
+    LLMModel,
     RiskDecision,
     RiskLimit,
     RiskReason,
     TradingAction,
 )
+from ai_spot_trader.domain.symbols import parse_canonical_symbol
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 PositiveDecimal = Annotated[Decimal, Field(gt=0)]
 NonNegativeDecimal = Annotated[Decimal, Field(ge=0)]
 PositiveInt = Annotated[int, Field(gt=0)]
 NonNegativeInt = Annotated[int, Field(ge=0)]
+Sha256Digest = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
 
 def _normalize_utc(value: datetime) -> datetime:
@@ -217,6 +220,84 @@ class PortfolioState(DomainModel):
         return self
 
 
+class AggressivenessContext(DomainModel):
+    """Versioned strategic interpretation of one configured aggressiveness level."""
+
+    mapping_version: NonEmptyText
+    level: Annotated[int, Field(ge=1, le=10)]
+    posture: NonEmptyText
+    strategic_instruction: NonEmptyText
+
+
+class ExperimentRiskPolicySnapshot(DomainModel):
+    """Canonical experiment identity for deterministic RiskPolicy parameters."""
+
+    max_order_notional: PositiveDecimal | None = None
+    allowed_pairs: tuple[NonEmptyText, ...] | None = None
+    stale_after_seconds: PositiveDecimal | None = None
+    allow_quantity_reduction: bool
+
+    @model_validator(mode="after")
+    def pairs_are_canonical(self) -> "ExperimentRiskPolicySnapshot":
+        if self.allowed_pairs is None:
+            return self
+        if not self.allowed_pairs:
+            raise ValueError("allowed_pairs cannot be empty")
+        if self.allowed_pairs != tuple(sorted(self.allowed_pairs)):
+            raise ValueError("allowed_pairs must be sorted for reproducibility")
+        if len(set(self.allowed_pairs)) != len(self.allowed_pairs):
+            raise ValueError("allowed_pairs must be unique")
+        for symbol in self.allowed_pairs:
+            parse_canonical_symbol(symbol)
+        return self
+
+
+class ExperimentPaperCostSnapshot(DomainModel):
+    """Canonical PAPER cost configuration recorded in an experiment manifest."""
+
+    fee_rate: NonNegativeDecimal
+    spread_bps: NonNegativeDecimal
+    slippage_bps: NonNegativeDecimal
+
+
+class ExperimentManifest(DomainModel):
+    """Immutable protocol identity persisted with each experimental AgentInput."""
+
+    protocol_version: NonEmptyText
+    experiment_digest: Sha256Digest
+    aggressiveness: AggressivenessContext
+    llm_model: LLMModel
+    prompt_version: NonEmptyText
+    universe: tuple[NonEmptyText, ...]
+    risk_policy: ExperimentRiskPolicySnapshot
+    paper_costs: ExperimentPaperCostSnapshot
+    analytics_version: NonEmptyText
+    source_id: NonEmptyText
+    source_digest: Sha256Digest | None = None
+    window_start: UtcDateTime | None = None
+    window_end: UtcDateTime | None = None
+
+    @model_validator(mode="after")
+    def validate_manifest_shape(self) -> "ExperimentManifest":
+        if not self.universe:
+            raise ValueError("experiment universe cannot be empty")
+        if self.universe != tuple(sorted(self.universe)):
+            raise ValueError("experiment universe must be sorted for reproducibility")
+        if len(set(self.universe)) != len(self.universe):
+            raise ValueError("experiment universe must contain unique symbols")
+        for symbol in self.universe:
+            parse_canonical_symbol(symbol)
+        if (self.window_start is None) is not (self.window_end is None):
+            raise ValueError("experiment window_start and window_end must be set together")
+        if (
+            self.window_start is not None
+            and self.window_end is not None
+            and self.window_end < self.window_start
+        ):
+            raise ValueError("experiment window_end cannot precede window_start")
+        return self
+
+
 class AgentInput(DomainModel):
     """Structured input boundary for the single strategic trading agent."""
 
@@ -225,6 +306,26 @@ class AgentInput(DomainModel):
     market_state: MarketState
     portfolio_state: PortfolioState
     aggressiveness: Annotated[int, Field(ge=1, le=10)]
+    aggressiveness_context: AggressivenessContext | None = None
+    experiment_manifest: ExperimentManifest | None = None
+
+    @model_validator(mode="after")
+    def validate_experimental_context(self) -> "AgentInput":
+        if (
+            self.aggressiveness_context is not None
+            and self.aggressiveness_context.level != self.aggressiveness
+        ):
+            raise ValueError("aggressiveness_context level must match aggressiveness")
+        manifest = self.experiment_manifest
+        if manifest is None:
+            return self
+        if self.aggressiveness_context is None:
+            raise ValueError("experiment_manifest requires aggressiveness_context")
+        if manifest.aggressiveness != self.aggressiveness_context:
+            raise ValueError("experiment_manifest aggressiveness context mismatch")
+        if self.market_state.symbol not in manifest.universe:
+            raise ValueError("AgentInput symbol is outside the experiment universe")
+        return self
 
 
 class DecisionCandidate(DomainModel):

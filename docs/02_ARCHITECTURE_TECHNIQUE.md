@@ -2,7 +2,7 @@
 
 ## 1. Objet
 
-Ce document décrit l'architecture technique courante d'AI Spot Trader, incluant les Batches 10, 11 et 12 intégrés. Les choix produit non figés restent explicitement séparés de l'architecture.
+Ce document décrit l'architecture technique courante d'AI Spot Trader, incluant les Batches 10, 11 et 12 intégrés et le **patch Batch 13 préparé mais non intégré**. Les choix produit non figés restent explicitement séparés de l'architecture.
 
 ---
 
@@ -33,9 +33,21 @@ Agent -> Risk -> Paper Broker                     PostgreSQL
        |
        v
 TradingCycleResult -> AuditedTradingCycleRunner -> journal durable
+                                                     |
+                                  +------------------+------------------+
+                                  |                                     |
+                                  v                                     v
+                         audit query service                   analytics reducer
+                                  |                                     |
+                                  +------------------+------------------+
+                                                     |
+                                                     v
+                                             FastAPI / cockpit
 ```
 
 Le frontend n'est jamais l'ordonnanceur du moteur. PostgreSQL conserve des faits ; il ne produit aucune stratégie.
+
+Le patch Batch 13 ajoute un protocole expérimental backend/domaine sans modifier ce flux de confiance.
 
 ---
 
@@ -47,28 +59,21 @@ backend/src/ai_spot_trader/
   analytics/
     paper.py
   api/
-    routes/
-      analytics.py
-      audit.py
-      engine.py
-      health.py
-      portfolio.py
-    schemas.py
   broker/
   core/
-    clock.py
-    config.py
-    runtime.py
   domain/
+    enums.py
+    experiments.py
+    models.py
+    ports.py
+    symbols.py
+  experiments/
+    __init__.py
+    comparison.py
+    protocol.py
   integrations/kraken/
   market/
   persistence/
-    audit.py
-    db.py
-    analytics.py
-    models.py
-    query.py
-    repository.py
   portfolio/
   risk/
   trading/
@@ -78,7 +83,10 @@ backend/src/ai_spot_trader/
 
 Responsabilités :
 
-- `analytics` : calculs PAPER purs et déterministes dérivés des faits durables, sans stratégie ;
+- `domain.experiments` : mapping d'agressivité et identité/digest du protocole sans dépendance Risk/Broker ;
+- `experiments.protocol` : construction du manifeste à partir des configurations injectées Risk/coûts ;
+- `experiments.comparison` : comparaison factuelle de rapports Batch 12 sans recalcul analytics ;
+- `analytics` : calculs PAPER purs et déterministes dérivés des faits durables ;
 - `domain` : contrats canoniques fournisseur-agnostiques ;
 - `market` : construction déterministe du `MarketState` ;
 - `portfolio` : ledger PAPER mémoire ;
@@ -86,11 +94,11 @@ Responsabilités :
 - `risk` : autorité déterministe avant exécution ;
 - `broker` : exécution PAPER uniquement après intent Risk ;
 - `trading` : orchestration et boucle séquentielle ;
-- `persistence.repository` : écriture durable du résultat ;
-- `persistence.query` : lecture durable d'audit pour l'API ;
-- `persistence.analytics` : chargement read-only des faits nécessaires au reducer analytics ;
-- `api` : transport HTTP et modèles de réponse, sans métier de trading ;
+- `persistence` : écriture/lecture durable ;
+- `api` : transport HTTP sans métier de trading ;
 - `core.runtime` : dépendances process-locales et lifecycle explicite.
+
+Le package Agent n'importe pas directement `risk` ou `broker`. Il dépend du mapping canonique sous `domain.experiments`, ce qui évite une inversion de dépendance via le protocole expérimental.
 
 ---
 
@@ -101,6 +109,8 @@ MarketDataSource.snapshot(symbol) ----+
                                       |
 PaperPortfolioLedger.snapshot() ------+--> AgentInput
                                              |
+                                             |  aggressiveness_context
+                                             |  experiment_manifest?
                                              v
                                       DecisionCandidate
                                              |
@@ -130,271 +140,219 @@ PaperPortfolioLedger.snapshot() ------+--> AgentInput
 
 L'API ne peut ni créer `DecisionCandidate`, ni appeler le LLM, ni construire `RiskAssessment`/`ExecutionIntent`, ni appeler le Broker pour contourner le runner. Le frontend ne peut pas non plus effectuer ces opérations.
 
+L'agressivité n'est jamais transmise comme paramètre au Risk Engine.
+
 ---
 
-## 5. Runtime FastAPI intégré au Batch 10
+## 5. Contrats expérimentaux Batch 13
+
+### 5.1 `AggressivenessContext`
+
+Le mapping `aggressiveness-map-v1` est discret et déterministe. Chaque niveau `1..10` produit :
+
+```text
+mapping_version
+level
+posture
+strategic_instruction
+```
+
+Il ne contient aucun seuil Risk, indicateur, balance minimale, notional ou multiplicateur d'exécution.
+
+### 5.2 `ExperimentManifest`
+
+Le manifeste `paper-experiment-v1` est un modèle Pydantic strict persistable avec :
+
+```text
+protocol_version
+experiment_digest
+aggressiveness
+llm_model
+prompt_version
+universe[]
+risk_policy
+paper_costs
+analytics_version
+source_id
+source_digest?
+window_start?
+window_end?
+```
+
+Le digest SHA-256 utilise une sérialisation canonique : clés triées, `Decimal` sérialisés sans flottants, timestamps explicites et collections triées là où l'ordre n'est pas sémantique.
+
+Le `comparison_identity` recalcule un digest des champs contrôlés **en excluant volontairement l'agressivité**. Deux runs ne peuvent donc être comparés que si le reste du protocole est identique.
+
+### 5.3 Snapshots de configuration
+
+`RiskPolicy` est projetée vers :
+
+```text
+max_order_notional
+allowed_pairs
+stale_after_seconds
+allow_quantity_reduction
+```
+
+`PaperExecutionCostModel` est projeté vers :
+
+```text
+fee_rate
+spread_bps
+slippage_bps
+```
+
+Ces snapshots servent à l'identité expérimentale. Ils ne déplacent aucune logique Risk/Broker dans le package expérimental.
+
+---
+
+## 6. Agent et prompt Batch 13
+
+Le prompt évolue vers `agent-strategy-v2`.
+
+`OpenAIDecisionProvider` :
+
+1. valide le symbole et la chronologie existante ;
+2. résout `aggressiveness-map-v1` ;
+3. normalise un ancien `AgentInput` sans contexte pour l'appel LLM ;
+4. si un manifeste existe, vérifie son digest, son modèle, son prompt et son mapping ;
+5. appelle le client structured-output canonique ;
+6. revalide la décision comme avant.
+
+Aucun tool-calling, aucun accès Risk/Broker/Kraken et aucun retry automatique n'est ajouté.
+
+---
+
+## 7. TradingCycleRunner Batch 13
+
+Le runner canonique reste unique. Son constructeur accepte un `experiment_manifest` optionnel.
+
+À la construction :
+
+- le symbole reste validé en forme canonique ;
+- l'agressivité est validée via `aggressiveness_context(...)` ;
+- si un manifeste est présent, son digest doit être valide ;
+- le niveau du manifeste doit correspondre au niveau du runner ;
+- le symbole du runner doit appartenir à l'univers du manifeste.
+
+Lors de chaque cycle, l'`AgentInput` contient le même contexte et le même manifeste. Aucun composant expérimental n'exécute un ordre.
+
+Le reste du pipeline reste inchangé : Market -> Portfolio -> Agent -> Risk -> Broker -> post-portfolio.
+
+---
+
+## 8. Risk Engine inchangé
+
+`RiskEngine` reste synchrone et déterministe. Il ne lit ni `AggressivenessContext` ni `ExperimentManifest`.
+
+Les contrôles restent :
+
+- symbole et correspondance marché ;
+- whitelist optionnelle ;
+- chronologie marché/portfolio ;
+- fraîcheur optionnelle ;
+- max notional optionnel ;
+- rôles d'actifs ;
+- balance quote ;
+- solvabilité BUY avec coûts ;
+- position SELL disponible.
+
+La quantité stratégique peut être réduite ou rejetée exactement comme avant. Le niveau 10 ne crée aucune exception.
+
+---
+
+## 9. Persistance durable sans migration
+
+Le journal Batch 09 persiste déjà `agent_input_payload` en JSON/JSONB et le `result_digest` est calculé à partir du résultat complet.
+
+Conséquences Batch 13 :
+
+- `aggressiveness_context` et `experiment_manifest` sont durables sans nouvelle colonne ;
+- les niveaux différents sont explicitement distinguables dans les faits persistés ;
+- changer le manifeste change naturellement le `result_digest` ;
+- les anciens payloads restent valides car les deux champs sont optionnels ;
+- aucune migration Alembic n'est requise.
+
+Le writer durable ne connaît pas la sémantique du manifeste : il persiste le modèle canonique comme n'importe quel autre fait `AgentInput`.
+
+---
+
+## 10. Compatibilité analytics Batch 12
+
+`AgentInput.model_validate_json(...)` accepte les deux champs optionnels Batch 13 ; le reducer `analytics.paper` continue donc à lire les mêmes faits.
+
+Aucune formule P&L/drawdown/coût/exposition n'est modifiée.
+
+`compare_aggressiveness_runs(...)` reçoit des objets `PaperAnalyticsReport` déjà produits et extrait uniquement les métriques existantes :
+
+- gross/net P&L ;
+- frais/spread/slippage ;
+- drawdown ;
+- exposition ;
+- trades ;
+- HOLD/REJECT/MODIFY/FAILED ;
+- `daily` existant.
+
+La comparaison ne recharge pas le journal, ne revalorise pas les positions et ne modifie pas `source_digest`.
+
+---
+
+## 11. No-look-ahead et protocole expérimental
+
+Le manifeste peut identifier une source/dataset et une fenêtre, mais le `MarketState` réellement fourni au cycle reste la seule donnée de marché décisionnelle.
+
+Pour une comparaison strictement appariée :
+
+- même `source_id` ;
+- même `source_digest` si dataset figé ;
+- même fenêtre ;
+- même univers ;
+- même modèle/prompt ;
+- même `RiskPolicy` ;
+- mêmes coûts PAPER ;
+- même version analytics.
+
+Une comparaison de deux passages live successifs est possible descriptivement, mais ne permet pas d'attribuer proprement l'écart observé à l'agressivité seule puisque les faits marché diffèrent.
+
+---
+
+## 12. Reproductibilité et limite LLM
+
+Trois identités sont distinguées :
+
+1. `experiment_digest` : protocole/configuration ;
+2. `result_digest` : faits réalisés d'un cycle ;
+3. `PaperAnalyticsReport.source_digest` : séquence de cycles utilisée par les analytics.
+
+Cette séparation évite de prétendre qu'un digest de protocole reproduit une sortie LLM.
+
+Tant qu'aucun déterminisme fournisseur exact n'est garanti, même modèle + prompt + faits + manifeste peuvent produire des décisions différentes. Un futur protocole statistique pourra exécuter plusieurs répétitions contrôlées ; ce choix n'est pas inventé au Batch 13.
+
+---
+
+## 13. Runtime FastAPI
 
 `create_app()` reste sans I/O externe et sans démarrage du trading à l'import.
 
-Le lifespan construit un `AppRuntime` avec, selon l'injection :
+Le lifespan et la surface moteur restent inchangés. Batch 13 n'ajoute aucune route de création/mutation d'expérience.
 
-- un `ControllableTradingEngine` ;
-- un `PortfolioSnapshotSource` ;
-- un `CycleAuditReader` ;
-- depuis le Batch 12, un `PaperAnalyticsReader` ;
-- éventuellement un `Database` possédé par l'application si `database_url` est configurée.
-
-Aucune valeur produit de capital, paire, cadence, coûts ou RiskPolicy n'est inventée par FastAPI. Sans moteur ou portefeuille injecté, les endpoints associés restent explicitement non configurés.
-
-À l'arrêt, `AppRuntime.close()` demande l'arrêt coopératif du moteur configuré puis ferme la DB qu'il possède. Fermer un client ou le frontend n'appelle pas ce lifecycle process.
+Aucune valeur produit de capital, paire, cadence, coûts ou RiskPolicy n'est inventée par FastAPI.
 
 ---
 
-## 6. Surface moteur
+## 14. Frontend cockpit
 
-Le protocole HTTP ne connaît qu'une surface lifecycle/observation étroite :
+Le cockpit Batch 11 n'est pas modifié.
 
-```text
-is_running
-last_result
-last_unexpected_error_type
-start()
-stop()
-```
+Il continue d'afficher les ressources REST et analytics Batch 12. Il ne contient pas de mapping d'agressivité, de constructeur de manifeste ou de logique de comparaison métier.
 
-`POST /api/v1/engine/start` ne crée aucune tâche alternative : il délègue à `TradingEngine.start()`.
-
-`POST /api/v1/engine/stop` délègue à `TradingEngine.stop()` et reste idempotent lorsque le moteur est déjà arrêté.
-
-Un verrou de commande dans `AppRuntime` sérialise start/stop côté API. Le verrou de cycle du moteur reste la protection canonique du trading.
-
----
-
-## 7. Portefeuille
-
-`GET /api/v1/portfolio` appelle uniquement `snapshot()` sur le ledger PAPER injecté. Cette lecture :
-
-- ne déclenche aucune exécution ;
-- ne reconstruit pas le ledger depuis PostgreSQL ;
-- ne modifie pas le portefeuille ;
-- conserve les contrats PAPER existants.
-
-Le recovery/rebuild du ledger reste hors des Batches 10, 11 et 12.
-
----
-
-## 8. Query service durable
-
-`SqlAlchemyCycleAuditQueryService` sépare FastAPI des records ORM.
-
-```text
-FastAPI route
-    |
-    v
-CycleAuditReader
-    |
-    v
-SqlAlchemyCycleAuditQueryService
-    |
-    v
-AsyncSession
-    |
-    v
-audit_* tables
-```
-
-Il expose :
-
-- historique paginé des cycles ;
-- détail d'un cycle ;
-- dernier cycle ;
-- décisions ;
-- assessments Risk ;
-- intents + fills ;
-- dernière erreur technique ;
-- dernier `MarketState` déjà enregistré dans un `AgentInput`.
-
-Les routes ne manipulent pas les modèles SQLAlchemy.
-
----
-
-## 9. Pagination, ordre et filtres
-
-Les collections utilisent :
-
-- `limit` : 1 à 100 ;
-- `offset` : entier >= 0 ;
-- `order=asc|desc` ;
-- ordre secondaire déterministe par UUID ;
-- filtres adaptés à la ressource : statut cycle, action, statut Risk, symbole.
-
-Le `total` est calculé sur l'ensemble filtré avant pagination.
-
----
-
-## 10. Modèles HTTP
-
-Les réponses possèdent des modèles Pydantic dédiés sous `api/schemas.py` afin d'éviter de coupler le contrat HTTP aux classes ORM.
-
-Les payloads JSON/JSONB canoniques du journal sont rendus comme faits enregistrés. L'API n'en déduit aucune nouvelle décision.
-
-Les IDs et timestamps durables sont conservés.
-
-Le frontend Batch 11 reflète ces modèles avec des types TypeScript dédiés. Il n'ajoute aucun champ métier et se limite au formatage d'affichage des UUID, timestamps et `Decimal` sérialisés.
-
----
-
-## 11. Erreurs techniques et sécurité
-
-Le moteur et le journal ne conservent dans l'API que les métadonnées d'erreur sanitizées nécessaires :
-
-```text
-stage
-error_type
-timed_out
-```
-
-Aucun message brut d'exception, stack trace, DSN, SecretStr ou secret fournisseur n'est renvoyé au cockpit.
-
-Comportements HTTP :
-
-- ressource absente : 404 ;
-- moteur/portfolio/store non configuré : 503 explicite ;
-- store configuré mais indisponible : 503 générique ;
-- payload durable incohérent : 500 générique ;
-- paramètres invalides : validation FastAPI 422 ;
-- start dupliqué : 409.
-
-Le cockpit distingue explicitement 404, 503, erreurs réseau et erreurs API génériques. Il n'affiche aucune stack trace.
-
----
-
-## 12. Lifecycle DB
-
-Si un `CycleAuditReader` est injecté, FastAPI ne crée pas de DB.
-
-Sinon, lorsque `AI_SPOT_TRADER_DATABASE_URL` est présente, le lifespan construit un seul `Database` et les readers manquants (`SqlAlchemyCycleAuditQueryService` et, avec le Batch 12, `SqlAlchemyPaperAnalyticsQueryService`). La création de l'engine SQLAlchemy ne lance ni migration ni requête au startup. Le pool est disposé au shutdown.
-
-Les migrations restent gérées exclusivement par Alembic. Le Batch 12 ne nécessite aucune migration supplémentaire au-dessus de `0001_audit_journal`.
-
----
-
-## 13. WebSocket
-
-Aucun WebSocket n'est introduit aux Batches 10, 11 ou 12.
-
-Motifs :
-
-- aucune source d'événements runtime canonique n'existe encore ;
-- diffuser en WebSocket des polls DB ajouterait peu de valeur ;
-- il faut éviter une seconde source d'état parallèle à PostgreSQL/`TradingEngine` ;
-- REST suffit au cockpit actuel.
-
-Un WebSocket sera réévalué lorsque le besoin de fréquence, le modèle d'abonnement et la source d'événements auront été définis.
-
----
-
-## 14. Frontend cockpit — Batch 11 intégré
-
-Découpage intégré :
-
-```text
-frontend/src/
-  app/
-    page.tsx
-    globals.css
-  components/
-    cockpit/
-      analytics-panel.tsx
-      cockpit-dashboard.tsx
-    ui/
-      badge.tsx
-      button.tsx
-      card.tsx
-  hooks/
-    use-analytics.ts
-    use-cockpit.ts
-  lib/
-    api/
-      client.ts
-      format.ts
-      types.ts
-    utils.ts
-```
-
-### 14.1 Couche HTTP
-
-`frontend/src/lib/api/client.ts` est l'unique point d'accès REST du cockpit.
-
-Le navigateur appelle :
-
-```text
-/backend/health
-/backend/api/v1/engine
-/backend/api/v1/portfolio
-/backend/api/v1/...
-```
-
-`next.config.ts` réécrit ces routes vers :
-
-```text
-AI_SPOT_TRADER_BACKEND_URL
-```
-
-La valeur locale par défaut est `http://127.0.0.1:8000`. Cette adresse n'est pas sensible et n'est pas exposée par une variable `NEXT_PUBLIC_*`.
-
-### 14.2 CORS
-
-Le rewrite same-origin évite d'introduire une politique CORS backend pour le développement standard. Un déploiement séparant réellement les origines pourra revoir cette décision avec une politique CORS explicite, mais le Batch 11 n'élargit pas la surface backend.
-
-### 14.3 Polling
-
-`useCockpit` déclenche une lecture toutes les 10 secondes lorsque `document.visibilityState === "visible"`, plus une actualisation manuelle.
-
-Le polling :
-
-- est borné ;
-- est exclusivement présentatif ;
-- ne crée aucune tâche de trading ;
-- ne règle aucune cadence moteur ;
-- n'est pas requis pour la survie du backend.
-
-### 14.4 Commandes lifecycle
-
-Start/Stop appellent uniquement les routes Batch 10. Les boutons sont désactivés pendant une requête et selon l'état `configured/status` renvoyé par le backend.
-
-Aucun `ExecutionIntent`, décision ou fill n'est construit dans le navigateur.
-
-### 14.5 États UI
-
-Chaque ressource peut être :
-
-```text
-loading
-ready
-empty
-unavailable
-error
-```
-
-Correspondances principales :
-
-- 404 -> `empty` ;
-- 503 -> `unavailable` ;
-- erreur réseau -> `error` ;
-- liste 200 avec `items=[]` -> `ready` + état vide métier.
-
-### 14.6 Affichage
-
-Le cockpit privilégie les champs structurés de premier niveau : état moteur, action, statut Risk, symbole, timestamps, balances, positions et nombre de fills.
-
-Les payloads JSON canoniques détaillés ne sont pas utilisés pour produire une logique parallèle ni exposés comme dumps bruts par défaut.
+Une future surface UI de lancement/inspection d'expériences nécessitera un contrat API dédié avant implémentation.
 
 ---
 
 ## 15. PostgreSQL et schéma
 
-Le schéma du Batch 09 est réutilisé tel quel :
+Le schéma reste :
 
 ```text
 audit_cycles
@@ -404,78 +362,46 @@ audit_cycles
          +-- audit_fills
 ```
 
-Le journal garde les snapshots JSON disponibles et les colonnes indexables utiles. L'API ne modifie pas ce schéma pour simplifier ses routes.
+Aucune migration Batch 13 n'est ajoutée.
 
 ---
 
 ## 16. Testabilité
 
-Les routes sont testables avec des fakes injectés, sans OpenAI, Kraken ou PostgreSQL réel.
+Les tests Batch 13 ciblent :
 
-Un test séparé du query service utilise `sqlite+aiosqlite:///:memory:` pour vérifier les requêtes SQLAlchemy offline. La validation PostgreSQL reste une validation d'intégration locale distincte.
+- validation `1..10` et rejet hors plage ;
+- mapping discret/versionné déterministe ;
+- cohérence `AgentInput` niveau/contexte ;
+- digest de manifeste stable ;
+- digest distinct pour niveaux différents ;
+- rejet d'un manifeste altéré ;
+- comparaison refusée si RiskPolicy diffère ;
+- invariance des résultats Risk vis-à-vis du niveau ;
+- HOLD / ALLOW / MODIFY / REJECT ;
+- lecture analytics Batch 12 d'un `AgentInput` enrichi ;
+- validation provider modèle/prompt/manifeste avant appel LLM.
 
-Le startup FastAPI ne doit déclencher ni cycle, ni réseau, ni migration.
-
-Validation Batch 12 confirmée dans le repository local complet :
+Validation réellement exécutée pendant préparation :
 
 ```text
-pytest backend                     231 tests passés ; 2 warnings de dépréciation externes
-ruff check backend                 All checks passed
-mypy backend/src backend/tests     76 fichiers sans erreur
-pnpm --dir frontend lint           réussi
-pnpm --dir frontend typecheck      réussi
-pnpm --dir frontend build          réussi — Next.js 16.3.3
-git diff --check                   aucune erreur ; warnings LF -> CRLF uniquement
+pytest ciblé test_experiments.py + test_agent_provider.py : 47 passed
+python -m py_compile fichiers Python du patch          : réussi
 ```
 
-Commit/push fonctionnel intégré : `3f39999736b6fc3800ecfd36ddee0253c734d25d`. Aucun smoke test PostgreSQL/runtime Batch 12 distinct n'a été fourni ; il n'est donc pas revendiqué.
+Ruff n'était pas disponible dans l'environnement de préparation. La suite backend complète, Ruff, mypy et `git diff --check` doivent être exécutés localement avant intégration.
 
 ---
 
-## 17. Analytics PAPER — Batch 12 intégré
-
-Le Batch 12 ajoute deux frontières :
-
-```text
-audit_* tables
-      |
-      v
-SqlAlchemyPaperAnalyticsQueryService
-      |
-      v
-PaperAnalyticsCycleFact[]
-      |
-      v
-build_paper_analytics_report()
-      |
-      +--> summary
-      +--> points temporels
-      +--> daily UTC
-      |
-      v
-GET /api/v1/analytics -> cockpit
-```
-
-Le reducer est pur : aucun accès DB, réseau, horloge courante ou composant de trading. Les coûts sont lus dans les fills durables ; ils ne sont pas recalculés depuis un `PaperExecutionCostModel` courant. Les snapshots de portefeuille sont contrôlés par replay des fills, ce qui permet également de valoriser un échec technique post-exécution lorsque le snapshot post-cycle manque.
-
-La valorisation respecte le no look-ahead : chaque point utilise exclusivement `MarketState.last_price` et `MarketState.as_of` du cycle concerné. La continuité du portefeuille est vérifiée entre points successifs. Un actif non nul non valorisable avec le symbole du cycle provoque une erreur d'intégrité.
-
-Le rapport contient : equity, P&L brut/net, frais, spread, slippage, drawdown, exposition, trades, comptages HOLD/REJECT/MODIFY/FAILED, séries par cycle et agrégats quotidiens UTC. La réponse inclut une version de calcul et un digest des `result_digest` durables.
-
-Aucune table analytics ou migration n'est créée : la matérialisation est différée tant que le volume ne démontre pas un besoin. Le frontend consomme le résultat et n'implémente aucune formule métier.
-
-La reproductibilité de Batch 12 signifie **recalcul des métriques à faits identiques** ; elle ne signifie pas encore rejeu LLM complet d'une décision.
-
----
-
-## 18. Hors périmètre du Batch 12
+## 17. Hors périmètre du patch Batch 13
 
 - configuration de stratégie/Risk/agressivité par cockpit ;
+- lancement d'expériences via FastAPI ;
+- replay historique complet d'un flux marché depuis PostgreSQL ;
+- seed/déterminisme exact du fournisseur LLM ;
+- scanner multi-paires ;
 - private Kraken ;
 - LIVE ;
-- auth complexe ;
-- scanner multi-paires ;
 - recovery/reconciliation exactly-once ;
 - bus temps réel/WebSocket ;
-- moteur alternatif côté frontend ;
-- écriture directe PostgreSQL depuis le frontend.
+- moteur alternatif côté frontend.
