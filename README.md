@@ -4,7 +4,7 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut :** le **Batch 13 — Expérimentation agressivité 1–10 est intégré** sur GitHub `main` au commit fonctionnel `1747beb5efd1fe9763bc9b2d23f3a115575daaec` (`feat: add versioned aggressiveness experiments`), avec le commit documentaire `655b66b639c4e9c1803cef3920c9a96e7dd16055` comme HEAD GitHub resynchronisé avant Batch 14. Le **Batch 14 — Comparaison contrôlée GPT-5.6 Luna / GPT-5.6 Sol est préparé localement mais non intégré** tant que la validation locale complète, le commit, le push et le working tree propre ne sont pas confirmés.
+> **Statut :** le **Batch 14 — Comparaison contrôlée GPT-5.6 Luna / GPT-5.6 Sol est intégré** sur GitHub `main` au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d` (`feat: add controlled Luna Sol experiments`), après validation locale complète, push confirmé et working tree propre. Le Batch 13 reste référencé par `1747beb5efd1fe9763bc9b2d23f3a115575daaec`.
 
 ## Principes
 
@@ -101,9 +101,9 @@ Le prompt Agent devient `agent-strategy-v2` afin de rendre cette frontière expl
 
 Les comparaisons d'agressivité réutilisent directement les rapports `paper-analytics-v1` du Batch 12 : aucune métrique n'est recalculée avec une formule parallèle et aucun classement automatique n'est produit.
 
-### Comparaison Luna / Sol — Batch 14 préparé
+### Comparaison Luna / Sol — Batch 14 intégré
 
-Le patch Batch 14 conserve `paper-experiment-v1` pour l'axe agressivité et introduit `paper-experiment-v2` pour une expérience dont **le modèle LLM est l'unique variable contrôlée**.
+Le Batch 14 conserve `paper-experiment-v1` pour l'axe agressivité et introduit `paper-experiment-v2` pour une expérience dont **le modèle LLM est l'unique variable contrôlée**.
 
 `paper-experiment-v2` ajoute une identité de groupe et une identité de répétition : `comparison_variable = LLM_MODEL`, `experiment_group_digest`, `replicate_index` et `replicate_count`. Pour une comparaison Luna/Sol, `source_digest` devient obligatoire afin d'identifier un dataset/snapshot figé. Le digest de groupe inclut agressivité, prompt, univers, `RiskPolicy`, coûts PAPER, source/dataset, fenêtre, version analytics et nombre de répétitions, mais exclut volontairement le modèle et l'index de répétition. Le digest complet du manifeste reste l'identité durable de chaque run.
 
@@ -183,9 +183,18 @@ commit/push                             : 1747beb5efd1fe9763bc9b2d23f3a115575daa
 working tree après push                 : propre
 ```
 
-### Batch 14 préparé, non intégré
+### Batch 14 intégré
 
-Dans l'environnement de préparation ChatGPT, les tests ciblés du protocole/comparateur ont été exécutés dans un arbre local reconstruit depuis GitHub `main` : **34 tests passés** et `py_compile` réussi sur les fichiers modifiés. `ruff` et `mypy` ne sont pas installés dans cet environnement et la suite complète `pytest backend` n'y est pas disponible comme validation d'un checkout réel. La validation locale complète reste donc obligatoire avant commit/push.
+```text
+pytest backend                          : 266 tests passés, 2 warnings externes
+ruff check backend                      : All checks passed
+mypy backend/src backend/tests          : 81 fichiers sans erreur
+git diff --check                        : aucune erreur, warnings LF -> CRLF uniquement
+commit/push                             : dc60033f60bf5d98a68e6131a9320e575d46cc8d
+working tree après push                 : propre
+```
+
+La préparation ChatGPT avait également exécuté **34 tests ciblés** et `py_compile` sur les fichiers Python modifiés. Aucun test frontend additionnel n'était requis puisque le frontend n'a pas été modifié.
 
 ## Sécurité
 

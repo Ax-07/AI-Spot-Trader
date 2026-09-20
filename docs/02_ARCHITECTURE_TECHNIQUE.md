@@ -2,7 +2,7 @@
 
 ## 1. Objet
 
-Ce document décrit l'architecture technique courante d'AI Spot Trader. Les Batches 10 à 13 sont intégrés ; le Batch 14 est un **patch préparé localement, non intégré**. Le HEAD GitHub resynchronisé avant Batch 14 est `655b66b639c4e9c1803cef3920c9a96e7dd16055`, après le commit fonctionnel Batch 13 `1747beb5efd1fe9763bc9b2d23f3a115575daaec`.
+Ce document décrit l'architecture technique courante d'AI Spot Trader, incluant le Batch 14 intégré au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`. Le Batch 13 reste référencé par `1747beb5efd1fe9763bc9b2d23f3a115575daaec`.
 
 ---
 
@@ -387,7 +387,7 @@ Aucune migration Batch 14 n'est ajoutée.
 
 ## 16. Testabilité Batch 14
 
-Le patch ajoute/adapte les tests de protocole pour vérifier notamment :
+Le Batch 14 ajoute/adapte les tests de protocole pour vérifier notamment :
 
 - Luna/Sol représentables dans un même groupe ;
 - comparabilité lorsque seul le modèle change ;
@@ -400,7 +400,7 @@ Le patch ajoute/adapte les tests de protocole pour vérifier notamment :
 - compatibilité analytics Batch 12 ;
 - invariance de Risk vis-à-vis de l'identité du modèle.
 
-Validation exécutée dans l'environnement de préparation : **34 tests ciblés passés** et `py_compile` réussi. Ruff/mypy ne sont pas installés dans cet environnement ; la suite complète et `git diff --check` restent à exécuter sur le checkout local utilisateur.
+Validation d'intégration confirmée : `pytest backend` **266 passés** avec 2 warnings externes, Ruff **All checks passed**, mypy **81 fichiers sans erreur**, `git diff --check` sans erreur hors warnings LF -> CRLF, commit/push `dc60033f60bf5d98a68e6131a9320e575d46cc8d` et working tree propre. La préparation ChatGPT avait aussi exécuté **34 tests ciblés** et `py_compile`.
 
 ---
 

@@ -64,7 +64,7 @@ Le Batch 11 fournit le socle cockpit et est **intégré sur `main`** au commit `
 
 Le Batch 13 est **intégré sur `main`** au commit `1747beb5efd1fe9763bc9b2d23f3a115575daaec` : il fige le mapping d'agressivité et le protocole expérimental, sans modifier l'autorité Risk ni les analytics Batch 12. Le HEAD documentaire GitHub resynchronisé avant Batch 14 est `655b66b639c4e9c1803cef3920c9a96e7dd16055`.
 
-Le Batch 14 est **préparé localement mais non intégré** : il ajoute une comparaison Luna/Sol contrôlée et appariée sans modifier Agent/Risk/Broker, API ou frontend.
+Le Batch 14 est **intégré sur `main`** au commit `dc60033f60bf5d98a68e6131a9320e575d46cc8d` : il ajoute une comparaison Luna/Sol contrôlée et appariée sans modifier Agent/Risk/Broker, API ou frontend.
 
 ---
 
@@ -441,13 +441,13 @@ Les comparateurs Batches 13/14 **réutilisent** ces rapports ; ils n'implémente
 
 ---
 
-## 18. Comparaison Luna / Sol — Batch 14 préparé
+## 18. Comparaison Luna / Sol — Batch 14 intégré
 
 ### Axe expérimental versionné
 
 Le manifeste Batch 13 contient déjà `llm_model`, mais son identité de comparaison exclut uniquement l'agressivité. Le réutiliser tel quel pour Luna/Sol casserait la sémantique de la comparaison d'agressivité.
 
-Le patch introduit donc `paper-experiment-v2` avec `comparison_variable = LLM_MODEL`. `paper-experiment-v1` reste inchangé pour Batch 13 et ses anciens payloads restent lisibles.
+Le Batch 14 introduit donc `paper-experiment-v2` avec `comparison_variable = LLM_MODEL`. `paper-experiment-v1` reste inchangé pour Batch 13 et ses anciens payloads restent lisibles.
 
 ### Identités et répétitions
 
@@ -496,15 +496,17 @@ Validation Batch 13 confirmée :
 - commit/push : `1747beb5efd1fe9763bc9b2d23f3a115575daaec` ;
 - working tree propre après push.
 
-Validation de préparation Batch 14 dans l'environnement ChatGPT :
+Validation Batch 14 confirmée :
 
-- tests ciblés `backend/tests/test_experiments.py` : **34 passés** dans un arbre local reconstruit depuis GitHub `main` ;
-- `py_compile` des fichiers Python modifiés : **réussi** ;
-- Ruff : non exécuté, outil absent ;
-- mypy : non exécuté, outil absent ;
-- `pytest backend` complet et `git diff --check` d'un checkout réel : à exécuter localement.
+- `pytest backend` : **266 tests passés**, 2 warnings externes ;
+- Ruff : **All checks passed** ;
+- mypy : **81 fichiers sans erreur** ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- commit/push : `dc60033f60bf5d98a68e6131a9320e575d46cc8d` ;
+- working tree propre après push ;
+- préparation ChatGPT : **34 tests ciblés** et `py_compile` réussis.
 
-Aucun test frontend additionnel n'est requis puisque le frontend n'est pas modifié.
+Aucun test frontend additionnel n'était requis puisque le frontend n'a pas été modifié.
 
 ---
 

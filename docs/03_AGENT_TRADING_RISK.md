@@ -99,7 +99,7 @@ Le v1 reste le protocole Batch 13 pour comparer l'agressivité. Il enregistre ni
 
 ### `paper-experiment-v2`
 
-Le Batch 14 préparé ajoute un protocole où le modèle est l'unique variable expérimentale :
+Le Batch 14 intégré ajoute un protocole où le modèle est l'unique variable expérimentale :
 
 ```text
 protocol_version = paper-experiment-v2

@@ -304,40 +304,40 @@ Ces décisions sont intégrées avec le Batch 13 au commit fonctionnel `1747beb5
 
 ---
 
-## 5 ter. Décisions proposées au Batch 14
+## 5 ter. Décisions acceptées au Batch 14
 
-Ces décisions appartiennent au **patch Batch 14 préparé localement**. Elles ne deviennent intégrées qu'après validation locale complète, commit/push et working tree propre confirmé.
+Ces décisions sont intégrées avec le Batch 14 au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`, après validation locale complète, push confirmé et working tree propre.
 
 ### ADR-068 — Versionner la comparaison modèle en `paper-experiment-v2`
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - `paper-experiment-v1` reste le contrat Batch 13 et continue d'exclure uniquement l'agressivité de son identité de comparaison.
 - `paper-experiment-v2` fixe `comparison_variable = LLM_MODEL` afin que Luna/Sol soit l'unique variable autorisée.
 - Les champs v2 sont optionnels dans `ExperimentManifest` pour conserver la lecture des anciens payloads v1.
 - Le digest v1 exclut explicitement les nouveaux champs afin de préserver l'identité des manifestes déjà persistés.
 
 ### ADR-069 — Séparer identité de groupe et identité de run
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - `experiment_group_digest` identifie les champs contrôlés communs d'une expérience Luna/Sol.
 - Il exclut `llm_model` et `replicate_index`, mais inclut agressivité, prompt, univers, RiskPolicy, coûts PAPER, source/dataset, fenêtre, version analytics et `replicate_count`.
 - `experiment_digest` reste l'identité complète de chaque run et inclut modèle, groupe et index de répétition.
 - La persistance reste le JSON/JSONB `AgentInput` existant ; aucune table/migration dédiée n'est créée.
 
 ### ADR-070 — Dataset figé obligatoire pour une comparaison modèle stricte
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - `source_digest` est obligatoire dans `paper-experiment-v2`.
 - Deux passages live successifs non figés ne sont pas traités comme une comparaison strictement appariée.
 - Le batch formalise l'identité du dataset ; il n'ajoute pas de moteur de replay historique parallèle.
 - Toute fenêtre/univers/source différente fait changer le groupe et invalide la comparaison.
 
 ### ADR-071 — Répétitions appariées pour le non-déterminisme LLM
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - `replicate_index` et `replicate_count` sont persistés dans le manifeste v2.
 - `compare_model_runs(...)` exige les répétitions `1..N` pour Luna et Sol et refuse un groupe incomplet.
 - Le protocole ne prétend pas disposer d'un seed fournisseur exact.
 - Les répétitions restent des observations brutes ; aucune sélection post-hoc ou exclusion d'une répétition n'est autorisée par le comparateur.
 
 ### ADR-072 — Comparaison modèle factuelle sans score ni gagnant automatique
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - Le comparateur réutilise directement les `PaperAnalyticsReport` Batch 12.
 - Les métriques exposées incluent P&L brut/net, coûts, drawdown, exposition, trades BUY/SELL, HOLD/REJECT/MODIFY/FAILED, points cumulés et daily.
 - Aucune formule P&L parallèle, score composite, ranking ou choix automatique d'un « meilleur modèle » n'est introduit.
@@ -386,27 +386,27 @@ Ces décisions appartiennent au **patch Batch 14 préparé localement**. Elles n
 
 ### 2026-09-21 — Batch 14 Comparaison contrôlée GPT-5.6 Luna / GPT-5.6 Sol
 
-**État : patch préparé localement, non intégré.**
+**État : intégré sur `main` au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d` (`feat: add controlled Luna Sol experiments`).**
 
-- Resynchronisation GitHub `main` confirmée au HEAD `655b66b639c4e9c1803cef3920c9a96e7dd16055` (`docs: record Batch 13 integration`) ; aucun commit intervenu depuis l'état connu fourni.
+- Référence GitHub de départ : `655b66b639c4e9c1803cef3920c9a96e7dd16055` (`docs: record Batch 13 integration`).
 - Audit du manifeste Batch 13, du comparateur d'agressivité, des analytics Batch 12, du provider Luna/Sol, du runner et de la persistance JSON/JSONB.
-- Décision de conserver `paper-experiment-v1` pour l'agressivité et d'introduire `paper-experiment-v2` pour l'axe `LLM_MODEL`.
-- Ajout d'un `experiment_group_digest` commun aux champs contrôlés et conservation de `experiment_digest` comme identité complète du run.
-- Ajout de `replicate_index` / `replicate_count` et obligation d'une paire complète de répétitions Luna/Sol.
+- `paper-experiment-v1` conservé pour l'agressivité ; `paper-experiment-v2` intégré pour l'axe `LLM_MODEL`.
+- `experiment_group_digest` intégré pour les champs contrôlés et `experiment_digest` conservé comme identité complète du run.
+- `replicate_index` / `replicate_count` intégrés avec obligation d'un ensemble complet de répétitions Luna/Sol.
 - `source_digest` obligatoire en v2 pour identifier un dataset/snapshot figé ; aucun replay historique parallèle ajouté.
 - Comparaison Luna/Sol basée uniquement sur `PaperAnalyticsReport`, sans score composite ni ranking automatique.
-- Compatibilité v1 conservée ; aucune migration PostgreSQL.
-- Aucun changement Agent provider, Risk Engine, Broker, API ou frontend requis.
+- Compatibilité v1 conservée ; aucune migration PostgreSQL, aucun changement API/frontend, aucun LIVE.
 
-Validation réellement exécutée dans l'environnement de préparation ChatGPT :
+Validation locale finale confirmée :
 
-- tests ciblés `backend/tests/test_experiments.py` : **34 passés** dans un arbre local reconstruit depuis GitHub `main` ;
-- `py_compile` sur les fichiers Python modifiés : **réussi** ;
-- Ruff : **non exécuté**, outil absent ;
-- mypy : **non exécuté**, outil absent ;
-- `pytest backend` complet et `git diff --check` d'un checkout réel : **restent à exécuter localement**.
+- `pytest backend` : **266 tests passés**, 2 warnings de dépréciation externes ;
+- Ruff : **All checks passed** ;
+- mypy : **Success: no issues found in 81 source files** ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- commit/push confirmé sur `main` : `dc60033f60bf5d98a68e6131a9320e575d46cc8d` ;
+- working tree confirmé propre après push.
 
-Le batch ne doit pas être marqué intégré avant validation locale complète, commit/push et working tree propre confirmé.
+Validation de préparation ChatGPT : **34 tests ciblés** et `py_compile` réussis.
 
 ### 2026-09-21 — Batch 13 Expérimentation agressivité 1–10
 
