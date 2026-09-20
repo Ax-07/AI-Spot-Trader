@@ -4,11 +4,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from ai_spot_trader import __version__
+from ai_spot_trader.agent.openai_client import OpenAIResponsesClient
 from ai_spot_trader.api.routes.analytics import router as analytics_router
 from ai_spot_trader.api.routes.audit import router as audit_router
+from ai_spot_trader.api.routes.chat import router as chat_router
 from ai_spot_trader.api.routes.engine import router as engine_router
 from ai_spot_trader.api.routes.health import router as health_router
 from ai_spot_trader.api.routes.portfolio import router as portfolio_router
+from ai_spot_trader.chat.provider import OpenAIChatProvider
+from ai_spot_trader.chat.service import OperatorChatService, RuntimeChatContextSource
 from ai_spot_trader.core.config import Settings, get_settings
 from ai_spot_trader.core.runtime import (
     AppRuntime,
@@ -33,6 +37,7 @@ def create_app(
     portfolio: PortfolioSnapshotSource | None = None,
     audit_reader: CycleAuditReader | None = None,
     analytics_reader: PaperAnalyticsReader | None = None,
+    chat_service: OperatorChatService | None = None,
 ) -> FastAPI:
     """Create FastAPI without starting trading or performing external I/O."""
 
@@ -67,7 +72,25 @@ def create_app(
             analytics_reader=resolved_analytics_reader,
             owned_database=owned_database,
         )
+        resolved_chat_service = chat_service
+        api_key = resolved_settings.openai_api_key
+        if resolved_chat_service is None and api_key is not None:
+            client = OpenAIResponsesClient(
+                api_key=api_key,
+                base_url=resolved_settings.openai_base_url,
+                timeout_seconds=resolved_settings.openai_timeout_seconds,
+            )
+            provider = OpenAIChatProvider(
+                client=client,
+                model=resolved_settings.llm_model,
+            )
+            resolved_chat_service = OperatorChatService(
+                provider=provider,
+                context_source=RuntimeChatContextSource(runtime),
+            )
+
         app.state.runtime = runtime
+        app.state.chat_service = resolved_chat_service
         yield
         await runtime.close()
 
@@ -82,6 +105,7 @@ def create_app(
     app.include_router(portfolio_router)
     app.include_router(audit_router)
     app.include_router(analytics_router)
+    app.include_router(chat_router)
     return app
 
 

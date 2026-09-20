@@ -211,3 +211,28 @@ export type PaperAnalyticsResponse = {
   points: PaperAnalyticsPointResponse[];
   daily: PaperDailyPerformanceResponse[];
 };
+
+export type ChatRole = "OPERATOR" | "AGENT";
+
+export type ChatMessageResponse = {
+  message_id: string;
+  created_at: string;
+  role: ChatRole;
+  content: string;
+};
+
+export type ChatExchangeResponse = {
+  session_id: string;
+  model: "gpt-5.6-luna" | "gpt-5.6-sol";
+  historical_cycle_id: string | null;
+  operator_message: ChatMessageResponse;
+  agent_message: ChatMessageResponse;
+  history_size: number;
+};
+
+export type ChatHistoryResponse = {
+  session_id: string;
+  model: "gpt-5.6-luna" | "gpt-5.6-sol";
+  messages: ChatMessageResponse[];
+  max_messages: number;
+};

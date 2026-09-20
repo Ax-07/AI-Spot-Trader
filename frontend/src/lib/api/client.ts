@@ -1,4 +1,6 @@
 import type {
+  ChatExchangeResponse,
+  ChatHistoryResponse,
   CycleDetailResponse,
   CyclePageResponse,
   DecisionPageResponse,
@@ -99,4 +101,18 @@ export const api = {
       `/api/v1/executions?limit=${limit}&offset=0&order=desc`,
     ),
   analytics: () => requestJson<PaperAnalyticsResponse>("/api/v1/analytics"),
+  sendChatMessage: (payload: {
+    session_id: string | null;
+    message: string;
+    context_cycle_id?: string | null;
+  }) =>
+    requestJson<ChatExchangeResponse>("/api/v1/chat/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  chatHistory: (sessionId: string) =>
+    requestJson<ChatHistoryResponse>(
+      `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}`,
+    ),
 };

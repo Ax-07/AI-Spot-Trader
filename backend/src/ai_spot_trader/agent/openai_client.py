@@ -8,7 +8,7 @@ from ai_spot_trader.domain.enums import LLMModel
 
 
 class OpenAIResponsesClient:
-    """Minimal OpenAI Responses API adapter using strict Structured Outputs."""
+    """Minimal OpenAI Responses API adapter for strategic and conversational calls."""
 
     def __init__(
         self,
@@ -49,12 +49,33 @@ class OpenAIResponsesClient:
                 }
             },
         }
+        response = await self._responses(request)
+        return _extract_output_text(response)
+
+    async def generate_text_response(
+        self,
+        *,
+        model: LLMModel,
+        instructions: str,
+        input_text: str,
+    ) -> str:
+        """Generate plain text without tools, persistence, or structured trading output."""
+
+        request = {
+            "model": model.value,
+            "instructions": instructions,
+            "input": input_text,
+            "store": False,
+        }
+        response = await self._responses(request)
+        return _extract_output_text(response)
+
+    async def _responses(self, request: dict[str, Any]) -> dict[str, Any]:
         headers = {
             "Authorization": f"Bearer {self._api_key.get_secret_value()}",
             "Content-Type": "application/json",
         }
-        response = await self._post(request=request, headers=headers)
-        return _extract_output_text(response)
+        return await self._post(request=request, headers=headers)
 
     async def _post(
         self,
