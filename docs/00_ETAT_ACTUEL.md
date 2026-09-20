@@ -1,49 +1,49 @@
-# 00 â€” Ã‰tat actuel
+# 00 — État actuel
 
-> MÃ©moire courte de reprise. Ce fichier doit rester synthÃ©tique et Ãªtre mis Ã  jour aprÃ¨s chaque batch important.
+> Mémoire courte de reprise. Ce fichier doit rester synthétique et être mis à jour après chaque batch important.
 
-## RÃ©fÃ©rence intÃ©grÃ©e auditÃ©e
+## Référence intégrée auditée
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
 - HEAD fonctionnel Batch 15 : `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6` (`feat: add operator agent chat`).
-- RÃ©fÃ©rence prÃ©cÃ©dente : Batch 14 fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`, documentation Batch 14 `b2c74672744639f86c38e873f25d56c77f899c76`.
-- Le commit fonctionnel Batch 15 a Ã©tÃ© poussÃ© sur `origin/main` le 21 septembre 2026.
+- Référence précédente : Batch 14 fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`, documentation Batch 14 `b2c74672744639f86c38e873f25d56c77f899c76`.
+- Le commit fonctionnel Batch 15 a été poussé sur `origin/main` le 21 septembre 2026.
 
-## Ã‰tat intÃ©grÃ© confirmÃ©
+## État intégré confirmé
 
-- Backend PAPER autonome : Kraken public -> Agent Luna/Sol -> Risk dÃ©terministe -> Paper Broker.
-- Seul Risk produit `ExecutionIntent`; HOLD/REJECT restent auditÃ©s; erreurs techniques distinctes.
-- Journal PostgreSQL, API REST, cockpit Next.js et analytics `paper-analytics-v1` intÃ©grÃ©s.
-- `aggressiveness-map-v1`, prompt `agent-strategy-v2`, `paper-experiment-v1/v2` et comparaison Luna/Sol appariÃ©e intÃ©grÃ©s.
-- Chat opÃ©rateur V1 intÃ©grÃ© : mÃªme `LLMModel` Luna/Sol, provider conversationnel sÃ©parÃ©, REST, historique mÃ©moire bornÃ©, contexte canonique en lecture seule.
-- Le chat ne rejoint jamais `AgentInput`, Risk, Broker, Kraken privÃ© ou `ExecutionIntent`; aucune instruction conversationnelle ne modifie la stratÃ©gie future.
-- Pour un cycle historique, le chat s'ancre sur l'`AgentInput` persistÃ© exact et sÃ©pare explicitement l'Ã©tat courant afin d'Ã©viter le look-ahead.
-- Le panneau Chat reste indÃ©pendant du lifecycle moteur ; fermer ou recharger le frontend ne stoppe pas le moteur backend.
+- Backend PAPER autonome : Kraken public -> Agent Luna/Sol -> Risk déterministe -> Paper Broker.
+- Seul Risk produit `ExecutionIntent`; HOLD/REJECT restent audités; erreurs techniques distinctes.
+- Journal PostgreSQL, API REST, cockpit Next.js et analytics `paper-analytics-v1` intégrés.
+- `aggressiveness-map-v1`, prompt `agent-strategy-v2`, `paper-experiment-v1/v2` et comparaison Luna/Sol appariée intégrés.
+- Chat opérateur V1 intégré : même `LLMModel` Luna/Sol, provider conversationnel séparé, REST, historique mémoire borné, contexte canonique en lecture seule.
+- Le chat ne rejoint jamais `AgentInput`, Risk, Broker, Kraken privé ou `ExecutionIntent`; aucune instruction conversationnelle ne modifie la stratégie future.
+- Pour un cycle historique, le chat s'ancre sur l'`AgentInput` persisté exact et sépare explicitement l'état courant afin d'éviter le look-ahead.
+- Le panneau Chat reste indépendant du lifecycle moteur ; fermer ou recharger le frontend ne stoppe pas le moteur backend.
 
 ## Validation Batch 15
 
-Validation locale confirmÃ©e le 21 septembre 2026 :
+Validation locale confirmée le 21 septembre 2026 :
 
-- `pytest backend` : **277 tests passÃ©s**, 2 warnings de dÃ©prÃ©ciation externes ;
+- `pytest backend` : **277 tests passés**, 2 warnings de dépréciation externes ;
 - Ruff : **All checks passed** ;
 - mypy : **89 fichiers sans erreur** ;
-- `pnpm lint` : **rÃ©ussi** ;
-- `pnpm typecheck` : **rÃ©ussi** ;
-- `pnpm build` : **rÃ©ussi** ;
+- `pnpm lint` : **réussi** ;
+- `pnpm typecheck` : **réussi** ;
+- `pnpm build` : **réussi** ;
 - `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- commit/push fonctionnel confirmÃ© : `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6`.
+- commit/push fonctionnel confirmé : `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6`.
 
-Le premier passage de `pnpm lint` a dÃ©tectÃ© une unique erreur `react-hooks/set-state-in-effect` dans `use-chat.ts`; le correctif a Ã©tÃ© appliquÃ© puis lint, typecheck et build ont tous rÃ©ussi avant le commit fonctionnel.
+Le premier passage de `pnpm lint` a détecté une unique erreur `react-hooks/set-state-in-effect` dans `use-chat.ts`; le correctif a été appliqué puis lint, typecheck et build ont tous réussi avant le commit fonctionnel.
 
-## Limites conservÃ©es
+## Limites conservées
 
-- Historique chat non durable : un redÃ©marrage backend perd les sessions V1.
-- Redaction de secrets best-effort : le chat ne doit jamais servir Ã  transmettre des secrets.
-- Pas de mutation de stratÃ©gie via conversation ; un futur mÃ©canisme opÃ©rateur devra Ãªtre explicite, auditÃ©, versionnÃ© et appliquÃ© Ã  partir d'un cycle identifiÃ©.
-- Pas d'exactly-once global entre ledger PAPER mÃ©moire et commit PostgreSQL ; recovery/rÃ©conciliation restent diffÃ©rÃ©s.
-- Aucun LIVE, aucune API Kraken privÃ©e, aucune modification du protocole expÃ©rimental.
+- Historique chat non durable : un redémarrage backend perd les sessions V1.
+- Redaction de secrets best-effort : le chat ne doit jamais servir à transmettre des secrets.
+- Pas de mutation de stratégie via conversation ; un futur mécanisme opérateur devra être explicite, audité, versionné et appliqué à partir d'un cycle identifié.
+- Pas d'exactly-once global entre ledger PAPER mémoire et commit PostgreSQL ; recovery/réconciliation restent différés.
+- Aucun LIVE, aucune API Kraken privée, aucune modification du protocole expérimental.
 
-## Prochaine Ã©tape
+## Prochaine étape
 
-Finaliser le commit documentaire Batch 15, puis lancer les premiers essais PAPER rÃ©els. La prÃ©paration LIVE reste sÃ©parÃ©e et correspond au Batch 16 Ã©ventuel.
+Lancer les premiers essais PAPER réels avec le Batch 15 intégré. La préparation LIVE reste séparée et correspond au Batch 16 éventuel.
