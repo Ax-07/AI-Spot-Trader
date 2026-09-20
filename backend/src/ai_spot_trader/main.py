@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from ai_spot_trader import __version__
+from ai_spot_trader.api.routes.analytics import router as analytics_router
 from ai_spot_trader.api.routes.audit import router as audit_router
 from ai_spot_trader.api.routes.engine import router as engine_router
 from ai_spot_trader.api.routes.health import router as health_router
@@ -13,6 +14,10 @@ from ai_spot_trader.core.runtime import (
     AppRuntime,
     PortfolioSnapshotSource,
     StoppableTradingEngine,
+)
+from ai_spot_trader.persistence.analytics import (
+    PaperAnalyticsReader,
+    SqlAlchemyPaperAnalyticsQueryService,
 )
 from ai_spot_trader.persistence.db import Database
 from ai_spot_trader.persistence.query import (
@@ -27,6 +32,7 @@ def create_app(
     trading_engine: StoppableTradingEngine | None = None,
     portfolio: PortfolioSnapshotSource | None = None,
     audit_reader: CycleAuditReader | None = None,
+    analytics_reader: PaperAnalyticsReader | None = None,
 ) -> FastAPI:
     """Create FastAPI without starting trading or performing external I/O."""
 
@@ -36,19 +42,29 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         owned_database: Database | None = None
         resolved_audit_reader = audit_reader
+        resolved_analytics_reader = analytics_reader
         database_secret = resolved_settings.database_url
-        if resolved_audit_reader is None and database_secret is not None:
+        if (
+            (resolved_audit_reader is None or resolved_analytics_reader is None)
+            and database_secret is not None
+        ):
             database_url = database_secret.get_secret_value().strip()
             if database_url:
                 owned_database = Database(database_url)
-                resolved_audit_reader = SqlAlchemyCycleAuditQueryService(
-                    owned_database.sessions
-                )
+                if resolved_audit_reader is None:
+                    resolved_audit_reader = SqlAlchemyCycleAuditQueryService(
+                        owned_database.sessions
+                    )
+                if resolved_analytics_reader is None:
+                    resolved_analytics_reader = SqlAlchemyPaperAnalyticsQueryService(
+                        owned_database.sessions
+                    )
 
         runtime = AppRuntime(
             trading_engine=trading_engine,
             portfolio=portfolio,
             audit_reader=resolved_audit_reader,
+            analytics_reader=resolved_analytics_reader,
             owned_database=owned_database,
         )
         app.state.runtime = runtime
@@ -65,6 +81,7 @@ def create_app(
     app.include_router(engine_router)
     app.include_router(portfolio_router)
     app.include_router(audit_router)
+    app.include_router(analytics_router)
     return app
 
 

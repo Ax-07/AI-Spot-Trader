@@ -7,6 +7,7 @@ import type {
   HealthResponse,
   LatestErrorResponse,
   MarketStateResponse,
+  PaperAnalyticsResponse,
   PortfolioResponse,
   RiskAssessmentPageResponse,
 } from "@/lib/api/types";
@@ -97,4 +98,5 @@ export const api = {
     requestJson<ExecutionPageResponse>(
       `/api/v1/executions?limit=${limit}&offset=0&order=desc`,
     ),
+  analytics: () => requestJson<PaperAnalyticsResponse>("/api/v1/analytics"),
 };

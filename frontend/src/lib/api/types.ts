@@ -138,3 +138,76 @@ export type LatestErrorResponse = {
   recorded_at: string;
   failure: CycleFailure;
 };
+
+export type PaperAnalyticsSummaryResponse = {
+  initial_equity: string | null;
+  ending_equity: string | null;
+  gross_pnl: string;
+  net_pnl: string;
+  fees: string;
+  spread_cost: string;
+  slippage_cost: string;
+  max_drawdown_value: string;
+  max_drawdown_fraction: string | null;
+  current_drawdown_value: string;
+  current_drawdown_fraction: string | null;
+  current_exposure_value: string;
+  current_exposure_fraction: string | null;
+  trade_count: number;
+  buy_trade_count: number;
+  sell_trade_count: number;
+  hold_count: number;
+  reject_count: number;
+  modify_count: number;
+  completed_cycle_count: number;
+  failed_cycle_count: number;
+  valued_cycle_count: number;
+  first_at: string | null;
+  last_at: string | null;
+};
+
+export type PaperAnalyticsPointResponse = {
+  cycle_id: string;
+  at: string;
+  status: string;
+  action: string | null;
+  risk_status: string | null;
+  symbol: string;
+  reference_price: string;
+  equity: string;
+  gross_pnl: string;
+  net_pnl: string;
+  cumulative_fees: string;
+  cumulative_spread_cost: string;
+  cumulative_slippage_cost: string;
+  exposure_value: string;
+  exposure_fraction: string | null;
+  cumulative_return_fraction: string | null;
+  drawdown_value: string;
+  drawdown_fraction: string | null;
+  trade_count: number;
+};
+
+export type PaperDailyPerformanceResponse = {
+  day: string;
+  closing_at: string;
+  closing_equity: string;
+  gross_pnl: string;
+  net_pnl: string;
+  daily_net_pnl: string;
+  daily_return_fraction: string | null;
+  cumulative_return_fraction: string | null;
+  fees: string;
+  spread_cost: string;
+  slippage_cost: string;
+  trade_count: number;
+};
+
+export type PaperAnalyticsResponse = {
+  calculation_version: string;
+  timezone: "UTC";
+  source_digest: string;
+  summary: PaperAnalyticsSummaryResponse;
+  points: PaperAnalyticsPointResponse[];
+  daily: PaperDailyPerformanceResponse[];
+};

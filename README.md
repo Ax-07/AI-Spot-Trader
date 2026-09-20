@@ -4,7 +4,7 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut :** le Batch 11 — Frontend cockpit est **intégré sur `main`** au commit fonctionnel `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7` (`feat: add frontend paper cockpit`). Les validations frontend et le smoke test runtime ont été confirmés le 20 septembre 2026. La prochaine étape est le Batch 12 — Analytics et expérimentation reproductible.
+> **Statut :** GitHub `main` a été resynchronisé au HEAD `cab3920d4d924d785b0a54c06b51066ccc949eb0` (`docs: record Batch 11 integration`). Le Batch 11 reste intégré fonctionnellement au commit `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`. Le **patch Batch 12 — Analytics et expérimentation reproductible est préparé mais non intégré** tant que la validation locale, le commit et le push ne sont pas confirmés.
 
 ## Principes
 
@@ -72,7 +72,10 @@ Kraken public data
                                       PostgreSQL audit journal
                                                       |
                                                       v
-                                       FastAPI read/query layer
+                              durable read/query + analytics reducer
+                                                      |
+                                                      v
+                                       FastAPI REST / analytics
                                                       |
                                                       v
                                           Next.js cockpit
@@ -185,6 +188,28 @@ Le polling du cockpit est borné à 10 secondes et suspendu lorsque l'onglet n'e
 
 Le frontend ne contient aucun appel OpenAI/Kraken, aucune `RiskPolicy`, aucune création de décision ou d'`ExecutionIntent`, aucune simulation de fill et aucun LIVE.
 
+
+## Analytics PAPER — Batch 12 patch à valider
+
+Le patch Batch 12 ajoute un reducer analytics **pur, déterministe et en lecture seule** au-dessus du journal durable existant. Aucune migration n'est requise et aucune décision de trading n'est recalculée ou modifiée.
+
+Conventions proposées par le patch :
+
+- source canonique : faits immuables du journal PostgreSQL (`AgentInput`, décision/Risk, fills, portfolio post-cycle) ;
+- P&L net : equity marquée au prix durable du cycle moins l'equity initiale durable ;
+- P&L brut : P&L net + frais + spread + slippage cumulés ;
+- coûts : sommes des valeurs effectivement persistées dans les fills, jamais réestimées avec une configuration courante ;
+- drawdown : calculé sur l'equity nette marquée ;
+- exposition : valeur des positions au prix durable du cycle rapportée à l'equity lorsque celle-ci est positive ;
+- trade : exécution effectivement fillée ; HOLD et REJECT sont comptés séparément ;
+- cycles `FAILED` : comptés séparément et valorisés uniquement lorsque les faits marché/portefeuille nécessaires sont durables ;
+- frontière quotidienne : **UTC** ;
+- historique : chaque point utilise uniquement le `MarketState` durable du cycle concerné, sans dernier prix futur ;
+- reproductibilité : `calculation_version` + SHA-256 de la séquence durable `(cycle_id, result_digest)` ;
+- incohérence de continuité ou actif non valorisable : erreur explicite plutôt qu'une métrique inventée.
+
+L'API proposée ajoute `GET /api/v1/analytics`. Le cockpit affiche P&L, coûts, drawdown, exposition, activité et performances quotidiennes sans recalcul métier dans le navigateur. La reproduction d'une **décision LLM** sous protocole expérimental complet (modèle/prompt/RiskPolicy/configuration) n'est pas prétendue par ce batch et reste du ressort des Batches 13/14.
+
 ## PostgreSQL local
 
 Depuis la racine du repository :
@@ -211,6 +236,17 @@ git diff --check               aucune erreur ; warnings LF -> CRLF uniquement
 Smoke test runtime confirmé : backend accessible, moteur non configuré, ressources vides/indisponibles affichées sans crash ni fuite d'erreur brute, puis backend arrêté avec bascule propre du cockpit vers l'état indisponible. Le working tree était propre après commit/push.
 
 La dernière validation backend intégrée reste celle du Batch 10 : **222 tests**, Ruff OK et mypy sans erreur sur 70 fichiers.
+
+
+### Validation du patch Batch 12 dans cet environnement
+
+Exécuté pendant la préparation du patch :
+
+```text
+pytest ciblé backend/tests/test_analytics.py : 6 tests réussis
+```
+
+La suite backend complète, Ruff, mypy, lint/typecheck/build frontend et le smoke test PostgreSQL/runtime doivent encore être exécutés localement dans le repository complet avant toute intégration. Le Batch 12 ne doit donc pas être marqué intégré à ce stade.
 
 ## Sécurité
 

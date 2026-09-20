@@ -59,7 +59,7 @@ Le Batch 08 réalise le point 9. Le Batch 09 réalise le socle durable du point 
 
 V1 ajoute le cockpit Next.js/shadcn, historique, analytics P&L/drawdown/coûts/exposition, replay reproductible, expérimentations d'agressivité et comparaison Luna/Sol. Le LIVE n'est pas une condition de V1.
 
-Le Batch 11 fournit le socle cockpit et est **intégré sur `main`** au commit `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7` après validation frontend et smoke test runtime.
+Le Batch 11 fournit le socle cockpit et est **intégré sur `main`** au commit `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7` après validation frontend et smoke test runtime. Le HEAD GitHub resynchronisé avant Batch 12 est `cab3920d4d924d785b0a54c06b51066ccc949eb0`. Le patch Batch 12 ajoute les analytics reproductibles mais reste **non intégré** jusqu'à validation locale puis commit/push.
 
 ---
 
@@ -97,6 +97,13 @@ PortfolioState --+--> AgentInput --> Agent IA --> DecisionCandidate
                                              |
                                              v
                                   durable audit persistence
+                                             |
+                           +-----------------+-----------------+
+                           |                                   |
+                           v                                   v
+                    audit query service               analytics reducer
+                           |                                   |
+                           +-----------------+-----------------+
                                              |
                                              v
                                        FastAPI REST
@@ -302,6 +309,7 @@ Le Batch 10 étend `AppRuntime` sans déplacer la logique métier dans FastAPI. 
 - un `TradingEngine` canonique contrôlable (`start`, `stop`, état et dernier résultat) ;
 - un lecteur de portefeuille PAPER ;
 - un lecteur durable `CycleAuditReader` ;
+- dans le patch Batch 12, un lecteur `PaperAnalyticsReader` dérivant uniquement des faits durables ;
 - une DB possédée par l'application lorsque FastAPI la crée depuis `AI_SPOT_TRADER_DATABASE_URL`.
 
 `create_app(...)` ne démarre jamais le moteur. Si une URL DB est configurée et qu'aucun lecteur d'audit n'est injecté, le lifespan crée seulement le moteur SQLAlchemy/session factory ; aucune requête métier n'est déclenchée au startup.
@@ -438,6 +446,8 @@ Capacités intégrées :
 - `GET /api/v1/errors/latest` ;
 - `GET /api/v1/market/latest`.
 
+Le patch Batch 12 ajoute `GET /api/v1/analytics` sans changer les endpoints de trading ni créer une seconde orchestration.
+
 Les listes sont paginées par `limit`/`offset`, ordonnées de façon déterministe par timestamp puis UUID, avec filtres métier simples. Les réponses API utilisent des modèles Pydantic dédiés ; les payloads canoniques du journal sont exposés sans être réinterprétés stratégiquement.
 
 Les erreurs techniques persistées n'exposent que `stage`, `error_type` et `timed_out`. Les erreurs de connexion DB sont transformées en réponse générique, sans URL de connexion ni message fournisseur.
@@ -525,7 +535,49 @@ Les analytics P&L/drawdown restent hors Batch 11.
 
 ---
 
-## 16. Sécurité et séparation PAPER / LIVE
+
+## 16. Analytics PAPER — Batch 12 patch à valider
+
+### Source et frontière de calcul
+
+Les analytics observent le journal immuable. Le reducer `ai_spot_trader.analytics.paper` ne reçoit ni horloge courante, ni Kraken, ni LLM, ni ledger mémoire : il travaille sur une séquence de faits `PaperAnalyticsCycleFact` issue des records durables.
+
+Aucune table analytics supplémentaire n'est proposée. `SqlAlchemyPaperAnalyticsQueryService` charge les cycles et payloads déjà persistés puis appelle le reducer pur. Cette séparation permet de rejouer le calcul offline avec les mêmes faits.
+
+### Définitions proposées
+
+Pour le patch Batch 12 :
+
+- **equity** : valeur du portefeuille durable au `MarketState.last_price` du même cycle ;
+- **P&L net** : equity marquée moins l'equity initiale du premier cycle valorisable ;
+- **coûts** : `fee`, `spread_cost` et `slippage_cost` lus dans les fills persistés ;
+- **P&L brut** : P&L net + coûts cumulés ;
+- **drawdown** : écart entre le pic historique d'equity nette et l'equity courante ;
+- **exposition** : valeur de la position base / equity si l'equity est positive ;
+- **trade** : `execution_id` ayant produit au moins un fill ;
+- **jour** : date UTC ; performance journalière calculée entre clôtures UTC successives.
+
+HOLD et REJECT restent des résultats métier comptés mais ne deviennent pas des trades. MODIFY est compté séparément et son fill utilise la quantité effectivement autorisée. Les cycles FAILED sont comptés ; ils ne participent à la série de valorisation que si le journal contient les faits marché/portefeuille nécessaires. Un FAILED `POST_PORTFOLIO` avec fills peut être reconstitué en rejouant uniquement les fills durables sur le portefeuille pré-cycle.
+
+### No look-ahead et intégrité
+
+Un point historique est toujours valorisé avec le prix durable du cycle concerné. Le dernier prix connu aujourd'hui n'est jamais appliqué rétroactivement. Le reducer vérifie la continuité des montants du portefeuille d'un cycle valorisable au suivant et refuse les actifs non nuls qu'il ne peut pas valoriser avec le symbole durable courant. Une incohérence produit une erreur analytics explicite, pas un P&L approximatif.
+
+### Reproductibilité
+
+La réponse porte `calculation_version = paper-analytics-v1` et un `source_digest` SHA-256 calculé sur la séquence ordonnée `(cycle_id, result_digest)`. À faits et version identiques, le résultat doit être identique, indépendamment de l'ordre d'entrée fourni au reducer.
+
+Cette reproductibilité concerne **les métriques dérivées**. Le journal actuel ne contient pas encore un manifeste expérimental complet garantissant le rejeu d'une décision LLM avec modèle, prompt, RiskPolicy et configuration identiques ; les comparaisons contrôlées d'agressivité et Luna/Sol restent respectivement les Batches 13 et 14.
+
+### API et cockpit
+
+`GET /api/v1/analytics` expose le rapport calculé. Le frontend affiche les métriques fournies par le backend et ne recalcule que leur format de présentation. Le polling reste borné à 10 secondes et suspendu onglet masqué.
+
+Aucune modification n'est apportée au chemin `Agent -> Risk -> Broker`, au modèle de coûts du broker ou au journal d'écriture.
+
+---
+
+## 17. Sécurité et séparation PAPER / LIVE
 
 `ExecutionMode` ne contient que `PAPER`. Le LIVE reste non représentable et nécessitera une décision dédiée. Aucune clé Kraken privée n'est requise.
 
@@ -539,7 +591,7 @@ Le Batch 11 n'ajoute aucun secret frontend. `AI_SPOT_TRADER_BACKEND_URL` est une
 
 ---
 
-## 17. Stratégie de tests
+## 18. Stratégie de tests
 
 Les tests restent déterministes et offline autant que possible.
 
@@ -585,9 +637,15 @@ Validation Batch 11 confirmée avant intégration :
 - smoke test runtime confirmé pour backend disponible, moteur non configuré, ressources vides/503 et backend hors ligne ;
 - commit/push confirmé sur `main` : `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`.
 
+Validation réellement exécutée pendant la préparation Batch 12 :
+
+- `backend/tests/test_analytics.py` : **6 tests réussis** dans un environnement isolé reconstruit depuis les fichiers canoniques utiles.
+
+Les suites backend/frontend complètes restent à exécuter dans le repository local complet avant intégration.
+
 ---
 
-## 18. Questions ouvertes prioritaires
+## 19. Questions ouvertes prioritaires
 
 - capital PAPER et devise de référence produit ;
 - univers initial de paires ;
@@ -595,8 +653,8 @@ Validation Batch 11 confirmée avant intégration :
 - valeurs produit des limites Risk ;
 - mapping agressivité 1–10 ;
 - valeurs de référence fee/spread/slippage ;
-- exposition portefeuille avancée ;
-- frontière de journée et données P&L ;
+- limites avancées d'exposition/drawdown en tant que contraintes Risk ;
+- manifeste expérimental complet pour rejeu/comparaison des décisions ;
 - politique de rétention du journal ;
 - reconstruction du ledger et réconciliation après crash ;
 - source d'événements et protocole d'un futur WebSocket cockpit ;

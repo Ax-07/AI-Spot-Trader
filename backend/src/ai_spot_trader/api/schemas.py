@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -157,3 +157,76 @@ class EngineStatusResponse(ApiModel):
     last_cycle_status: str | None = None
     last_cycle_failure: CycleFailureResponse | None = None
     last_unexpected_error_type: str | None = None
+
+
+class PaperAnalyticsPointResponse(ApiModel):
+    cycle_id: UUID
+    at: datetime
+    status: str
+    action: str | None = None
+    risk_status: str | None = None
+    symbol: str
+    reference_price: Decimal = Field(gt=0)
+    equity: Decimal = Field(ge=0)
+    gross_pnl: Decimal
+    net_pnl: Decimal
+    cumulative_fees: Decimal = Field(ge=0)
+    cumulative_spread_cost: Decimal = Field(ge=0)
+    cumulative_slippage_cost: Decimal = Field(ge=0)
+    exposure_value: Decimal = Field(ge=0)
+    exposure_fraction: Decimal | None = Field(default=None, ge=0)
+    cumulative_return_fraction: Decimal | None = None
+    drawdown_value: Decimal = Field(ge=0)
+    drawdown_fraction: Decimal | None = Field(default=None, ge=0)
+    trade_count: int = Field(ge=0)
+
+
+class PaperDailyPerformanceResponse(ApiModel):
+    day: date
+    closing_at: datetime
+    closing_equity: Decimal = Field(ge=0)
+    gross_pnl: Decimal
+    net_pnl: Decimal
+    daily_net_pnl: Decimal
+    daily_return_fraction: Decimal | None = None
+    cumulative_return_fraction: Decimal | None = None
+    fees: Decimal = Field(ge=0)
+    spread_cost: Decimal = Field(ge=0)
+    slippage_cost: Decimal = Field(ge=0)
+    trade_count: int = Field(ge=0)
+
+
+class PaperAnalyticsSummaryResponse(ApiModel):
+    initial_equity: Decimal | None = Field(default=None, ge=0)
+    ending_equity: Decimal | None = Field(default=None, ge=0)
+    gross_pnl: Decimal
+    net_pnl: Decimal
+    fees: Decimal = Field(ge=0)
+    spread_cost: Decimal = Field(ge=0)
+    slippage_cost: Decimal = Field(ge=0)
+    max_drawdown_value: Decimal = Field(ge=0)
+    max_drawdown_fraction: Decimal | None = Field(default=None, ge=0)
+    current_drawdown_value: Decimal = Field(ge=0)
+    current_drawdown_fraction: Decimal | None = Field(default=None, ge=0)
+    current_exposure_value: Decimal = Field(ge=0)
+    current_exposure_fraction: Decimal | None = Field(default=None, ge=0)
+    trade_count: int = Field(ge=0)
+    buy_trade_count: int = Field(ge=0)
+    sell_trade_count: int = Field(ge=0)
+    hold_count: int = Field(ge=0)
+    reject_count: int = Field(ge=0)
+    modify_count: int = Field(ge=0)
+    completed_cycle_count: int = Field(ge=0)
+    failed_cycle_count: int = Field(ge=0)
+    valued_cycle_count: int = Field(ge=0)
+    first_at: datetime | None = None
+    last_at: datetime | None = None
+
+
+class PaperAnalyticsResponse(ApiModel):
+    calculation_version: str
+    timezone: Literal["UTC"]
+    source_digest: str = Field(min_length=64, max_length=64)
+    summary: PaperAnalyticsSummaryResponse
+    points: tuple[PaperAnalyticsPointResponse, ...] = ()
+    daily: tuple[PaperDailyPerformanceResponse, ...] = ()

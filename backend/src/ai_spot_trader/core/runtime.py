@@ -7,6 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from ai_spot_trader.persistence.analytics import PaperAnalyticsReader
 from ai_spot_trader.persistence.query import CycleAuditReader
 
 
@@ -97,6 +98,7 @@ class AppRuntime:
     trading_engine: StoppableTradingEngine | None = None
     portfolio: PortfolioSnapshotSource | None = None
     audit_reader: CycleAuditReader | None = None
+    analytics_reader: PaperAnalyticsReader | None = None
     owned_database: AsyncCloseable | None = None
     _engine_command_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 

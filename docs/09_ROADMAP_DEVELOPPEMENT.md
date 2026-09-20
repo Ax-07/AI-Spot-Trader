@@ -178,9 +178,54 @@ Remplacer le bootstrap Batch 01 par un cockpit Next.js réellement utilisable, e
 
 ## Batch 12 — Analytics et expérimentation reproductible
 
-**État : futur.**
+**État : patch préparé, validation locale requise, non intégré.**
 
-P&L brut/net, drawdown, frais, spread/slippage, exposition, trades, métriques quotidiennes/cumulées et replay.
+### Objectif du patch
+
+Mesurer les performances PAPER honnêtement à partir des faits durables sans modifier la stratégie ni réécrire les décisions.
+
+### Périmètre préparé
+
+- P&L brut et net ;
+- frais, spread et slippage cumulés depuis les fills persistés ;
+- equity et drawdown ;
+- exposition mark-to-market ;
+- nombre de trades BUY/SELL effectivement fillés ;
+- comptages HOLD, REJECT, MODIFY et FAILED ;
+- séries temporelles par cycle ;
+- performance quotidienne UTC et cumulée ;
+- endpoint `GET /api/v1/analytics` ;
+- panneau analytics dans le cockpit ;
+- version de calcul et digest SHA-256 des faits sources pour vérifier la reproductibilité du recalcul.
+
+### Architecture proposée
+
+- reducer `analytics.paper` pur, sans I/O ni horloge courante ;
+- `SqlAlchemyPaperAnalyticsQueryService` en lecture seule au-dessus du journal Batch 09 ;
+- aucune nouvelle table, vue matérialisée ou migration ;
+- valorisation historique au `MarketState.last_price` du cycle concerné uniquement ;
+- refus explicite d'une continuité portefeuille incohérente ou d'un actif non valorisable ;
+- frontend strictement présentatif, sans recalcul métier.
+
+### Conventions proposées
+
+- P&L net = equity courante marquée - equity initiale durable ;
+- P&L brut = P&L net + frais + spread + slippage cumulés ;
+- drawdown = baisse de l'equity nette depuis son plus haut historique ;
+- exposition = valeur des positions / equity lorsque l'equity est positive ;
+- trade = exécution avec fill ; HOLD/REJECT ne sont pas des trades ;
+- jours = UTC ;
+- cycles FAILED comptés et valorisés seulement lorsque leurs faits permettent un replay déterministe.
+
+### Limite de reproductibilité
+
+Le Batch 12 reproduit **les métriques** à partir des faits immuables. Il ne prétend pas encore rejouer une décision LLM sous un manifeste complet modèle/prompt/RiskPolicy/coûts : cette expérimentation contrôlée reste le périmètre des Batches 13/14.
+
+### Validation effectuée pendant préparation
+
+- test ciblé `backend/tests/test_analytics.py` : **6 tests réussis**.
+
+La suite backend complète, Ruff, mypy, lint/typecheck/build frontend, `git diff --check` sur le repository réel et le smoke test runtime/PostgreSQL restent à exécuter localement avant intégration.
 
 ---
 
@@ -252,12 +297,12 @@ Readiness, adaptateur privé Kraken, réconciliation, permissions minimales sans
 - univers initial de paires ;
 - valeur produit de cadence ;
 - valeurs produit des limites Risk ;
-- limites avancées d'exposition/drawdown une fois les données disponibles ;
+- limites avancées d'exposition/drawdown utilisées comme **contraintes Risk** ;
 - mapping agressivité ;
 - valeurs de référence fee/spread/slippage ;
 - politique de rétention ;
-- frontière de journée et P&L ;
 - reconstruction du ledger et réconciliation après crash ;
+- manifeste expérimental complet pour rejouer/comparer les décisions ;
 - source d'événements et protocole d'un futur WebSocket ;
 - auth/déploiement pour une exposition non locale ;
 - éventuel LIVE.

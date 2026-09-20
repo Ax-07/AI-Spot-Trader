@@ -2,7 +2,7 @@
 
 ## 1. Objet
 
-Ce document décrit l'architecture technique courante d'AI Spot Trader, incluant les Batches 10 et 11 intégrés. Les choix produit non figés restent explicitement séparés de l'architecture.
+Ce document décrit l'architecture technique courante d'AI Spot Trader, incluant les Batches 10 et 11 intégrés et le patch Batch 12 préparé mais non intégré. Les choix produit non figés restent explicitement séparés de l'architecture.
 
 ---
 
@@ -44,8 +44,11 @@ Le frontend n'est jamais l'ordonnanceur du moteur. PostgreSQL conserve des faits
 ```text
 backend/src/ai_spot_trader/
   agent/
+  analytics/
+    paper.py
   api/
     routes/
+      analytics.py
       audit.py
       engine.py
       health.py
@@ -62,6 +65,7 @@ backend/src/ai_spot_trader/
   persistence/
     audit.py
     db.py
+    analytics.py
     models.py
     query.py
     repository.py
@@ -74,6 +78,7 @@ backend/src/ai_spot_trader/
 
 Responsabilités :
 
+- `analytics` : calculs PAPER purs et déterministes dérivés des faits durables, sans stratégie ;
 - `domain` : contrats canoniques fournisseur-agnostiques ;
 - `market` : construction déterministe du `MarketState` ;
 - `portfolio` : ledger PAPER mémoire ;
@@ -82,7 +87,8 @@ Responsabilités :
 - `broker` : exécution PAPER uniquement après intent Risk ;
 - `trading` : orchestration et boucle séquentielle ;
 - `persistence.repository` : écriture durable du résultat ;
-- `persistence.query` : lecture durable pour l'API ;
+- `persistence.query` : lecture durable d'audit pour l'API ;
+- `persistence.analytics` : chargement read-only des faits nécessaires au reducer analytics ;
 - `api` : transport HTTP et modèles de réponse, sans métier de trading ;
 - `core.runtime` : dépendances process-locales et lifecycle explicite.
 
@@ -135,6 +141,7 @@ Le lifespan construit un `AppRuntime` avec, selon l'injection :
 - un `ControllableTradingEngine` ;
 - un `PortfolioSnapshotSource` ;
 - un `CycleAuditReader` ;
+- dans le patch Batch 12, un `PaperAnalyticsReader` ;
 - éventuellement un `Database` possédé par l'application si `database_url` est configurée.
 
 Aucune valeur produit de capital, paire, cadence, coûts ou RiskPolicy n'est inventée par FastAPI. Sans moteur ou portefeuille injecté, les endpoints associés restent explicitement non configurés.
@@ -266,7 +273,7 @@ Le cockpit distingue explicitement 404, 503, erreurs réseau et erreurs API gén
 
 Si un `CycleAuditReader` est injecté, FastAPI ne crée pas de DB.
 
-Sinon, lorsque `AI_SPOT_TRADER_DATABASE_URL` est présente, le lifespan construit `Database` et `SqlAlchemyCycleAuditQueryService`. La création de l'engine SQLAlchemy ne lance ni migration ni requête au startup. Le pool est disposé au shutdown.
+Sinon, lorsque `AI_SPOT_TRADER_DATABASE_URL` est présente, le lifespan construit un seul `Database` et les readers manquants (`SqlAlchemyCycleAuditQueryService` et, avec le patch Batch 12, `SqlAlchemyPaperAnalyticsQueryService`). La création de l'engine SQLAlchemy ne lance ni migration ni requête au startup. Le pool est disposé au shutdown.
 
 Les migrations restent gérées exclusivement par Alembic. Le Batch 10 ne nécessite aucune migration supplémentaire au-dessus de `0001_audit_journal` et le Batch 11 ne modifie pas la base.
 
@@ -298,12 +305,14 @@ frontend/src/
     globals.css
   components/
     cockpit/
+      analytics-panel.tsx
       cockpit-dashboard.tsx
     ui/
       badge.tsx
       button.tsx
       card.tsx
   hooks/
+    use-analytics.ts
     use-cockpit.ts
   lib/
     api/
@@ -418,11 +427,49 @@ git diff --check               aucune erreur ; warnings LF -> CRLF uniquement
 
 Le smoke test runtime a également validé les états backend accessible, moteur non configuré, données absentes/503 et backend hors ligne. Commit fonctionnel intégré : `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`. Aucune requête réelle OpenAI ou Kraken n'est nécessaire.
 
+Pour le patch Batch 12, `backend/tests/test_analytics.py` a été exécuté séparément pendant la préparation : **6 tests réussis**. L'intégration API, la suite backend complète et les validations frontend restent à exécuter localement avant intégration.
+
 ---
 
-## 17. Hors périmètre Batch 11
 
-- analytics P&L/drawdown complets ;
+## 17. Analytics PAPER — patch Batch 12
+
+Le patch ajoute deux frontières :
+
+```text
+audit_* tables
+      |
+      v
+SqlAlchemyPaperAnalyticsQueryService
+      |
+      v
+PaperAnalyticsCycleFact[]
+      |
+      v
+build_paper_analytics_report()
+      |
+      +--> summary
+      +--> points temporels
+      +--> daily UTC
+      |
+      v
+GET /api/v1/analytics -> cockpit
+```
+
+Le reducer est pur : aucun accès DB, réseau, horloge courante ou composant de trading. Les coûts sont lus dans les fills durables ; ils ne sont pas recalculés depuis un `PaperExecutionCostModel` courant. Les snapshots de portefeuille sont contrôlés par replay des fills, ce qui permet également de valoriser un échec technique post-exécution lorsque le snapshot post-cycle manque.
+
+La valorisation respecte le no look-ahead : chaque point utilise exclusivement `MarketState.last_price` et `MarketState.as_of` du cycle concerné. La continuité du portefeuille est vérifiée entre points successifs. Un actif non nul non valorisable avec le symbole du cycle provoque une erreur d'intégrité.
+
+Le rapport contient : equity, P&L brut/net, frais, spread, slippage, drawdown, exposition, trades, comptages HOLD/REJECT/MODIFY/FAILED, séries par cycle et agrégats quotidiens UTC. La réponse inclut une version de calcul et un digest des `result_digest` durables.
+
+Aucune table analytics ou migration n'est créée : la matérialisation est différée tant que le volume ne démontre pas un besoin. Le frontend consomme le résultat et n'implémente aucune formule métier.
+
+La reproductibilité de Batch 12 signifie **recalcul des métriques à faits identiques** ; elle ne signifie pas encore rejeu LLM complet d'une décision.
+
+---
+
+## 18. Hors périmètre du patch Batch 12
+
 - configuration de stratégie/Risk/agressivité par cockpit ;
 - private Kraken ;
 - LIVE ;
