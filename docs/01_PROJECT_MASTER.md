@@ -59,7 +59,7 @@ Le Batch 08 réalise le point 9. Le Batch 09 réalise le socle durable du point 
 
 V1 ajoute le cockpit Next.js/shadcn, historique, analytics P&L/drawdown/coûts/exposition, replay reproductible, expérimentations d'agressivité et comparaison Luna/Sol. Le LIVE n'est pas une condition de V1.
 
-Le Batch 11 fournit le socle cockpit et est **intégré sur `main`** au commit `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7` après validation frontend et smoke test runtime. Le HEAD GitHub resynchronisé avant Batch 12 est `cab3920d4d924d785b0a54c06b51066ccc949eb0`. Le patch Batch 12 ajoute les analytics reproductibles mais reste **non intégré** jusqu'à validation locale puis commit/push.
+Le Batch 11 fournit le socle cockpit et est **intégré sur `main`** au commit `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7` après validation frontend et smoke test runtime. Le Batch 12 fournit les analytics PAPER reproductibles et est **intégré sur `main`** au commit `3f39999736b6fc3800ecfd36ddee0253c734d25d` après validation locale backend/frontend.
 
 ---
 
@@ -309,7 +309,7 @@ Le Batch 10 étend `AppRuntime` sans déplacer la logique métier dans FastAPI. 
 - un `TradingEngine` canonique contrôlable (`start`, `stop`, état et dernier résultat) ;
 - un lecteur de portefeuille PAPER ;
 - un lecteur durable `CycleAuditReader` ;
-- dans le patch Batch 12, un lecteur `PaperAnalyticsReader` dérivant uniquement des faits durables ;
+- depuis le Batch 12, un lecteur `PaperAnalyticsReader` dérivant uniquement des faits durables ;
 - une DB possédée par l'application lorsque FastAPI la crée depuis `AI_SPOT_TRADER_DATABASE_URL`.
 
 `create_app(...)` ne démarre jamais le moteur. Si une URL DB est configurée et qu'aucun lecteur d'audit n'est injecté, le lifespan crée seulement le moteur SQLAlchemy/session factory ; aucune requête métier n'est déclenchée au startup.
@@ -446,7 +446,7 @@ Capacités intégrées :
 - `GET /api/v1/errors/latest` ;
 - `GET /api/v1/market/latest`.
 
-Le patch Batch 12 ajoute `GET /api/v1/analytics` sans changer les endpoints de trading ni créer une seconde orchestration.
+Le Batch 12 ajoute `GET /api/v1/analytics` sans changer les endpoints de trading ni créer une seconde orchestration.
 
 Les listes sont paginées par `limit`/`offset`, ordonnées de façon déterministe par timestamp puis UUID, avec filtres métier simples. Les réponses API utilisent des modèles Pydantic dédiés ; les payloads canoniques du journal sont exposés sans être réinterprétés stratégiquement.
 
@@ -519,7 +519,7 @@ Les boutons sont désactivés selon l'état du moteur et pendant une commande po
 
 ### Vues cockpit
 
-Le patch affiche :
+Le cockpit affiche :
 
 - disponibilité backend et audit store ;
 - moteur et dernier cycle ;
@@ -529,24 +529,20 @@ Le patch affiche :
 - décisions BUY/SELL/HOLD ;
 - assessments ALLOW/MODIFY/REJECT ;
 - executions/intents et fills ;
-- dernière erreur technique.
-
-Les analytics P&L/drawdown restent hors Batch 11.
+- dernière erreur technique ;
+- panneau analytics PAPER Batch 12.
 
 ---
 
-
-## 16. Analytics PAPER — Batch 12 patch à valider
+## 16. Analytics PAPER — Batch 12 intégré
 
 ### Source et frontière de calcul
 
 Les analytics observent le journal immuable. Le reducer `ai_spot_trader.analytics.paper` ne reçoit ni horloge courante, ni Kraken, ni LLM, ni ledger mémoire : il travaille sur une séquence de faits `PaperAnalyticsCycleFact` issue des records durables.
 
-Aucune table analytics supplémentaire n'est proposée. `SqlAlchemyPaperAnalyticsQueryService` charge les cycles et payloads déjà persistés puis appelle le reducer pur. Cette séparation permet de rejouer le calcul offline avec les mêmes faits.
+Aucune table analytics supplémentaire n'est introduite. `SqlAlchemyPaperAnalyticsQueryService` charge les cycles et payloads déjà persistés puis appelle le reducer pur. Cette séparation permet de rejouer le calcul offline avec les mêmes faits.
 
-### Définitions proposées
-
-Pour le patch Batch 12 :
+### Définitions intégrées
 
 - **equity** : valeur du portefeuille durable au `MarketState.last_price` du même cycle ;
 - **P&L net** : equity marquée moins l'equity initiale du premier cycle valorisable ;
@@ -637,11 +633,19 @@ Validation Batch 11 confirmée avant intégration :
 - smoke test runtime confirmé pour backend disponible, moteur non configuré, ressources vides/503 et backend hors ligne ;
 - commit/push confirmé sur `main` : `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`.
 
-Validation réellement exécutée pendant la préparation Batch 12 :
+Validation Batch 12 confirmée avant intégration :
 
-- `backend/tests/test_analytics.py` : **6 tests réussis** dans un environnement isolé reconstruit depuis les fichiers canoniques utiles.
+- `pytest backend` : **231 tests passés**, 2 warnings de dépréciation externes ;
+- Ruff : **All checks passed** ;
+- mypy : **76 fichiers sans erreur** ;
+- `pnpm --dir frontend lint` : **réussi** ;
+- `pnpm --dir frontend typecheck` : **réussi** ;
+- `pnpm --dir frontend build` : **réussi** avec Next.js 16.3.3 ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- commit/push confirmé sur `main` : `3f39999736b6fc3800ecfd36ddee0253c734d25d` ;
+- working tree confirmé propre après push.
 
-Les suites backend/frontend complètes restent à exécuter dans le repository local complet avant intégration.
+Aucun smoke test PostgreSQL/runtime Batch 12 distinct n'a été fourni ; il n'est pas revendiqué.
 
 ---
 

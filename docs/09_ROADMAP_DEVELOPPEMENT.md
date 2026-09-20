@@ -178,13 +178,13 @@ Remplacer le bootstrap Batch 01 par un cockpit Next.js réellement utilisable, e
 
 ## Batch 12 — Analytics et expérimentation reproductible
 
-**État : patch préparé, validation locale requise, non intégré.**
+**État : intégré.**
 
-### Objectif du patch
+### Objectif
 
 Mesurer les performances PAPER honnêtement à partir des faits durables sans modifier la stratégie ni réécrire les décisions.
 
-### Périmètre préparé
+### Périmètre intégré
 
 - P&L brut et net ;
 - frais, spread et slippage cumulés depuis les fills persistés ;
@@ -198,7 +198,7 @@ Mesurer les performances PAPER honnêtement à partir des faits durables sans mo
 - panneau analytics dans le cockpit ;
 - version de calcul et digest SHA-256 des faits sources pour vérifier la reproductibilité du recalcul.
 
-### Architecture proposée
+### Architecture retenue
 
 - reducer `analytics.paper` pur, sans I/O ni horloge courante ;
 - `SqlAlchemyPaperAnalyticsQueryService` en lecture seule au-dessus du journal Batch 09 ;
@@ -207,7 +207,7 @@ Mesurer les performances PAPER honnêtement à partir des faits durables sans mo
 - refus explicite d'une continuité portefeuille incohérente ou d'un actif non valorisable ;
 - frontend strictement présentatif, sans recalcul métier.
 
-### Conventions proposées
+### Conventions retenues
 
 - P&L net = equity courante marquée - equity initiale durable ;
 - P&L brut = P&L net + frais + spread + slippage cumulés ;
@@ -221,11 +221,19 @@ Mesurer les performances PAPER honnêtement à partir des faits durables sans mo
 
 Le Batch 12 reproduit **les métriques** à partir des faits immuables. Il ne prétend pas encore rejouer une décision LLM sous un manifeste complet modèle/prompt/RiskPolicy/coûts : cette expérimentation contrôlée reste le périmètre des Batches 13/14.
 
-### Validation effectuée pendant préparation
+### Validation d'intégration
 
-- test ciblé `backend/tests/test_analytics.py` : **6 tests réussis**.
+- `pytest backend` : **231 tests passés**, 2 warnings de dépréciation externes ;
+- Ruff : **All checks passed** ;
+- mypy : **76 fichiers sans erreur** ;
+- `pnpm --dir frontend lint` : **réussi** ;
+- `pnpm --dir frontend typecheck` : **réussi** ;
+- `pnpm --dir frontend build` : **réussi** avec Next.js 16.3.3 ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- commit/push confirmé : `3f39999736b6fc3800ecfd36ddee0253c734d25d` ;
+- working tree confirmé propre après push.
 
-La suite backend complète, Ruff, mypy, lint/typecheck/build frontend, `git diff --check` sur le repository réel et le smoke test runtime/PostgreSQL restent à exécuter localement avant intégration.
+Aucun smoke test PostgreSQL/runtime Batch 12 distinct n'a été fourni ; il n'est pas revendiqué.
 
 ---
 

@@ -2,7 +2,7 @@
 
 ## 1. Objet
 
-Ce document décrit l'architecture technique courante d'AI Spot Trader, incluant les Batches 10 et 11 intégrés et le patch Batch 12 préparé mais non intégré. Les choix produit non figés restent explicitement séparés de l'architecture.
+Ce document décrit l'architecture technique courante d'AI Spot Trader, incluant les Batches 10, 11 et 12 intégrés. Les choix produit non figés restent explicitement séparés de l'architecture.
 
 ---
 
@@ -141,7 +141,7 @@ Le lifespan construit un `AppRuntime` avec, selon l'injection :
 - un `ControllableTradingEngine` ;
 - un `PortfolioSnapshotSource` ;
 - un `CycleAuditReader` ;
-- dans le patch Batch 12, un `PaperAnalyticsReader` ;
+- depuis le Batch 12, un `PaperAnalyticsReader` ;
 - éventuellement un `Database` possédé par l'application si `database_url` est configurée.
 
 Aucune valeur produit de capital, paire, cadence, coûts ou RiskPolicy n'est inventée par FastAPI. Sans moteur ou portefeuille injecté, les endpoints associés restent explicitement non configurés.
@@ -179,7 +179,7 @@ Un verrou de commande dans `AppRuntime` sérialise start/stop côté API. Le ver
 - ne modifie pas le portefeuille ;
 - conserve les contrats PAPER existants.
 
-Le recovery/rebuild du ledger reste hors Batch 10 et hors Batch 11.
+Le recovery/rebuild du ledger reste hors des Batches 10, 11 et 12.
 
 ---
 
@@ -273,22 +273,22 @@ Le cockpit distingue explicitement 404, 503, erreurs réseau et erreurs API gén
 
 Si un `CycleAuditReader` est injecté, FastAPI ne crée pas de DB.
 
-Sinon, lorsque `AI_SPOT_TRADER_DATABASE_URL` est présente, le lifespan construit un seul `Database` et les readers manquants (`SqlAlchemyCycleAuditQueryService` et, avec le patch Batch 12, `SqlAlchemyPaperAnalyticsQueryService`). La création de l'engine SQLAlchemy ne lance ni migration ni requête au startup. Le pool est disposé au shutdown.
+Sinon, lorsque `AI_SPOT_TRADER_DATABASE_URL` est présente, le lifespan construit un seul `Database` et les readers manquants (`SqlAlchemyCycleAuditQueryService` et, avec le Batch 12, `SqlAlchemyPaperAnalyticsQueryService`). La création de l'engine SQLAlchemy ne lance ni migration ni requête au startup. Le pool est disposé au shutdown.
 
-Les migrations restent gérées exclusivement par Alembic. Le Batch 10 ne nécessite aucune migration supplémentaire au-dessus de `0001_audit_journal` et le Batch 11 ne modifie pas la base.
+Les migrations restent gérées exclusivement par Alembic. Le Batch 12 ne nécessite aucune migration supplémentaire au-dessus de `0001_audit_journal`.
 
 ---
 
 ## 13. WebSocket
 
-Aucun WebSocket n'est introduit au Batch 10 ni au Batch 11.
+Aucun WebSocket n'est introduit aux Batches 10, 11 ou 12.
 
 Motifs :
 
 - aucune source d'événements runtime canonique n'existe encore ;
 - diffuser en WebSocket des polls DB ajouterait peu de valeur ;
 - il faut éviter une seconde source d'état parallèle à PostgreSQL/`TradingEngine` ;
-- REST suffit au premier cockpit.
+- REST suffit au cockpit actuel.
 
 Un WebSocket sera réévalué lorsque le besoin de fréquence, le modèle d'abonnement et la source d'événements auront été définis.
 
@@ -416,25 +416,25 @@ Un test séparé du query service utilise `sqlite+aiosqlite:///:memory:` pour v�
 
 Le startup FastAPI ne doit déclencher ni cycle, ni réseau, ni migration.
 
-Le frontend Batch 11 ne nécessite aucun backend actif pour compiler. Les validations d'intégration confirmées sont :
+Validation Batch 12 confirmée dans le repository local complet :
 
 ```text
-pnpm --dir frontend lint       réussi
-pnpm --dir frontend typecheck  réussi
-pnpm --dir frontend build      réussi
-git diff --check               aucune erreur ; warnings LF -> CRLF uniquement
+pytest backend                     231 tests passés ; 2 warnings de dépréciation externes
+ruff check backend                 All checks passed
+mypy backend/src backend/tests     76 fichiers sans erreur
+pnpm --dir frontend lint           réussi
+pnpm --dir frontend typecheck      réussi
+pnpm --dir frontend build          réussi — Next.js 16.3.3
+git diff --check                   aucune erreur ; warnings LF -> CRLF uniquement
 ```
 
-Le smoke test runtime a également validé les états backend accessible, moteur non configuré, données absentes/503 et backend hors ligne. Commit fonctionnel intégré : `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`. Aucune requête réelle OpenAI ou Kraken n'est nécessaire.
-
-Pour le patch Batch 12, `backend/tests/test_analytics.py` a été exécuté séparément pendant la préparation : **6 tests réussis**. L'intégration API, la suite backend complète et les validations frontend restent à exécuter localement avant intégration.
+Commit/push fonctionnel intégré : `3f39999736b6fc3800ecfd36ddee0253c734d25d`. Aucun smoke test PostgreSQL/runtime Batch 12 distinct n'a été fourni ; il n'est donc pas revendiqué.
 
 ---
 
+## 17. Analytics PAPER — Batch 12 intégré
 
-## 17. Analytics PAPER — patch Batch 12
-
-Le patch ajoute deux frontières :
+Le Batch 12 ajoute deux frontières :
 
 ```text
 audit_* tables
@@ -468,7 +468,7 @@ La reproductibilité de Batch 12 signifie **recalcul des métriques à faits ide
 
 ---
 
-## 18. Hors périmètre du patch Batch 12
+## 18. Hors périmètre du Batch 12
 
 - configuration de stratégie/Risk/agressivité par cockpit ;
 - private Kraken ;

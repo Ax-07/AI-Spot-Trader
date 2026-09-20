@@ -220,25 +220,24 @@ Ces décisions sont intégrées avec le Batch 11 au commit fonctionnel `d3f41a3b
 
 ---
 
+## 5. Décisions acceptées au Batch 12
 
-## 5. Décisions proposées au Batch 12
-
-Ces décisions appartiennent au patch Batch 12. Elles restent **PROPOSÉES** tant que la validation locale et le commit/push ne sont pas confirmés.
+Ces décisions sont intégrées avec le Batch 12 au commit fonctionnel `3f39999736b6fc3800ecfd36ddee0253c734d25d`, après validation locale backend/frontend et push confirmé.
 
 ### ADR-057 — Journal durable comme source canonique des analytics
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - Les analytics dérivent uniquement des faits déjà persistés par le journal Batch 09.
 - L'état courant du ledger mémoire ne sert pas à reconstruire l'historique.
 - Aucune décision Agent/Risk n'est modifiée par les analytics.
 
 ### ADR-058 — Analytics calculés à la volée par un reducer pur
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - `build_paper_analytics_report` est déterministe et sans I/O/horloge courante.
 - `SqlAlchemyPaperAnalyticsQueryService` charge les faits puis délègue le calcul.
 - Pas de table/vue matérialisée ni migration tant que le volume ne justifie pas cette complexité.
 
 ### ADR-059 — Définitions PAPER du P&L, drawdown et exposition
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - P&L net = equity marquée - equity initiale durable.
 - P&L brut = P&L net + frais + spread + slippage cumulés.
 - Les coûts sont les valeurs des fills durables, jamais une réestimation avec la configuration actuelle.
@@ -246,14 +245,14 @@ Ces décisions appartiennent au patch Batch 12. Elles restent **PROPOSÉES** tan
 - Un trade est une exécution ayant produit un fill ; HOLD/REJECT ne sont pas des trades.
 
 ### ADR-060 — UTC et no look-ahead pour les séries historiques
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - La frontière de journée analytics est UTC.
 - Chaque point est valorisé au prix du `MarketState` durable du même cycle.
 - Aucun dernier prix futur/courant n'est appliqué rétroactivement.
 - Une rupture de continuité portefeuille ou un actif non valorisable est une erreur d'intégrité explicite.
 
 ### ADR-061 — Reproductibilité versionnée des métriques
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - La réponse analytics contient `calculation_version` et un SHA-256 de la séquence ordonnée `(cycle_id, result_digest)`.
 - À faits et version identiques, le rapport doit être identique, quel que soit l'ordre d'entrée.
 - Cette garantie ne couvre pas encore le rejeu LLM d'une décision ; les manifestes/protocoles d'expérimentation restent Batches 13/14.
@@ -299,23 +298,35 @@ Ces décisions appartiennent au patch Batch 12. Elles restent **PROPOSÉES** tan
 
 ## 8. Changelog
 
-
 ### 2026-09-20 — Batch 12 Analytics et expérimentation reproductible
 
-**État : patch préparé, non intégré. Référence GitHub resynchronisée : `cab3920d4d924d785b0a54c06b51066ccc949eb0`.**
+**État : intégré sur `main` au commit fonctionnel `3f39999736b6fc3800ecfd36ddee0253c734d25d` (`feat: add reproducible paper analytics`).**
 
-- Audit confirmé du journal Batch 09, de l'API Batch 10 et du cockpit Batch 11.
+- Resynchronisation initiale Batch 12 confirmée au HEAD `cab3920d4d924d785b0a54c06b51066ccc949eb0`.
+- Audit du journal Batch 09, de l'API Batch 10 et du cockpit Batch 11.
 - Aucun nouveau schéma DB : analytics dérivés à la volée des faits immuables.
-- Ajout proposé du reducer PAPER, du reader SQLAlchemy et de `GET /api/v1/analytics`.
+- Ajout du reducer PAPER, du reader SQLAlchemy et de `GET /api/v1/analytics`.
 - P&L brut/net, coûts, drawdown, exposition, trades, issues HOLD/REJECT/MODIFY/FAILED, séries temporelles et daily UTC.
 - No look-ahead : valorisation au prix durable de chaque cycle.
 - Continuité du portefeuille et valorisabilité vérifiées ; aucune approximation silencieuse.
 - Reproductibilité du calcul via `paper-analytics-v1` + digest des `result_digest`.
-- Ajout proposé d'un panneau analytics cockpit strictement présentatif.
+- Ajout du panneau analytics cockpit strictement présentatif.
 - Aucun changement Agent/Risk/Broker, aucun LIVE, aucun Kraken privé, aucun WebSocket.
-- Limite documentée : pas encore de rejeu décisionnel LLM avec manifeste expérimental complet.
+- Limite conservée : pas encore de rejeu décisionnel LLM avec manifeste expérimental complet.
 
-Validation réellement exécutée pendant préparation : `backend/tests/test_analytics.py` : **6 tests réussis**. Les validations backend/frontend complètes et le smoke runtime/PostgreSQL restent à confirmer localement avant de passer les ADR-057 à ADR-061 en ACCEPTÉE et de marquer Batch 12 intégré.
+Validation finale locale confirmée :
+
+- `pytest backend` : **231 tests passés**, 2 warnings de dépréciation externes ;
+- Ruff : **All checks passed** ;
+- mypy : **Success: no issues found in 76 source files** ;
+- `pnpm --dir frontend lint` : **réussi** ;
+- `pnpm --dir frontend typecheck` : **réussi** ;
+- `pnpm --dir frontend build` : **réussi**, Next.js 16.3.3 ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- commit/push confirmé sur `main` : `3f39999736b6fc3800ecfd36ddee0253c734d25d` ;
+- working tree confirmé propre après push.
+
+Aucun smoke test PostgreSQL/runtime Batch 12 distinct n'a été fourni ; il n'est pas revendiqué.
 
 ### 2026-09-20 — Batch 11 Frontend cockpit
 

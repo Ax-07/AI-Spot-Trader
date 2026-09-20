@@ -6,31 +6,36 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub resynchronisé avant Batch 12 : `cab3920d4d924d785b0a54c06b51066ccc949eb0` (`docs: record Batch 11 integration`).
-- Commit fonctionnel Batch 11 : `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7` (`feat: add frontend paper cockpit`).
-- Batch 11 : **intégré**.
-- Batch 12 : **patch préparé, non intégré** tant que validation locale + commit/push ne sont pas confirmés.
+- HEAD fonctionnel Batch 12 confirmé : `3f39999736b6fc3800ecfd36ddee0253c734d25d` (`feat: add reproducible paper analytics`).
+- Batch 11 : **intégré** au commit `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`.
+- Batch 12 : **intégré** après validation locale et push confirmé.
+- Working tree local confirmé propre après push du commit Batch 12.
 
 ## État intégré confirmé
 
 - Backend PAPER autonome : Kraken public, Agent Luna/Sol, Risk Engine déterministe, Paper Broker et boucle séquentielle.
 - Seul Risk produit `ExecutionIntent` ; HOLD/REJECT restent des issues métier auditées ; les erreurs techniques restent distinctes.
 - Journal durable PostgreSQL SQLAlchemy/Alembic, API REST `/api/v1` et cockpit Next.js/shadcn intégrés.
+- Analytics PAPER déterministes dérivés des faits durables : P&L brut/net, coûts, drawdown, exposition, trades, séries par cycle et daily UTC.
+- `GET /api/v1/analytics` et panneau analytics cockpit intégrés.
+- Reproductibilité des métriques par `paper-analytics-v1` + digest des `result_digest`, sans look-ahead.
 - Aucun LIVE, Kraken privé, stratégie frontend ou WebSocket.
 
-## Patch Batch 12 préparé
+## Validation Batch 12
 
-- reducer analytics pur et déterministe, sans nouvelle migration ;
-- source : faits durables existants, jamais l'état mémoire courant ;
-- P&L net = equity marquée - equity initiale ; P&L brut = net + frais + spread + slippage ;
-- drawdown sur equity nette ; exposition mark-to-market ; trades = exécutions fillées ;
-- HOLD/REJECT/MODIFY/FAILED comptés explicitement ;
-- jours en UTC et prix historique limité au `MarketState` du cycle, sans look-ahead ;
-- reproductibilité par version de calcul + digest des `result_digest` durables ;
-- `GET /api/v1/analytics` et panneau analytics cockpit ;
-- incohérences de continuité/valorisation refusées explicitement.
+Validation locale confirmée le 20 septembre 2026 :
 
-Test réellement exécuté pendant la préparation : `backend/tests/test_analytics.py` : **6 réussis**. Les validations complètes backend/frontend restent à exécuter localement.
+- `pytest backend` : **231 tests passés**, 2 warnings de dépréciation externes ;
+- Ruff : **All checks passed** ;
+- mypy : **76 fichiers sans erreur** ;
+- `pnpm --dir frontend lint` : **réussi** ;
+- `pnpm --dir frontend typecheck` : **réussi** ;
+- `pnpm --dir frontend build` : **réussi**, Next.js 16.3.3 ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- commit/push confirmé : `3f39999736b6fc3800ecfd36ddee0253c734d25d` ;
+- working tree propre après push.
+
+Aucun smoke test PostgreSQL/runtime Batch 12 distinct n'a été fourni ; il n'est pas revendiqué.
 
 ## Limites conservées
 
@@ -40,4 +45,4 @@ Test réellement exécuté pendant la préparation : `backend/tests/test_analyti
 
 ## Prochaine étape
 
-Valider localement le patch Batch 12 (backend + frontend + smoke runtime), puis commit/push. Ne marquer Batch 12 intégré qu'après confirmation.
+**Batch 13 — Expérimentation agressivité 1–10** : figer un mapping versionné et comparer les niveaux sous protocole identique, sans jamais contourner Risk.
