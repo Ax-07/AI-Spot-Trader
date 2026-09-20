@@ -6,7 +6,7 @@ AI Spot Trader est une application expérimentale de trading crypto SPOT piloté
 
 Source de vérité technique :
 
-* GitHub : `[REPOSITORY À RENSEIGNER]`
+* GitHub : `Ax-07/AI-Spot-Trader`
 * Branche : `main`
 
 GitHub `main` représente l'état intégré. La documentation versionnée complète cette source de vérité.
