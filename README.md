@@ -1,192 +1,109 @@
-# AI Spot Trader — Instructions permanentes
+# AI Spot Trader
 
-AI Spot Trader est une application expérimentale de trading crypto SPOT pilotée par un agent IA unique.
+AI Spot Trader est une application expérimentale de **trading crypto SPOT pilotée par un agent IA unique**.
 
-## Source de vérité
+Le projet vise à étudier jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché structuré, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-Source de vérité technique :
+> **Statut du projet :** phase de conception et de documentation. Les premières versions seront exclusivement en **PAPER trading**.
 
-* GitHub : `Ax-07/AI-Spot-Trader`
-* Branche : `main`
+## Principes du projet
 
-GitHub `main` représente l'état intégré. La documentation versionnée complète cette source de vérité.
+- Exchange initial : **Kraken**.
+- Trading **SPOT uniquement**.
+- Aucun short, levier, margin, future ou perpetual.
+- Actions stratégiques de l'agent : `BUY`, `SELL`, `HOLD`.
+- Impossible de vendre un actif non détenu.
+- Un seul agent IA conserve la décision stratégique.
+- Les indicateurs et calculs déterministes fournissent du contexte, sans devenir silencieusement une stratégie algorithmique parallèle.
+- Le **Risk Engine** déterministe peut autoriser, modifier ou refuser une décision avant exécution.
+- Aucune sortie LLM ne peut déclencher directement un ordre Kraken.
+- Toutes les décisions, y compris `HOLD`, doivent être journalisées.
+- Les frais, le spread et le slippage doivent être pris en compte dans les mesures de performance.
+- Le passage au **LIVE** sera explicite, séparé du PAPER et traité dans une phase ultérieure.
 
-Ne pas utiliser les anciennes conversations, souvenirs du modèle ou anciennes pièces jointes comme source de vérité technique.
+## Agent IA
 
-Le dépôt local de l'utilisateur peut contenir des modifications non commitées plus récentes. Si l'utilisateur fournit `git status`, `git diff`, logs, fichiers ou résultats locaux, les considérer comme l'état courant du travail.
+Les premiers tests utiliseront **GPT-5.6 Luna** afin de réduire les coûts d'expérimentation. L'architecture doit permettre de sélectionner **GPT-5.6 Sol** par configuration sans modifier le moteur de trading.
 
-Toujours distinguer :
+Le niveau d'agressivité de l'agent est prévu sur une échelle configurable de **1 à 10**. Sa traduction exacte en contraintes et comportement reste à définir et devra être mesurée expérimentalement.
 
-* état intégré GitHub ;
-* modifications locales ;
-* patch proposé non intégré.
+## Objectif expérimental
 
-## Début d'une nouvelle discussion
+Le projet utilise une cible expérimentale de **+4 % de rendement journalier** comme objectif de recherche et de mesure.
 
-Pour toute nouvelle tâche :
+Cette cible n'est **ni une promesse, ni une garantie de rendement**. Les résultats devront être évalués sans look-ahead ni sélection rétrospective, en mesurant notamment le P&L brut et net, le drawdown, les frais, le slippage, l'exposition et le nombre de trades.
 
-1. consulter le HEAD actuel de GitHub `main` ;
-2. lire `docs/00_ETAT_ACTUEL.md` ;
-3. comparer son HEAD de référence au HEAD GitHub ;
-4. si nécessaire, inspecter les commits intervenus depuis ;
-5. consulter uniquement les documents/fichiers utiles à la tâche.
+## Architecture cible
 
-Ne pas demander à l'utilisateur des informations déjà disponibles dans GitHub, la documentation ou la conversation courante.
+Le **backend constitue l'application de trading**. Il doit continuer à fonctionner indépendamment du frontend.
 
-## Méthode de travail
+Le frontend est uniquement un cockpit de contrôle et de visualisation : le fermer ou le redémarrer ne doit jamais arrêter le moteur de trading.
 
-Auditer l'existant avant toute modification importante.
+Stack décidée :
 
-Préserver les composants canoniques et éviter les implémentations parallèles inutiles.
+- **Backend** : Python, `asyncio`, FastAPI, Pydantic.
+- **Frontend** : Next.js, TypeScript, shadcn/ui, Tailwind CSS.
+- **Communication** : REST et WebSocket selon le besoin.
+- **Base cible** : PostgreSQL.
+- **Intégrations externes** : Kraken et le fournisseur LLM derrière des interfaces dédiées.
 
-Privilégier des batches cohérents, limités et testables.
+Rust ne sera introduit que si un besoin mesuré ou une décision architecturale explicite le justifie.
 
-Ne jamais déclarer un test réussi s'il n'a pas réellement été exécuté.
+## Flux de décision simplifié
 
-Distinguer clairement les tests exécutés par ChatGPT des tests restant à exécuter dans l'environnement utilisateur.
-
-Ne jamais modifier GitHub directement sauf demande explicite.
-
-## LIVRAISON DU CODE — RÈGLE PRIORITAIRE
-
-Pour tout batch comportant plusieurs fichiers, fournir par défaut un **ZIP prêt à extraire à la racine du repository**.
-
-L'utilisateur ne doit pas avoir à recopier manuellement de nombreux blocs de code.
-
-Le ZIP doit être **root-relative** et conserver exactement l'arborescence du repository.
-
-Exemple du contenu du ZIP :
-
-```text id="fgksag"
-src/
-  market/
-    kraken_ws.py
-tests/
-  test_kraken_ws.py
-docs/
-  ...
+```text
+Kraken / Market Data
+        │
+        ▼
+   Market State
+        │
+        ├──────────────┐
+        ▼              │
+ Portfolio State       │
+        │              │
+        └──────┬───────┘
+               ▼
+          Agent IA
+      BUY / SELL / HOLD
+               │
+               ▼
+         Risk Engine
+      autorise / modifie
+            / refuse
+               │
+               ▼
+         Paper Broker
+               │
+               ▼
+      Journal / Analytics
 ```
 
-Ne PAS encapsuler ces fichiers dans un dossier parent portant le nom du projet.
-
-Le ZIP doit pouvoir être extrait directement à la racine.
-
-Inclure uniquement les fichiers créés ou réellement modifiés par le batch.
-
-Les fichiers livrés doivent être complets et directement utilisables. Ne jamais utiliser de placeholders du type « reste du fichier inchangé ».
-
-Ne jamais inclure :
-
-* `.git/` ;
-* `.env` avec secrets ;
-* clés API ;
-* environnement virtuel ;
-* caches ;
-* dépendances installées ;
-* fichiers temporaires inutiles.
-
-Nommer les ZIP clairement, par exemple :
-
-`batch_01_project_bootstrap.zip`
-`batch_02_kraken_websocket.zip`
-`batch_03_paper_broker.zip`
-
-Après génération, fournir un lien de téléchargement.
-
-Pour chaque ZIP, indiquer brièvement :
-
-1. objectif du batch ;
-2. fichiers principaux créés/modifiés ;
-3. extraction à la racine ;
-4. commandes exactes de validation ;
-5. résultat attendu.
-
-Si une correction touche plusieurs fichiers, fournir également un ZIP correctif plutôt qu'une longue série de modifications manuelles.
-
-Les petits snippets restent acceptables pour une commande, quelques lignes, un diagnostic ou une modification triviale.
-
-## Validation
-
-Après une modification, fournir les commandes pertinentes, par exemple :
-
-```bash id="frd9gn"
-git status
-git diff
-pytest
-```
-
-Si un test nécessite Kraken, Internet, une clé API ou l'environnement local et n'a pas pu être exécuté par ChatGPT, le préciser.
-
-Ne jamais inventer un résultat de test.
+Aucun chemin direct entre l'agent IA et Kraken ne doit exister.
 
 ## Documentation
 
-Documentation en français. Code et identifiants techniques de préférence en anglais.
+La documentation versionnée constitue la référence détaillée du projet :
 
-Maintenir notamment :
+- [`docs/00_ETAT_ACTUEL.md`](docs/00_ETAT_ACTUEL.md) — mémoire courte pour reprendre le projet rapidement.
+- [`docs/01_PROJECT_MASTER.md`](docs/01_PROJECT_MASTER.md) — spécification fonctionnelle et principes généraux.
+- [`docs/02_ARCHITECTURE_TECHNIQUE.md`](docs/02_ARCHITECTURE_TECHNIQUE.md) — architecture et frontières techniques.
+- [`docs/03_AGENT_TRADING_RISK.md`](docs/03_AGENT_TRADING_RISK.md) — responsabilités de l'agent, du trading et du Risk Engine.
+- [`docs/09_ROADMAP_DEVELOPPEMENT.md`](docs/09_ROADMAP_DEVELOPPEMENT.md) — roadmap par batches cohérents et testables.
+- [`docs/10_DECISIONS_ET_CHANGELOG.md`](docs/10_DECISIONS_ET_CHANGELOG.md) — décisions architecturales et changelog.
 
-* `docs/00_ETAT_ACTUEL.md` : mémoire courte de l'état courant ;
-* `docs/01_PROJECT_MASTER.md` : spécification principale ;
-* `docs/09_ROADMAP_DEVELOPPEMENT.md` : roadmap ;
-* `docs/10_DECISIONS_ET_CHANGELOG.md` : décisions/ADR/changelog.
+## État de développement
 
-Après un batch important, vérifier les documents concernés.
+La documentation initiale est en place. Le prochain chantier recommandé est le **bootstrap technique du projet** : structure backend/frontend, configuration, outillage qualité et tests minimaux, avant l'implémentation de Kraken ou de l'agent de trading.
 
-`00_ETAT_ACTUEL.md` doit rester court et actuel, pas devenir un changelog cumulatif.
+Pour l'état exact du repository et les prochaines décisions ouvertes, consulter [`docs/00_ETAT_ACTUEL.md`](docs/00_ETAT_ACTUEL.md).
 
-## Invariants fonctionnels
+## Sécurité
 
-Sauf décision explicite contraire :
+- Aucun secret ou clé API ne doit être versionné, journalisé ou injecté dans les prompts.
+- Une future clé Kraken ne devra jamais disposer du droit de retrait.
+- PAPER et LIVE doivent rester explicitement séparés.
+- Toute exécution LIVE future devra passer par des garde-fous dédiés et une activation volontaire.
 
-* un seul agent IA de trading ;
-* Kraken comme exchange initial ;
-* trading SPOT uniquement ;
-* aucun short, levier, margin, future ou perpetual ;
-* Luna pour les premiers tests afin de réduire les coûts ;
-* architecture permettant de remplacer Luna par Sol par configuration ;
-* cible expérimentale : +4 % de rendement journalier ;
-* agressivité configurable de 1 à 10 ;
-* BUY, SELL et HOLD sont les actions de trading ;
-* impossible de vendre un actif non détenu ;
-* l'agent IA prend les décisions stratégiques ;
-* le Risk Engine déterministe reste l'autorité finale ;
-* aucune sortie LLM ne déclenche directement un ordre Kraken ;
-* premières versions exclusivement en PAPER ;
-* frais, spread et slippage doivent être simulés ;
-* toutes les décisions, y compris HOLD, sont journalisées ;
-* aucune clé/secrets dans prompts, logs ou fichiers versionnés ;
-* aucune clé Kraken avec droit de retrait ;
-* passage au LIVE explicite et séparé du PAPER.
+## Avertissement
 
-## Philosophie
-
-Ne pas transformer silencieusement le projet en bot algorithmique traditionnel.
-
-Les systèmes déterministes peuvent calculer données, statistiques, indicateurs et contraintes de risque, mais l'objectif est que l'agent IA conserve la décision stratégique.
-
-La cible +4 %/jour est un objectif expérimental, jamais une garantie.
-
-Mesurer honnêtement P&L net, drawdown, frais, slippage, exposition et nombre de trades. Aucun look-ahead ou sélection rétrospective des résultats.
-
-## Style de collaboration
-
-Répondre en français sauf demande contraire.
-
-Être concret et orienté implémentation.
-
-Pour les audits, distinguer :
-
-* confirmé ;
-* obsolète ;
-* manquant ;
-* à décider.
-
-Ne pas transformer silencieusement une hypothèse en décision architecturale.
-
-Si plusieurs solutions ont des conséquences importantes, présenter brièvement les options avant implémentation.
-
-## Règle de travail essentielle
-
-Pour un batch multi-fichiers :
-
-**resynchroniser → auditer → modifier → tester autant que possible → créer un ZIP root-relative → fournir les commandes de validation.**
+AI Spot Trader est un projet expérimental de recherche et de développement. Il ne constitue pas un conseil financier et ne garantit aucun résultat de trading.

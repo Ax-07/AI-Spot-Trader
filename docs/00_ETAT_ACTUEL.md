@@ -6,34 +6,32 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub audité : `f5b967d8736075781d8142c8cc80a99cbd96fae3`
-- Commit : `first commit` — 20 septembre 2026
-- Contenu intégré observé : `README.md` uniquement ; aucun dossier `docs/` avant ce batch.
+- HEAD GitHub audité : `bd58ec3502fecca6c8c693af6fe71daea22b9167`
+- Commit : `docs: initialize project documentation` — 20 septembre 2026
+- État intégré : documentation initiale présente sous `docs/` ; aucune implémentation fonctionnelle du moteur de trading.
 
 ## État courant
 
 **Confirmé**
 - Projet expérimental de trading crypto SPOT piloté par un agent IA unique.
-- Exchange initial : Kraken.
-- Backend : Python + `asyncio` + FastAPI + Pydantic.
-- Frontend : Next.js + TypeScript + shadcn/ui + Tailwind CSS.
-- PAPER obligatoire pour les premières versions ; LIVE séparé et ultérieur.
-- Agent stratégique, Risk Engine déterministe avec autorité finale.
-- Modèle initial : GPT-5.6 Luna ; Sol doit rester sélectionnable par configuration.
-- PostgreSQL est la base cible.
+- Kraken comme exchange initial ; premières versions exclusivement en PAPER.
+- Backend Python + `asyncio` + FastAPI + Pydantic.
+- Frontend Next.js + TypeScript + shadcn/ui + Tailwind CSS, indépendant du moteur de trading.
+- Agent stratégique ; Risk Engine déterministe avec autorité finale.
+- GPT-5.6 Luna pour les premiers tests ; Sol sélectionnable ultérieurement par configuration.
+- PostgreSQL comme base cible.
 
-**Patch préparé, non intégré tant qu'il n'est pas commité**
-- Batch 00 : documentation initiale du projet.
-- Création de la documentation canonique sous `docs/`.
-- Correction dans `README.md` du placeholder du repository.
+**Patch local proposé, non intégré**
+- Refonte de `README.md` en véritable page de présentation du projet.
+- Mise à jour de ce fichier pour refléter le HEAD désormais intégré.
 
 ## Dernier batch intégré
 
-Aucun batch applicatif. Le repository est au commit initial.
+**Batch 00 — Documentation initiale** : documentation canonique créée et intégrée sur `main`.
 
 ## Prochain batch recommandé
 
-**Batch 01 — Bootstrap du projet** : arborescence backend/frontend, configuration, qualité, tests minimaux et contrats de démarrage, sans implémenter encore une stratégie de trading.
+**Batch 01 — Bootstrap du projet** : arborescence backend/frontend, configuration, qualité et tests minimaux, sans implémenter encore Kraken ni l'agent IA.
 
 ## Points encore à décider
 
