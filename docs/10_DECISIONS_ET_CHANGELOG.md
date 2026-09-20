@@ -129,34 +129,26 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 
 ### ADR-031 — Le sizing stratégique est explicite dans DecisionCandidate
 - **Statut : ACCEPTÉE**
-- BUY/SELL doivent porter `proposed_quantity > 0`.
-- HOLD ne porte aucune quantité.
+- BUY/SELL portent `proposed_quantity > 0` ; HOLD ne porte aucune quantité.
 - L'agent source la taille stratégique ; Risk peut la réduire mais ne choisit pas arbitrairement une taille initiale.
 
 ### ADR-032 — RiskAssessment porte quantités et raisons structurées
 - **Statut : ACCEPTÉE**
-- `requested_quantity`, `authorized_quantity` et `evaluated_limits` rendent ALLOW/MODIFY/REJECT auditables.
-- `RiskReason` fournit des codes stables et testables.
-- MODIFY signifie strictement une réduction ; REJECT ne crée aucun `ExecutionIntent`.
-- HOLD produit un assessment auditable sans intent.
+- `requested_quantity`, `authorized_quantity`, `evaluated_limits` et `RiskReason` rendent la décision Risk auditable.
+- MODIFY signifie strictement une réduction ; REJECT ne crée aucun intent ; HOLD produit un assessment sans intent.
 
 ### ADR-033 — RiskPolicy injectée, sans limites produit implicites
 - **Statut : ACCEPTÉE**
-- La policy supporte max order notional, whitelist, seuil stale métier et autorisation explicite de réduction.
-- Aucune valeur chiffrée produit n'est codée en dur ni ajoutée à `Settings` au Batch 06.
-- Drawdown/daily loss restent non implémentés tant que l'historique P&L nécessaire n'existe pas.
+- Max order notional, whitelist, seuil stale métier et réduction de quantité sont explicites et optionnels.
+- Aucune valeur chiffrée produit n'est codée en dur.
 
 ### ADR-034 — Estimation PAPER partagée entre Risk et Paper Broker
 - **Statut : ACCEPTÉE**
 - `broker/pricing.py` contient la mathématique pure commune des coûts PAPER.
-- Risk l'utilise pour vérifier le cash BUY prévisible sans exécuter l'ordre.
-- Paper Broker utilise la même primitive pour le fill réel.
 
 ### ADR-035 — MODIFY ne peut qu'abaisser le risque sans changer la stratégie
 - **Statut : ACCEPTÉE**
-- Risk ne change jamais BUY↔SELL, symbole ou actif.
-- Risk n'augmente jamais la quantité proposée.
-- Réductions uniquement si la policy les autorise.
+- Risk ne change jamais BUY↔SELL ou symbole, n'augmente jamais la quantité et réduit uniquement si la policy l'autorise.
 
 ### ADR-036 — HOLD traverse la frontière Risk pour audit
 - **Statut : ACCEPTÉE**
@@ -164,32 +156,33 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 
 ### ADR-037 — Le LLM ne produit que les champs stratégiques
 - **Statut : ACCEPTÉE**
-- La réponse fournisseur contient uniquement `action`, `symbol`, `proposed_quantity`, `rationale`.
-- `decision_id` vient d'une factory UUID injectable.
-- `cycle_id` est contrôlé par `AgentInput`.
-- `created_at` vient d'un `Clock` injectable.
-- `DecisionCandidate` reste l'unique contrat métier exposé au reste du moteur.
+- Sortie fournisseur : `action`, `symbol`, `proposed_quantity`, `rationale`.
+- IDs et timestamps sont contrôlés par l'application.
 
 ### ADR-038 — L'Agent est limité au symbole du MarketState fourni
 - **Statut : ACCEPTÉE**
 - `decision.symbol` doit être exactement égal à `agent_input.market_state.symbol`.
-- L'agent ne peut pas choisir un actif pour lequel aucun snapshot marché n'a été fourni.
-- Risk conserve indépendamment son propre contrôle de symbole en aval.
 
 ### ADR-039 — Prompt versionné et Structured Outputs stricts
 - **Statut : ACCEPTÉE**
-- Prompt initial : `agent-luna-v1`.
-- OpenAI Responses API avec `text.format.type=json_schema`, `strict=true` et champs supplémentaires interdits.
-- La sortie est revalidée localement sans réparation stratégique silencieuse.
-- Aucun tool-calling ou chemin d'exécution n'est fourni au LLM.
+- Prompt initial `agent-luna-v1`, Responses API, JSON Schema strict, revalidation locale et aucun tool-calling.
 
 ### ADR-040 — Adapter OpenAI minimal sur httpx, secrets via SecretStr
 - **Statut : ACCEPTÉE**
-- Identifiants vérifiés : `gpt-5.6-luna` et `gpt-5.6-sol`.
-- Le même `OpenAIDecisionProvider` supporte Luna et Sol par configuration.
-- `httpx`, déjà dépendance runtime, est réutilisé ; aucun SDK runtime supplémentaire au Batch 07.
-- Clé OpenAI chargée via environnement en `SecretStr`, jamais incluse dans prompts/logs/exceptions.
-- Aucun retry automatique au Batch 07 ; les erreurs restent explicites et testables.
+- `gpt-5.6-luna` et `gpt-5.6-sol` utilisent le même provider.
+- `httpx` est réutilisé ; clé via environnement/`SecretStr` ; aucun retry automatique au Batch 07.
+
+### ADR-041 — Boucle autonome séquentielle sur snapshots cohérents
+- **Statut : ACCEPTÉE**
+- La primitive canonique du Batch 08 est `TradingCycleRunner.run_cycle()` ; `TradingEngine` ne fait que la répéter.
+- Un verrou partagé couvre tout le cycle : aucun appel manuel et aucune loop utilisant le même runner ne se chevauchent.
+- Chaque cycle utilise un unique `MarketState` pour Agent, Risk et Broker, et un unique `PortfolioState` pré-cycle pour Agent et Risk.
+- Seul Risk crée l'`ExecutionIntent`; l'orchestrateur ne modifie jamais action, symbole ou quantité.
+- HOLD et REJECT sont des issues métier complètes ; les pannes techniques sont distinctes et ne deviennent jamais des HOLD.
+- Market, Agent et Broker ont des timeouts explicitement injectés ; Risk n'a pas de timeout artificiel.
+- La cadence est attendue après la fin d'un cycle ; aucun rattrapage concurrent n'est effectué.
+- Le stop est coopératif et réveille l'attente de cadence ; FastAPI peut attendre l'arrêt via `AppRuntime`.
+- Aucune valeur produit de cadence/timeouts n'est imposée par `Settings` dans ce batch.
 
 ---
 
@@ -215,69 +208,72 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 - capital PAPER initial produit ;
 - devise de référence produit ;
 - univers initial de paires ;
-- cadence de décision ;
+- valeur produit de cadence ;
 - données marché supplémentaires ;
 - valeurs chiffrées produit des limites Risk ;
-- éventuelle limite d'exposition simple/avancée ;
+- éventuelle limite d'exposition ;
 - max drawdown / max daily loss quand les données existeront ;
 - mapping agressivité 1–10 ;
 - valeurs expérimentales fee/spread/slippage ;
 - modèle de fill plus riche éventuel ;
 - base de coût et frontière de journée ;
 - ORM/migrations/rétention ;
-- auth, déploiement, reprise après panne ;
+- idempotence/réconciliation et reprise après panne ;
+- auth et déploiement ;
 - versionnement explicite des schémas si nécessaire ;
-- éventuelle policy de retry LLM bornée si le Batch 08 la justifie ;
+- éventuelle policy de retry LLM bornée ;
 - éventuel LIVE.
 
 ---
 
 ## 5. Changelog
 
+### 2026-09-20 — Batch 08 Boucle autonome
+
+**État : patch préparé, non encore intégré.**
+
+- Resynchronisation confirmée sur GitHub `main` au HEAD `6415064b0f9bb0ee625cc42e8209cdf4388167e0` (`docs: record Batch 07 integration`).
+- Correction de `docs/00_ETAT_ACTUEL.md` : le commit documentaire post-intégration devient la référence HEAD auditée ; le commit fonctionnel Batch 07 reste `caff3851...`.
+- Ajout du package `ai_spot_trader.trading` avec `TradingCycleRunner`, `TradingEngine`, timeouts et résultat de cycle mémoire.
+- Un seul `MarketState` est acquis par cycle et réutilisé par Agent/Risk/Broker ; un seul `PortfolioState` pré-cycle est utilisé par Agent/Risk.
+- Verrou global de cycle pour empêcher tout chevauchement entre appel manuel et loop autonome.
+- HOLD traverse Risk ; REJECT n'appelle pas Broker ; MODIFY/ALLOW exécutent uniquement l'intent Risk.
+- Aucun `ExecutionIntent` n'est construit par l'orchestrateur.
+- Erreurs techniques Market/Portfolio/Input/Agent/Risk/Broker/Post-Portfolio représentées explicitement, sans faux HOLD.
+- Timeouts `asyncio.timeout` injectés pour Market/Agent/Broker ; aucun timeout Risk.
+- Cadence positive injectée, attendue après chaque cycle sans rattrapage concurrent.
+- Double `start()` interdit ; `stop()` coopératif réveille la cadence et attend la tâche.
+- `AppRuntime` et `create_app` acceptent un moteur injecté pour le shutdown, sans démarrage automatique ni réseau au boot.
+- Aucun paramètre produit de capital, paire, cadence, RiskPolicy ou coûts PAPER ajouté silencieusement.
+- Aucune persistance durable, API de contrôle, API Kraken privée ou fonctionnalité LIVE.
+
+Validation réellement exécutée dans l'environnement ChatGPT : `pytest -q backend/tests/test_trading_engine.py` **34/34** puis suite ciblée Health + Trading **37/37**. Aucun appel réseau réel.
+
+Validation locale Windows confirmée par l'utilisateur avant le correctif Ruff final : `pytest backend` **203/203**, mypy **Success: no issues found in 57 source files**, `git diff --check` sans erreur et 2 warnings FastAPI/Starlette sans échec. Ruff a signalé uniquement `SIM105` dans la boucle de cadence et un ordre d'imports dans le test Trading ; le correctif suivant traite ces deux points. `ruff check backend` reste à relancer localement avant intégration.
+
 ### 2026-09-20 — Batch 07 Agent Luna
 
 **État : intégré sur `main` au commit `caff3851d8299630f328b955c69eb31eb11baef0` (`feat: add Luna agent provider`).**
 
-- Resynchronisation confirmée sur GitHub `main` au HEAD `d3271d6404ea2af38a42ff09e5a1df1eed5e141e` (`feat: add deterministic risk engine`).
-- Intégration finale du Batch 07 confirmée sur `main` au commit `caff3851d8299630f328b955c69eb31eb11baef0` (`feat: add Luna agent provider`).
-- Correction documentaire : Batch 06 enregistré comme intégré avec validation locale finale 131 tests, Ruff OK, mypy OK sur 47 fichiers source et `git diff --check` OK.
-- Port `LLMProvider` conservé inchangé.
-- Ajout du package `ai_spot_trader.agent`.
-- `OpenAIDecisionProvider` commun Luna/Sol et `OpenAIResponsesClient` injectable.
-- Prompt versionné `agent-luna-v1`.
-- Réponse LLM limitée à action/symbole/quantité/rationale ; IDs et timestamp restent applicatifs.
-- Symbole strictement limité au `MarketState` fourni.
-- OpenAI Responses API avec Structured Outputs JSON Schema stricts et `additionalProperties=false`.
-- Parsing local exact en `Decimal`, sans coercition de chaînes ni réparation d'intention.
-- Erreurs transport, fournisseur, validation et invariant Agent séparées.
-- Clé OpenAI via `SecretStr`; `.env.example` contient uniquement une valeur vide.
-- Aucun import Risk/Broker/Kraken/FastAPI dans l'agent ; aucun tool-calling ; aucune exécution directe.
-- Aucun retry automatique et aucune nouvelle dépendance runtime.
+- Provider unique Luna/Sol, prompt `agent-luna-v1`, Structured Outputs stricts, sortie limitée aux champs stratégiques et IDs/timestamps applicatifs.
+- Aucun import Risk/Broker/Kraken/FastAPI depuis l'agent ; aucun tool-calling ; aucune exécution directe.
+- Commit documentaire post-intégration : `6415064b0f9bb0ee625cc42e8209cdf4388167e0`.
 
-Validation réellement exécutée dans l'environnement ChatGPT : suite ciblée Agent/OpenAI/configuration **42/42**, `compileall`, contrôle lignes Python <= 100 et absence d'espaces de fin de ligne. Aucun appel réseau réel.
-
-Validation locale Windows finale confirmée par l'utilisateur : `pytest backend` **168/168**, Ruff **All checks passed**, mypy **Success: no issues found in 54 source files**, `git diff --check` sans erreur ; uniquement warnings LF → CRLF habituels et 2 warnings FastAPI/Starlette sans échec.
+Validation locale finale confirmée : `pytest backend` **168/168**, Ruff **All checks passed**, mypy **Success: no issues found in 54 source files**, `git diff --check` sans erreur ; warnings LF → CRLF habituels et 2 warnings FastAPI/Starlette sans échec.
 
 ### 2026-09-20 — Batch 06 Risk Engine
 
 **État : intégré sur `main` au commit `d3271d6404ea2af38a42ff09e5a1df1eed5e141e` (`feat: add deterministic risk engine`).**
 
-- `DecisionCandidate.proposed_quantity` fixe la frontière de sizing stratégique.
-- `RiskAssessment` porte quantités demandée/autorisée, `RiskLimit` évaluées et `RiskReason` structurés.
-- Package `ai_spot_trader.risk` avec `RiskPolicy`, `RiskEngine`, `RiskResult` et erreurs dédiées.
-- ALLOW/MODIFY/REJECT explicites ; REJECT ne produit aucun intent.
-- MODIFY ne peut que réduire la quantité ; jamais de changement d'action/symbole ni augmentation.
-- HOLD produit un assessment auditable mais aucun `ExecutionIntent`.
-- Contrôles : symbole, whitelist, chronologie, stale métier, max order notional, cash BUY, SELL détenu/disponible et rôles d'actifs.
-- Estimation PAPER factorisée dans `broker/pricing.py`, partagée entre Risk et Paper Broker.
+`DecisionCandidate.proposed_quantity`, `RiskAssessment`, `RiskPolicy`, ALLOW/MODIFY/REJECT, HOLD audité, intent uniquement après Risk, contrôles cash/position/chronologie et estimation PAPER partagée.
 
-Validation locale Windows finale confirmée avant intégration : `pytest backend` **131/131**, Ruff **All checks passed**, mypy **Success: no issues found in 47 source files**, `git diff --check` sans erreur ; uniquement warnings LF → CRLF habituels et 2 warnings FastAPI/Starlette sans échec.
+Validation locale finale : **131 tests**, Ruff/mypy OK, `git diff --check` sans erreur.
 
 ### 2026-09-20 — Batch 05 Portfolio State + Paper Broker
 
 **État : intégré sur `main` au commit `c24551d36a863abbb5fdb86b79658b235c852772` (`feat: add paper portfolio and broker`).**
 
-Portfolio PAPER canonique, ledger mémoire, état initial injecté, mutations atomiques. Paper Broker full-fill, contexte MarketState explicite et coûts PAPER auditables. Validation locale finale : **92 tests**, Ruff/mypy OK et `git diff --check` sans erreur.
+Portfolio PAPER canonique, ledger mémoire, état initial injecté, mutations atomiques, Paper Broker full-fill, contexte MarketState explicite et coûts PAPER auditables. Validation locale finale : **92 tests**, Ruff/mypy OK et `git diff --check` sans erreur.
 
 ### 2026-09-20 — Batch 04 Market State
 

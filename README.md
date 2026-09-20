@@ -4,28 +4,28 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut du projet :** le Batch 07 — Agent Luna est intégré sur `main` au commit `caff3851d8299630f328b955c69eb31eb11baef0` (`feat: add Luna agent provider`). Le Batch 08 — Boucle autonome est la prochaine étape prévue. Les premières versions restent exclusivement en **PAPER trading**.
+> **Statut du projet :** le Batch 07 — Agent Luna est intégré. Le Batch 08 — Boucle autonome est préparé dans cette livraison mais **n'est pas encore intégré**. Le HEAD GitHub `main` audité au départ du Batch 08 est `6415064b0f9bb0ee625cc42e8209cdf4388167e0` (`docs: record Batch 07 integration`). Les premières versions restent exclusivement en **PAPER trading**.
 
 ## Principes du projet
 
 - Exchange initial : **Kraken**.
 - Trading **SPOT uniquement**.
 - Aucun short, levier, margin, future ou perpetual.
-- Actions stratégiques de l'agent : `BUY`, `SELL`, `HOLD`.
+- Actions stratégiques : `BUY`, `SELL`, `HOLD`.
 - Impossible de vendre un actif non détenu.
-- Un seul agent IA conserve la décision stratégique et propose aussi la taille des BUY/SELL.
+- Un seul agent IA conserve la décision stratégique et propose la taille des BUY/SELL.
 - Le Risk Engine ne crée aucun signal et ne choisit jamais spontanément un actif ou un sens de trade.
 - Le **Risk Engine déterministe** peut autoriser, réduire ou refuser une proposition avant exécution.
-- Aucune sortie LLM ne peut déclencher directement un ordre Kraken ou un appel Broker.
-- Toutes les décisions, y compris `HOLD`, doivent être journalisées.
-- Les frais, le spread et le slippage sont explicitement modélisés dans l'exécution PAPER.
+- Aucune sortie LLM ne déclenche directement un appel Broker ou un ordre Kraken.
+- Toutes les décisions, y compris `HOLD`, doivent pouvoir être journalisées.
+- Frais, spread et slippage sont explicitement modélisés dans l'exécution PAPER.
 - Le passage au **LIVE** sera explicite, séparé du PAPER et traité dans une phase ultérieure.
 
 Principe central : **l'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
 ## Agent IA
 
-Les premiers tests utilisent **GPT-5.6 Luna** (`gpt-5.6-luna`) afin de réduire les coûts d'expérimentation. La même implémentation permet de sélectionner **GPT-5.6 Sol** (`gpt-5.6-sol`) par configuration sans modifier le moteur métier ni dupliquer l'agent.
+Les premiers tests utilisent **GPT-5.6 Luna** (`gpt-5.6-luna`). La même implémentation permet de sélectionner **GPT-5.6 Sol** (`gpt-5.6-sol`) par configuration sans dupliquer l'agent.
 
 Le port canonique reste :
 
@@ -33,7 +33,7 @@ Le port canonique reste :
 LLMProvider.generate_decision(agent_input: AgentInput) -> DecisionCandidate
 ```
 
-Le Batch 07 garde une frontière fournisseur étroite. Le modèle ne produit que :
+Le modèle produit uniquement :
 
 ```text
 action = BUY | SELL | HOLD
@@ -42,42 +42,17 @@ proposed_quantity   # nombre > 0 pour BUY/SELL, null pour HOLD
 rationale           # texte optionnel, jamais une commande
 ```
 
-Les métadonnées techniques restent contrôlées par l'application : `decision_id` via une factory UUID injectable, `cycle_id` recopié depuis `AgentInput` et `created_at` via `Clock`.
+`decision_id`, `cycle_id` et `created_at` restent sous contrôle applicatif. Le symbole doit être exactement celui du `MarketState` fourni. Le prompt système est versionné sous `agent-luna-v1` et l'adapter OpenAI utilise la Responses API avec Structured Outputs stricts.
 
-L'agent est limité au symbole de `agent_input.market_state.symbol`. Une sortie proposant un autre actif est rejetée avant création d'un `DecisionCandidate` utilisable.
-
-Le prompt système est versionné sous `agent-luna-v1`. Il rappelle SPOT/PAPER uniquement, l'interdiction du short/levier/margin/futures/perpetuals, le SELL couvert, l'absence de données inventées, le caractère non obligatoire de la cible expérimentale +4 %/jour et l'absence de chemin d'exécution direct.
-
-L'adapter OpenAI utilise la **Responses API** avec **Structured Outputs** (`json_schema`, `strict=true`). La sortie est reparsée et revalidée côté application sans réparation ou coercition stratégique silencieuse.
-
-Le niveau d'agressivité est prévu sur une échelle configurable de **1 à 10**. Son mapping exact reste à définir. Aucune valeur d'agressivité ne pourra contourner les invariants absolus SPOT/PAPER ou une limite Risk active.
-
-## Configuration OpenAI
-
-La clé OpenAI n'est jamais versionnée :
-
-```text
-AI_SPOT_TRADER_LLM_MODEL=gpt-5.6-luna
-AI_SPOT_TRADER_OPENAI_API_KEY=
-AI_SPOT_TRADER_OPENAI_BASE_URL=https://api.openai.com/v1
-AI_SPOT_TRADER_OPENAI_TIMEOUT_SECONDS=30
-```
-
-`AI_SPOT_TRADER_OPENAI_API_KEY` est chargé comme `SecretStr`. Aucun secret n'est inclus dans les prompts, les exceptions ou les tests. Aucun appel OpenAI réel n'est requis par la suite automatisée.
-
-Aucun retry automatique n'est ajouté au Batch 07. Les erreurs transport, les réponses fournisseur incomplètes/refusées et les sorties stratégiques invalides restent explicites.
+Le niveau d'agressivité est un entier de **1 à 10**. Son mapping stratégique exact reste volontairement ouvert ; l'orchestrateur du Batch 08 le transmet tel quel à `AgentInput` et ne modifie jamais la quantité stratégique en fonction de cette valeur.
 
 ## Objectif expérimental
 
-Le projet conserve une cible expérimentale de **+4 % de rendement journalier** comme objectif de recherche et de mesure. Cette cible n'est ni une promesse ni une garantie ; les résultats doivent être mesurés honnêtement, sans look-ahead ni sélection rétrospective.
-
-Cette cible n'est jamais une obligation de trader.
+Le projet conserve une cible expérimentale de **+4 % de rendement journalier** comme objectif de recherche et de mesure. Cette cible n'est ni une promesse ni une garantie et n'impose jamais de trader.
 
 ## Architecture
 
-Le **backend constitue l'application de trading**. Il doit fonctionner indépendamment du frontend.
-
-Le frontend est uniquement un cockpit de contrôle et de visualisation : le fermer ou le redémarrer ne doit jamais arrêter le moteur de trading.
+Le **backend constitue l'application de trading**. Le frontend est uniquement un cockpit de contrôle et de visualisation : le fermer ou le redémarrer ne doit jamais arrêter le moteur.
 
 Stack décidée :
 
@@ -93,178 +68,154 @@ Rust ne sera introduit que si un besoin mesuré ou une décision architecturale 
 Kraken public data
         |
         v
-normalized observations
-        |
-        v
    Market State --------+
                         |
- Portfolio State -------+--> Agent Luna/Sol
-                              BUY / SELL / HOLD
-                         + quantité proposée BUY/SELL
-                                     |
-                                     v
-                                Risk Engine
-                         ALLOW / MODIFY / REJECT
-                                     |
-                         +-----------+-----------+
-                         |                       |
-                  aucun intent              ExecutionIntent
-                   si REJECT                 PAPER seulement
-                                                 |
-                                      Market State pricing
-                                                 |
-                                                 v
-                                           Paper Broker
-                                                 |
-                                        Fill + Portfolio
-                                                 |
-                                                 v
-                                        Journal / Analytics
+ Portfolio State -------+--> AgentInput --> Agent Luna/Sol
+                                           BUY / SELL / HOLD
+                                           + quantité proposée
+                                                   |
+                                                   v
+                                              Risk Engine
+                                       ALLOW / MODIFY / REJECT
+                                                   |
+                           REJECT/HOLD ------------+---- tradable
+                           aucun Broker                  |
+                                                       v
+                                              ExecutionIntent
+                                                créé par Risk
+                                                       |
+                                              même MarketState
+                                                       |
+                                                       v
+                                                Paper Broker
+                                                       |
+                                              Fill(s) + Portfolio
 ```
 
-Aucun chemin direct entre l'agent IA et Kraken ne doit exister. Le package `agent` ne connaît ni Risk, ni Broker, ni Kraken, ni FastAPI. Le Paper Broker n'interroge pas Kraken : le `MarketState` utilisé pour le pricing lui est fourni explicitement.
+Aucun chemin direct entre l'agent IA et Kraken n'existe. Le Paper Broker n'interroge pas Kraken : le `MarketState` utilisé pour le pricing lui est fourni explicitement.
 
-## État backend actuel
+## Batch 08 — Boucle autonome PAPER
 
-Le backend intégré contient notamment :
+Le patch ajoute deux niveaux d'orchestration dans `ai_spot_trader.trading` :
+
+```text
+TradingCycleRunner.run_cycle()
+        |
+        v
+un cycle exact et testable
+
+TradingEngine
+        |
+        v
+répète run_cycle séquentiellement
+```
+
+### Sémantique d'un cycle
+
+Un cycle :
+
+1. génère un `cycle_id` via une factory UUID injectable ;
+2. capture exactement un `MarketState` pour le symbole configuré ;
+3. capture le `PortfolioState` PAPER courant ;
+4. crée `AgentInput` avec ces deux snapshots et l'agressivité injectée ;
+5. appelle l'agent ;
+6. passe la décision et **les mêmes snapshots** au Risk Engine ;
+7. n'appelle le Broker que si Risk a produit un `ExecutionIntent` ;
+8. passe **le même `MarketState`** au Broker ;
+9. capture un `PortfolioState` post-exécution après des fills valides.
+
+Aucun refresh marché caché n'a lieu entre Agent, Risk et Broker. L'orchestrateur ne construit jamais d'`ExecutionIntent`, ne modifie jamais action/symbole/quantité et ne contient aucune stratégie de trading déterministe.
+
+### HOLD, REJECT, MODIFY et ALLOW
+
+- `HOLD` suit Agent -> Risk -> `ALLOW + HOLD_NO_EXECUTION` et n'appelle jamais le Broker.
+- `REJECT` est un résultat métier normal, sans intent ni Broker.
+- `MODIFY` transmet exactement l'intent et la quantité produits par Risk.
+- `ALLOW` transmet exactement l'intent produit par Risk.
+
+### Erreurs et timeouts
+
+Les erreurs techniques Market, Portfolio/Input, Agent, Risk, Broker ou snapshot post-exécution sont représentées par un résultat de cycle `FAILED` avec étape et type d'erreur. Une erreur LLM n'est jamais convertie en `HOLD`.
+
+Les I/O Market, Agent et Broker sont entourées de timeouts explicitement injectés et strictement positifs. Risk reste synchrone et déterministe, sans timeout artificiel. Les messages d'exception distants ne sont pas recopiés dans le résultat d'orchestration.
+
+### Séquentialité et cadence
+
+Le runner possède un verrou de cycle. Un appel manuel et la boucle autonome utilisant le même runner ne peuvent donc jamais se chevaucher.
+
+La boucle respecte :
+
+```text
+cycle N terminé
+    |
+attente cadence
+    |
+cycle N+1
+```
+
+Elle ne tente jamais de rattraper une cadence dépassée. La valeur de cadence est injectée au `TradingEngine` et doit être positive ; aucune valeur produit n'est codée en dur ni ajoutée à `Settings` dans ce batch.
+
+`start()` refuse une seconde loop simultanée. `stop()` réveille immédiatement l'attente de cadence et attend coopérativement le cycle borné déjà en cours. `AppRuntime` peut posséder un moteur injecté et l'arrête lors du shutdown FastAPI. Aucun moteur réel n'est démarré automatiquement à l'import ou à la création de l'application.
+
+## État backend après application du patch Batch 08
 
 ```text
 backend/
   src/ai_spot_trader/
     agent/
-      __init__.py
-      errors.py
-      openai_client.py
-      prompt.py
-      provider.py
     api/
     broker/
-      errors.py
-      paper.py
-      pricing.py
     core/
       clock.py
       config.py
       runtime.py
     domain/
-      enums.py
-      models.py
-      ports.py
-      symbols.py
     integrations/kraken/
     market/
-      errors.py
-      state.py
     portfolio/
-      errors.py
-      ledger.py
     risk/
+    trading/
       __init__.py
       engine.py
-      errors.py
-      policy.py
     main.py
   tests/
-  pyproject.toml
+    test_trading_engine.py
 ```
 
-Composants disponibles :
+Le Batch 08 n'ajoute ni PostgreSQL, ni route FastAPI de contrôle trading, ni WebSocket cockpit, ni frontend, ni scanner multi-paires, ni API Kraken privée, ni LIVE.
 
-- contrats Pydantic stricts et timestamps UTC aware ;
-- données publiques Kraken normalisées ;
-- `MarketStateBuilder` déterministe multi-horizon avec no look-ahead ;
-- `PaperPortfolioLedger` mémoire avec état initial explicitement injecté ;
-- `PaperBroker` full-fill déterministe avec frais, spread et slippage auditables ;
-- `DecisionCandidate.proposed_quantity` comme sizing stratégique avant Risk ;
-- `RiskPolicy` injectée sans limites produit cachées ;
-- `RiskEngine` déterministe avec `ALLOW`, `MODIFY`, `REJECT` ;
-- `RiskAssessment` avec quantités demandée/autorisée, `RiskLimit` évaluées et `RiskReason` ;
-- `ExecutionIntent` PAPER créé uniquement après autorisation Risk ;
-- `OpenAIDecisionProvider` derrière le port `LLMProvider` ;
-- `OpenAIResponsesClient` testable, sans tool-calling et sans exécution ;
-- aucune API Kraken privée, aucun ordre réel et aucun LIVE.
+## Configuration
 
-FastAPI expose toujours uniquement le healthcheck `GET /health` à ce stade. Le frontend reste un cockpit bootstrap sans orchestration du moteur. La boucle autonome reste au Batch 08.
+Le patch n'invente aucune nouvelle valeur produit. Les réglages existants OpenAI/Kraken restent inchangés. La cadence et les timeouts du cycle sont des dépendances explicites de composition ; la paire, le capital PAPER, la RiskPolicy et les coûts PAPER restent eux aussi explicitement fournis par l'appelant.
 
-## Risk Engine initial
+## Démarrage et validation locale
 
-Le Batch 06 conserve une frontière volontairement étroite :
-
-- aucune limite chiffrée produit n'est codée en dur ;
-- `max_order_notional`, whitelist de paires et seuil métier stale sont optionnels et injectés ;
-- la réduction de quantité est désactivée par défaut et doit être explicitement autorisée par la policy ;
-- un `MODIFY` peut uniquement **réduire** une quantité ; il ne change jamais action ni symbole ;
-- BUY vérifie le cash nécessaire en anticipant les mêmes frais/spread/slippage que le Paper Broker ;
-- SELL vérifie la quantité réellement disponible ;
-- les snapshots marché et portefeuille postérieurs à la décision sont refusés ;
-- HOLD reste une décision stratégique valide et ne crée jamais d'`ExecutionIntent` ;
-- drawdown, daily loss, VaR, corrélations et exposition multi-actifs ne sont pas fabriqués sans données adaptées.
-
-## Modèle PAPER initial
-
-Le Paper Broker utilise un modèle simple et reproductible :
-
-- une intention BUY/SELL donne un fill complet immédiat ou un rejet explicite ;
-- aucune simulation d'order book, partial fill, ordre limite ou hasard ;
-- calculs financiers en `Decimal` ;
-- `spread_bps` = impact adverse **par côté** ;
-- `slippage_bps` = impact adverse additionnel par côté ;
-- frais calculés sur le notional exécuté ;
-- aucun capital initial, quote asset ou niveau de frais produit n'est codé en dur : ils sont injectés explicitement.
-
-Le Risk Engine anticipe les coûts prévisibles pour la solvabilité d'un BUY, mais le Paper Broker reste la dernière frontière d'intégrité et réalise seul la mutation du portefeuille.
-
-## Démarrage local
-
-### Backend
-
-Toutes les commandes de développement sont prévues pour être exécutées depuis la racine du repository sous PowerShell.
+Toutes les commandes sont prévues depuis la racine du repository sous PowerShell :
 
 ```powershell
-uv venv --python 3.13.14 --seed backend\.venv
-backend\.venv\Scripts\python.exe -m pip install -e "backend[dev]"
 backend\.venv\Scripts\python.exe -m pytest backend
 backend\.venv\Scripts\python.exe -m ruff check backend
 backend\.venv\Scripts\python.exe -m mypy backend\src backend\tests
 git diff --check
 ```
 
-Le package backend accepte Python `>=3.12`. Aucun smoke test OpenAI réel n'est requis pour valider le Batch 07.
-
-### Frontend
-
-Dans un second terminal, toujours depuis la racine :
-
-```powershell
-pnpm --dir frontend install
-pnpm --dir frontend dev
-```
-
-Checks frontend utiles :
-
-```powershell
-pnpm --dir frontend lint
-pnpm --dir frontend typecheck
-pnpm --dir frontend build
-```
-
-`pnpm` est le gestionnaire de paquets frontend canonique du projet.
+Aucun appel OpenAI ou Kraken réel n'est requis pour les tests automatisés.
 
 ## Documentation
 
-- [`docs/00_ETAT_ACTUEL.md`](docs/00_ETAT_ACTUEL.md) — mémoire courte pour reprendre le projet rapidement.
-- [`docs/01_PROJECT_MASTER.md`](docs/01_PROJECT_MASTER.md) — spécification fonctionnelle et principes généraux.
-- [`docs/02_ARCHITECTURE_TECHNIQUE.md`](docs/02_ARCHITECTURE_TECHNIQUE.md) — architecture et frontières techniques.
-- [`docs/03_AGENT_TRADING_RISK.md`](docs/03_AGENT_TRADING_RISK.md) — responsabilités de l'agent, du trading et du Risk Engine.
-- [`docs/09_ROADMAP_DEVELOPPEMENT.md`](docs/09_ROADMAP_DEVELOPPEMENT.md) — roadmap par batches cohérents et testables.
-- [`docs/10_DECISIONS_ET_CHANGELOG.md`](docs/10_DECISIONS_ET_CHANGELOG.md) — décisions architecturales et changelog.
+- `docs/00_ETAT_ACTUEL.md` — mémoire courte de reprise.
+- `docs/01_PROJECT_MASTER.md` — spécification principale.
+- `docs/02_ARCHITECTURE_TECHNIQUE.md` — architecture et frontières techniques.
+- `docs/03_AGENT_TRADING_RISK.md` — responsabilités Agent/Risk/Trading.
+- `docs/09_ROADMAP_DEVELOPPEMENT.md` — roadmap.
+- `docs/10_DECISIONS_ET_CHANGELOG.md` — ADR et changelog.
 
 ## Sécurité
 
 - Aucun secret ou clé API ne doit être versionné, journalisé ou injecté dans les prompts.
 - Une future clé Kraken ne devra jamais disposer du droit de retrait.
-- PAPER et LIVE doivent rester explicitement séparés.
-- Toute exécution LIVE future devra passer par des garde-fous dédiés et une activation volontaire.
+- PAPER et LIVE restent explicitement séparés.
+- Toute exécution future doit continuer à passer par Risk ; aucune sortie LLM ne doit atteindre directement un Broker.
 
 ## Avertissement
 

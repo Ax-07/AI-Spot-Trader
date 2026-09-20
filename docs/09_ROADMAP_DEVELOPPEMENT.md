@@ -50,19 +50,9 @@ Validation locale Windows finale : **59 tests**, Ruff OK, mypy OK sur 24 fichier
 
 **Statut : intégré sur `main` au commit `c24551d36a863abbb5fdb86b79658b235c852772` (`feat: add paper portfolio and broker`).**
 
-Intégré :
+Intégré : ledger PAPER mémoire, rôles `balances`/`positions`, mutations atomiques, Paper Broker full-fill, pricing via `MarketState` explicite et coûts PAPER `Decimal` injectés.
 
-- rôles `balances` / `positions` canoniques et disjoints ;
-- `PaperPortfolioLedger` mémoire et état initial injecté ;
-- mutations copy-on-write atomiques ;
-- `PaperBroker` full-fill immédiat ;
-- `Broker.execute(execution_intent, market_state)` ;
-- coûts PAPER injectés en `Decimal` ;
-- frais/spread/slippage auditables dans `Fill` ;
-- aucun lookup Kraken caché ;
-- aucun capital ou coût produit imposé globalement.
-
-Validation locale Windows finale confirmée avant intégration : **92 tests**, Ruff OK, mypy OK sur 40 fichiers source, `git diff --check` sans erreur.
+Validation locale Windows finale : **92 tests**, Ruff OK, mypy OK sur 40 fichiers source, `git diff --check` sans erreur.
 
 ---
 
@@ -70,30 +60,14 @@ Validation locale Windows finale confirmée avant intégration : **92 tests**, R
 
 **Statut : intégré sur `main` au commit `d3271d6404ea2af38a42ff09e5a1df1eed5e141e` (`feat: add deterministic risk engine`).**
 
-Intégré :
+Intégré : sizing stratégique dans `DecisionCandidate`, `RiskAssessment`, `RiskPolicy`, ALLOW/MODIFY/REJECT, HOLD audité, intent créé uniquement par Risk, contrôles de symbole/chronologie/cash/position et estimation PAPER partagée.
 
-- `DecisionCandidate.proposed_quantity` obligatoire pour BUY/SELL, absente pour HOLD ;
-- `RiskAssessment` avec quantité demandée/autorisée, limites évaluées et raisons structurées ;
-- package canonique `ai_spot_trader.risk` ;
-- `RiskPolicy` explicitement injectée ;
-- sorties `ALLOW`, `MODIFY`, `REJECT` ;
-- `MODIFY` limité à une réduction de quantité ;
-- HOLD audité sans `ExecutionIntent` ;
-- symboles canoniques partagés via `domain.symbols` ;
-- whitelist, stale métier et max order notional optionnels ;
-- BUY contrôlé avec coût PAPER prévisible complet ;
-- SELL borné par la position disponible ;
-- snapshots futurs rejetés ;
-- aucune stratégie algorithmique introduite.
-
-Validation locale Windows finale confirmée avant intégration :
+Validation locale Windows finale :
 
 - `pytest backend` : **131 tests passés** ;
 - Ruff : **All checks passed** ;
 - mypy : **Success: no issues found in 47 source files** ;
-- `git diff --check` : aucune erreur ;
-- warnings LF → CRLF habituels uniquement ;
-- 2 warnings FastAPI/Starlette sans échec.
+- `git diff --check` : aucune erreur.
 
 ---
 
@@ -101,65 +75,87 @@ Validation locale Windows finale confirmée avant intégration :
 
 **Statut : intégré sur `main` au commit `caff3851d8299630f328b955c69eb31eb11baef0` (`feat: add Luna agent provider`).**
 
-Objectif : implémenter le premier provider LLM canonique derrière `LLMProvider` sans créer de chemin d'exécution direct.
+Intégré : `OpenAIDecisionProvider` commun Luna/Sol, Responses API, Structured Outputs stricts, prompt `agent-luna-v1`, sortie stratégique limitée, IDs/timestamps applicatifs, symbole limité au snapshot, erreurs distinctes et aucun chemin direct vers Risk/Broker/Kraken.
 
-Intégré :
+Commit documentaire post-intégration : `6415064b0f9bb0ee625cc42e8209cdf4388167e0` (`docs: record Batch 07 integration`).
 
-- package `ai_spot_trader.agent` ;
-- `OpenAIDecisionProvider` commun Luna/Sol ;
-- OpenAI Responses API avec Structured Outputs stricts ;
-- prompt versionné `agent-luna-v1` ;
-- sortie stratégique limitée à action/symbole/quantité/rationale ;
-- UUID/timestamp/cycle contrôlés par l'application ;
-- symbole strictement limité au `MarketState` fourni ;
-- parsing `Decimal` sans réparation/coercition silencieuse ;
-- erreurs transport / fournisseur / validation / contrat séparées ;
-- clé OpenAI via `SecretStr` et environnement ;
-- aucun retry automatique ;
-- aucun import Risk/Broker/Kraken/FastAPI dans l'agent ;
-- aucun nouvel appel marché ;
-- aucune nouvelle dépendance runtime : réutilisation de `httpx`.
-
-Validation ChatGPT réellement exécutée sur le patch :
-
-- suite ciblée Agent/OpenAI/configuration : **42 tests passés** ;
-- aucun réseau réel ;
-- `compileall` : OK ;
-- aucune ligne Python > 100 caractères ;
-- aucun espace de fin de ligne détecté.
-
-Validation locale Windows finale confirmée :
+Validation locale Windows finale :
 
 - `pytest backend` : **168 tests passés** ;
 - Ruff : **All checks passed** ;
 - mypy : **Success: no issues found in 54 source files** ;
 - `git diff --check` : aucune erreur ;
-- warnings LF → CRLF habituels uniquement ;
-- 2 warnings FastAPI/Starlette sans échec.
+- warnings LF → CRLF habituels et 2 warnings FastAPI/Starlette sans échec.
 
 ---
 
 ## Batch 08 — Boucle autonome
 
-**Prochaine étape prévue.**
+**Statut : patch préparé dans cette livraison, non encore intégré.**
 
-Objectif : orchestrer `MarketState + PortfolioState + Agent + Risk + Paper Broker`, corréler les IDs, définir cadence/start/stop, timeouts et comportement sûr en erreur.
+HEAD intégré de départ audité : `6415064b0f9bb0ee625cc42e8209cdf4388167e0`.
 
-Le pipeline devra être explicite :
+Objectif : orchestrer explicitement `MarketState + PortfolioState + Agent + Risk + Paper Broker`, fournir un cycle testable et le répéter de manière strictement séquentielle.
 
-```text
-Agent -> DecisionCandidate -> Risk -> ExecutionIntent éventuel -> Paper Broker
+Patch préparé :
+
+- package `ai_spot_trader.trading` ;
+- `TradingCycleRunner.run_cycle()` comme primitive un-cycle ;
+- `TradingEngine` comme boucle autonome séquentielle ;
+- `cycle_id` via factory injectable ;
+- même `MarketState` pour Agent/Risk/Broker ;
+- même `PortfolioState` pré-cycle pour Agent/Risk ;
+- aucun refresh marché caché ;
+- verrou de cycle partagé entre appels manuels et loop ;
+- HOLD traverse Risk et n'appelle jamais Broker ;
+- REJECT traité comme résultat métier normal ;
+- MODIFY/ALLOW transmettent uniquement l'`ExecutionIntent` produit par Risk ;
+- `TradingCycleResult` mémoire pour audit futur ;
+- erreurs techniques par étape, sans faux HOLD ;
+- timeouts explicites Market/Agent/Broker via `asyncio.timeout` ;
+- Risk sans timeout artificiel ;
+- cadence explicitement injectée et positive ;
+- aucun rattrapage de cadence par concurrence ;
+- start double interdit ;
+- stop coopératif et réveil immédiat pendant l'attente de cadence ;
+- `AppRuntime` arrête un moteur injecté au shutdown FastAPI ;
+- aucun démarrage automatique de trading ;
+- aucune valeur produit de paire/capital/cadence/Risk/coûts inventée ;
+- aucune persistance durable, aucune API de contrôle trading, aucun frontend et aucun LIVE.
+
+Validation réellement exécutée dans l'environnement ChatGPT :
+
+- `pytest -q backend/tests/test_trading_engine.py` : **34 tests passés** ;
+- `pytest -q backend/tests/test_health.py backend/tests/test_trading_engine.py` : **37 tests passés** ;
+- aucun appel OpenAI/Kraken réel ;
+- `compileall` ciblé : OK ; lignes Python <= 100 et espaces de fin de ligne : OK.
+
+Validation locale Windows confirmée par l'utilisateur avant le correctif Ruff final :
+
+- `pytest backend` : **203 tests passés** ;
+- mypy : **Success: no issues found in 57 source files** ;
+- `git diff --check` : aucune erreur ;
+- 2 warnings de dépréciation FastAPI/Starlette sans échec ;
+- Ruff a relevé uniquement `SIM105` dans `trading/engine.py` et un ordre d'imports dans `test_trading_engine.py`.
+
+Le correctif de cette livraison traite ces deux défauts. Avant intégration, relancer au minimum :
+
+```powershell
+ruff check backend
+pytest backend
 ```
 
-`REJECT` ne déclenche rien ; `HOLD` reste journalisé ; aucune sortie LLM ne contourne Risk.
+Le Batch 08 ne devra être marqué intégré qu'après confirmation finale puis commit/push sur `main`.
 
 ---
 
 ## Batch 09 — Persistance et journal d'audit
 
-Objectif : PostgreSQL, schéma/migrations, cycles, décisions, `RiskAssessment`, intents, fills, métriques et reprise cohérente.
+**Prochaine étape après validation et intégration du Batch 08.**
 
-À décider : ORM, migrations, granularité des snapshots et rétention.
+Objectif : PostgreSQL, schéma/migrations, cycles, décisions, `RiskAssessment`, intents, fills, erreurs techniques, métriques et reprise cohérente.
+
+À décider : ORM, migrations, granularité des snapshots, rétention, idempotence/réconciliation et stratégie de reprise après crash.
 
 ---
 
@@ -178,8 +174,6 @@ Objectif : dashboard marché/portefeuille/décisions/trades PAPER/performance/é
 ## Batch 12 — Analytics, P&L et expérimentation reproductible
 
 Objectif : P&L brut/net, drawdown, frais, spread/slippage, exposition, nombre de trades, quotidien/cumulé et replay.
-
-Ce batch fournira les données nécessaires à d'éventuelles limites Risk de drawdown/daily loss.
 
 ---
 
@@ -245,7 +239,7 @@ Audit de readiness, adaptateur privé Kraken, réconciliation, permissions minim
 
 - capital PAPER et devise de référence produit ;
 - univers initial de paires ;
-- cadence de décision ;
+- valeur produit de cadence ;
 - valeurs produit du max order notional, whitelist et stale métier ;
 - éventuelles limites d'exposition ;
 - drawdown/daily loss une fois les données disponibles ;
@@ -253,5 +247,6 @@ Audit de readiness, adaptateur privé Kraken, réconciliation, permissions minim
 - valeurs expérimentales fee/spread/slippage ;
 - ORM/migrations/rétention ;
 - frontière de journée ;
+- reprise/réconciliation/idempotence ;
 - auth/déploiement ;
 - activation éventuelle du LIVE.

@@ -6,7 +6,9 @@ Ce document fixe la frontière entre :
 
 1. les calculs déterministes de contexte ;
 2. la décision stratégique de l'agent IA ;
-3. les règles déterministes de sécurité et d'exécution.
+3. les règles déterministes de sécurité ;
+4. l'orchestration PAPER ;
+5. l'exécution PAPER.
 
 Cette frontière est centrale pour éviter de transformer AI Spot Trader en bot algorithmique traditionnel.
 
@@ -14,21 +16,17 @@ Cette frontière est centrale pour éviter de transformer AI Spot Trader en bot 
 
 ## 2. Principe de décision
 
-### Confirmé
-
 L'agent IA est l'unique décideur stratégique. Il choisit parmi `BUY`, `SELL`, `HOLD` et fournit la **quantité proposée** pour BUY/SELL.
 
 Les systèmes déterministes peuvent calculer et présenter prix, statistiques, volatilité, exposition, P&L, contraintes et fraîcheur des données. Ils ne doivent pas décider silencieusement qu'un signal technique implique un BUY ou SELL.
 
-Le Risk Engine reste déterministe et possède l'autorité finale d'autoriser, modifier ou refuser une proposition tradable.
+Le Risk Engine reste déterministe et possède l'autorité finale d'autoriser, réduire ou refuser une proposition tradable.
 
 **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
 ---
 
-## 3. Chaîne de décision
-
-### Confirmé après préparation du Batch 07
+## 3. Chaîne de décision canonique
 
 ```text
 MarketState + PortfolioState + aggressiveness
@@ -37,9 +35,7 @@ MarketState + PortfolioState + aggressiveness
              AgentInput
                   |
                   v
-       OpenAIDecisionProvider
-                  |
-    sortie structurée strictement validée
+          Agent Luna/Sol
                   |
                   v
          DecisionCandidate
@@ -50,18 +46,21 @@ MarketState + PortfolioState + aggressiveness
          /       |        \
      REJECT    MODIFY      ALLOW
          |        |          |
-   aucun intent   +----------+
+         |        +----------+
+         |                   |
+         |          ExecutionIntent PAPER
+         |                   |
+         |          same MarketState pricing
+         |                   |
+         |                   v
+         |             Paper Broker
+         |                   |
+         +-------------------+
                   |
-                  v
-          ExecutionIntent PAPER
-                  |
-          MarketState pricing
-                  |
-                  v
-            Paper Broker
+          TradingCycleResult
 ```
 
-Aucune sortie LLM ne déclenche directement un ordre. Le package Agent n'importe ni Risk, ni Broker, ni Kraken, ni FastAPI.
+Aucune sortie LLM ne déclenche directement un ordre. Le package Agent n'importe ni Risk, ni Broker, ni Kraken, ni FastAPI. Le package `trading` orchestre les frontières mais ne prend aucune décision stratégique.
 
 ---
 
@@ -76,7 +75,7 @@ AgentInput
 - aggressiveness (1..10)
 ```
 
-Le Batch 07 ne modifie pas ce contrat. Les snapshots imbriqués restent des modèles Pydantic stricts et les timestamps sont timezone-aware normalisés UTC.
+Les snapshots imbriqués restent les contrats Pydantic canoniques. Le runner Batch 08 crée l'input seulement après avoir acquis les deux snapshots du cycle.
 
 ### No look-ahead côté Agent
 
@@ -87,7 +86,7 @@ market_state.as_of    <= agent_input.created_at
 portfolio_state.as_of <= agent_input.created_at
 ```
 
-Une violation est rejetée avant l'appel fournisseur. Aucun lookup Kraken, refresh de prix ou enrichissement réseau n'est réalisé par l'agent.
+Une violation empêche l'appel fournisseur. Aucun lookup Kraken, refresh de prix ou enrichissement réseau n'est réalisé par l'agent.
 
 ---
 
@@ -104,20 +103,19 @@ DecisionCandidate
 - rationale?
 ```
 
-La taille proposée est portée par le contrat stratégique canonique. Conséquences :
+Conséquences :
 
 - BUY et SELL sans quantité sont invalides ;
 - HOLD avec une quantité est invalide ;
-- le Risk Engine peut réduire une quantité uniquement si sa policy l'autorise ;
-- le Risk Engine ne peut jamais augmenter la taille proposée ;
-- le Risk Engine ne peut jamais changer l'action ou le symbole ;
+- Risk peut réduire une quantité uniquement si sa policy l'autorise ;
+- Risk ne peut jamais augmenter la taille proposée ;
+- Risk ne peut jamais changer action ou symbole ;
+- l'orchestrateur ne recalcule jamais la quantité ;
 - `rationale` reste une donnée d'audit, jamais une commande.
 
 ---
 
-## 6. Frontière fournisseur du Batch 07
-
-### Sortie autorisée du modèle
+## 6. Frontière fournisseur LLM
 
 Le modèle n'est pas autorisé à inventer les métadonnées techniques. Son JSON contient uniquement :
 
@@ -128,29 +126,15 @@ proposed_quantity
 rationale
 ```
 
-`decision_id`, `cycle_id` et `created_at` appartiennent à l'application :
+`decision_id`, `cycle_id` et `created_at` appartiennent à l'application : factory UUID injectable, `cycle_id` recopié de l'input et `Clock` injectable.
 
-- factory UUID injectable ;
-- `cycle_id` recopié de l'input ;
-- `Clock` injectable.
-
-Cette décision conserve le port `LLMProvider` inchangé et évite un second contrat métier concurrent.
-
-### Symbole
-
-Le modèle doit produire exactement `agent_input.market_state.symbol`.
-
-Une décision pour `ETH/EUR` à partir d'un `MarketState` `BTC/EUR` est rejetée avant création d'un `DecisionCandidate`. L'agent ne peut donc pas trader silencieusement un actif sans contexte marché fourni.
-
-Le Risk Engine conserve son propre contrôle identique en aval : la défense est volontairement redondante, mais les responsabilités diffèrent.
+Le modèle doit produire exactement `agent_input.market_state.symbol`. Une décision pour un autre symbole est rejetée avant création d'un `DecisionCandidate` utilisable.
 
 ---
 
 ## 7. Validation structurée LLM
 
-### Structured Outputs
-
-Le Batch 07 utilise un JSON Schema strict côté OpenAI :
+Le JSON Schema OpenAI strict autorise uniquement :
 
 ```text
 {
@@ -163,34 +147,20 @@ Le Batch 07 utilise un JSON Schema strict côté OpenAI :
 
 Les quatre propriétés sont requises, `additionalProperties=false`, puis la réponse est revalidée localement.
 
-### Validation applicative
+Le parsing refuse notamment : sortie vide, JSON invalide, constantes non standard, quantité fournie comme chaîne, champs inattendus, action inconnue, BUY/SELL sans quantité positive et HOLD avec quantité.
 
-Le parsing :
-
-- refuse les sorties vides ou JSON invalides ;
-- préserve les nombres comme `Decimal` ;
-- refuse les constantes JSON non standard ;
-- refuse la coercition d'une chaîne `"0.01"` en quantité ;
-- refuse les champs inattendus ;
-- refuse une action inconnue ;
-- exige quantité strictement positive pour BUY/SELL ;
-- exige `null` pour la quantité de HOLD.
-
-Aucune réparation silencieuse n'est tentée. Une réponse stratégique invalide ne produit pas de `DecisionCandidate` utilisable.
+Aucune réparation silencieuse n'est tentée.
 
 ---
 
 ## 8. Prompt `agent-luna-v1`
 
-Le prompt système est versionné et auditable. Il rappelle au modèle :
+Le prompt système rappelle :
 
 - SPOT uniquement ;
 - PAPER uniquement ;
 - BUY / SELL / HOLD ;
-- aucun short ;
-- aucun levier ;
-- aucune margin ;
-- aucun future/perpetual ;
+- aucun short, levier, margin, future ou perpetual ;
 - ne pas vendre plus que détenu ;
 - BUY/SELL avec quantité positive ;
 - HOLD sans quantité ;
@@ -208,141 +178,147 @@ Le prompt ne contient aucun secret.
 
 ## 9. OpenAI / Luna / Sol
 
-La documentation OpenAI vérifiée lors du Batch 07 confirme :
+La même implémentation `OpenAIDecisionProvider` supporte :
 
 ```text
 Luna = gpt-5.6-luna
 Sol  = gpt-5.6-sol
 ```
 
-Les deux modèles supportent la Responses API et les Structured Outputs. L'application utilise un provider unique paramétré par `LLMModel`; Sol ne nécessite pas un second agent.
-
-Le Batch 07 ne compare pas leurs performances et n'introduit aucun mécanisme expérimental de sélection dynamique.
+Le choix est porté par `LLMModel`. Le Batch 08 n'ajoute aucune sélection dynamique ni comparaison de performance.
 
 ---
 
-## 10. Adapter OpenAI et erreurs
-
-`OpenAIResponsesClient` encapsule uniquement le transport Responses API. Il ne connaît pas le domaine Risk/Broker.
+## 10. Erreurs Agent
 
 Erreurs séparées :
 
 - `LLMTransportError` : réseau ou HTTP ;
 - `LLMProviderError` : réponse fournisseur incomplète, refusée ou enveloppe inutilisable ;
 - `LLMOutputValidationError` : sortie JSON/stratégique invalide ;
-- `AgentContractViolationError` : invariant d'application violé, par exemple symbole ou chronologie.
+- `AgentContractViolationError` : invariant d'application violé.
 
-Les erreurs transport ne reproduisent jamais le body de réponse distant ni les headers d'authentification afin de ne pas exposer de secret.
-
-### Retry
-
-Aucun retry n'est ajouté au Batch 07. Un appel échoue explicitement. Une stratégie bornée pourra être décidée plus tard si l'orchestration en a besoin.
+Une erreur Agent termine techniquement le cycle avant Risk/Broker. Elle n'est jamais transformée en HOLD et ne déclenche aucun retry immédiat du même cycle.
 
 ---
 
-## 11. Configuration et secrets
+## 11. Risk Engine
 
-Configuration LLM pertinente :
-
-```text
-AI_SPOT_TRADER_LLM_MODEL=gpt-5.6-luna
-AI_SPOT_TRADER_OPENAI_API_KEY=
-AI_SPOT_TRADER_OPENAI_BASE_URL=https://api.openai.com/v1
-AI_SPOT_TRADER_OPENAI_TIMEOUT_SECONDS=30
-```
-
-La clé est typée `SecretStr | None`. Elle reste absente par défaut afin que l'application et les tests puissent démarrer sans compte OpenAI. Un client réel exige une valeur non vide.
-
-Aucun secret n'est présent dans `.env.example`, le prompt ou les tests.
-
----
-
-## 12. Risk Engine
-
-Le Risk Engine du Batch 06 reste inchangé.
+`RiskPolicy` peut porter :
 
 ```text
-RiskPolicy
-- max_order_notional?
-- allowed_pairs?
-- stale_after?
-- allow_quantity_reduction = false
+max_order_notional?
+allowed_pairs?
+stale_after?
+allow_quantity_reduction = false
 ```
 
-Il vérifie indépendamment symbole, chronologie, whitelist, fraîcheur, max notional, cash BUY, position SELL et rôles d'actifs. Il conserve l'autorité finale même si le prompt a demandé au LLM de respecter ces invariants.
+Risk vérifie indépendamment symbole, chronologie, whitelist, fraîcheur, max notional, cash BUY, position SELL et rôles d'actifs.
 
 ### Sémantique
 
 - `ALLOW` : proposition acceptée ;
 - `MODIFY` : quantité strictement réduite ;
 - `REJECT` : aucun `ExecutionIntent` ;
-- `HOLD` : assessment auditable sans intent.
+- `HOLD` : `ALLOW + HOLD_NO_EXECUTION`, aucun intent.
+
+REJECT est un résultat métier normal, pas une exception technique.
 
 ---
 
-## 13. MODIFY et réductions autorisées
+## 12. HOLD
 
-La réduction est désactivée par défaut. Lorsqu'elle est activée, Risk peut borner une quantité par max notional, cash BUY disponible ou quantité SELL disponible.
+HOLD suit obligatoirement :
 
-Risk ne peut jamais :
+```text
+Agent
+ -> DecisionCandidate(HOLD)
+ -> Risk Engine
+ -> RiskAssessment(ALLOW + HOLD_NO_EXECUTION)
+ -> aucun ExecutionIntent
+ -> aucun Broker
+```
 
-- augmenter la quantité ;
-- changer l'action ;
-- changer le symbole ;
-- transformer HOLD en ordre ;
-- choisir une autre opportunité.
+Le `TradingCycleResult` conserve la décision et l'assessment pour que Batch 09 puisse les persister.
 
 ---
 
-## 14. ExecutionIntent et Paper Broker
+## 13. REJECT
 
-`ExecutionIntent` reste PAPER, BUY/SELL uniquement et n'est construit qu'après Risk.
+Pour `RiskDecision.REJECT` :
 
-Le Paper Broker reste l'unique composant qui exécute et mute le portefeuille :
+- aucun intent ;
+- aucun Broker ;
+- aucun fill ;
+- aucune mutation du ledger ;
+- résultat technique `COMPLETED` avec décision et assessment conservés.
+
+---
+
+## 14. MODIFY
+
+Pour `MODIFY`, seul l'`ExecutionIntent` créé par Risk est transmis au Broker.
+
+L'orchestrateur vérifie que :
+
+- l'action est inchangée ;
+- le symbole est inchangé ;
+- l'intent référence le bon assessment ;
+- la quantité de l'intent est exactement `authorized_quantity`.
+
+Il ne recalcule ni n'arrondit cette quantité.
+
+---
+
+## 15. ALLOW
+
+Pour BUY/SELL autorisé :
+
+```text
+DecisionCandidate
+ -> RiskAssessment
+ -> ExecutionIntent créé par Risk
+ -> Broker.execute(intent, same_market_state)
+ -> Fill(s)
+```
+
+Il n'existe aucun autre chemin d'exécution.
+
+---
+
+## 16. Paper Broker et portefeuille
+
+`PaperBroker` reste l'unique composant qui réalise le fill et mute le `PaperPortfolioLedger`.
 
 ```text
 Broker.execute(execution_intent, market_state) -> tuple[Fill, ...]
 ```
 
-Il n'existe aucun appel Broker depuis le package Agent.
+Le Broker reçoit le même `MarketState` que celui présenté à l'Agent et à Risk pour le cycle. Il n'effectue aucun lookup Kraken caché.
+
+Le snapshot portfolio post-trade n'est pris qu'après retour de fills valides.
 
 ---
 
-## 15. Frais, spread et slippage
+## 17. Frais, spread et slippage
 
 `PaperExecutionCostModel` reste la source des coûts PAPER déterministes : `fee_rate`, `spread_bps`, `slippage_bps`.
 
-Le Risk Engine utilise l'estimation commune pour la solvabilité BUY et le Paper Broker utilise la même primitive pour le fill. Tous les calculs financiers utilisent `Decimal`.
+Risk utilise la même estimation de coût que le Paper Broker pour la solvabilité BUY. Tous les calculs financiers utilisent `Decimal`.
 
 ---
 
-## 16. Portfolio PAPER et invariants SPOT
-
-`PortfolioState` distingue `balances` et `positions`.
-
-Le prompt demande à l'agent de ne pas vendre plus que détenu, mais ce contrôle n'est pas transformé en stratégie déterministe parallèle : Risk et le Paper Broker gardent leurs vérifications canoniques de quantité disponible.
-
----
-
-## 17. Agressivité
+## 18. Agressivité
 
 Valeur entière de 1 à 10, validée dans `Settings` et `AgentInput`.
 
-Le mapping exact reste à décider. Le prompt la traite comme contexte sans fabriquer de coefficient ou de policy chiffrée. Aucune agressivité ne contourne les invariants absolus ou Risk.
-
----
-
-## 18. Objectif quotidien +4 %
-
-Cible expérimentale, jamais une garantie.
-
-Le prompt précise explicitement que la cible n'impose pas de trade. Le système ne doit pas générer une position uniquement parce que la performance du jour est inférieure à +4 %.
+Le mapping exact reste à décider. Le Batch 08 transmet la valeur à `AgentInput` sans coefficient, taille, seuil technique ou changement de stratégie déterministe.
 
 ---
 
 ## 19. Identifiants, timestamps et audit
 
-Un cycle complet pourra relier :
+Un cycle complet peut relier :
 
 ```text
 cycle_id
@@ -362,39 +338,122 @@ portfolio_state.as_of <= agent_input.created_at
 agent_input.created_at <= decision_candidate.created_at
                          <= risk_assessment.assessed_at
                          == execution_intent.created_at  # si intent
+market_state.as_of <= fill.filled_at                    # si fill
 ```
 
-Les IDs et timestamps techniques Agent sont injectables pour les tests/replays.
+Le `cycle_id` vient d'une factory injectable au runner. Le LLM ne l'invente jamais.
 
 ---
 
-## 20. Interfaces externes
+## 20. Cohérence des snapshots Batch 08
 
-Ports canoniques :
+Chaque cycle capture exactement :
+
+1. un `MarketState` ;
+2. un `PortfolioState` pré-cycle.
+
+Ces objets sont placés dans `AgentInput`. Après validation de l'input, l'orchestrateur réutilise explicitement ces mêmes références : marché + portefeuille pour Risk, puis marché pour Broker.
+
+Aucun refresh marché n'est autorisé avant l'exécution de cette décision.
+
+Le verrou global du runner garantit qu'un autre cycle utilisant ce runner ne peut pas muter le ledger entre Risk et Broker.
+
+---
+
+## 21. Résultat technique du cycle
+
+`TradingCycleResult` est un conteneur d'orchestration mémoire et non un contrat métier parallèle.
+
+Il peut conserver selon l'étape :
+
+- `cycle_id` ;
+- `AgentInput` ;
+- `DecisionCandidate` ;
+- `RiskAssessment` ;
+- `ExecutionIntent` éventuel ;
+- fills ;
+- `PortfolioState` post-exécution ;
+- métadonnée de panne technique éventuelle.
+
+HOLD et REJECT sont `COMPLETED`. Une panne technique est `FAILED`.
+
+---
+
+## 22. Politique d'erreur du cycle
+
+### Avant décision
+
+Une erreur Market/Portfolio/Input empêche Agent, Risk et Broker selon l'étape atteinte.
+
+### Agent
+
+Une erreur fournisseur, transport, parsing ou contrat empêche Risk et Broker. Pas de HOLD synthétique.
+
+### Risk
+
+Une exception technique Risk empêche le Broker. Elle reste distincte d'un `REJECT` métier.
+
+### Broker
+
+Une erreur Broker est conservée comme échec explicite. Aucun fill synthétique n'est créé.
+
+Le résultat technique ne recopie que le type d'exception, pas son message brut.
+
+---
+
+## 23. Timeouts et incertitude d'exécution
+
+Les attentes Market, Agent et Broker sont bornées avec `asyncio.timeout`, avec valeurs injectées et strictement positives.
+
+Risk reste sans timeout artificiel.
+
+Le Broker PAPER canonique exécute son calcul/mutation de manière synchrone après acquisition de son verrou. Le Batch 08 n'introduit donc aucune reprise automatique d'un intent après timeout.
+
+Un futur broker réseau pouvant laisser une mutation incertaine nécessitera persistance, idempotence/réconciliation et politique dédiée ; ces sujets sont différés.
+
+---
+
+## 24. Boucle autonome
+
+`TradingEngine` répète un seul runner :
+
+```text
+cycle N complet
+    |
+attente cadence ou stop
+    |
+cycle N+1
+```
+
+Il n'existe aucun cycle de rattrapage concurrent. Une erreur de cycle est isolée puis la cadence normale est respectée avant de retenter un nouveau cycle.
+
+`start()` refuse les doubles démarrages. `stop()` réveille l'attente de cadence et attend la fin du cycle borné en cours. Le runtime FastAPI peut appeler `stop()` au shutdown.
+
+---
+
+## 25. Interfaces externes
+
+Ports canoniques inchangés :
 
 - `MarketDataSource.snapshot(symbol) -> MarketState` ;
 - `MarketObservationSource.observation(symbol) -> MarketObservation` ;
 - `LLMProvider.generate_decision(agent_input) -> DecisionCandidate` ;
 - `Broker.execute(execution_intent, market_state) -> tuple[Fill, ...]`.
 
-Le Batch 07 ne modifie aucun de ces ports.
+Le Risk Engine reste une frontière interne synchrone. Le Batch 08 n'ajoute pas de port externe généraliste.
 
 ---
 
-## 21. Tests Batch 07
+## 26. Tests Batch 08
 
-La suite Agent vérifie notamment : BUY/SELL/HOLD valides, quantités absentes/non positives, HOLD avec quantité, action inconnue, JSON invalide, champs supplémentaires, absence de coercition, symbole divergent, corrélation `cycle_id`, UUID/timestamp injectables, rationale conservée, prompt versionné, Luna/Sol par la même classe, erreurs transport/refus/incomplétude et absence d'import Risk/Broker/Kraken/FastAPI.
+La suite ciblée vérifie notamment : HOLD complet et passage Risk, BUY/SELL ALLOW, MODIFY exact, REJECT sans Broker, identité Market/Portfolio, corrélation `cycle_id`, clock/factory injectables, erreurs avant décision/Agent/Risk/Broker, timeouts Market/Agent/Broker, absence de refresh caché, sérialisation de cycles, double start impossible, stop pendant cadence, absence de tâche orpheline, absence de boucle serrée, portfolio post BUY/SELL et shutdown runtime.
 
-Les tests HTTP utilisent `httpx.MockTransport` ; aucun réseau ni secret réel n'est requis.
-
----
-
-## 22. Comparaison Luna / Sol
-
-Une future comparaison devra utiliser des `MarketState`, `PortfolioState`, `RiskPolicy`, coûts PAPER, mapping d'agressivité et versions de prompt/contracts comparables. Le Batch 07 fournit seulement la compatibilité architecturale commune.
+Aucun réseau ni secret réel n'est requis.
 
 ---
 
-## 23. Conditions minimales avant discussion LIVE
+## 27. Persistance et LIVE
 
-**Hors périmètre pour l'instant.** Le Batch 07 ne change rien à la politique LIVE : aucune API Kraken privée, aucune clé de trading, aucune permission de retrait et aucune exécution réelle.
+Batch 09 ajoutera le journal durable. Batch 08 ne prétend pas offrir de reprise après crash.
+
+Le LIVE reste hors périmètre : aucune API Kraken privée, aucune clé de trading, aucune permission de retrait et aucune exécution réelle.

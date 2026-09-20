@@ -6,17 +6,21 @@ from fastapi import FastAPI
 from ai_spot_trader import __version__
 from ai_spot_trader.api.routes.health import router as health_router
 from ai_spot_trader.core.config import Settings, get_settings
-from ai_spot_trader.core.runtime import AppRuntime
+from ai_spot_trader.core.runtime import AppRuntime, StoppableTradingEngine
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    """Create the FastAPI application without starting any trading component."""
+def create_app(
+    settings: Settings | None = None,
+    *,
+    trading_engine: StoppableTradingEngine | None = None,
+) -> FastAPI:
+    """Create FastAPI without starting trading or performing external I/O."""
 
     resolved_settings = settings or get_settings()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        runtime = AppRuntime()
+        runtime = AppRuntime(trading_engine=trading_engine)
         app.state.runtime = runtime
         yield
         await runtime.close()
