@@ -15,6 +15,7 @@ from pydantic import (
 
 from ai_spot_trader.domain.enums import (
     ExecutionMode,
+    ExperimentVariable,
     LLMModel,
     RiskDecision,
     RiskLimit,
@@ -276,6 +277,10 @@ class ExperimentManifest(DomainModel):
     source_digest: Sha256Digest | None = None
     window_start: UtcDateTime | None = None
     window_end: UtcDateTime | None = None
+    comparison_variable: ExperimentVariable | None = None
+    experiment_group_digest: Sha256Digest | None = None
+    replicate_index: PositiveInt | None = None
+    replicate_count: PositiveInt | None = None
 
     @model_validator(mode="after")
     def validate_manifest_shape(self) -> "ExperimentManifest":
@@ -295,6 +300,20 @@ class ExperimentManifest(DomainModel):
             and self.window_end < self.window_start
         ):
             raise ValueError("experiment window_end cannot precede window_start")
+
+        repeat_fields = (
+            self.comparison_variable,
+            self.experiment_group_digest,
+            self.replicate_index,
+            self.replicate_count,
+        )
+        if any(value is not None for value in repeat_fields):
+            if any(value is None for value in repeat_fields):
+                raise ValueError("versioned repeated experiments require complete group metadata")
+            assert self.replicate_index is not None
+            assert self.replicate_count is not None
+            if self.replicate_index > self.replicate_count:
+                raise ValueError("replicate_index cannot exceed replicate_count")
         return self
 
 

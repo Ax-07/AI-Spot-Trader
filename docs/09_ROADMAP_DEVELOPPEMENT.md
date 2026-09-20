@@ -153,17 +153,6 @@ Figer un protocole expérimental explicite, versionné, reproductible et mesurab
 - comparaison refusée si un champ contrôlé hors agressivité diffère ;
 - aucune API ni modification frontend dans ce batch.
 
-### Invariants spécifiques
-
-- l'agressivité peut influencer uniquement la décision stratégique et la quantité proposée par l'Agent ;
-- `RiskEngine.evaluate(...)` ne reçoit pas l'agressivité ;
-- niveau 10 ne modifie ni balance, ni position, ni max notional, ni solvabilité, ni whitelist, ni fraîcheur ;
-- aucun niveau ne crée directement un `ExecutionIntent` ;
-- HOLD / REJECT / MODIFY / ALLOW conservent exactement leur sémantique ;
-- erreurs techniques != HOLD ;
-- coûts PAPER inchangés et enregistrés dans le manifeste ;
-- aucune sélection rétrospective de décisions ou de cycles.
-
 ### Reproductibilité
 
 Le digest du manifeste identifie le protocole/configuration. Il ne garantit pas une sortie LLM bit-à-bit identique. Pour isoler strictement l'agressivité, les runs doivent partager les mêmes faits sources ; un dataset figé avec `source_digest` identique est préférable à deux passages live successifs.
@@ -176,16 +165,50 @@ Le digest du manifeste identifie le protocole/configuration. Il ne garantit pas 
 - mypy : **81 fichiers sans erreur** ;
 - `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
 - commit/push confirmé : `1747beb5efd1fe9763bc9b2d23f3a115575daaec` ;
-- working tree propre après push ;
-- en préparation : **47 tests ciblés**, `py_compile` réussi et smoke `TradingCycleRunner` niveau 10 confirmant REJECT Risk / Broker non appelé.
+- working tree propre après push.
 
 ---
 
 ## Batch 14 — Comparaison Luna / Sol
 
-**État : futur.**
+**État : patch préparé localement, non intégré.**
 
-Comparer les modèles sur snapshots/faits sources, RiskPolicy, coûts PAPER, prompt et configuration expérimentale contrôlés. Le manifeste Batch 13 sert de socle : le changement de modèle devra être explicite et empêcher toute attribution erronée à l'agressivité.
+### Objectif
+
+Comparer GPT-5.6 Luna et GPT-5.6 Sol avec **le modèle comme unique variable contrôlée**, en réutilisant le provider Agent canonique, le Risk Engine existant, les analytics PAPER Batch 12 et la persistance/manifeste Batch 13.
+
+### Périmètre préparé
+
+- maintien de `paper-experiment-v1` pour les comparaisons d'agressivité existantes ;
+- nouveau `paper-experiment-v2` avec `comparison_variable = LLM_MODEL` ;
+- `experiment_group_digest` pour identifier les champs contrôlés communs ;
+- `experiment_digest` conservé comme identité complète du run ;
+- `replicate_index` / `replicate_count` pour plusieurs réalisations par modèle ;
+- `source_digest` obligatoire pour une identité de dataset figée ;
+- comparaison refusée si agressivité, prompt, RiskPolicy, coûts PAPER, dataset/source, univers, fenêtre, version analytics ou nombre de répétitions diffèrent ;
+- exigence de toutes les répétitions `1..N` pour Luna et Sol ;
+- comparaison factuelle basée uniquement sur les `PaperAnalyticsReport` Batch 12 : P&L brut/net, coûts, drawdown, exposition, trades BUY/SELL, HOLD/REJECT/MODIFY/FAILED, points cumulés et daily ;
+- aucun score composite, ranking ou sélection automatique d'un « meilleur modèle » ;
+- compatibilité des payloads `paper-experiment-v1` préservée ;
+- aucune migration DB, API ou modification frontend.
+
+### Décisions expérimentales
+
+- Un dataset/replay figé est **nécessaire pour une comparaison strictement appariée** ; le v2 impose son `source_digest`, mais le moteur de replay concret reste hors de ce batch.
+- Le non-déterminisme éventuel du LLM est traité par répétitions explicites, pas par un faux seed fournisseur.
+- Les répétitions sont conservées brutes ; aucune agrégation de dispersion n'est inventée dans le batch.
+- L'absence d'une répétition annoncée pour l'un des modèles invalide la comparaison afin de limiter le cherry-picking post-hoc.
+
+### Validation de préparation exécutée par ChatGPT
+
+- resynchronisation GitHub `main` confirmée au HEAD documentaire `655b66b639c4e9c1803cef3920c9a96e7dd16055` ;
+- tests ciblés `backend/tests/test_experiments.py` dans un arbre local reconstruit : **34 passés** ;
+- `py_compile` des fichiers Python modifiés : **réussi** ;
+- Ruff : **non exécuté**, outil absent ;
+- mypy : **non exécuté**, outil absent ;
+- suite complète `pytest backend` et `git diff --check` d'un checkout réel : **à exécuter localement**.
+
+Le Batch 14 ne doit être marqué intégré qu'après validation locale complète, commit, push et working tree propre confirmé.
 
 ---
 
@@ -245,8 +268,8 @@ Readiness, adaptateur privé Kraken, réconciliation, permissions minimales sans
 - valeurs de référence fee/spread/slippage ;
 - politique de rétention ;
 - reconstruction du ledger et réconciliation après crash ;
-- choix d'un dataset/replay canonique pour comparaisons strictement appariées ;
-- politique éventuelle de répétitions LLM pour estimer la variance stochastique ;
+- choix/format concret d'un dataset/replay canonique pour exécuter les comparaisons strictement appariées ;
+- statistiques descriptives éventuelles de dispersion des répétitions LLM ;
 - source d'événements et protocole d'un futur WebSocket ;
 - auth/déploiement pour une exposition non locale ;
 - éventuel LIVE.

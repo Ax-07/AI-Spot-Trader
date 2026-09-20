@@ -3,11 +3,19 @@ import json
 from datetime import datetime
 from decimal import Decimal
 
-from ai_spot_trader.domain.enums import LLMModel
+from ai_spot_trader.domain.enums import ExperimentVariable, LLMModel
 from ai_spot_trader.domain.models import AggressivenessContext, ExperimentManifest
 
 AGGRESSIVENESS_MAPPING_VERSION = "aggressiveness-map-v1"
 EXPERIMENT_PROTOCOL_VERSION = "paper-experiment-v1"
+MODEL_EXPERIMENT_PROTOCOL_VERSION = "paper-experiment-v2"
+
+_MODEL_EXPERIMENT_FIELDS = {
+    "comparison_variable",
+    "experiment_group_digest",
+    "replicate_index",
+    "replicate_count",
+}
 
 _AGGRESSIVENESS_PROFILES: tuple[tuple[str, str], ...] = (
     (
@@ -81,26 +89,68 @@ def aggressiveness_context(level: int) -> AggressivenessContext:
 
 
 def validate_experiment_manifest_digest(manifest: ExperimentManifest) -> None:
-    """Reject a durable manifest whose identity or canonical mapping was altered."""
+    """Reject manifests whose protocol identity, grouping, or canonical mapping was altered."""
 
-    if manifest.protocol_version != EXPERIMENT_PROTOCOL_VERSION:
+    if manifest.protocol_version not in {
+        EXPERIMENT_PROTOCOL_VERSION,
+        MODEL_EXPERIMENT_PROTOCOL_VERSION,
+    }:
         raise ValueError("unsupported experiment protocol version")
+
     expected_context = aggressiveness_context(manifest.aggressiveness.level)
     if manifest.aggressiveness != expected_context:
         raise ValueError("experiment manifest aggressiveness mapping is not canonical")
-    payload = manifest.model_dump(exclude={"experiment_digest"})
-    actual = canonical_experiment_digest(payload)
+
+    if manifest.protocol_version == EXPERIMENT_PROTOCOL_VERSION:
+        if any(getattr(manifest, field) is not None for field in _MODEL_EXPERIMENT_FIELDS):
+            raise ValueError("paper-experiment-v1 cannot carry model-comparison metadata")
+    else:
+        _validate_model_experiment_metadata(manifest)
+        expected_group = canonical_experiment_digest(_model_comparison_payload(manifest))
+        if expected_group != manifest.experiment_group_digest:
+            raise ValueError("experiment group digest does not match controlled fields")
+
+    actual = canonical_experiment_digest(_manifest_digest_payload(manifest))
     if actual != manifest.experiment_digest:
         raise ValueError("experiment manifest digest does not match its canonical fields")
 
 
 def comparison_identity(manifest: ExperimentManifest) -> str:
-    """Digest fixed protocol fields while intentionally excluding aggressiveness."""
+    """Digest Batch 13 controlled fields while intentionally excluding aggressiveness."""
 
     validate_experiment_manifest_digest(manifest)
-    payload = manifest.model_dump(exclude={"experiment_digest", "aggressiveness"})
+    if manifest.protocol_version != EXPERIMENT_PROTOCOL_VERSION:
+        raise ValueError("aggressiveness comparison requires paper-experiment-v1")
+    payload = manifest.model_dump(
+        exclude={"experiment_digest", "aggressiveness", *_MODEL_EXPERIMENT_FIELDS}
+    )
     payload["aggressiveness_mapping_version"] = manifest.aggressiveness.mapping_version
     return canonical_experiment_digest(payload)
+
+
+def model_comparison_identity(manifest: ExperimentManifest) -> str:
+    """Return the verified group identity for a controlled Luna/Sol experiment."""
+
+    validate_experiment_manifest_digest(manifest)
+    if manifest.protocol_version != MODEL_EXPERIMENT_PROTOCOL_VERSION:
+        raise ValueError("model comparison requires paper-experiment-v2")
+    assert manifest.experiment_group_digest is not None
+    return manifest.experiment_group_digest
+
+
+def model_comparison_group_digest(manifest: ExperimentManifest) -> str:
+    """Calculate the deterministic group digest before the full manifest digest is assigned."""
+
+    if manifest.protocol_version != MODEL_EXPERIMENT_PROTOCOL_VERSION:
+        raise ValueError("model comparison group digest requires paper-experiment-v2")
+    _validate_model_experiment_metadata(manifest, allow_zero_group_digest=True)
+    return canonical_experiment_digest(_model_comparison_payload(manifest))
+
+
+def manifest_digest_payload(manifest: ExperimentManifest) -> dict[str, object]:
+    """Return the version-aware payload used for the durable experiment digest."""
+
+    return _manifest_digest_payload(manifest)
 
 
 def canonical_experiment_digest(payload: dict[str, object]) -> str:
@@ -111,6 +161,43 @@ def canonical_experiment_digest(payload: dict[str, object]) -> str:
         ensure_ascii=True,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _manifest_digest_payload(manifest: ExperimentManifest) -> dict[str, object]:
+    exclude = {"experiment_digest"}
+    if manifest.protocol_version == EXPERIMENT_PROTOCOL_VERSION:
+        exclude.update(_MODEL_EXPERIMENT_FIELDS)
+    return manifest.model_dump(exclude=exclude)
+
+
+def _model_comparison_payload(manifest: ExperimentManifest) -> dict[str, object]:
+    return manifest.model_dump(
+        exclude={
+            "experiment_digest",
+            "experiment_group_digest",
+            "llm_model",
+            "replicate_index",
+        }
+    )
+
+
+def _validate_model_experiment_metadata(
+    manifest: ExperimentManifest,
+    *,
+    allow_zero_group_digest: bool = False,
+) -> None:
+    if manifest.comparison_variable is not ExperimentVariable.LLM_MODEL:
+        raise ValueError("paper-experiment-v2 comparison_variable must be LLM_MODEL")
+    if manifest.experiment_group_digest is None:
+        raise ValueError("paper-experiment-v2 requires experiment_group_digest")
+    if not allow_zero_group_digest and manifest.experiment_group_digest == "0" * 64:
+        raise ValueError("paper-experiment-v2 requires a finalized group digest")
+    if manifest.replicate_index is None or manifest.replicate_count is None:
+        raise ValueError("paper-experiment-v2 requires replicate metadata")
+    if manifest.replicate_index > manifest.replicate_count:
+        raise ValueError("replicate_index cannot exceed replicate_count")
+    if manifest.source_digest is None:
+        raise ValueError("paper-experiment-v2 requires a frozen source_digest")
 
 
 def _jsonable(value: object) -> object:
@@ -124,6 +211,6 @@ def _jsonable(value: object) -> object:
         return value.isoformat()
     if isinstance(value, Decimal):
         return str(value)
-    if isinstance(value, LLMModel):
+    if isinstance(value, (LLMModel, ExperimentVariable)):
         return value.value
     return value

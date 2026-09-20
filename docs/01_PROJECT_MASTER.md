@@ -19,6 +19,7 @@ Invariants principaux :
 - actions stratégiques `BUY`, `SELL`, `HOLD` ;
 - aucune vente d'un actif non détenu ;
 - GPT-5.6 Luna pour les premiers essais, Sol sélectionnable par configuration ;
+- Luna et Sol utilisent le **même provider canonique** ;
 - Risk Engine déterministe avec autorité finale ;
 - aucune sortie LLM ne déclenche directement une exécution ;
 - premières versions exclusivement en PAPER ;
@@ -59,9 +60,11 @@ Le Batch 08 réalise le point 9. Le Batch 09 réalise le socle durable du point 
 
 V1 ajoute le cockpit Next.js/shadcn, historique, analytics P&L/drawdown/coûts/exposition, replay reproductible, expérimentations d'agressivité et comparaison Luna/Sol. Le LIVE n'est pas une condition de V1.
 
-Le Batch 11 fournit le socle cockpit et est **intégré sur `main`** au commit `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`. Le Batch 12 fournit les analytics PAPER reproductibles et est **intégré** au commit fonctionnel `3f39999736b6fc3800ecfd36ddee0253c734d25d`. Le HEAD documentaire GitHub resynchronisé avant Batch 13 est `bc1b06ad25a2aa0ba7781d50c9e642dc113850ad`.
+Le Batch 11 fournit le socle cockpit et est **intégré sur `main`** au commit `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`. Le Batch 12 fournit les analytics PAPER reproductibles et est **intégré** au commit fonctionnel `3f39999736b6fc3800ecfd36ddee0253c734d25d`.
 
-Le Batch 13 est **intégré sur `main`** au commit `1747beb5efd1fe9763bc9b2d23f3a115575daaec` : il fige le mapping d'agressivité et le protocole expérimental, sans modifier l'autorité Risk ni les analytics Batch 12.
+Le Batch 13 est **intégré sur `main`** au commit `1747beb5efd1fe9763bc9b2d23f3a115575daaec` : il fige le mapping d'agressivité et le protocole expérimental, sans modifier l'autorité Risk ni les analytics Batch 12. Le HEAD documentaire GitHub resynchronisé avant Batch 14 est `655b66b639c4e9c1803cef3920c9a96e7dd16055`.
+
+Le Batch 14 est **préparé localement mais non intégré** : il ajoute une comparaison Luna/Sol contrôlée et appariée sans modifier Agent/Risk/Broker, API ou frontend.
 
 ---
 
@@ -116,7 +119,7 @@ PortfolioState --+--> AgentInput --> Agent IA --> DecisionCandidate
 
 Principe absolu : **l'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
-Le package Agent ne possède aucun chemin direct vers Risk, Broker, Kraken, FastAPI ou une base de données. Le mapping d'agressivité canonique est un contrat de domaine. Le package `experiments` peut construire un manifeste à partir des configurations Risk/coûts injectées, mais n'exécute aucun ordre et ne remplace pas le runner.
+Le package Agent ne possède aucun chemin direct vers Risk, Broker, Kraken, FastAPI ou une base de données. Le mapping d'agressivité canonique est un contrat de domaine. Le package `experiments` peut construire un manifeste à partir des configurations Risk/coûts injectées et comparer des rapports analytics, mais n'exécute aucun ordre et ne remplace pas le runner.
 
 ---
 
@@ -144,10 +147,10 @@ market_state
 portfolio_state
 aggressiveness = 1..10
 aggressiveness_context?   # mapping versionné Batch 13
-experiment_manifest?      # protocole contrôlé Batch 13
+experiment_manifest?      # protocole expérimental versionné
 ```
 
-Les deux nouveaux champs sont optionnels pour rester compatibles avec les faits Batch 12 déjà persistés. Tout nouveau cycle canonique Batch 13 construit le `AggressivenessContext` explicite.
+Les deux champs expérimentaux restent optionnels pour rester compatibles avec les faits Batch 12 déjà persistés. Tout nouveau cycle expérimental construit le `AggressivenessContext` explicite.
 
 `DecisionCandidate` contient :
 
@@ -183,13 +186,13 @@ reasons[]
 
 `Fill` reste le fait d'exécution PAPER auditable avec contexte de pricing, prix de référence, prix exécuté, notional, frais, spread et slippage.
 
-### Contrats expérimentaux Batch 13
+### Contrats expérimentaux Batch 13 / Batch 14
 
 `AggressivenessContext` contient `mapping_version`, `level`, `posture` et `strategic_instruction`.
 
-`ExperimentManifest` contient :
+`ExperimentManifest` conserve les champs communs :
 
-- `protocol_version = paper-experiment-v1` ;
+- `protocol_version` ;
 - `experiment_digest` SHA-256 ;
 - contexte d'agressivité complet ;
 - `llm_model` ;
@@ -198,8 +201,19 @@ reasons[]
 - snapshot déterministe de `RiskPolicy` ;
 - snapshot des coûts PAPER ;
 - `analytics_version` ;
-- `source_id`, `source_digest` optionnel ;
+- `source_id`, `source_digest` ;
 - fenêtre temporelle optionnelle.
+
+`paper-experiment-v1` reste compatible avec le Batch 13 et n'utilise pas les champs Batch 14. `paper-experiment-v2` ajoute :
+
+```text
+comparison_variable = LLM_MODEL
+experiment_group_digest
+replicate_index
+replicate_count
+```
+
+Pour v2, `source_digest` est obligatoire. `experiment_group_digest` identifie les champs contrôlés communs en excluant uniquement `llm_model` et `replicate_index`. `experiment_digest` identifie chaque run complet.
 
 La couche SQLAlchemy n'introduit pas de seconde représentation métier : ses records conservent les objets canoniques sous forme JSON/JSONB et leurs clés de corrélation.
 
@@ -233,7 +247,7 @@ Broker.execute(execution_intent, market_state) -> tuple[Fill, ...]
 
 Il ne consulte jamais Kraken. Le calcul des coûts est factorisé dans `estimate_paper_execution` et partagé par Risk et le Paper Broker. `PaperExecutionCostModel` reste injecté : `fee_rate`, `spread_bps`, `slippage_bps`.
 
-Batch 13 ne modifie pas cette mathématique. Les valeurs injectées sont seulement enregistrées dans le manifeste expérimental afin de détecter une comparaison non contrôlée.
+Les Batches 13/14 ne modifient pas cette mathématique. Les valeurs injectées sont seulement enregistrées dans le manifeste expérimental afin de détecter une comparaison non contrôlée.
 
 ---
 
@@ -254,7 +268,7 @@ Contrôles actuels : symbole, chronologie, whitelist optionnelle, fraîcheur mé
 
 HOLD traverse Risk et produit `ALLOW + HOLD_NO_EXECUTION`, sans `ExecutionIntent`.
 
-**Batch 13 :** l'agressivité n'est pas un paramètre de `RiskEngine.evaluate(...)`. Un niveau 10 passe par exactement les mêmes contrôles déterministes qu'un niveau 1.
+Ni l'agressivité ni le modèle LLM ne sont des paramètres de `RiskEngine.evaluate(...)`. À décision et snapshots identiques, Luna et Sol passent par exactement les mêmes contrôles déterministes.
 
 ---
 
@@ -272,7 +286,7 @@ L'Agent est limité au symbole de `agent_input.market_state.symbol`. Une sortie 
 
 L'adapter OpenAI utilise la Responses API et un JSON Schema strict. La réponse est parsée et revalidée localement sans réparation stratégique silencieuse.
 
-Le Batch 13 fait évoluer le prompt vers `agent-strategy-v2`. Le prompt indique que `aggressiveness_context` est une posture stratégique uniquement et ne relâche jamais Risk.
+Le prompt courant reste `agent-strategy-v2`. Luna et Sol utilisent exactement `OpenAIDecisionProvider`; le modèle est un paramètre de configuration, pas une implémentation Agent parallèle.
 
 Lorsqu'un `ExperimentManifest` est présent, le provider valide avant l'appel LLM :
 
@@ -304,7 +318,7 @@ Le même `MarketState` imbriqué dans `AgentInput` est réutilisé pour Risk pui
 
 La persistance enregistre les timestamps produits ; elle ne les recalcule pas et ne réécrit pas les décisions a posteriori.
 
-Le manifeste ne permet aucun look-ahead : sa fenêtre/source décrit les faits autorisés pour l'expérience, mais ne modifie pas les snapshots réellement fournis au cycle.
+Le manifeste ne permet aucun look-ahead : sa fenêtre/source décrit les faits autorisés pour l'expérience, mais ne modifie pas les snapshots réellement fournis au cycle. Pour une comparaison Luna/Sol strictement appariée, `paper-experiment-v2` exige une identité `source_digest` figée.
 
 ---
 
@@ -348,7 +362,7 @@ Le runtime peut recevoir un `TradingEngine`, un lecteur de portefeuille, un `Cyc
 
 `create_app(...)` ne démarre jamais le moteur. Les commandes `start`/`stop` passent uniquement par le moteur injecté.
 
-Batch 13 n'ajoute aucune configuration expérimentale à l'API. La composition d'un runner expérimental reste explicite côté backend afin de ne pas inventer silencieusement capital, univers, cadence, RiskPolicy ou coûts.
+Batch 14 n'ajoute aucune configuration expérimentale à l'API. La composition d'un runner expérimental reste explicite côté backend afin de ne pas inventer silencieusement capital, univers, cadence, RiskPolicy ou coûts.
 
 ---
 
@@ -358,7 +372,9 @@ Le journal repose sur PostgreSQL, SQLAlchemy async, `asyncpg` et Alembic. La mig
 
 `CycleAuditWriter.record(TradingCycleResult)` persiste un graphe immuable par `cycle_id`, avec idempotence par digest et transaction unique.
 
-Le cycle enregistre notamment `AgentInput` complet en JSON/JSONB. Par conséquent, les nouveaux champs Batch 13 (`aggressiveness_context`, `experiment_manifest`) sont persistés sans nouvelle colonne ni migration et participent au `result_digest`.
+Le cycle enregistre notamment `AgentInput` complet en JSON/JSONB. Par conséquent, les champs Batch 13/14 du manifeste sont persistés sans nouvelle colonne ni migration et participent au `result_digest`.
+
+`experiment_digest` identifie durablement un run. `experiment_group_digest` relie les runs Luna/Sol et leurs répétitions appartenant au même groupe contrôlé.
 
 HOLD, REJECT, MODIFY, ALLOW et FAILED conservent leur sémantique durable existante.
 
@@ -370,7 +386,7 @@ La limite exactly-once entre mutation du ledger mémoire et commit PostgreSQL re
 
 La façade REST versionnée `/api/v1` expose moteur, portefeuille, cycles, décisions, Risk, exécutions/fills, erreurs, dernier marché et analytics.
 
-Batch 13 n'ajoute aucun endpoint. Les payloads durables détaillés continuent d'être exposés comme faits enregistrés sans être réinterprétés stratégiquement.
+Batch 14 n'ajoute aucun endpoint. Les payloads durables détaillés continuent d'être exposés comme faits enregistrés sans être réinterprétés stratégiquement.
 
 ---
 
@@ -378,7 +394,7 @@ Batch 13 n'ajoute aucun endpoint. Les payloads durables détaillés continuent d
 
 Le cockpit reste strictement client des interfaces FastAPI. Il affiche les vues intégrées et le panneau analytics Batch 12, utilise un polling présentatif borné et n'est jamais propriétaire du moteur.
 
-Aucune modification frontend n'est proposée au Batch 13. Il n'existe donc aucun configurateur navigateur capable de muter agressivité, RiskPolicy, coûts ou manifeste d'un moteur en cours.
+Aucune modification frontend n'est proposée au Batch 14. Il n'existe donc aucun configurateur navigateur capable de muter modèle, agressivité, RiskPolicy, coûts ou manifeste d'un moteur en cours.
 
 ---
 
@@ -405,7 +421,7 @@ HOLD/REJECT/MODIFY/FAILED restent comptés explicitement.
 
 La réponse porte `calculation_version = paper-analytics-v1` et un `source_digest` calculé sur `(cycle_id, result_digest)` ordonné.
 
-Batch 13 **réutilise** ces rapports ; il n'implémente aucune formule analytics alternative.
+Les comparateurs Batches 13/14 **réutilisent** ces rapports ; ils n'implémentent aucune formule analytics alternative.
 
 ---
 
@@ -417,35 +433,46 @@ Batch 13 **réutilise** ces rapports ; il n'implémente aucune formule analytics
 
 ### Manifeste
 
-`build_experiment_manifest(...)` reçoit explicitement :
-
-- niveau ;
-- modèle LLM ;
-- version de prompt ;
-- univers ;
-- `RiskPolicy` injectée ;
-- `PaperExecutionCostModel` injecté ;
-- source/dataset et digest éventuel ;
-- fenêtre éventuelle ;
-- version analytics.
-
-Il construit `paper-experiment-v1` et son digest déterministe.
+`build_experiment_manifest(...)` reçoit explicitement niveau, modèle, prompt, univers, `RiskPolicy`, coûts PAPER, source/dataset, fenêtre et version analytics. Il construit `paper-experiment-v1` et son digest déterministe.
 
 ### Comparabilité
 
 `compare_aggressiveness_runs(...)` refuse des runs qui diffèrent sur un champ contrôlé autre que l'agressivité. La comparaison expose les métriques existantes sans ranking ni optimisation rétrospective.
 
-### Dataset et flux live
+---
 
-Pour isoler strictement l'agressivité, un dataset/replay figé avec le même `source_digest` est recommandé. Deux passages successifs sur flux live ne constituent pas une expérience appariée stricte car les faits marché diffèrent.
+## 18. Comparaison Luna / Sol — Batch 14 préparé
 
-### LLM non parfaitement déterministe
+### Axe expérimental versionné
 
-Même manifeste + mêmes faits peut encore produire des décisions différentes si le fournisseur LLM n'offre pas un déterminisme bit-à-bit. Le manifeste reproduit la configuration et permet l'audit ; il ne prétend pas fournir un seed fournisseur inexistant.
+Le manifeste Batch 13 contient déjà `llm_model`, mais son identité de comparaison exclut uniquement l'agressivité. Le réutiliser tel quel pour Luna/Sol casserait la sémantique de la comparaison d'agressivité.
+
+Le patch introduit donc `paper-experiment-v2` avec `comparison_variable = LLM_MODEL`. `paper-experiment-v1` reste inchangé pour Batch 13 et ses anciens payloads restent lisibles.
+
+### Identités et répétitions
+
+`build_model_experiment_manifest(...)` construit chaque run avec :
+
+- `experiment_digest` : identité complète du run ;
+- `experiment_group_digest` : identité des champs contrôlés communs ;
+- `replicate_index` : répétition courante ;
+- `replicate_count` : nombre de répétitions déclaré pour chaque modèle.
+
+Le digest de groupe exclut uniquement `llm_model` et `replicate_index`. Une variation d'agressivité, prompt, univers, `RiskPolicy`, coûts PAPER, source/dataset, fenêtre, version analytics ou `replicate_count` produit donc un groupe différent et invalide une comparaison directe.
+
+### Dataset figé et no look-ahead
+
+`source_digest` est obligatoire en v2. Une comparaison Luna/Sol strictement appariée suppose un dataset/snapshot de faits sources figé et identique. Le batch **n'ajoute pas** de moteur de replay historique : il formalise l'identité requise pour qu'un replay futur ou un dataset fourni soit auditable.
+
+### Non-déterminisme et anti cherry-picking
+
+Plusieurs répétitions sont supportées sans seed fournisseur fictif. `compare_model_runs(...)` exige toutes les répétitions `1..N` pour Luna **et** Sol. Cette contrainte empêche de présenter un groupe incomplet après suppression post-hoc d'une répétition défavorable.
+
+Le comparateur renvoie les runs bruts et les métriques Batch 12 existantes, y compris les points cumulés et le daily. Il ne calcule aucun score composite, ne classe pas les modèles et ne conclut pas automatiquement qu'un modèle est « meilleur ».
 
 ---
 
-## 18. Sécurité et séparation PAPER / LIVE
+## 19. Sécurité et séparation PAPER / LIVE
 
 `ExecutionMode` ne contient que `PAPER`. Le LIVE reste non représentable et nécessitera une décision dédiée. Aucune clé Kraken privée n'est requise.
 
@@ -455,11 +482,9 @@ Le manifeste ne contient aucun secret ; il ne stocke que des identités/configur
 
 ---
 
-## 19. Stratégie de tests
+## 20. Stratégie de tests
 
 Les tests restent déterministes et offline autant que possible.
-
-Validation intégrée Batch 12 : `pytest backend` 231 tests, Ruff OK, mypy 76 fichiers, frontend lint/typecheck/build OK et `git diff --check` sans erreur.
 
 Validation Batch 13 confirmée :
 
@@ -469,14 +494,21 @@ Validation Batch 13 confirmée :
 - mypy : **81 fichiers sans erreur** ;
 - `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
 - commit/push : `1747beb5efd1fe9763bc9b2d23f3a115575daaec` ;
-- working tree propre après push ;
-- préparation : **47 tests ciblés**, `py_compile` réussi et smoke `TradingCycleRunner` niveau 10 confirmant REJECT Risk / Broker non appelé.
+- working tree propre après push.
 
-Aucun test frontend additionnel n'était requis puisque le frontend n'a pas été modifié.
+Validation de préparation Batch 14 dans l'environnement ChatGPT :
+
+- tests ciblés `backend/tests/test_experiments.py` : **34 passés** dans un arbre local reconstruit depuis GitHub `main` ;
+- `py_compile` des fichiers Python modifiés : **réussi** ;
+- Ruff : non exécuté, outil absent ;
+- mypy : non exécuté, outil absent ;
+- `pytest backend` complet et `git diff --check` d'un checkout réel : à exécuter localement.
+
+Aucun test frontend additionnel n'est requis puisque le frontend n'est pas modifié.
 
 ---
 
-## 20. Questions ouvertes prioritaires
+## 21. Questions ouvertes prioritaires
 
 - capital PAPER et devise de référence produit ;
 - univers initial de paires ;
@@ -484,8 +516,8 @@ Aucun test frontend additionnel n'était requis puisque le frontend n'a pas ét�
 - valeurs produit des limites Risk ;
 - valeurs de référence fee/spread/slippage ;
 - limites avancées d'exposition/drawdown en tant que contraintes Risk ;
-- dataset/replay canonique pour expériences appariées ;
-- nombre de répétitions éventuelles pour mesurer la variance LLM ;
+- dataset/replay canonique concret pour exécuter les expériences appariées ;
+- éventuelles statistiques descriptives de dispersion à ajouter plus tard sans score composite ;
 - politique de rétention du journal ;
 - reconstruction du ledger et réconciliation après crash ;
 - source d'événements et protocole d'un futur WebSocket cockpit ;

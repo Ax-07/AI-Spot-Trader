@@ -4,13 +4,13 @@
 
 **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
-Ce principe reste inchangé par le Batch 13. L'agressivité est un contexte stratégique versionné pour l'Agent ; elle n'est ni une limite Risk, ni une permission d'exécution, ni une formule de sizing déterministe.
+Ce principe reste inchangé par les Batches 13/14. L'agressivité et le choix Luna/Sol appartiennent à la couche stratégique Agent ; ils ne sont ni des limites Risk, ni des permissions d'exécution, ni des formules de sizing déterministes.
 
 ---
 
 ## 2. Agent IA
 
-L'agent reçoit un `AgentInput` structuré contenant le `MarketState`, le `PortfolioState`, le `cycle_id`, le timestamp, l'agressivité et, pour les nouveaux cycles Batch 13, son `AggressivenessContext` canonique.
+L'agent reçoit un `AgentInput` structuré contenant le `MarketState`, le `PortfolioState`, le `cycle_id`, le timestamp, l'agressivité, son `AggressivenessContext` canonique et éventuellement un `ExperimentManifest`.
 
 Il produit uniquement :
 
@@ -24,21 +24,21 @@ DecisionCandidate
 
 BUY/SELL nécessitent une quantité stratégique positive ; HOLD n'en porte aucune. `decision_id`, `cycle_id` et `created_at` restent contrôlés par l'application.
 
-Le provider LLM ne dispose d'aucun outil Broker/Kraken et ne connaît pas l'API de lifecycle.
+Le provider LLM ne dispose d'aucun outil Broker/Kraken et ne connaît pas l'API de lifecycle. Luna et Sol utilisent le **même `OpenAIDecisionProvider`** et le même schéma de sortie.
 
-### Prompt versionné Batch 13
+### Prompt versionné
 
-Le prompt devient `agent-strategy-v2`.
+Le prompt courant est `agent-strategy-v2`.
 
-Il précise que :
+Il précise notamment que :
 
-- `AgentInput.aggressiveness_context` est la seule interprétation canonique du niveau `1..10` ;
+- `AgentInput.aggressiveness_context` est l'interprétation canonique du niveau `1..10` ;
 - l'agressivité peut influencer la volonté d'agir et la quantité **proposée** ;
 - elle ne relâche jamais les limites Risk, balances, positions, solvabilité, chronologie, whitelist ou contraintes PAPER ;
 - un niveau élevé ne garantit ni ALLOW, ni fill, ni rendement ;
-- HOLD reste toujours valide lorsqu'aucune thèse défendable n'est supportée par les faits fournis.
+- HOLD reste valide lorsqu'aucune thèse défendable n'est supportée par les faits fournis.
 
-Le provider normalise les anciens `AgentInput` sans contexte en ajoutant le mapping canonique avant l'appel LLM. Si un manifeste expérimental est présent, il vérifie avant l'appel que son digest, son modèle LLM, sa version de prompt et son mapping d'agressivité correspondent à la configuration réellement active.
+Le provider normalise les anciens `AgentInput` sans contexte en ajoutant le mapping canonique avant l'appel LLM. Si un manifeste expérimental est présent, il vérifie avant l'appel son digest, son modèle LLM, sa version de prompt et son mapping d'agressivité.
 
 ---
 
@@ -46,18 +46,7 @@ Le provider normalise les anciens `AgentInput` sans contexte en ajoutant le mapp
 
 Version : `aggressiveness-map-v1`.
 
-Le mapping est **discret**, pas dérivé d'une formule de Risk ou d'un multiplicateur de taille. Les niveaux décrivent une posture stratégique :
-
-1. `capital_preservation` — HOLD par défaut sauf signal exceptionnel ; plus petite quantité stratégiquement utile ;
-2. `very_conservative` — preuve forte requise, quantités très petites ;
-3. `conservative` — trades sélectifs, petites quantités ;
-4. `measured` — sélection mesurée, pas d'activité forcée ;
-5. `balanced` — équilibre opportunité/retenue, quantité modérée ;
-6. `active` — davantage d'initiative sur thèse supportée, quantité un peu plus grande ;
-7. `assertive` — action plus affirmée sur thèse cohérente, sans activité artificielle ;
-8. `aggressive` — éventail plus large d'opportunités bien raisonnées, grandes quantités proposées possibles ;
-9. `very_aggressive` — forte propension à agir sur opportunité plausible/cohérente, très grandes quantités proposées possibles ;
-10. `maximum_experimental` — initiative stratégique maximale, sans aucune relaxation des contraintes Risk.
+Le mapping est **discret**, pas dérivé d'une formule de Risk ou d'un multiplicateur de taille. Les dix postures restent celles intégrées au Batch 13, de `capital_preservation` à `maximum_experimental`.
 
 Ce mapping ne contient aucun seuil de prix, indicateur, exposition, drawdown, balance ou notional. Il ne constitue donc pas une stratégie déterministe parallèle.
 
@@ -76,7 +65,7 @@ Résultats :
 
 Seul Risk peut construire un `ExecutionIntent`. Il ne peut pas changer BUY en SELL, SELL en BUY ou le symbole stratégique.
 
-L'agressivité n'est pas passée au `RiskEngine.evaluate(...)`. Les contrôles de symbole, chronologie, whitelist, fraîcheur, max notional, solvabilité BUY et position SELL restent identiques pour les niveaux 1 et 10.
+Ni l'agressivité ni le modèle LLM ne sont passés au `RiskEngine.evaluate(...)`. Les contrôles de symbole, chronologie, whitelist, fraîcheur, max notional, solvabilité BUY et position SELL sont identiques quel que soit le modèle.
 
 ---
 
@@ -96,23 +85,29 @@ Ordre :
 8. snapshot portefeuille post-exécution si applicable ;
 9. `TradingCycleResult`.
 
-Le verrou du runner empêche le chevauchement des cycles.
+Le verrou du runner empêche le chevauchement des cycles. Les pannes techniques sont des résultats `FAILED` avec stage/type/timeout sanitizés ; elles ne deviennent jamais un HOLD.
 
-Les pannes techniques sont des résultats `FAILED` avec stage/type/timeout sanitizés. Elles ne deviennent jamais un HOLD.
-
-Si un `ExperimentManifest` est injecté au runner, son digest est vérifié et son niveau/univers doivent correspondre à la configuration du runner avant tout cycle.
+Si un `ExperimentManifest` est injecté, son digest est vérifié et son niveau/univers doivent correspondre à la configuration du runner avant tout cycle.
 
 ---
 
-## 6. Manifeste expérimental durable
+## 6. Manifestes expérimentaux durables
 
-Version : `paper-experiment-v1`.
+### `paper-experiment-v1`
 
-Le manifeste enregistre :
+Le v1 reste le protocole Batch 13 pour comparer l'agressivité. Il enregistre niveau/mapping, modèle, prompt, univers, `RiskPolicy`, coûts PAPER, version analytics, source/dataset et fenêtre éventuelle. Son `comparison_identity` exclut l'agressivité mais conserve le modèle comme champ contrôlé.
+
+### `paper-experiment-v2`
+
+Le Batch 14 préparé ajoute un protocole où le modèle est l'unique variable expérimentale :
 
 ```text
-protocol_version
+protocol_version = paper-experiment-v2
+comparison_variable = LLM_MODEL
+experiment_group_digest
 experiment_digest
+replicate_index
+replicate_count
 aggressiveness { mapping_version, level, posture, strategic_instruction }
 llm_model
 prompt_version
@@ -121,24 +116,36 @@ risk_policy { max_order_notional, allowed_pairs, stale_after_seconds, allow_quan
 paper_costs { fee_rate, spread_bps, slippage_bps }
 analytics_version
 source_id
-source_digest?
+source_digest
 window_start?
 window_end?
 ```
 
-Le digest SHA-256 est calculé sur la représentation canonique de ces champs. À configuration identique, le digest est identique ; changer le niveau, le modèle, le prompt, Risk, les coûts, l'univers ou les faits sources change l'identité expérimentale.
+`source_digest` est obligatoire. Le digest de groupe varie si un champ contrôlé change et exclut uniquement le modèle et l'index de répétition. Le digest complet identifie chaque run.
 
-Le manifeste est inclus dans `AgentInput`. Comme le journal Batch 09 persiste déjà l'`AgentInput` complet, aucune migration n'est nécessaire. Le `result_digest` du cycle inclut naturellement le manifeste via le payload canonique.
+Le manifeste est inclus dans `AgentInput`. Le journal Batch 09 persistant déjà l'`AgentInput` complet, aucune migration n'est nécessaire.
 
-Le digest ne rend pas le LLM déterministe. Il identifie le **protocole** ; les décisions effectivement réalisées restent des faits durables séparés.
+Aucun digest ne rend le LLM déterministe : il identifie le **protocole** et les relations entre runs ; les décisions réalisées restent des faits durables séparés.
 
 ---
 
-## 7. Comparaison des niveaux
+## 7. Comparaison Luna / Sol
 
-`compare_aggressiveness_runs(...)` compare des `PaperAnalyticsReport` Batch 12 déjà calculés.
+`compare_model_runs(...)` compare des `PaperAnalyticsReport` Batch 12 déjà calculés.
 
-Les runs ne sont comparables que si tous les champs contrôlés hors agressivité sont identiques : modèle, prompt, univers, `RiskPolicy`, coûts PAPER, source/dataset, fenêtre et version analytics.
+Deux runs appartiennent au même groupe uniquement si restent identiques :
+
+- agressivité + version de mapping ;
+- version de prompt ;
+- univers ;
+- `RiskPolicy` ;
+- coûts PAPER ;
+- `source_id` et `source_digest` ;
+- fenêtre ;
+- version analytics ;
+- nombre de répétitions déclaré.
+
+La seule variable autorisée est `llm_model`, avec l'index de répétition comme identité de réalisation.
 
 La comparaison expose factuellement :
 
@@ -146,31 +153,28 @@ La comparaison expose factuellement :
 - frais, spread, slippage ;
 - drawdown ;
 - exposition ;
-- nombre de trades ;
+- nombre de trades BUY/SELL ;
 - HOLD / REJECT / MODIFY / FAILED ;
-- séries quotidiennes déjà calculées par Batch 12.
+- points cumulés déjà calculés par Batch 12 ;
+- séries quotidiennes Batch 12.
 
-Elle ne recalcule aucune métrique, ne réordonne pas les décisions, ne sélectionne pas rétrospectivement les meilleurs cycles et ne produit aucun « gagnant » automatique.
+Elle ne recalcule aucune métrique métier, ne réordonne pas les décisions et ne produit aucun « gagnant » automatique.
 
 ---
 
-## 8. TradingEngine
+## 8. Répétitions et non-déterminisme
 
-`TradingEngine` répète le runner séquentiellement :
+Le LLM peut rester non parfaitement déterministe même avec modèle, prompt et faits identiques. Le patch ne prétend pas disposer d'un seed fournisseur inexistant.
 
-```text
-cycle -> attente cadence -> cycle -> ...
-```
+`replicate_count = N` annonce explicitement le nombre de réalisations prévues par modèle. `compare_model_runs(...)` exige alors les répétitions `1..N` pour Luna **et** Sol. Une comparaison incomplète est refusée.
 
-Il n'ajoute aucune stratégie. `start()` crée une seule boucle autonome, `stop()` est coopératif et attend le cycle borné éventuellement en cours.
-
-Les propriétés `is_running`, `last_result` et `last_unexpected_error_type` fournissent l'observation minimale utilisée par l'API.
+Ce mécanisme permet de conserver une dispersion observable sans créer de score ou de modèle statistique caché. Les statistiques de dispersion éventuelles pourront être ajoutées séparément si elles sont définies explicitement.
 
 ---
 
 ## 9. Persistance
 
-`AuditedTradingCycleRunner` enveloppe le runner canonique :
+`AuditedTradingCycleRunner` continue d'envelopper le runner canonique :
 
 ```text
 result = delegate.run_cycle()
@@ -180,7 +184,7 @@ return result
 
 La persistance conserve les faits produits, notamment HOLD et REJECT, mais ne crée aucun artefact métier.
 
-Le mapping et le manifeste Batch 13 sont persistés à l'intérieur du payload `AgentInput` existant. Le schéma SQL reste inchangé.
+Le manifeste v2, l'identité de groupe et l'index de répétition sont persistés à l'intérieur du payload `AgentInput` existant. Le schéma SQL reste inchangé.
 
 La limite exactly-once entre mutation du ledger mémoire et commit PostgreSQL reste documentée et non résolue.
 
@@ -188,48 +192,36 @@ La limite exactly-once entre mutation du ledger mémoire et commit PostgreSQL re
 
 ## 10. API et frontend
 
-Aucune nouvelle route ni surface cockpit n'est ajoutée au Batch 13.
+Aucune nouvelle route ni surface cockpit n'est ajoutée au Batch 14.
 
 Motif : le protocole expérimental est une configuration backend/domaine et les analytics comparés existent déjà. Une future UI de lancement d'expériences nécessitera un contrat de composition produit explicite plutôt qu'un configurateur stratégique improvisé dans le frontend.
 
-Le frontend reste strictement cockpit et ne peut pas muter le mapping, `RiskPolicy`, les coûts ou le manifeste d'un moteur en cours.
+Le frontend reste strictement cockpit et ne peut pas muter modèle, mapping, `RiskPolicy`, coûts ou manifeste d'un moteur en cours.
 
 ---
 
 ## 11. No-look-ahead et anti cherry-picking
 
-Pour comparer deux niveaux honnêtement :
+Pour comparer Luna et Sol honnêtement :
 
-- utiliser le même modèle et la même version de prompt ;
+- utiliser le même prompt et la même agressivité ;
 - utiliser la même `RiskPolicy` et les mêmes coûts PAPER ;
 - utiliser le même univers ;
-- lier les runs au même `source_id` et, pour un dataset figé, au même `source_digest` ;
-- conserver les mêmes fenêtres temporelles ;
+- lier les runs au même `source_id` et au même `source_digest` figé ;
+- conserver la même fenêtre et la même version analytics ;
+- annoncer `replicate_count` avant la comparaison et conserver toutes les répétitions des deux modèles ;
 - ne jamais réécrire une décision déjà prise ;
 - ne jamais supprimer a posteriori des HOLD, REJECT, FAILED ou mauvais trades ;
 - valoriser les résultats uniquement via les faits durables et `paper-analytics-v1`.
 
-Sur un flux live, deux runs séquentiels ne voient pas mécaniquement les mêmes faits. Pour isoler strictement l'effet de l'agressivité, un dataset/snapshot replay figé avec digest identique est requis.
+Deux passages successifs sur un flux live non figé ne constituent pas une expérience appariée stricte. Un dataset/snapshot replay figé avec digest identique est nécessaire pour attribuer proprement les écarts au modèle seul.
 
 ---
 
-## 12. Limite de reproductibilité LLM
-
-Même manifeste + mêmes faits ne signifie pas nécessairement même sortie Luna/Sol : le fournisseur LLM peut rester non parfaitement déterministe et le projet ne prétend pas disposer d'un seed/replay exact fournisseur.
-
-La reproductibilité Batch 13 porte donc sur :
-
-- l'identité du protocole ;
-- la conservation des entrées et décisions réalisées ;
-- la comparaison des métriques Batch 12 à faits réalisés identiques.
-
-Le Batch 14 pourra réutiliser exactement ce mécanisme pour comparer Luna/Sol en changeant explicitement le modèle tout en maintenant le reste du protocole contrôlé.
-
----
-
-## 13. Invariants conservés
+## 12. Invariants conservés
 
 - un seul agent IA ;
+- même provider canonique pour Luna/Sol ;
 - SPOT/PAPER uniquement ;
 - aucun short/levier/margin/future/perpetual ;
 - SELL uniquement sur position détenue ;
@@ -237,7 +229,8 @@ Le Batch 14 pourra réutiliser exactement ce mécanisme pour comparer Luna/Sol e
 - Risk autorité finale ;
 - aucun LLM -> Broker direct ;
 - seul Risk crée l'intent ;
-- agressivité hors contrôle des limites Risk ;
+- agressivité et modèle hors contrôle des limites Risk ;
+- HOLD/ALLOW/MODIFY/REJECT conservent leur sémantique ;
 - erreurs techniques distinctes de HOLD ;
 - aucun secret exposé ;
 - aucun look-ahead ;

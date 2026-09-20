@@ -304,6 +304,47 @@ Ces décisions sont intégrées avec le Batch 13 au commit fonctionnel `1747beb5
 
 ---
 
+## 5 ter. Décisions proposées au Batch 14
+
+Ces décisions appartiennent au **patch Batch 14 préparé localement**. Elles ne deviennent intégrées qu'après validation locale complète, commit/push et working tree propre confirmé.
+
+### ADR-068 — Versionner la comparaison modèle en `paper-experiment-v2`
+- **Statut : PROPOSÉE**
+- `paper-experiment-v1` reste le contrat Batch 13 et continue d'exclure uniquement l'agressivité de son identité de comparaison.
+- `paper-experiment-v2` fixe `comparison_variable = LLM_MODEL` afin que Luna/Sol soit l'unique variable autorisée.
+- Les champs v2 sont optionnels dans `ExperimentManifest` pour conserver la lecture des anciens payloads v1.
+- Le digest v1 exclut explicitement les nouveaux champs afin de préserver l'identité des manifestes déjà persistés.
+
+### ADR-069 — Séparer identité de groupe et identité de run
+- **Statut : PROPOSÉE**
+- `experiment_group_digest` identifie les champs contrôlés communs d'une expérience Luna/Sol.
+- Il exclut `llm_model` et `replicate_index`, mais inclut agressivité, prompt, univers, RiskPolicy, coûts PAPER, source/dataset, fenêtre, version analytics et `replicate_count`.
+- `experiment_digest` reste l'identité complète de chaque run et inclut modèle, groupe et index de répétition.
+- La persistance reste le JSON/JSONB `AgentInput` existant ; aucune table/migration dédiée n'est créée.
+
+### ADR-070 — Dataset figé obligatoire pour une comparaison modèle stricte
+- **Statut : PROPOSÉE**
+- `source_digest` est obligatoire dans `paper-experiment-v2`.
+- Deux passages live successifs non figés ne sont pas traités comme une comparaison strictement appariée.
+- Le batch formalise l'identité du dataset ; il n'ajoute pas de moteur de replay historique parallèle.
+- Toute fenêtre/univers/source différente fait changer le groupe et invalide la comparaison.
+
+### ADR-071 — Répétitions appariées pour le non-déterminisme LLM
+- **Statut : PROPOSÉE**
+- `replicate_index` et `replicate_count` sont persistés dans le manifeste v2.
+- `compare_model_runs(...)` exige les répétitions `1..N` pour Luna et Sol et refuse un groupe incomplet.
+- Le protocole ne prétend pas disposer d'un seed fournisseur exact.
+- Les répétitions restent des observations brutes ; aucune sélection post-hoc ou exclusion d'une répétition n'est autorisée par le comparateur.
+
+### ADR-072 — Comparaison modèle factuelle sans score ni gagnant automatique
+- **Statut : PROPOSÉE**
+- Le comparateur réutilise directement les `PaperAnalyticsReport` Batch 12.
+- Les métriques exposées incluent P&L brut/net, coûts, drawdown, exposition, trades BUY/SELL, HOLD/REJECT/MODIFY/FAILED, points cumulés et daily.
+- Aucune formule P&L parallèle, score composite, ranking ou choix automatique d'un « meilleur modèle » n'est introduit.
+- API et frontend restent inchangés au Batch 14.
+
+---
+
 ## 6. Propositions historiques
 
 ### ADR-P001 — Contrats Pydantic versionnés entre composants
@@ -330,8 +371,8 @@ Ces décisions sont intégrées avec le Batch 13 au commit fonctionnel `1747beb5
 - valeurs chiffrées des limites Risk ;
 - limites d'exposition/drawdown quand les données le permettent ;
 - valeurs expérimentales fee/spread/slippage ;
-- dataset/replay canonique pour comparaisons strictement appariées ;
-- stratégie de répétitions pour mesurer la variance LLM éventuelle ;
+- dataset/replay canonique concret pour exécuter les comparaisons strictement appariées ;
+- éventuelles statistiques descriptives de dispersion des répétitions LLM ;
 - politique de rétention PostgreSQL ;
 - reconstruction du ledger et stratégie de reprise après panne ;
 - auth et déploiement ;
@@ -342,6 +383,30 @@ Ces décisions sont intégrées avec le Batch 13 au commit fonctionnel `1747beb5
 ---
 
 ## 8. Changelog
+
+### 2026-09-21 — Batch 14 Comparaison contrôlée GPT-5.6 Luna / GPT-5.6 Sol
+
+**État : patch préparé localement, non intégré.**
+
+- Resynchronisation GitHub `main` confirmée au HEAD `655b66b639c4e9c1803cef3920c9a96e7dd16055` (`docs: record Batch 13 integration`) ; aucun commit intervenu depuis l'état connu fourni.
+- Audit du manifeste Batch 13, du comparateur d'agressivité, des analytics Batch 12, du provider Luna/Sol, du runner et de la persistance JSON/JSONB.
+- Décision de conserver `paper-experiment-v1` pour l'agressivité et d'introduire `paper-experiment-v2` pour l'axe `LLM_MODEL`.
+- Ajout d'un `experiment_group_digest` commun aux champs contrôlés et conservation de `experiment_digest` comme identité complète du run.
+- Ajout de `replicate_index` / `replicate_count` et obligation d'une paire complète de répétitions Luna/Sol.
+- `source_digest` obligatoire en v2 pour identifier un dataset/snapshot figé ; aucun replay historique parallèle ajouté.
+- Comparaison Luna/Sol basée uniquement sur `PaperAnalyticsReport`, sans score composite ni ranking automatique.
+- Compatibilité v1 conservée ; aucune migration PostgreSQL.
+- Aucun changement Agent provider, Risk Engine, Broker, API ou frontend requis.
+
+Validation réellement exécutée dans l'environnement de préparation ChatGPT :
+
+- tests ciblés `backend/tests/test_experiments.py` : **34 passés** dans un arbre local reconstruit depuis GitHub `main` ;
+- `py_compile` sur les fichiers Python modifiés : **réussi** ;
+- Ruff : **non exécuté**, outil absent ;
+- mypy : **non exécuté**, outil absent ;
+- `pytest backend` complet et `git diff --check` d'un checkout réel : **restent à exécuter localement**.
+
+Le batch ne doit pas être marqué intégré avant validation locale complète, commit/push et working tree propre confirmé.
 
 ### 2026-09-21 — Batch 13 Expérimentation agressivité 1–10
 
@@ -369,49 +434,27 @@ Validation locale finale confirmée :
 - commit/push confirmé sur `main` : `1747beb5efd1fe9763bc9b2d23f3a115575daaec` ;
 - working tree confirmé propre après push.
 
-Validation de préparation : **47 tests ciblés**, `py_compile` réussi et smoke `TradingCycleRunner` niveau 10 confirmant REJECT Risk avec Broker non appelé.
-
 ### 2026-09-20 — Batch 12 Analytics et expérimentation reproductible
 
 **État : intégré sur `main` au commit fonctionnel `3f39999736b6fc3800ecfd36ddee0253c734d25d` (`feat: add reproducible paper analytics`).**
 
-- Resynchronisation initiale Batch 12 confirmée au HEAD `cab3920d4d924d785b0a54c06b51066ccc949eb0`.
-- Audit du journal Batch 09, de l'API Batch 10 et du cockpit Batch 11.
-- Aucun nouveau schéma DB : analytics dérivés à la volée des faits immuables.
-- Ajout du reducer PAPER, du reader SQLAlchemy et de `GET /api/v1/analytics`.
-- P&L brut/net, coûts, drawdown, exposition, trades, issues HOLD/REJECT/MODIFY/FAILED, séries temporelles et daily UTC.
-- No look-ahead : valorisation au prix durable de chaque cycle.
-- Continuité du portefeuille et valorisabilité vérifiées ; aucune approximation silencieuse.
-- Reproductibilité du calcul via `paper-analytics-v1` + digest des `result_digest`.
-- Ajout du panneau analytics cockpit strictement présentatif.
-- Aucun changement Agent/Risk/Broker, aucun LIVE, aucun Kraken privé, aucun WebSocket.
-- Limite conservée : pas encore de rejeu décisionnel LLM avec manifeste expérimental complet.
+- Journal durable utilisé comme source des analytics.
+- Reducer PAPER pur avec P&L brut/net, coûts, drawdown, exposition, trades, HOLD/REJECT/MODIFY/FAILED, séries par cycle et daily UTC.
+- No look-ahead par valorisation au prix durable de chaque cycle.
+- Reproductibilité via `paper-analytics-v1` + digest des `result_digest`.
+- Endpoint analytics et panneau cockpit ajoutés sans modifier Agent/Risk/Broker.
 
-Validation finale locale confirmée :
-
-- `pytest backend` : **231 tests passés**, 2 warnings de dépréciation externes ;
-- Ruff : **All checks passed** ;
-- mypy : **Success: no issues found in 76 source files** ;
-- `pnpm --dir frontend lint` : **réussi** ;
-- `pnpm --dir frontend typecheck` : **réussi** ;
-- `pnpm --dir frontend build` : **réussi**, Next.js 16.3.3 ;
-- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- commit/push confirmé sur `main` : `3f39999736b6fc3800ecfd36ddee0253c734d25d` ;
-- working tree confirmé propre après push.
-
-Aucun smoke test PostgreSQL/runtime Batch 12 distinct n'a été fourni ; il n'est pas revendiqué.
+Validation finale locale confirmée : `pytest backend` **231 passés**, Ruff OK, mypy **76 fichiers sans erreur**, frontend lint/typecheck/build réussis et `git diff --check` sans erreur.
 
 ### 2026-09-20 — Batch 11 Frontend cockpit
 
 **État : intégré sur `main` au commit fonctionnel `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7` (`feat: add frontend paper cockpit`).**
 
-- Remplacement du cockpit Batch 01 par une interface de contrôle/observation PAPER.
-- Client REST centralisé, types alignés sur Batch 10, polling borné, états 404/503/offline, Start/Stop via FastAPI uniquement.
-- Aucun appel OpenAI/Kraken direct, aucune logique Risk, aucun WebSocket, aucun LIVE.
+Cockpit Next.js/shadcn, client REST centralisé, polling borné, états 404/503/offline, Start/Stop via FastAPI uniquement, aucune logique stratégique frontend.
 
 ### 2026-09-20 — Batch 10 API FastAPI de contrôle/observation
 
-**État : intégré sur `main` au commit fonctionnel `e6bcfd4dd345c934769b2f90fa7822232a80dd80`, avec commit documentaire post-intégration `f29c51545cd63763ea9fefbfd37d441e52850609`.**
+**État : intégré sur `main` au commit fonctionnel `e6bcfd4dd345c934769b2f90fa7822232a80dd80`.**
 
 Façade REST, query service durable, lifecycle moteur injecté, erreurs sanitizées, aucune migration/API Kraken privée/LIVE.
 

@@ -2,6 +2,7 @@
 
 from ai_spot_trader.domain.enums import (
     ExecutionMode,
+    ExperimentVariable,
     LLMModel,
     RiskDecision,
     RiskLimit,
@@ -11,8 +12,10 @@ from ai_spot_trader.domain.enums import (
 from ai_spot_trader.domain.experiments import (
     AGGRESSIVENESS_MAPPING_VERSION,
     EXPERIMENT_PROTOCOL_VERSION,
+    MODEL_EXPERIMENT_PROTOCOL_VERSION,
     aggressiveness_context,
     comparison_identity,
+    model_comparison_identity,
     validate_experiment_manifest_digest,
 )
 from ai_spot_trader.domain.models import (
@@ -44,6 +47,7 @@ from ai_spot_trader.domain.symbols import parse_canonical_symbol
 __all__ = [
     "AGGRESSIVENESS_MAPPING_VERSION",
     "EXPERIMENT_PROTOCOL_VERSION",
+    "MODEL_EXPERIMENT_PROTOCOL_VERSION",
     "AgentInput",
     "AggressivenessContext",
     "AssetBalance",
@@ -55,6 +59,7 @@ __all__ = [
     "ExperimentManifest",
     "ExperimentPaperCostSnapshot",
     "ExperimentRiskPolicySnapshot",
+    "ExperimentVariable",
     "Fill",
     "LLMModel",
     "LLMProvider",
@@ -72,6 +77,7 @@ __all__ = [
     "TradingAction",
     "aggressiveness_context",
     "comparison_identity",
+    "model_comparison_identity",
     "parse_canonical_symbol",
     "validate_experiment_manifest_digest",
 ]

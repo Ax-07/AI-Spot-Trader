@@ -4,7 +4,7 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut :** le **Batch 13 — Expérimentation agressivité 1–10 est intégré** sur GitHub `main` au commit fonctionnel `1747beb5efd1fe9763bc9b2d23f3a115575daaec` (`feat: add versioned aggressiveness experiments`), après validation locale complète et push confirmé. Le Batch 12 reste référencé par `3f39999736b6fc3800ecfd36ddee0253c734d25d`.
+> **Statut :** le **Batch 13 — Expérimentation agressivité 1–10 est intégré** sur GitHub `main` au commit fonctionnel `1747beb5efd1fe9763bc9b2d23f3a115575daaec` (`feat: add versioned aggressiveness experiments`), avec le commit documentaire `655b66b639c4e9c1803cef3920c9a96e7dd16055` comme HEAD GitHub resynchronisé avant Batch 14. Le **Batch 14 — Comparaison contrôlée GPT-5.6 Luna / GPT-5.6 Sol est préparé localement mais non intégré** tant que la validation locale complète, le commit, le push et le working tree propre ne sont pas confirmés.
 
 ## Principes
 
@@ -101,6 +101,16 @@ Le prompt Agent devient `agent-strategy-v2` afin de rendre cette frontière expl
 
 Les comparaisons d'agressivité réutilisent directement les rapports `paper-analytics-v1` du Batch 12 : aucune métrique n'est recalculée avec une formule parallèle et aucun classement automatique n'est produit.
 
+### Comparaison Luna / Sol — Batch 14 préparé
+
+Le patch Batch 14 conserve `paper-experiment-v1` pour l'axe agressivité et introduit `paper-experiment-v2` pour une expérience dont **le modèle LLM est l'unique variable contrôlée**.
+
+`paper-experiment-v2` ajoute une identité de groupe et une identité de répétition : `comparison_variable = LLM_MODEL`, `experiment_group_digest`, `replicate_index` et `replicate_count`. Pour une comparaison Luna/Sol, `source_digest` devient obligatoire afin d'identifier un dataset/snapshot figé. Le digest de groupe inclut agressivité, prompt, univers, `RiskPolicy`, coûts PAPER, source/dataset, fenêtre, version analytics et nombre de répétitions, mais exclut volontairement le modèle et l'index de répétition. Le digest complet du manifeste reste l'identité durable de chaque run.
+
+`compare_model_runs(...)` exige un protocole apparié complet : toutes les répétitions déclarées doivent être présentes pour **Luna et Sol**. Il réutilise directement `PaperAnalyticsReport` (`paper-analytics-v1`) et expose factuellement P&L brut/net, coûts, drawdown, exposition, trades BUY/SELL, HOLD, REJECT, MODIFY, FAILED, points cumulés et séries quotidiennes. Il ne produit ni score composite, ni classement, ni « meilleur modèle » automatique.
+
+Le support de plusieurs répétitions sert à conserver la dispersion observable du LLM sans prétendre à un déterminisme fournisseur. Aucune sélection post-hoc de répétitions n'est autorisée par le comparateur apparié.
+
 ## Trading PAPER canonique
 
 `TradingCycleRunner.run_cycle()` exécute exactement un cycle et `TradingEngine` répète cette primitive séquentiellement. Un seul `MarketState` est partagé entre Agent, Risk et Broker pour le cycle, et un seul `PortfolioState` pré-cycle est partagé entre Agent et Risk.
@@ -110,7 +120,7 @@ Les comparaisons d'agressivité réutilisent directement les rapports `paper-ana
 - MODIFY utilise exactement la quantité autorisée par Risk.
 - ALLOW transmet l'intent produit par Risk.
 - Les erreurs Market/Portfolio/Agent/Risk/Broker restent des cycles `FAILED`, jamais des HOLD synthétiques.
-- Le Batch 13 n'ajoute aucun chemin d'exécution et ne permet jamais à l'agressivité de produire un `ExecutionIntent`.
+- Le changement Luna/Sol ne modifie aucun chemin d'exécution : l'Agent continue de produire un `DecisionCandidate`, jamais un `ExecutionIntent`.
 
 ## Persistance durable — Batch 09 intégré
 
@@ -126,7 +136,7 @@ Le schéma `0001_audit_journal` conserve :
 
 Le graphe est transactionnel et idempotent par `cycle_id`. La persistance ne garantit pas encore un exactly-once global entre la mutation du ledger PAPER mémoire et le commit PostgreSQL ; la reconstruction/réconciliation après crash reste différée.
 
-Le Batch 13 n'ajoute pas de table ni de migration : `AgentInput` est déjà persisté intégralement en JSON/JSONB, donc le mapping et le manifeste expérimental éventuel deviennent automatiquement des faits durables et participent au `result_digest` du cycle.
+Les Batches 13/14 n'ajoutent pas de table ni de migration : `AgentInput` est déjà persisté intégralement en JSON/JSONB, donc le mapping, le manifeste, l'identité de groupe et les répétitions deviennent des faits durables et participent au `result_digest` du cycle.
 
 ## API FastAPI — Batch 10 intégré
 
@@ -147,21 +157,21 @@ Le Batch 10 expose une façade REST versionnée `/api/v1` sans seconde logique d
 - `GET /api/v1/market/latest`
 - `GET /api/v1/analytics`
 
-Le Batch 13 n'ajoute aucun endpoint : le protocole expérimental reste une responsabilité backend/domaine, et le cockpit demeure une surface d'observation.
+Le Batch 14 n'ajoute aucun endpoint : le protocole expérimental reste une responsabilité backend/domaine, et le cockpit demeure une surface d'observation.
 
 ## Frontend cockpit — Batch 11 intégré
 
-Le cockpit affiche l'état backend/moteur, portefeuille, marché durable, cycles, décisions, Risk, exécutions/fills, erreurs sanitizées et analytics PAPER. Il ne contient aucune logique Agent/Risk/Broker et n'est pas modifié au Batch 13.
+Le cockpit affiche l'état backend/moteur, portefeuille, marché durable, cycles, décisions, Risk, exécutions/fills, erreurs sanitizées et analytics PAPER. Il ne contient aucune logique Agent/Risk/Broker et n'est pas modifié au Batch 14.
 
 ## Analytics PAPER — Batch 12 intégré
 
 Le reducer analytics reste **pur, déterministe et en lecture seule** au-dessus du journal durable. Les coûts sont lus dans les fills persistés, chaque point est valorisé au `MarketState` durable du même cycle et la reproductibilité des métriques repose sur `paper-analytics-v1` + digest des `result_digest`.
 
-Le Batch 13 réutilise ces rapports tels quels pour comparer factuellement les niveaux : P&L brut/net, coûts, drawdown, exposition, trades, HOLD, REJECT, MODIFY, FAILED et séries quotidiennes/cumulées.
+Les Batches 13/14 réutilisent ces rapports tels quels pour comparer factuellement l'axe expérimental autorisé : P&L brut/net, coûts, drawdown, exposition, trades, HOLD, REJECT, MODIFY, FAILED et séries quotidiennes/cumulées.
 
-## Validation Batch 13
+## Validation
 
-Validation locale finale confirmée :
+### Batch 13 intégré
 
 ```text
 Python                                  : 3.13.14
@@ -173,7 +183,9 @@ commit/push                             : 1747beb5efd1fe9763bc9b2d23f3a115575daa
 working tree après push                 : propre
 ```
 
-Validation de préparation également exécutée : 47 tests ciblés, `py_compile` réussi et smoke `TradingCycleRunner` niveau 10 confirmant REJECT Risk avec Broker non appelé. Aucun test frontend additionnel n'était requis puisque le frontend n'a pas été modifié.
+### Batch 14 préparé, non intégré
+
+Dans l'environnement de préparation ChatGPT, les tests ciblés du protocole/comparateur ont été exécutés dans un arbre local reconstruit depuis GitHub `main` : **34 tests passés** et `py_compile` réussi sur les fichiers modifiés. `ruff` et `mypy` ne sont pas installés dans cet environnement et la suite complète `pytest backend` n'y est pas disponible comme validation d'un checkout réel. La validation locale complète reste donc obligatoire avant commit/push.
 
 ## Sécurité
 

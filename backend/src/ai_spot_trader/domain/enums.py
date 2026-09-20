@@ -67,3 +67,9 @@ class LLMModel(StrEnum):
 
     LUNA = "gpt-5.6-luna"
     SOL = "gpt-5.6-sol"
+
+
+class ExperimentVariable(StrEnum):
+    """Single controlled variable intentionally changed inside an experiment group."""
+
+    LLM_MODEL = "LLM_MODEL"

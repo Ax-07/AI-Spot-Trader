@@ -15,7 +15,13 @@ from ai_spot_trader.analytics.paper import (
     build_paper_analytics_report,
 )
 from ai_spot_trader.broker.pricing import PaperExecutionCostModel
-from ai_spot_trader.domain.enums import LLMModel, RiskDecision, RiskReason, TradingAction
+from ai_spot_trader.domain.enums import (
+    ExperimentVariable,
+    LLMModel,
+    RiskDecision,
+    RiskReason,
+    TradingAction,
+)
 from ai_spot_trader.domain.models import (
     AgentInput,
     AssetBalance,
@@ -28,17 +34,21 @@ from ai_spot_trader.domain.models import (
 )
 from ai_spot_trader.experiments import (
     AGGRESSIVENESS_MAPPING_VERSION,
+    MODEL_EXPERIMENT_PROTOCOL_VERSION,
     ExperimentComparisonError,
     ExperimentRun,
     aggressiveness_context,
     build_experiment_manifest,
+    build_model_experiment_manifest,
     compare_aggressiveness_runs,
+    compare_model_runs,
     validate_experiment_manifest_digest,
 )
 from ai_spot_trader.risk.engine import RiskEngine, RiskResult
 from ai_spot_trader.risk.policy import RiskPolicy
 
 NOW = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
+END = datetime(2026, 9, 20, 13, 0, tzinfo=UTC)
 CYCLE_ID = UUID("10000000-0000-0000-0000-000000000001")
 DECISION_ID = UUID("20000000-0000-0000-0000-000000000002")
 RISK_ID = UUID("30000000-0000-0000-0000-000000000003")
@@ -51,11 +61,16 @@ class FixedClock:
         return NOW
 
 
-def costs() -> PaperExecutionCostModel:
+def costs(
+    *,
+    fee_rate: str = "0.001",
+    spread_bps: str = "2",
+    slippage_bps: str = "3",
+) -> PaperExecutionCostModel:
     return PaperExecutionCostModel(
-        fee_rate=Decimal("0.001"),
-        spread_bps=Decimal("2"),
-        slippage_bps=Decimal("3"),
+        fee_rate=Decimal(fee_rate),
+        spread_bps=Decimal(spread_bps),
+        slippage_bps=Decimal(slippage_bps),
     )
 
 
@@ -78,7 +93,40 @@ def manifest(level: int, *, risk_policy: RiskPolicy | None = None) -> Experiment
         source_id="fixture-market-v1",
         source_digest="a" * 64,
         window_start=NOW,
-        window_end=datetime(2026, 9, 20, 13, 0, tzinfo=UTC),
+        window_end=END,
+    )
+
+
+def model_manifest(
+    model: LLMModel,
+    *,
+    replicate_index: int = 1,
+    replicate_count: int = 1,
+    aggressiveness: int = 5,
+    prompt_version: str = AGENT_PROMPT_VERSION,
+    risk_policy: RiskPolicy | None = None,
+    paper_costs: PaperExecutionCostModel | None = None,
+    source_id: str = "frozen-replay-v1",
+    source_digest: str = "d" * 64,
+    universe: tuple[str, ...] = ("BTC/EUR",),
+    window_start: datetime | None = NOW,
+    window_end: datetime | None = END,
+    analytics_version: str = ANALYTICS_VERSION,
+) -> ExperimentManifest:
+    return build_model_experiment_manifest(
+        aggressiveness=aggressiveness,
+        llm_model=model,
+        prompt_version=prompt_version,
+        universe=universe,
+        risk_policy=risk_policy or policy(),
+        paper_costs=paper_costs or costs(),
+        source_id=source_id,
+        source_digest=source_digest,
+        replicate_index=replicate_index,
+        replicate_count=replicate_count,
+        window_start=window_start,
+        window_end=window_end,
+        analytics_version=analytics_version,
     )
 
 
@@ -178,6 +226,10 @@ def test_same_configuration_produces_same_manifest_digest() -> None:
 
     assert left == right
     assert left.experiment_digest == right.experiment_digest
+    assert (
+        left.experiment_digest
+        == "6e4b31942703ea04bee0aeac9fd949a14608b19e8eb8b4f0ed2dba85acc28159"
+    )
     validate_experiment_manifest_digest(left)
 
 
@@ -393,7 +445,7 @@ def test_comparison_rejects_different_source_facts() -> None:
         source_id="other-fixture",
         source_digest="b" * 64,
         window_start=NOW,
-        window_end=datetime(2026, 9, 20, 13, 0, tzinfo=UTC),
+        window_end=END,
     )
 
     with pytest.raises(ExperimentComparisonError, match="controlled fields"):
@@ -430,4 +482,290 @@ def test_manifest_digest_is_based_on_normalized_values() -> None:
     assert value.prompt_version == AGENT_PROMPT_VERSION
     assert value.source_id == "normalized-fixture"
     assert value.window_start == NOW
-    assert value.window_end == datetime(2026, 9, 20, 13, 0, tzinfo=UTC)
+    assert value.window_end == END
+
+
+# Batch 14 — controlled Luna/Sol comparison.
+
+
+def test_luna_and_sol_are_representable_in_same_model_protocol() -> None:
+    luna = model_manifest(LLMModel.LUNA)
+    sol = model_manifest(LLMModel.SOL)
+
+    assert luna.protocol_version == MODEL_EXPERIMENT_PROTOCOL_VERSION
+    assert sol.protocol_version == MODEL_EXPERIMENT_PROTOCOL_VERSION
+    assert luna.comparison_variable is ExperimentVariable.LLM_MODEL
+    assert luna.experiment_group_digest == sol.experiment_group_digest
+    assert luna.experiment_digest != sol.experiment_digest
+    validate_experiment_manifest_digest(luna)
+    validate_experiment_manifest_digest(sol)
+
+
+def test_identical_runs_outside_model_are_comparable_factually() -> None:
+    comparison = compare_model_runs(
+        (
+            ExperimentRun(
+                manifest=model_manifest(LLMModel.SOL),
+                analytics=report(net_pnl="7", source_digest="7" * 64),
+            ),
+            ExperimentRun(
+                manifest=model_manifest(LLMModel.LUNA),
+                analytics=report(net_pnl="5", source_digest="5" * 64),
+            ),
+        )
+    )
+
+    assert comparison.replicate_count == 1
+    assert comparison.analytics_version == ANALYTICS_VERSION
+    assert {row.llm_model for row in comparison.rows} == {LLMModel.LUNA, LLMModel.SOL}
+    assert {row.net_pnl for row in comparison.rows} == {Decimal("5"), Decimal("7")}
+    assert all(row.trade_count == 2 for row in comparison.rows)
+    assert all(row.hold_count == 0 for row in comparison.rows)
+    assert all(row.reject_count == 1 for row in comparison.rows)
+    assert all(row.modify_count == 1 for row in comparison.rows)
+    assert all(row.failed_cycle_count == 1 for row in comparison.rows)
+
+
+def _assert_model_comparison_rejected(left: ExperimentManifest, right: ExperimentManifest) -> None:
+    with pytest.raises(ExperimentComparisonError, match="controlled fields"):
+        compare_model_runs(
+            (
+                ExperimentRun(left, report(net_pnl="1", source_digest="1" * 64)),
+                ExperimentRun(right, report(net_pnl="2", source_digest="2" * 64)),
+            )
+        )
+
+
+def test_model_comparison_rejects_changed_aggressiveness() -> None:
+    _assert_model_comparison_rejected(
+        model_manifest(LLMModel.LUNA, aggressiveness=5),
+        model_manifest(LLMModel.SOL, aggressiveness=6),
+    )
+
+
+def test_model_comparison_rejects_changed_prompt() -> None:
+    _assert_model_comparison_rejected(
+        model_manifest(LLMModel.LUNA),
+        model_manifest(LLMModel.SOL, prompt_version="agent-strategy-other"),
+    )
+
+
+def test_model_comparison_rejects_changed_risk_policy() -> None:
+    _assert_model_comparison_rejected(
+        model_manifest(LLMModel.LUNA),
+        model_manifest(LLMModel.SOL, risk_policy=policy(max_notional="50")),
+    )
+
+
+def test_model_comparison_rejects_changed_paper_costs() -> None:
+    _assert_model_comparison_rejected(
+        model_manifest(LLMModel.LUNA),
+        model_manifest(LLMModel.SOL, paper_costs=costs(fee_rate="0.002")),
+    )
+
+
+def test_model_comparison_rejects_changed_dataset_source() -> None:
+    _assert_model_comparison_rejected(
+        model_manifest(LLMModel.LUNA),
+        model_manifest(LLMModel.SOL, source_digest="e" * 64),
+    )
+
+
+@pytest.mark.parametrize(
+    "sol",
+    [
+        {"universe": ("ETH/EUR",)},
+        {
+            "window_start": datetime(2026, 9, 20, 12, 30, tzinfo=UTC),
+            "window_end": END,
+        },
+        {"analytics_version": "paper-analytics-v2"},
+    ],
+)
+def test_model_comparison_rejects_changed_universe_window_or_analytics_version(
+    sol: dict[str, object],
+) -> None:
+    _assert_model_comparison_rejected(
+        model_manifest(LLMModel.LUNA),
+        model_manifest(LLMModel.SOL, **sol),  # type: ignore[arg-type]
+    )
+
+
+def test_model_protocol_requires_frozen_source_digest() -> None:
+    with pytest.raises(ValueError, match="frozen source_digest"):
+        build_model_experiment_manifest(
+            aggressiveness=5,
+            llm_model=LLMModel.LUNA,
+            prompt_version=AGENT_PROMPT_VERSION,
+            universe=("BTC/EUR",),
+            risk_policy=policy(),
+            paper_costs=costs(),
+            source_id="unfrozen",
+            source_digest=None,  # type: ignore[arg-type]
+        )
+
+
+def test_model_repetitions_are_complete_paired_and_not_post_hoc_subset() -> None:
+    runs = tuple(
+        ExperimentRun(
+            manifest=model_manifest(model, replicate_index=index, replicate_count=2),
+            analytics=report(
+                net_pnl=str(index + (0 if model is LLMModel.LUNA else 1)),
+                source_digest=f"{index + (0 if model is LLMModel.LUNA else 2):064x}",
+            ),
+        )
+        for index in (1, 2)
+        for model in (LLMModel.LUNA, LLMModel.SOL)
+    )
+
+    comparison = compare_model_runs(runs)
+    assert comparison.replicate_count == 2
+    assert [(row.replicate_index, row.llm_model) for row in comparison.rows] == [
+        (1, LLMModel.LUNA),
+        (1, LLMModel.SOL),
+        (2, LLMModel.LUNA),
+        (2, LLMModel.SOL),
+    ]
+
+    with pytest.raises(ExperimentComparisonError, match="every declared replicate"):
+        compare_model_runs(runs[:-1])
+
+
+def test_model_run_and_group_digests_are_deterministic() -> None:
+    left = model_manifest(LLMModel.LUNA, replicate_index=2, replicate_count=3)
+    right = model_manifest(LLMModel.LUNA, replicate_index=2, replicate_count=3)
+    other_replicate = model_manifest(LLMModel.LUNA, replicate_index=3, replicate_count=3)
+    sol_same_group = model_manifest(LLMModel.SOL, replicate_index=2, replicate_count=3)
+
+    assert left == right
+    assert left.experiment_digest == right.experiment_digest
+    assert left.experiment_group_digest == right.experiment_group_digest
+    assert left.experiment_digest != other_replicate.experiment_digest
+    assert left.experiment_group_digest == other_replicate.experiment_group_digest
+    assert left.experiment_group_digest == sol_same_group.experiment_group_digest
+
+
+def test_model_experiment_identity_round_trips_through_durable_agent_input() -> None:
+    experiment = model_manifest(LLMModel.SOL, replicate_index=2, replicate_count=3)
+    value = AgentInput(
+        cycle_id=CYCLE_ID,
+        created_at=NOW,
+        market_state=market(),
+        portfolio_state=portfolio(),
+        aggressiveness=experiment.aggressiveness.level,
+        aggressiveness_context=experiment.aggressiveness,
+        experiment_manifest=experiment,
+    )
+
+    restored = AgentInput.model_validate_json(value.model_dump_json())
+
+    assert restored == value
+    assert restored.experiment_manifest is not None
+    assert restored.experiment_manifest.experiment_digest == experiment.experiment_digest
+    assert (
+        restored.experiment_manifest.experiment_group_digest
+        == experiment.experiment_group_digest
+    )
+    assert restored.experiment_manifest.replicate_index == 2
+    assert restored.experiment_manifest.replicate_count == 3
+
+
+def test_old_batch_13_manifest_payload_without_batch_14_fields_remains_readable() -> None:
+    original = manifest(5)
+    old_payload = original.model_dump(
+        mode="json",
+        exclude={
+            "comparison_variable",
+            "experiment_group_digest",
+            "replicate_index",
+            "replicate_count",
+        },
+    )
+
+    restored = ExperimentManifest.model_validate_json(json.dumps(old_payload))
+
+    assert restored.experiment_digest == original.experiment_digest
+    assert restored.comparison_variable is None
+    validate_experiment_manifest_digest(restored)
+
+
+def test_batch_12_analytics_accepts_persisted_model_experiment_manifest() -> None:
+    experiment = model_manifest(LLMModel.LUNA)
+    agent_input = AgentInput(
+        cycle_id=CYCLE_ID,
+        created_at=NOW,
+        market_state=market(),
+        portfolio_state=portfolio(),
+        aggressiveness=5,
+        aggressiveness_context=experiment.aggressiveness,
+        experiment_manifest=experiment,
+    )
+    decision = DecisionCandidate(
+        decision_id=DECISION_ID,
+        cycle_id=CYCLE_ID,
+        created_at=NOW,
+        action=TradingAction.HOLD,
+        symbol="BTC/EUR",
+        proposed_quantity=None,
+    )
+    risk = RiskAssessment(
+        risk_assessment_id=RISK_ID,
+        cycle_id=CYCLE_ID,
+        decision_id=DECISION_ID,
+        assessed_at=NOW,
+        status=RiskDecision.ALLOW,
+        requested_quantity=None,
+        authorized_quantity=None,
+        reasons=(RiskReason.HOLD_NO_EXECUTION,),
+    )
+    fact = PaperAnalyticsCycleFact(
+        cycle_id=CYCLE_ID,
+        status="COMPLETED",
+        recorded_at=NOW,
+        result_digest="9" * 64,
+        agent_input_payload=agent_input.model_dump(mode="json"),
+        decision_payload=decision.model_dump(mode="json"),
+        risk_assessment_payload=risk.model_dump(mode="json"),
+        fill_payloads=(),
+        portfolio_after_payload=None,
+    )
+
+    analytics = build_paper_analytics_report((fact,))
+
+    assert analytics.calculation_version == ANALYTICS_VERSION
+    assert analytics.summary.hold_count == 1
+    assert analytics.summary.failed_cycle_count == 0
+
+
+def test_risk_result_is_identical_regardless_of_manifest_model_identity() -> None:
+    sell_too_much = DecisionCandidate(
+        decision_id=DECISION_ID,
+        cycle_id=CYCLE_ID,
+        created_at=NOW,
+        action=TradingAction.SELL,
+        symbol="BTC/EUR",
+        proposed_quantity=Decimal("3"),
+    )
+    outcomes = []
+
+    for model in (LLMModel.LUNA, LLMModel.SOL):
+        experiment = model_manifest(model)
+        validate_experiment_manifest_digest(experiment)
+        engine = RiskEngine(
+            policy=policy(),
+            cost_model=costs(),
+            clock=FixedClock(),
+            risk_assessment_id_factory=lambda: RISK_ID,
+            execution_id_factory=lambda: UUID("60000000-0000-0000-0000-000000000006"),
+        )
+        outcomes.append(
+            engine.evaluate(
+                decision=sell_too_much,
+                market_state=market(),
+                portfolio_state=portfolio(),
+            )
+        )
+
+    assert outcomes[0] == outcomes[1]
+    assert outcomes[0].assessment.status is RiskDecision.REJECT
+    assert outcomes[0].execution_intent is None
