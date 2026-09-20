@@ -2,7 +2,7 @@
 
 ## 1. Objet
 
-Ce document décrit l'architecture technique courante d'AI Spot Trader, incluant le Batch 10 intégré et le patch Batch 11 proposé pour validation. Les choix produit non figés restent explicitement séparés de l'architecture.
+Ce document décrit l'architecture technique courante d'AI Spot Trader, incluant les Batches 10 et 11 intégrés. Les choix produit non figés restent explicitement séparés de l'architecture.
 
 ---
 
@@ -274,7 +274,7 @@ Les migrations restent gérées exclusivement par Alembic. Le Batch 10 ne néces
 
 ## 13. WebSocket
 
-Aucun WebSocket n'est introduit au Batch 10 ni dans le patch Batch 11.
+Aucun WebSocket n'est introduit au Batch 10 ni au Batch 11.
 
 Motifs :
 
@@ -287,9 +287,9 @@ Un WebSocket sera réévalué lorsque le besoin de fréquence, le modèle d'abon
 
 ---
 
-## 14. Frontend cockpit — Batch 11 proposé
+## 14. Frontend cockpit — Batch 11 intégré
 
-Découpage proposé :
+Découpage intégré :
 
 ```text
 frontend/src/
@@ -407,16 +407,16 @@ Un test séparé du query service utilise `sqlite+aiosqlite:///:memory:` pour v�
 
 Le startup FastAPI ne doit déclencher ni cycle, ni réseau, ni migration.
 
-Le frontend Batch 11 ne doit exiger aucun backend actif pour compiler. Les validations attendues sont :
+Le frontend Batch 11 ne nécessite aucun backend actif pour compiler. Les validations d'intégration confirmées sont :
 
 ```text
-pnpm --dir frontend lint
-pnpm --dir frontend typecheck
-pnpm --dir frontend build
-git diff --check
+pnpm --dir frontend lint       réussi
+pnpm --dir frontend typecheck  réussi
+pnpm --dir frontend build      réussi
+git diff --check               aucune erreur ; warnings LF -> CRLF uniquement
 ```
 
-Aucune requête réelle OpenAI ou Kraken n'est nécessaire.
+Le smoke test runtime a également validé les états backend accessible, moteur non configuré, données absentes/503 et backend hors ligne. Commit fonctionnel intégré : `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`. Aucune requête réelle OpenAI ou Kraken n'est nécessaire.
 
 ---
 

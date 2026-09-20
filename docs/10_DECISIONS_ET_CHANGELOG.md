@@ -188,31 +188,31 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 
 ---
 
-## 4. Décisions proposées au Batch 11
+## 4. Décisions acceptées au Batch 11
 
-Ces décisions accompagnent le patch Batch 11. Elles ne deviennent la référence intégrée qu'après validation locale puis commit/push confirmé.
+Ces décisions sont intégrées avec le Batch 11 au commit fonctionnel `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`, après validation locale et smoke test runtime.
 
 ### ADR-053 — Rewrite Next.js same-origin vers FastAPI
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - Le navigateur appelle uniquement `/backend/*` sur l'origine Next.js.
 - Next.js réécrit ces appels vers `AI_SPOT_TRADER_BACKEND_URL`, par défaut `http://127.0.0.1:8000`.
 - Aucune modification CORS backend n'est nécessaire pour le développement standard.
 - L'adresse backend n'est pas exposée via une variable `NEXT_PUBLIC_*`.
 
 ### ADR-054 — Polling cockpit borné et purement présentatif
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - Le cockpit relit les ressources REST toutes les 10 secondes lorsque l'onglet est visible.
 - Le polling s'arrête implicitement lorsque l'onglet n'est pas visible et ne pilote jamais la cadence du moteur.
 - Aucun WebSocket n'est ajouté au Batch 11.
 
 ### ADR-055 — Types frontend alignés sur les contrats HTTP Batch 10
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - Les types TypeScript du cockpit reflètent `api/schemas.py` sans inventer de champ métier.
 - UUID/timestamps restent des chaînes JSON et les `Decimal` sérialisés restent des chaînes côté frontend.
 - Le frontend se limite au formatage d'affichage.
 
 ### ADR-056 — États d'indisponibilité explicites dans le cockpit
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - 404 = donnée encore absente ; 503 = ressource non configurée/indisponible ; échec réseau = backend inaccessible.
 - Les listes vides restent des états métier normaux.
 - Les boutons Start/Stop sont verrouillés pendant une commande et désactivés lorsque l'état ne l'autorise pas.
@@ -259,19 +259,29 @@ Ces décisions accompagnent le patch Batch 11. Elles ne deviennent la référenc
 
 ## 7. Changelog
 
-### 2026-09-20 — Batch 11 Frontend cockpit — patch préparé
+### 2026-09-20 — Batch 11 Frontend cockpit
 
-**État : non intégré ; validation locale, commit et push encore requis.**
+**État : intégré sur `main` au commit fonctionnel `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7` (`feat: add frontend paper cockpit`).**
 
-- Resynchronisation confirmée sur GitHub `main` au HEAD `f29c51545cd63763ea9fefbfd37d441e52850609` (`docs: record Batch 10 integration`).
-- Correction de la référence courte qui indiquait encore `e6bcfd4` comme HEAD au lieu du commit documentaire post-intégration.
+- Resynchronisation initiale confirmée sur GitHub `main` au HEAD `f29c51545cd63763ea9fefbfd37d441e52850609` (`docs: record Batch 10 integration`).
 - Remplacement du cockpit Batch 01 par une interface de contrôle/observation PAPER.
 - Ajout d'un client REST centralisé et de types TypeScript alignés sur les schémas HTTP Batch 10.
 - Ajout du rewrite `/backend/*` vers une URL FastAPI configurable côté serveur Next.js.
-- Ajout du polling d'affichage borné, de la gestion 404/503/offline et de la protection des commandes Start/Stop.
-- Ajout des vues portefeuille, marché durable, cycles, décisions, Risk, executions/fills et dernière erreur.
-- Aucun appel OpenAI/Kraken, aucune logique Risk, aucun WebSocket, aucun LIVE et aucune modification backend.
-- Les validations `pnpm --dir frontend lint`, `typecheck` et `build` restent à exécuter localement avant intégration.
+- Polling d'affichage borné à 10 secondes, suspendu onglet masqué, sans rôle d'ordonnanceur.
+- Gestion explicite des états 404, 503, listes vides, backend hors ligne et erreurs API.
+- Start/Stop uniquement via les routes lifecycle Batch 10, avec protection contre les doubles clics.
+- Vues intégrées : portefeuille, marché durable, cycles, décisions, Risk, executions/fills et dernière erreur.
+- Aucun appel OpenAI/Kraken direct, aucune logique Risk, aucun WebSocket, aucun LIVE et aucune modification backend.
+
+Validation finale locale confirmée :
+
+- `pnpm --dir frontend lint` : **réussi** ;
+- `pnpm --dir frontend typecheck` : **réussi** ;
+- `pnpm --dir frontend build` : **réussi**, Next.js 16.3.3 ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- smoke test runtime confirmé pour backend accessible, moteur non configuré, données vides/503 et backend hors ligne ;
+- commit/push confirmé sur `main` : `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7` ;
+- working tree confirmé propre après push.
 
 ### 2026-09-20 — Batch 10 API FastAPI de contrôle/observation
 

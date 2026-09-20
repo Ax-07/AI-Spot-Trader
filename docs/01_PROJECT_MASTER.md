@@ -59,7 +59,7 @@ Le Batch 08 réalise le point 9. Le Batch 09 réalise le socle durable du point 
 
 V1 ajoute le cockpit Next.js/shadcn, historique, analytics P&L/drawdown/coûts/exposition, replay reproductible, expérimentations d'agressivité et comparaison Luna/Sol. Le LIVE n'est pas une condition de V1.
 
-Le Batch 11 fournit le socle cockpit comme patch à valider localement ; il n'est pas encore intégré tant que la validation, le commit et le push ne sont pas confirmés.
+Le Batch 11 fournit le socle cockpit et est **intégré sur `main`** au commit `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7` après validation frontend et smoke test runtime.
 
 ---
 
@@ -448,9 +448,9 @@ Aucun WebSocket n'est ajouté. Tant qu'il n'existe pas de bus d'événements can
 
 ---
 
-## 15. Frontend cockpit — Batch 11 proposé pour validation
+## 15. Frontend cockpit — Batch 11 intégré
 
-Le Batch 11 transforme le bootstrap Next.js en cockpit PAPER utilisable, sans modifier les responsabilités backend.
+Le Batch 11 transforme le bootstrap Next.js en cockpit PAPER utilisable, sans modifier les responsabilités backend. Il est intégré sur `main` au commit fonctionnel `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`.
 
 ### Communication frontend/backend
 
@@ -576,13 +576,14 @@ Validation finale Batch 10 confirmée localement avant intégration :
 - commit fonctionnel confirmé sur `main` : `e6bcfd4dd345c934769b2f90fa7822232a80dd80` ;
 - HEAD documentaire audité : `f29c51545cd63763ea9fefbfd37d441e52850609`.
 
-Validation Batch 11 requise avant intégration :
+Validation Batch 11 confirmée avant intégration :
 
-- `pnpm --dir frontend lint` ;
-- `pnpm --dir frontend typecheck` ;
-- `pnpm --dir frontend build` ;
-- `git diff --check` ;
-- vérification manuelle des états backend disponible/indisponible, moteur non configuré, audit vide/503 et données PAPER présentes.
+- `pnpm --dir frontend lint` : **réussi** ;
+- `pnpm --dir frontend typecheck` : **réussi** ;
+- `pnpm --dir frontend build` : **réussi** avec Next.js 16.3.3 ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- smoke test runtime confirmé pour backend disponible, moteur non configuré, ressources vides/503 et backend hors ligne ;
+- commit/push confirmé sur `main` : `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`.
 
 ---
 

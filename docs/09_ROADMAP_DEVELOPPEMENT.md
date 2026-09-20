@@ -134,13 +134,13 @@ Fournir au cockpit une façade REST cohérente sans déplacer l'autorité du bac
 
 ## Batch 11 — Frontend cockpit
 
-**État : patch préparé, à valider localement, non intégré.**
+**État : intégré.**
 
 ### Objectif
 
 Remplacer le bootstrap Batch 01 par un cockpit Next.js réellement utilisable, exclusivement client des interfaces Batch 10.
 
-### Périmètre proposé
+### Périmètre intégré
 
 - état backend et audit store ;
 - état moteur et commandes Start/Stop ;
@@ -154,7 +154,7 @@ Remplacer le bootstrap Batch 01 par un cockpit Next.js réellement utilisable, e
 - gestion explicite des 404, 503, listes vides, backend hors ligne et erreurs API génériques ;
 - responsive desktop/mobile sans librairie de graphiques.
 
-### Architecture retenue dans le patch
+### Architecture retenue
 
 - types TypeScript alignés sur `api/schemas.py` ;
 - client HTTP centralisé sous `frontend/src/lib/api/` ;
@@ -165,16 +165,14 @@ Remplacer le bootstrap Batch 01 par un cockpit Next.js réellement utilisable, e
 - aucune logique Agent/Risk/Broker/market data dans le frontend ;
 - aucun WebSocket.
 
-### Validation requise avant intégration
+### Validation d'intégration
 
-```powershell
-pnpm --dir frontend lint
-pnpm --dir frontend typecheck
-pnpm --dir frontend build
-git diff --check
-```
-
-Une validation manuelle avec backend configuré et non configuré est également requise avant de marquer le batch intégré.
+- `pnpm --dir frontend lint` : **réussi** ;
+- `pnpm --dir frontend typecheck` : **réussi** ;
+- `pnpm --dir frontend build` : **réussi** avec Next.js 16.3.3 ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- smoke test runtime : backend accessible, moteur non configuré, données vides/503 et backend hors ligne gérés proprement ;
+- commit/push confirmé : `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`.
 
 ---
 

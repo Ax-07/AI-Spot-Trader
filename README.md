@@ -4,7 +4,7 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut :** le Batch 10 — API FastAPI de contrôle et d'observation est **intégré sur `main`**. Le HEAD GitHub audité est `f29c51545cd63763ea9fefbfd37d441e52850609` (`docs: record Batch 10 integration`) et le commit fonctionnel Batch 10 est `e6bcfd4dd345c934769b2f90fa7822232a80dd80`. Le Batch 11 — Frontend cockpit est **préparé dans le patch courant mais n'est pas intégré** tant que la validation locale, le commit et le push ne sont pas confirmés.
+> **Statut :** le Batch 11 — Frontend cockpit est **intégré sur `main`** au commit fonctionnel `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7` (`feat: add frontend paper cockpit`). Les validations frontend et le smoke test runtime ont été confirmés le 20 septembre 2026. La prochaine étape est le Batch 12 — Analytics et expérimentation reproductible.
 
 ## Principes
 
@@ -151,9 +151,9 @@ Les erreurs techniques sont exposées sous forme sanitizée (`stage`, `error_typ
 
 Lorsque `AI_SPOT_TRADER_DATABASE_URL` est configurée et qu'aucun reader n'est injecté, FastAPI crée le `Database` et le query service pendant son lifespan, sans requête automatique et sans démarrer le trading. La connexion est disposée à l'arrêt. Une DB absente ou indisponible produit une erreur API générique sans fuite d'URL ou de secret.
 
-## Frontend cockpit — Batch 11 proposé
+## Frontend cockpit — Batch 11 intégré
 
-Le patch Batch 11 remplace le bootstrap technique du Batch 01 par un cockpit de contrôle/observation PAPER.
+Le Batch 11 remplace le bootstrap technique du Batch 01 par un cockpit de contrôle/observation PAPER.
 
 Il affiche notamment :
 
@@ -199,25 +199,18 @@ Le mot de passe versionné dans `docker-compose.yml` est uniquement une valeur l
 
 ## Validation
 
-Dernière validation intégrée confirmée : Batch 10.
+Batch 11 validé localement puis intégré sur `main` au commit `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`.
 
 ```text
-pytest backend                  222 tests passés, 2 warnings de dépréciation non bloquants
-ruff check backend              All checks passed
-mypy backend\src backend\tests  70 fichiers sans erreur
-git diff --check                aucune erreur ; warnings LF -> CRLF uniquement
+pnpm --dir frontend lint       réussi
+pnpm --dir frontend typecheck  réussi
+pnpm --dir frontend build      réussi — Next.js 16.3.3, route / statique compilée
+git diff --check               aucune erreur ; warnings LF -> CRLF uniquement
 ```
 
-Pour valider le Batch 11 avant commit/push :
+Smoke test runtime confirmé : backend accessible, moteur non configuré, ressources vides/indisponibles affichées sans crash ni fuite d'erreur brute, puis backend arrêté avec bascule propre du cockpit vers l'état indisponible. Le working tree était propre après commit/push.
 
-```powershell
-pnpm --dir frontend lint
-pnpm --dir frontend typecheck
-pnpm --dir frontend build
-git diff --check
-```
-
-Le frontend doit également être vérifié avec : backend accessible, moteur non configuré, audit vide, audit indisponible et données PAPER présentes.
+La dernière validation backend intégrée reste celle du Batch 10 : **222 tests**, Ruff OK et mypy sans erreur sur 70 fichiers.
 
 ## Sécurité
 

@@ -6,47 +6,31 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub audité : `f29c51545cd63763ea9fefbfd37d441e52850609` (`docs: record Batch 10 integration`).
-- Commit fonctionnel Batch 10 : `e6bcfd4dd345c934769b2f90fa7822232a80dd80` (`feat: add paper control and observation api`).
-- Batch 10 — API FastAPI de contrôle/observation : **intégré sur `main`**.
-- Batch 11 — Frontend cockpit : **patch préparé pour validation locale, non intégré**.
+- Commit fonctionnel Batch 11 : `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7` (`feat: add frontend paper cockpit`).
+- Batch 11 — Frontend cockpit : **intégré sur `main`**.
+- Working tree local confirmé propre après push.
 
 ## État intégré confirmé
 
-- Kraken public SPOT et `MarketState` déterministe, sans look-ahead.
-- `PaperPortfolioLedger` et `PaperBroker` avec frais, spread et slippage injectables.
-- Agent Luna/Sol derrière `LLMProvider`, sortie limitée à BUY/SELL/HOLD + quantité stratégique.
-- Risk Engine déterministe avec ALLOW/MODIFY/REJECT ; seul Risk crée l'`ExecutionIntent`.
-- `TradingCycleRunner.run_cycle()` orchestre un cycle PAPER cohérent ; `TradingEngine` le répète séquentiellement.
-- HOLD et REJECT restent des issues métier complètes ; erreurs techniques distinctes.
+- Backend PAPER autonome : Kraken public, Agent Luna/Sol, Risk Engine déterministe, Paper Broker et boucle séquentielle.
+- Seul Risk peut produire un `ExecutionIntent` ; HOLD/REJECT restent des issues métier auditées et les erreurs techniques restent distinctes.
 - Persistance durable PostgreSQL via SQLAlchemy async + `asyncpg` + Alembic.
-- API REST `/api/v1` pour état moteur, start/stop, portefeuille, cycles, décisions, Risk, exécutions/fills, dernière erreur et dernier marché durable.
-- Aucun auto-start du moteur, aucun WebSocket, aucune API Kraken privée et aucun LIVE.
+- API REST `/api/v1` pour lifecycle moteur, portefeuille, cycles, décisions, Risk, exécutions/fills, dernière erreur et dernier marché durable.
+- Cockpit Next.js/shadcn consommant uniquement FastAPI via rewrite same-origin `/backend/*`.
+- Polling d'affichage borné à 10 s, suspendu lorsque l'onglet est masqué ; aucun WebSocket ni moteur alternatif frontend.
+- Aucun appel OpenAI/Kraken direct, aucune logique Risk, aucun LIVE dans le frontend.
 
-## Batch 11 proposé
+## Validation Batch 11
 
-- Next.js consomme uniquement FastAPI via un rewrite same-origin `/backend/*` vers `AI_SPOT_TRADER_BACKEND_URL`.
-- Polling d'affichage borné à 10 s et suspendu lorsque l'onglet n'est pas visible.
-- Cockpit : disponibilité backend/audit, lifecycle moteur, portefeuille PAPER, marché durable, cycles, décisions, Risk, exécutions/fills et dernière erreur.
-- États `loading`, vide, non configuré/503, 404 et erreur réseau explicites.
-- Aucun calcul de stratégie, aucun appel OpenAI/Kraken, aucun `ExecutionIntent` et aucun moteur local dans le frontend.
+Validation locale Windows confirmée le 20 septembre 2026 :
 
-## Dernière validation intégrée
-
-Batch 10, Windows, 20 septembre 2026 :
-
-- `pytest backend` : **222 tests passés**, 2 warnings de dépréciation non bloquants ;
-- `ruff check backend` : **All checks passed** ;
-- mypy : **70 fichiers sans erreur** ;
-- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement.
-
-## À valider avant intégration du Batch 11
-
-- `pnpm --dir frontend lint`
-- `pnpm --dir frontend typecheck`
-- `pnpm --dir frontend build`
-- `git diff --check`
-- comportement réel avec backend configuré, non configuré et audit store vide/indisponible.
+- `pnpm --dir frontend lint` : **réussi** ;
+- `pnpm --dir frontend typecheck` : **réussi** ;
+- `pnpm --dir frontend build` : **réussi**, Next.js 16.3.3, route `/` statique compilée ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- smoke test runtime : backend accessible, moteur non configuré, ressources vides/503 et backend hors ligne gérés proprement ;
+- commit/push confirmé : `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7` ;
+- working tree propre après push.
 
 ## Limite de reprise
 
@@ -54,7 +38,7 @@ Le journal durable ne garantit pas encore un exactly-once global entre mutation 
 
 ## Prochaine étape
 
-Valider localement le Batch 11, puis commit/push. Le Batch 12 — analytics et expérimentation reproductible — reste futur tant que cette intégration n'est pas confirmée.
+**Batch 12 — Analytics et expérimentation reproductible** : P&L brut/net, drawdown, frais, spread/slippage, exposition, trades et métriques quotidiennes/cumulées, sans modifier rétroactivement les décisions.
 
 ## Points encore à décider
 
