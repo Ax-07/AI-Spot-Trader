@@ -53,7 +53,7 @@ V0 est atteinte lorsque le backend peut, sans frontend obligatoire :
 10. journaliser durablement les cycles ;
 11. exposer suffisamment d'état via FastAPI.
 
-Le Batch 08 réalise le point 9. Le Batch 09 réalise le socle durable du point 10. Le Batch 10 doit traiter le point 11.
+Le Batch 08 réalise le point 9. Le Batch 09 réalise le socle durable du point 10. Le Batch 10 propose le socle REST du point 11 ; il reste **non intégré** jusqu'à validation locale et commit/push confirmés.
 
 ### V1 — cockpit et expérimentation instrumentée
 
@@ -289,11 +289,18 @@ La cadence est injectée et `> 0`. `start()` refuse une seconde loop et `stop()`
 
 ## 12. Runtime FastAPI et composition
 
-`AppRuntime` peut recevoir un moteur implémentant uniquement `stop()` comme dépendance de lifecycle. `close()` pose le signal global de shutdown puis attend le moteur configuré.
+Le patch Batch 10 étend `AppRuntime` sans déplacer la logique métier dans FastAPI. Le runtime peut recevoir :
 
-`create_app(..., trading_engine=...)` permet cette composition sans lancer le moteur. L'import du module, le healthcheck et les tests d'application ne provoquent aucun appel OpenAI/Kraken et aucune boucle réelle.
+- un `TradingEngine` canonique contrôlable (`start`, `stop`, état et dernier résultat) ;
+- un lecteur de portefeuille PAPER ;
+- un lecteur durable `CycleAuditReader` ;
+- une DB possédée par l'application lorsque FastAPI la crée depuis `AI_SPOT_TRADER_DATABASE_URL`.
 
-Le Batch 10 doit ajouter les routes de contrôle utiles sans rendre le frontend propriétaire du lifecycle du moteur.
+`create_app(...)` ne démarre jamais le moteur. Si une URL DB est configurée et qu'aucun lecteur d'audit n'est injecté, le lifespan crée seulement le moteur SQLAlchemy/session factory ; aucune requête métier n'est déclenchée au startup.
+
+Les commandes `start`/`stop` passent uniquement par le moteur injecté. Elles ne créent jamais de `DecisionCandidate`, `RiskAssessment`, `ExecutionIntent` ou appel Broker alternatif. Sans moteur ou portfolio injecté, l'API répond explicitement que la ressource n'est pas configurée au lieu d'inventer capital, paire ou cadence.
+
+Le frontend reste un cockpit : il peut demander un changement de lifecycle, mais il ne devient ni propriétaire de la boucle ni source de stratégie.
 
 ---
 
@@ -406,7 +413,34 @@ Aucun replay automatique d'un intent n'est introduit au Batch 09.
 
 ---
 
-## 14. Sécurité et séparation PAPER / LIVE
+## 14. API de contrôle et d'observation — Batch 10 proposé, non intégré
+
+Le patch Batch 10 introduit une façade REST versionnée `/api/v1` et une couche de lecture `SqlAlchemyCycleAuditQueryService` entre FastAPI et les records SQLAlchemy.
+
+Capacités proposées :
+
+- `GET /api/v1/engine` ;
+- `POST /api/v1/engine/start` ;
+- `POST /api/v1/engine/stop` ;
+- `GET /api/v1/portfolio` ;
+- `GET /api/v1/cycles` et détail/dernier cycle ;
+- `GET /api/v1/decisions` ;
+- `GET /api/v1/risk-assessments` ;
+- `GET /api/v1/executions` ;
+- `GET /api/v1/errors/latest` ;
+- `GET /api/v1/market/latest`.
+
+Les listes sont paginées par `limit`/`offset`, ordonnées de façon déterministe par timestamp puis UUID, avec filtres métier simples. Les réponses API utilisent des modèles Pydantic dédiés ; les payloads canoniques du journal sont exposés sans être réinterprétés stratégiquement.
+
+Les erreurs techniques persistées n'exposent que `stage`, `error_type` et `timed_out`. Les erreurs de connexion DB sont transformées en réponse générique, sans URL de connexion ni message fournisseur.
+
+Aucune migration n'est nécessaire : le Batch 10 lit le schéma `0001_audit_journal` existant.
+
+Aucun WebSocket n'est ajouté. Tant qu'il n'existe pas de bus d'événements canonique, un WebSocket ajouterait une seconde mécanique d'état ou du polling déguisé. Le cockpit peut utiliser REST ; un canal temps réel sera décidé lorsqu'un besoin mesuré et une source d'événements fiable existent.
+
+---
+
+## 15. Sécurité et séparation PAPER / LIVE
 
 `ExecutionMode` ne contient que `PAPER`. Le LIVE reste non représentable et nécessitera une décision dédiée. Aucune clé Kraken privée n'est requise.
 
@@ -414,40 +448,49 @@ Le provider OpenAI ne dispose d'aucun outil d'exécution et ne connaît ni Broke
 
 La base PostgreSQL ne doit recevoir aucun secret. `database_url` est chargée depuis l'environnement via `SecretStr`.
 
+Le patch Batch 10 n'ajoute pas d'authentification complexe. Le bind API par défaut reste local (`127.0.0.1`) ; l'exposition réseau distante des commandes lifecycle devra être protégée explicitement avant tout usage non local.
+
 ---
 
-## 15. Stratégie de tests
+## 16. Stratégie de tests
 
 Les tests restent déterministes et offline autant que possible.
 
-Batch 09 ajoute des tests SQLite async pour :
+Batch 09 couvre la persistance d'écriture via SQLite async et PostgreSQL réel.
 
-- HOLD sans intent/fill ;
-- REJECT sans intent/fill ;
-- ALLOW avec graphe complet ;
-- MODIFY avec graphe complet ;
-- conservation des IDs/snapshots/status ;
-- erreur technique sanitizée ;
-- replay exact idempotent ;
-- wrapper `AuditedTradingCycleRunner` ;
-- rollback atomique en cas d'échec.
+Le patch Batch 10 ajoute des tests pour :
 
-Validation locale confirmée :
+- health non régressé ;
+- état moteur, absence d'auto-start et start/stop injectés ;
+- portefeuille PAPER ;
+- historique vide et 404 ;
+- HOLD, REJECT, ALLOW, MODIFY et cycles FAILED ;
+- conservation des IDs/timestamps ;
+- intents/fills ;
+- décisions, Risk, dernier marché et dernière erreur ;
+- pagination, tri et validation de paramètres ;
+- indisponibilité DB sans fuite de secret ;
+- fermeture de la DB possédée par le runtime ;
+- lecture SQL du journal avec `aiosqlite` sans PostgreSQL externe.
+
+Validation Batch 09 intégrée :
 
 - `pytest backend` : **209 tests passés** ;
 - Ruff : **All checks passed** ;
 - mypy : **63 fichiers sans erreur** ;
 - `git diff --check` : aucune erreur.
 
-Validation PostgreSQL réelle :
+Validation du patch Batch 10 exécutée dans l'environnement ChatGPT :
 
-- conteneur healthy ;
-- migration Alembic réussie ;
-- tables et version Alembic vérifiées via `psql`.
+- tests FastAPI ciblés : **15 passés** ;
+- compilation Python des sources/tests concernés : **OK** ;
+- routes FastAPI générées/importées : **OK**.
+
+La suite complète, Ruff, mypy, `git diff --check`, le test `aiosqlite` du query service et PostgreSQL réel restent à rejouer localement avant intégration.
 
 ---
 
-## 16. Questions ouvertes prioritaires
+## 17. Questions ouvertes prioritaires
 
 - capital PAPER et devise de référence produit ;
 - univers initial de paires ;
@@ -459,6 +502,7 @@ Validation PostgreSQL réelle :
 - frontière de journée et données P&L ;
 - politique de rétention du journal ;
 - reconstruction du ledger et réconciliation après crash ;
+- source d'événements et protocole d'un futur WebSocket cockpit ;
 - conditions futures d'un éventuel LIVE.
 
 Ces choix doivent être consignés dans `10_DECISIONS_ET_CHANGELOG.md` lorsqu'ils deviennent canoniques.

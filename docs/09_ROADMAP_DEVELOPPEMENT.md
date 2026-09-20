@@ -1,218 +1,178 @@
 # 09 — Roadmap de développement
 
-Cette roadmap découpe AI Spot Trader en batches cohérents, limités et testables. Un batch n'est considéré comme intégré qu'après validation locale et commit/push confirmés sur `main`.
+## 1. Règle de lecture
+
+La roadmap décrit l'ordre de construction. Un batch n'est considéré **intégré** qu'après validation locale puis commit/push confirmé sur `main`.
 
 ---
 
 ## Batch 00 — Documentation initiale
 
-**Statut : intégré sur `main`.**
+**État : intégré.**
 
-Vision, architecture cible, responsabilités Agent/Risk/Broker, roadmap et décisions initiales.
+Vision, invariants, architecture cible et méthode de travail.
 
 ---
 
 ## Batch 01 — Bootstrap backend/frontend
 
-**Statut : intégré sur `main` au commit `d9af0ca293dd9f2712969b246e394c4a8c188b5e`.**
+**État : intégré.**
 
-Backend Python/FastAPI installable, configuration typée, lifecycle asynchrone, tests et frontend Next.js/TypeScript/shadcn/Tailwind avec `pnpm`.
+FastAPI/Python et Next.js initialisés en applications séparées.
 
 ---
 
-## Batch 02 — Contrats de domaine et configuration
+## Batch 02 — Contrats domaine et configuration
 
-**Statut : intégré sur `main` au commit `bff0f8b03740da4a01072af90111a2e5d9f208ef`.**
+**État : intégré.**
 
-Contrats Pydantic stricts, UUID, timestamps UTC aware, horloge injectable, ports externes, PAPER uniquement, Luna/Sol configurable et agressivité 1–10.
+Pydantic strict, horloge injectable, ports, PAPER, Luna/Sol et agressivité 1–10.
 
 ---
 
 ## Batch 03 — Kraken Market Data
 
-**Statut : intégré sur `main` au commit `e7ac37955f08853024528fa9b9e10b5a75e05e3b`.**
+**État : intégré.**
 
-Données publiques Kraken Spot, normalisation des symboles, REST AssetPairs, WebSocket ticker, reconnexion bornée et aucune API privée.
+APIs publiques Kraken SPOT, normalisation et aucune clé privée.
 
 ---
 
 ## Batch 04 — Market State
 
-**Statut : intégré sur `main` au commit `73acc4758427ea7575ddf0a43505e1c95fab5e9c`.**
+**État : intégré.**
 
-`MarketObservation`, `MarketStateBuilder`, historique borné, horizons multi-fenêtres, statistiques `Decimal`, fraîcheur descriptive et no-look-ahead.
-
-Validation locale Windows finale : **59 tests**, Ruff OK, mypy OK sur 24 fichiers source, `git diff --check` sans erreur.
+Market State déterministe, multi-horizon, historique borné et sans look-ahead.
 
 ---
 
 ## Batch 05 — Portfolio State + Paper Broker
 
-**Statut : intégré sur `main` au commit `c24551d36a863abbb5fdb86b79658b235c852772` (`feat: add paper portfolio and broker`).**
+**État : intégré.**
 
-Intégré : ledger PAPER mémoire, rôles `balances`/`positions`, mutations atomiques, Paper Broker full-fill, pricing via `MarketState` explicite et coûts PAPER `Decimal` injectés.
-
-Validation locale Windows finale : **92 tests**, Ruff OK, mypy OK sur 40 fichiers source, `git diff --check` sans erreur.
+Ledger PAPER mémoire, état initial injecté, pricing explicite, frais/spread/slippage.
 
 ---
 
 ## Batch 06 — Risk Engine
 
-**Statut : intégré sur `main` au commit `d3271d6404ea2af38a42ff09e5a1df1eed5e141e` (`feat: add deterministic risk engine`).**
+**État : intégré.**
 
-Intégré : sizing stratégique dans `DecisionCandidate`, `RiskAssessment`, `RiskPolicy`, ALLOW/MODIFY/REJECT, HOLD audité, intent créé uniquement par Risk, contrôles de symbole/chronologie/cash/position et estimation PAPER partagée.
-
-Validation locale Windows finale :
-
-- `pytest backend` : **131 tests passés** ;
-- Ruff : **All checks passed** ;
-- mypy : **Success: no issues found in 47 source files** ;
-- `git diff --check` : aucune erreur.
+ALLOW/MODIFY/REJECT, HOLD audité, checks déterministes, seul Risk produit `ExecutionIntent`.
 
 ---
 
 ## Batch 07 — Agent Luna
 
-**Statut : intégré sur `main` au commit `caff3851d8299630f328b955c69eb31eb11baef0` (`feat: add Luna agent provider`).**
+**État : intégré.**
 
-Intégré : `OpenAIDecisionProvider` commun Luna/Sol, Responses API, Structured Outputs stricts, prompt `agent-luna-v1`, sortie stratégique limitée, IDs/timestamps applicatifs, symbole limité au snapshot, erreurs distinctes et aucun chemin direct vers Risk/Broker/Kraken.
-
-Commit documentaire post-intégration : `6415064b0f9bb0ee625cc42e8209cdf4388167e0` (`docs: record Batch 07 integration`).
-
-Validation locale Windows finale :
-
-- `pytest backend` : **168 tests passés** ;
-- Ruff : **All checks passed** ;
-- mypy : **Success: no issues found in 54 source files** ;
-- `git diff --check` : aucune erreur ;
-- warnings LF → CRLF habituels et 2 warnings FastAPI/Starlette sans échec.
+Provider Luna/Sol unique, prompt versionné, Structured Outputs stricts, aucune exécution directe.
 
 ---
 
-## Batch 08 — Boucle autonome
+## Batch 08 — Boucle autonome PAPER
 
-**Statut : intégré sur `main` au commit `8deb72faeeaa1ac065189480c64ba16410c0d451` (`feat: add autonomous trading loop`).**
+**État : intégré.**
 
-HEAD intégré de départ audité : `6415064b0f9bb0ee625cc42e8209cdf4388167e0` (`docs: record Batch 07 integration`).
-
-Intégré :
-
-- package `ai_spot_trader.trading` ;
-- `TradingCycleRunner.run_cycle()` comme primitive un-cycle ;
-- `TradingEngine` comme boucle autonome strictement séquentielle ;
-- `cycle_id`, horloge, cadence et timeouts injectables ;
-- même `MarketState` pour Agent/Risk/Broker et même `PortfolioState` pré-cycle pour Agent/Risk ;
-- aucun refresh marché caché ni chevauchement entre cycle manuel et loop ;
-- HOLD traverse Risk sans Broker ; REJECT reste un résultat métier normal ;
-- MODIFY/ALLOW exécutent uniquement l'`ExecutionIntent` produit par Risk ;
-- erreurs techniques par étape, sans faux HOLD ;
-- timeouts explicites Market/Agent/Broker, aucun timeout artificiel Risk ;
-- aucun rattrapage concurrent de cadence ; start double interdit ; stop coopératif ;
-- `AppRuntime` arrête un moteur injecté au shutdown FastAPI sans démarrage automatique ;
-- aucune persistance durable, API de contrôle trading, API Kraken privée, frontend additionnel ou fonctionnalité LIVE.
-
-Validation locale Windows finale confirmée :
-
-- `ruff check backend` : **All checks passed** ;
-- `pytest backend` : **203 tests passés** ;
-- mypy : **Success: no issues found in 57 source files** ;
-- `git diff --check` : aucune erreur ;
-- 2 warnings de dépréciation FastAPI/Starlette sans échec ;
-- `git status --short` vide après commit/push.
-
-Validation complémentaire exécutée dans l'environnement ChatGPT : suite ciblée Health + Trading **37/37**, `compileall` ciblé et contrôles statiques ; aucun appel OpenAI/Kraken réel.
+`TradingCycleRunner.run_cycle()` + `TradingEngine`, cycles séquentiels, timeouts bornés et stop coopératif.
 
 ---
 
 ## Batch 09 — Persistance et journal d'audit
 
-**Statut : intégré fonctionnellement sur `main` au commit `c53d04f14bcda82359d11c2e14fc1eb601ed14e0` (`feat: add durable audit persistence`).**
+**État : intégré fonctionnellement.**
 
-HEAD intégré de départ audité : `4af32bb6ddf714d71405392d4e515312ba89e2a6` (`docs: record Batch 08 integration`).
+SQLAlchemy async + PostgreSQL + `asyncpg` + Alembic, journal durable corrélé par `cycle_id`, idempotence et transactions.
 
-Intégré :
-
-- package `ai_spot_trader.persistence` ;
-- SQLAlchemy 2 async + `asyncpg` ;
-- Alembic et migration initiale `0001_audit_journal` ;
-- PostgreSQL comme journal durable ;
-- `CycleAuditWriter` comme port minimal ;
-- `AuditedTradingCycleRunner` comme wrapper du runner canonique ;
-- tables cycles, décisions, Risk assessments, intents et fills ;
-- conservation JSON/JSONB des objets métier canoniques ;
-- IDs et timestamps corrélés ;
-- erreurs techniques sanitizées ;
-- HOLD et REJECT sans intent/fill ;
-- ALLOW/MODIFY avec graphe d'exécution complet ;
-- idempotence par `cycle_id` + digest ;
-- conflit explicite si un même `cycle_id` représente des faits différents ;
-- transaction unique et rollback complet ;
-- lifecycle async DB explicite ;
-- tests offline avec SQLite async ;
-- `docker-compose.yml` pour PostgreSQL 18 local persistant ;
-- aucune API Kraken privée, aucune route de contrôle FastAPI et aucun LIVE.
-
-Validation locale Windows finale confirmée :
-
-- `pytest backend` : **209 tests passés**, 2 warnings de dépréciation non bloquants ;
-- `ruff check backend` : **All checks passed** ;
-- mypy : **Success: no issues found in 63 source files** ;
-- `git diff --check` : aucune erreur ;
-- commit/push fonctionnel confirmé ;
-- `git status --short` vide après push.
-
-Validation PostgreSQL réelle confirmée :
-
-- Docker Desktop actif ;
-- conteneur `ai-spot-trader-postgres` : **healthy** ;
-- image `postgres:18.6-bookworm` ;
-- Alembic `upgrade head` : **OK** ;
-- `alembic_version = 0001_audit_journal` ;
-- tables `audit_cycles`, `audit_decisions`, `audit_risk_assessments`, `audit_execution_intents`, `audit_fills` présentes.
-
-Limite assumée : le ledger PAPER reste mémoire. L'exactly-once bout-en-bout entre mutation du ledger et commit PostgreSQL, la reconstruction du ledger et la réconciliation après crash restent différés.
+Limite conservée : pas encore d'exactly-once global entre ledger mémoire et commit PostgreSQL.
 
 ---
 
-## Batch 10 — API FastAPI de contrôle
+## Batch 10 — API FastAPI de contrôle et d'observation
 
-**Prochaine étape prévue.**
+**État : patch proposé, non intégré.**
 
-Objectif : état moteur, portefeuille, décisions, risque, historique durable, performance disponible, réglages autorisés, start/stop si retenu et WebSocket utiles au cockpit.
+### Objectif
 
-La couche API ne doit ni dupliquer l'orchestration, ni permettre au frontend de contourner Risk ou le backend autonome.
+Fournir au futur cockpit une façade REST cohérente sans déplacer l'autorité du backend ni du Risk Engine.
+
+### Périmètre proposé
+
+- état moteur ;
+- start/stop uniquement via le `TradingEngine` canonique injecté ;
+- portefeuille PAPER courant ;
+- historique durable des cycles ;
+- détail d'un cycle ;
+- décisions Agent ;
+- assessments Risk ;
+- intents/fills ;
+- dernière erreur technique sanitizée ;
+- dernier `MarketState` durable disponible ;
+- pagination, ordre et filtres déterministes ;
+- lifecycle DB FastAPI explicite.
+
+### Décisions proposées
+
+- modèles Pydantic HTTP dédiés ;
+- `CycleAuditReader` + `SqlAlchemyCycleAuditQueryService` entre routes et ORM ;
+- aucune nouvelle migration ;
+- aucun démarrage automatique du moteur ;
+- endpoints moteur/portfolio explicitement non configurés si leurs composants canoniques ne sont pas injectés ;
+- DB absente/indisponible gérée sans fuite de secrets ;
+- pas de WebSocket tant qu'aucun bus d'événements canonique n'existe.
+
+### Validation avant intégration
+
+À exécuter localement :
+
+```powershell
+backend\.venv\Scripts\python.exe -m pytest backend
+backend\.venv\Scripts\python.exe -m ruff check backend
+backend\.venv\Scripts\python.exe -m mypy backend\src backend\tests
+git diff --check
+```
+
+Puis valider PostgreSQL/API avec Docker si nécessaire. Le batch ne doit être marqué intégré qu'après résultat propre et commit/push confirmé.
 
 ---
 
 ## Batch 11 — Frontend cockpit
 
-Objectif : dashboard marché/portefeuille/décisions/trades PAPER/performance/état système. Le frontend reste indépendant du moteur.
+**État : futur.**
+
+Dashboard marché, portefeuille, décisions, Risk, exécutions, erreurs et lifecycle. Le frontend reste un client du backend, jamais le propriétaire du moteur.
 
 ---
 
-## Batch 12 — Analytics, P&L et expérimentation reproductible
+## Batch 12 — Analytics et expérimentation reproductible
 
-Objectif : P&L brut/net, drawdown, frais, spread/slippage, exposition, nombre de trades, quotidien/cumulé et replay.
+**État : futur.**
+
+P&L brut/net, drawdown, frais, spread/slippage, exposition, trades, métriques quotidiennes/cumulées et replay.
 
 ---
 
 ## Batch 13 — Expérimentation agressivité 1–10
 
-Objectif : figer un mapping versionné et comparer plusieurs niveaux sur un protocole identique. Aucune agressivité ne contourne les limites absolues Risk.
+**État : futur.**
+
+Figer un mapping versionné et comparer les niveaux sous protocole identique. Aucune agressivité ne contourne Risk.
 
 ---
 
 ## Batch 14 — Comparaison Luna / Sol
 
-Objectif : protocole comparable entre Luna et Sol, mêmes snapshots, RiskPolicy, coûts PAPER, versions de prompt et configuration expérimentale.
+**État : futur.**
+
+Comparer les modèles sur snapshots, RiskPolicy, coûts PAPER, prompts et configuration expérimentale identiques.
 
 ---
 
 ## Batch 15 — Préparation éventuelle du LIVE
 
-**Hors périmètre jusqu'à décision explicite.**
+**État : hors périmètre jusqu'à décision explicite.**
 
-Audit de readiness, adaptateur privé Kraken, réconciliation, permissions minimales, aucun retrait, garde-fous LIVE et activation volontaire. Sa présence dans la roadmap ne vaut pas autorisation de trading réel.
+Readiness, adaptateur privé Kraken, réconciliation, permissions minimales sans retrait, garde-fous LIVE et activation volontaire séparée.
 
 ---
 
@@ -225,7 +185,7 @@ Audit de readiness, adaptateur privé Kraken, réconciliation, permissions minim
   |
 02 Domain contracts
   |
-03 Kraken data
+03 Kraken public data
   |
 04 Market State
   |
@@ -259,13 +219,13 @@ Audit de readiness, adaptateur privé Kraken, réconciliation, permissions minim
 - capital PAPER et devise de référence produit ;
 - univers initial de paires ;
 - valeur produit de cadence ;
-- valeurs produit du max order notional, whitelist et stale métier ;
-- éventuelles limites d'exposition ;
-- drawdown/daily loss une fois les données disponibles ;
+- valeurs produit des limites Risk ;
+- limites avancées d'exposition/drawdown une fois les données disponibles ;
 - mapping agressivité ;
-- valeurs expérimentales fee/spread/slippage ;
+- valeurs de référence fee/spread/slippage ;
 - politique de rétention ;
-- frontière de journée ;
-- reconstruction du ledger, réconciliation et reprise après panne ;
-- auth et déploiement ;
-- activation éventuelle du LIVE.
+- frontière de journée et P&L ;
+- reconstruction du ledger et réconciliation après crash ;
+- source d'événements et protocole d'un futur WebSocket ;
+- auth/déploiement pour une exposition non locale ;
+- éventuel LIVE.

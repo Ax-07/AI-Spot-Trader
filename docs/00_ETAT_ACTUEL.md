@@ -6,10 +6,10 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD fonctionnel Batch 09 audité le 20 septembre 2026 : `c53d04f14bcda82359d11c2e14fc1eb601ed14e0`
-- Commit : `feat: add durable audit persistence`
+- HEAD GitHub vérifié au démarrage du Batch 10 : `328cdcea155905e2859e73ab3c46a195dc52047e` (`docs: record Batch 09 integration`).
+- HEAD fonctionnel Batch 09 : `c53d04f14bcda82359d11c2e14fc1eb601ed14e0` (`feat: add durable audit persistence`).
 - Batch 09 — Persistance et journal d'audit : **intégré fonctionnellement sur `main`**.
-- Le push `4af32bb..c53d04f` a été confirmé et `git status --short` était vide après intégration fonctionnelle.
+- Batch 10 — API FastAPI de contrôle/observation : **patch proposé, non intégré**.
 
 ## État backend intégré
 
@@ -26,6 +26,24 @@
 - Idempotence stricte par `cycle_id` + empreinte du résultat ; rollback transactionnel complet.
 - PostgreSQL local reproductible via Docker Compose.
 - Aucune API Kraken privée et aucun LIVE.
+
+## Patch Batch 10 proposé
+
+Le patch Batch 10 ajoute une façade FastAPI versionnée `/api/v1` sans créer de seconde logique de trading :
+
+- état moteur et commandes lifecycle `start`/`stop` uniquement contre un `TradingEngine` canonique injecté ;
+- aucune exécution automatique au démarrage FastAPI ;
+- portefeuille PAPER courant via un lecteur injecté ;
+- lecture durable des cycles, décisions, résultats Risk, intents/fills, dernière erreur et dernier état marché ;
+- pagination `limit`/`offset`, ordre déterministe `asc`/`desc` et filtres utiles ;
+- couche `SqlAlchemyCycleAuditQueryService` entre FastAPI et SQLAlchemy ;
+- erreurs techniques exposées seulement sous forme sanitizée (`stage`, `error_type`, `timed_out`) ;
+- DB non configurée ou indisponible représentée explicitement sans fuite de secret ;
+- lifecycle DB possédé par FastAPI uniquement lorsqu'il est créé depuis `AI_SPOT_TRADER_DATABASE_URL` ;
+- aucune migration supplémentaire ;
+- aucun WebSocket dans ce batch : REST suffit tant qu'aucun bus d'événements canonique n'existe.
+
+Le bootstrap produit (capital, paire, cadence) n'est pas inventé : sans moteur/portfolio injecté, les endpoints correspondants signalent qu'ils ne sont pas configurés.
 
 ## Validation finale connue du Batch 09
 
@@ -46,13 +64,30 @@ Validation PostgreSQL réelle confirmée :
 - révision : `0001_audit_journal` ;
 - tables : `audit_cycles`, `audit_decisions`, `audit_risk_assessments`, `audit_execution_intents`, `audit_fills`, `alembic_version`.
 
+## Validation du patch Batch 10 dans l'environnement ChatGPT
+
+Exécuté sur le patch reconstruit depuis `main` :
+
+- tests FastAPI ciblés : **15 passés** ;
+- `python -m compileall` sur les sources/tests concernés : **OK** ;
+- génération/import des routes FastAPI : **OK**.
+
+Non exécuté ici faute de dépendances/outils réseau dans l'environnement :
+
+- test SQL `aiosqlite` du query service ;
+- suite complète `pytest backend` ;
+- Ruff ;
+- mypy ;
+- `git diff --check` sur un clone Git réel ;
+- validation PostgreSQL réelle.
+
 ## Limite de reprise
 
-Le journal durable ne garantit pas encore un exactly-once global entre la mutation du ledger PAPER mémoire et le commit PostgreSQL. Reconstruction du ledger, réconciliation après crash et stratégie de recovery restent à traiter explicitement.
+Le journal durable ne garantit pas encore un exactly-once global entre la mutation du ledger PAPER mémoire et le commit PostgreSQL. Reconstruction du ledger, réconciliation après crash et stratégie de recovery restent à traiter explicitement. Le Batch 10 ne prétend pas résoudre cette limite.
 
 ## Prochaine étape
 
-**Batch 10 — API FastAPI de contrôle** : exposition de l'état moteur, portefeuille, décisions, Risk, historique et contrôles autorisés, sans donner au frontend l'autorité sur la logique de trading.
+**Valider localement le patch Batch 10, puis seulement après validation/commit/push mettre cette mémoire à jour comme intégrée.**
 
 ## Points encore à décider
 
@@ -65,3 +100,4 @@ Le journal durable ne garantit pas encore un exactly-once global entre la mutati
 - Politique de rétention.
 - Frontière de journée et données P&L.
 - Reconstruction/reprise du ledger et réconciliation après panne.
+- Besoin et protocole exact d'un WebSocket lorsque le cockpit temps réel le justifiera.

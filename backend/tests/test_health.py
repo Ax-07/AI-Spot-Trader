@@ -15,11 +15,20 @@ def _settings(**overrides: Any) -> Settings:
 
 class FakeTradingEngine:
     def __init__(self) -> None:
+        self.start_calls = 0
         self.stop_calls = 0
+        self.is_running = False
+        self.last_result = None
+        self.last_unexpected_error_type = None
         self.stopped = asyncio.Event()
+
+    async def start(self) -> None:
+        self.start_calls += 1
+        self.is_running = True
 
     async def stop(self) -> None:
         self.stop_calls += 1
+        self.is_running = False
         self.stopped.set()
 
 
@@ -54,7 +63,9 @@ def test_lifespan_stops_injected_trading_engine_without_starting_it() -> None:
     app = create_app(settings, trading_engine=engine)
 
     with TestClient(app):
+        assert engine.start_calls == 0
         assert engine.stop_calls == 0
 
+    assert engine.start_calls == 0
     assert engine.stop_calls == 1
     assert engine.stopped.is_set()
