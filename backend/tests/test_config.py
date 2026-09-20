@@ -15,6 +15,11 @@ def test_settings_defaults_are_safe_for_local_bootstrap() -> None:
     assert settings.execution_mode is ExecutionMode.PAPER
     assert settings.llm_model is LLMModel.LUNA
     assert settings.aggressiveness is None
+    assert settings.kraken_rest_url == "https://api.kraken.com"
+    assert settings.kraken_ws_url == "wss://ws.kraken.com/v2"
+    assert settings.kraken_ws_max_reconnect_attempts == 2
+    assert settings.kraken_stale_after_seconds is None
+    assert not any("api_key" in name or "secret" in name for name in Settings.model_fields)
 
 
 def test_settings_read_prefixed_environment_variables(monkeypatch: pytest.MonkeyPatch) -> None:

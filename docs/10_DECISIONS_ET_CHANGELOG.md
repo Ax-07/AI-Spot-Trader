@@ -187,6 +187,19 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 - Elles sont définies comme `Protocol` et dépendent des contrats de domaine, pas des SDK fournisseurs.
 - Aucun provider Kraken, LLM ou broker réel n'est implémenté au Batch 02.
 
+### ADR-025 — Adapter Kraken Spot public minimal
+
+- **Statut : ACCEPTÉE**
+- La première intégration Kraken utilise uniquement les APIs publiques Spot et implémente `MarketDataSource` sans modifier `MarketState`.
+- REST `/0/public/AssetPairs` avec `assetVersion=1` sert à découvrir les paires et à obtenir une représentation canonique slash-separated ainsi que les alias Kraken utiles.
+- La normalisation est dérivée des métadonnées fournisseur ; aucune table dispersée `XBT/BTC` ou univers de trading codé en dur n'est introduit.
+- WebSocket Spot v2 `ticker` est le flux temps réel initial car il fournit le dernier prix et un timestamp suffisants pour le contrat minimal du Batch 03.
+- Les heartbeats et messages système non pertinents ne produisent pas de `MarketState`.
+- La reconnexion WebSocket est bornée et configurable, avec réabonnement ; aucun retry infini ni circuit breaker n'est introduit.
+- La stale detection existe derrière l'horloge injectable, mais son seuil reste optionnel et non défini par défaut afin de ne pas figer une règle métier prématurément.
+- `httpx` et `websockets` sont les seules dépendances runtime ajoutées pour cette intégration ; aucun SDK Kraken lourd n'est utilisé.
+- Le Batch 03 n'introduit ni clé Kraken, ni authentification privée, ni ordre, ni LIVE.
+
 ---
 
 ## 3. Propositions non encore décidées
@@ -226,6 +239,8 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 - cadence de décision ;
 - horizons/indicateurs ;
 - enrichissement exact du `MarketState` ;
+- stratégie de streaming/caching persistant du futur moteur marché ;
+- seuil métier global de fraîcheur/stale ;
 - représentation du sizing stratégique dans `DecisionCandidate` ;
 - taille et exposition maximales ;
 - max drawdown / max daily loss ;
@@ -244,25 +259,42 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 
 ## 5. Changelog
 
+### 2026-09-20 — Batch 03 Kraken Market Data
+
+**État : patch préparé et testé offline ; intégration Git en attente.**
+
+- Resynchronisation confirmée : GitHub `main` est au HEAD `bff0f8b03740da4a01072af90111a2e5d9f208ef` (`feat: add domain contracts and configuration`).
+- Correction documentaire : le Batch 02 est désormais indiqué comme intégré sur `main` à ce commit.
+- Ajout de `ai_spot_trader.integrations.kraken` et d'une implémentation publique de `MarketDataSource`.
+- Ajout d'un client REST public minimal sur `AssetPairs?assetVersion=1` pour découvrir les paires Spot et normaliser leurs alias.
+- Ajout du flux WebSocket Spot v2 `ticker`, avec parsing `last`/`symbol`/`timestamp`, heartbeat ignoré, abonnement public et fermeture propre.
+- Ajout d'une politique de reconnexion bornée/configurable avec réabonnement, sans boucle infinie.
+- Ajout d'une stale detection technique testable via `Clock`; aucun seuil métier global n'est défini par défaut.
+- Ajout d'erreurs fournisseur dédiées : connexion, payload invalide, symbole inconnu et donnée stale.
+- `httpx` devient dépendance runtime directe ; `websockets` est ajouté comme dépendance runtime directe.
+- Extension de `.env.example` avec uniquement des paramètres Kraken publics/techniques, sans clé ni secret.
+- Aucun endpoint Kraken privé, ordre, Risk Engine fonctionnel, Paper Broker, LLM, PostgreSQL ou LIVE n'est introduit.
+- Tests exécutés dans l'environnement ChatGPT : `pytest` 40/40 ; `compileall` OK.
+- Ruff et mypy n'ont pas pu être exécutés dans l'environnement ChatGPT utilisé pour cette livraison car les modules ne sont pas installés ; validation locale Windows requise.
+- Aucun test réseau Kraken n'est exécuté ni requis par la suite par défaut.
+
 ### 2026-09-20 — Batch 02 contrats de domaine et configuration
 
-**État : patch préparé et validé localement sous Windows ; intégration Git en attente.**
+**État : intégré sur `main` au commit `bff0f8b03740da4a01072af90111a2e5d9f208ef` (`feat: add domain contracts and configuration`).**
 
-- Resynchronisation confirmée : GitHub `main` est identique au HEAD `d9af0ca293dd9f2712969b246e394c4a8c188b5e`.
-- Correction documentaire : le Batch 01 est désormais indiqué comme intégré sur `main`.
+- Base intégrée auditée avant Batch 02 : `d9af0ca293dd9f2712969b246e394c4a8c188b5e`.
+- Correction documentaire : le Batch 01 est indiqué comme intégré sur `main`.
 - Ajout des enums `TradingAction`, `ExecutionMode`, `RiskDecision` et `LLMModel`.
 - Ajout des contrats stricts `MarketState`, `PortfolioState`, `AgentInput`, `DecisionCandidate`, `RiskAssessment`, `ExecutionIntent` et `Fill`.
-- Ajout de modèles minimaux `AssetBalance` et `AssetPosition` pour exprimer le portefeuille sans introduire le P&L ou le sizing complet.
+- Ajout de modèles minimaux `AssetBalance` et `AssetPosition`.
 - Ajout d'UUID de corrélation explicites.
 - Rejet des timestamps naïfs et normalisation des timestamps aware en UTC.
 - Ajout d'une horloge injectable minimale `Clock` / `SystemClock`.
-- Ajout des ports `MarketDataSource`, `LLMProvider` et `Broker` sans implémentation fournisseur.
-- Extension de la configuration : PAPER uniquement, Luna par défaut, Sol sélectionnable, agressivité optionnelle validée de 1 à 10, sans valeur par défaut décidée.
-- Mise à jour de `backend/.env.example` sans secret.
-- Aucun Kraken réel, appel OpenAI, Risk Engine fonctionnel, Paper Broker fonctionnel, PostgreSQL ou LIVE n'est introduit.
-- Tests exécutés dans l'environnement ChatGPT : `pytest` 20/20 ; `compileall` OK.
-- Validation locale Windows : `pytest` 20/20, Ruff OK et mypy OK.
-- Deux warnings de dépréciation Starlette/FastAPI sont observés dans les dépendances de test, sans échec.
+- Ajout des ports `MarketDataSource`, `LLMProvider` et `Broker` sans implémentation fournisseur au Batch 02.
+- Extension de la configuration : PAPER uniquement, Luna par défaut, Sol sélectionnable, agressivité optionnelle 1–10.
+- Aucun Kraken réel, appel OpenAI, Risk Engine fonctionnel, Paper Broker fonctionnel, PostgreSQL ou LIVE n'est introduit au Batch 02.
+- Validation locale Windows avant intégration : Python `3.13.14`, `pytest` 20/20, Ruff OK et mypy OK.
+- Deux warnings de dépréciation Starlette/FastAPI ont été observés dans les dépendances de test, sans échec.
 
 ### 2026-09-20 — Batch 01 bootstrap du projet
 

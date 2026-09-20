@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     execution_mode: ExecutionMode = ExecutionMode.PAPER
     llm_model: LLMModel = LLMModel.LUNA
     aggressiveness: int | None = Field(default=None, ge=1, le=10)
+    kraken_rest_url: str = "https://api.kraken.com"
+    kraken_ws_url: str = "wss://ws.kraken.com/v2"
+    kraken_rest_timeout_seconds: float = Field(default=10.0, gt=0)
+    kraken_ws_receive_timeout_seconds: float = Field(default=15.0, gt=0)
+    kraken_ws_max_reconnect_attempts: int = Field(default=2, ge=0, le=10)
+    kraken_ws_reconnect_delay_seconds: float = Field(default=1.0, ge=0)
+    kraken_stale_after_seconds: float | None = Field(default=None, gt=0)
 
 
 @lru_cache

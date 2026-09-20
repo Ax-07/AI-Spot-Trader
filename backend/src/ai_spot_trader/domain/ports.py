@@ -10,7 +10,7 @@ from ai_spot_trader.domain.models import (
 
 
 class MarketDataSource(Protocol):
-    """Boundary implemented later by the Kraken public market-data adapter."""
+    """Boundary implemented by normalized market-data providers."""
 
     async def snapshot(self, symbol: str) -> MarketState: ...
 

@@ -6,48 +6,48 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub audité, base du Batch 02 : `d9af0ca293dd9f2712969b246e394c4a8c188b5e`
-- Commit : `feat: bootstrap backend and frontend` — 20 septembre 2026
-- Batch 01 intégré sur `main` et validé localement sous Windows.
+- HEAD GitHub audité, base du Batch 03 : `bff0f8b03740da4a01072af90111a2e5d9f208ef`
+- Commit : `feat: add domain contracts and configuration` — 20 septembre 2026
+- Batch 02 intégré sur `main` et validé localement sous Windows.
 
 ## État courant
 
-**Confirmé sur `main` avant Batch 02**
+**Confirmé sur `main` avant Batch 03**
 - Projet expérimental de trading crypto SPOT piloté par un agent IA unique.
 - Kraken comme exchange initial ; premières versions exclusivement en PAPER.
-- Backend Python + `asyncio` + FastAPI + Pydantic.
-- Frontend Next.js + TypeScript + shadcn/ui + Tailwind CSS, indépendant du moteur de trading.
+- Backend Python + `asyncio` + FastAPI + Pydantic ; frontend Next.js indépendant du moteur.
 - Agent stratégique ; Risk Engine déterministe avec autorité finale.
-- GPT-5.6 Luna pour les premiers tests ; Sol sélectionnable par configuration.
-- PostgreSQL comme base cible.
-- Bootstrap backend/frontend du Batch 01 intégré au HEAD `d9af0ca`.
+- Contrats Pydantic stricts et ports `MarketDataSource`, `LLMProvider`, `Broker` intégrés.
+- `MarketState` reste minimal : UUID, timestamp UTC aware, symbole canonique et dernier prix positif.
+- Luna par défaut, Sol sélectionnable ; agressivité optionnelle validée de 1 à 10.
 
-**Patch Batch 02 préparé, non intégré au moment de sa génération**
-- Contrats Pydantic stricts initiaux dans `backend/src/ai_spot_trader/domain/`.
-- Enums canoniques `BUY` / `SELL` / `HOLD`, `PAPER`, `ALLOW` / `MODIFY` / `REJECT`.
-- Identifiants UUID explicites pour snapshots, cycles, décisions, évaluations de risque, exécutions et fills.
-- Timestamps techniques timezone-aware normalisés en UTC ; frontière statistique journalière toujours ouverte.
-- Configuration enrichie : mode PAPER uniquement, Luna par défaut, Sol sélectionnable, agressivité optionnelle validée de 1 à 10, sans valeur par défaut décidée.
-- Horloge injectable minimale via `Clock` + `SystemClock`.
-- Ports `MarketDataSource`, `LLMProvider` et `Broker` sans provider réel.
-- Aucun Kraken réel, appel LLM, Risk Engine fonctionnel, Paper Broker fonctionnel ou LIVE.
+**Patch Batch 03 préparé, non intégré au moment de sa génération**
+- Adapter public Kraken sous `ai_spot_trader.integrations.kraken`.
+- Découverte des paires Spot via REST `AssetPairs` avec `assetVersion=1`, sans authentification.
+- Normalisation explicite des alias Kraken vers un symbole canonique slash-separated, sans table `XBT/BTC` codée en dur.
+- WebSocket Spot v2 `ticker` pour `last`, `symbol` et `timestamp` ; heartbeat et messages système non pertinents ignorés.
+- Reconnexion bornée/configurable et fermeture propre ; aucune tâche de fond ni boucle de trading lancée.
+- Stale detection testable via l'horloge injectable ; seuil technique optionnel et non défini par défaut.
+- Dépendances runtime explicites : `httpx` et `websockets`.
+- Aucun secret, aucune clé Kraken, aucune API privée, aucun ordre, aucun LIVE.
 
-**Validation du Batch 02**
-- Environnement ChatGPT : `pytest` 20/20 et `compileall` OK.
-- Validation locale Windows : `pytest` 20/20, Ruff OK, mypy OK.
-- Deux warnings de dépréciation Starlette/FastAPI persistent dans les dépendances de test, sans échec.
+**Validation du patch Batch 03 dans l'environnement ChatGPT**
+- `pytest` : 40/40 tests passés.
+- `compileall` : OK.
+- Ruff et mypy ne sont pas installés dans l'environnement d'exécution ChatGPT utilisé pour cette livraison ; validation locale Windows requise.
+- Aucun test réseau Kraken n'est inclus dans la suite par défaut.
 
 ## Dernier batch intégré
 
-**Batch 01 — Bootstrap du projet** : intégré sur `main` au HEAD `d9af0ca293dd9f2712969b246e394c4a8c188b5e`.
+**Batch 02 — Contrats de domaine et configuration** : intégré sur `main` au HEAD `bff0f8b03740da4a01072af90111a2e5d9f208ef`.
 
 ## Batch en cours
 
-**Batch 02 — Contrats de domaine et configuration** : patch préparé et validé localement sous Windows ; intégration Git par l'utilisateur encore à effectuer.
+**Batch 03 — Kraken Market Data** : patch préparé et testé offline ; intégration Git par l'utilisateur encore à effectuer.
 
 ## Prochain batch recommandé
 
-**Batch 03 — Kraken Market Data** : données publiques Kraken et normalisation vers les contrats de domaine, sans trading privé.
+**Batch 04 — Market State** : enrichissement déterministe du contexte marché, horizons/statistiques/indicateurs, sans logique stratégique autonome.
 
 ## Points encore à décider
 
@@ -55,6 +55,7 @@
 - Univers d'actifs/paires Kraken initial.
 - Cadence de la boucle de décision et horizon(s) de marché.
 - Contenu détaillé du `MarketState` au-delà du snapshot minimal.
+- Seuil métier global de fraîcheur/stale à appliquer aux futurs composants Risk/Market State.
 - Représentation du sizing stratégique dans `DecisionCandidate`.
 - Limites chiffrées du Risk Engine et traduction exacte de l’agressivité 1–10.
 - Modèle précis de spread/slippage/fill en PAPER.

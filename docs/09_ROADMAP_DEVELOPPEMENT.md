@@ -54,11 +54,11 @@ Validation locale Windows confirmée : Python `3.13.14`, `pytest` 4/4, Ruff OK, 
 
 ## Batch 02 — Contrats de domaine et configuration
 
-**Statut : patch préparé et validé localement sous Windows ; intégration Git en attente.**
+**Statut : intégré sur `main` au commit `bff0f8b03740da4a01072af90111a2e5d9f208ef` (`feat: add domain contracts and configuration`).**
 
 Pourquoi avant Kraken : stabiliser les frontières évite de laisser le format de l'exchange dicter le domaine.
 
-Implémentation préparée :
+Intégré :
 
 - package `ai_spot_trader.domain` ;
 - enums `BUY|SELL|HOLD`, `PAPER`, `ALLOW|MODIFY|REJECT` et modèles Luna/Sol ;
@@ -74,25 +74,44 @@ Implémentation préparée :
 
 Ce batch ne fige pas : sizing stratégique, limites chiffrées du Risk Engine, capital PAPER, univers Kraken, cadence, frontière statistique journalière, frais/slippage/fill, prompt LLM ou logique d'exécution.
 
-Tests : environnement ChatGPT `pytest` 20/20 et `compileall` OK ; validation locale Windows `pytest` 20/20, Ruff OK et mypy OK. Deux warnings de dépréciation Starlette/FastAPI sont observés dans les dépendances de test, sans échec.
+Validation locale Windows confirmée avant intégration : Python `3.13.14`, `pytest` 20/20, Ruff OK et mypy OK. Deux warnings de dépréciation Starlette/FastAPI sont observés dans les dépendances de test, sans échec.
 
 ---
 
 ## Batch 03 — Kraken Market Data
 
-Objectif : connexion aux données publiques Kraken, WebSocket pour les flux nécessaires, récupération/normalisation des métadonnées utiles, reconnexion et stale detection, sans clé privée.
+**Statut : patch préparé et testé offline ; intégration Git en attente au moment de cette livraison.**
 
-Tests : unitaires avec fixtures ; intégration réseau publique optionnelle et séparée.
+Objectif : première intégration publique Kraken derrière `MarketDataSource`, sans API privée ni logique de trading.
 
-À décider : paires initiales, flux Kraken requis, politique de reconnexion.
+Implémentation du patch :
+
+- package `ai_spot_trader.integrations.kraken` ;
+- REST public `AssetPairs` avec `assetVersion=1` pour découverte/normalisation des paires Spot ;
+- registre d'alias Kraken (`symbol`, `altname`, `wsname`) vers un symbole canonique slash-separated ;
+- WebSocket Spot v2 `ticker` comme flux minimal pour `last`, `symbol` et `timestamp` ;
+- parsing provider-local avant construction du `MarketState` minimal ;
+- heartbeat et messages système non pertinents ignorés ;
+- reconnexion bornée et configurable avec réabonnement ;
+- fermeture propre sans tâche de fond persistante ;
+- stale detection testable avec `Clock`, seuil optionnel non défini par défaut ;
+- erreurs fournisseur dédiées et payloads sensibles non propagés ;
+- `httpx` et `websockets` comme dépendances runtime directes ;
+- aucune clé Kraken, aucun endpoint privé, aucun ordre, aucun LIVE.
+
+Tests dans l'environnement ChatGPT : `pytest` 40/40 et `compileall` OK. Ruff et mypy restent à exécuter localement sous Windows car ils ne sont pas installés dans l'environnement ChatGPT utilisé pour cette livraison. Aucun test réseau Kraken ne fait partie de la suite par défaut.
+
+Restent volontairement ouverts : univers initial, stratégie de streaming persistant du futur moteur, seuil métier global de stale et enrichissement du `MarketState`.
 
 ---
 
 ## Batch 04 — Market State
 
-Objectif : agréger les flux Kraken en snapshots canoniques, enrichir `MarketState`, calculer statistiques/indicateurs de contexte, gérer fraîcheur/timestamps sans produire de signal autonome.
+Objectif : agréger les données normalisées Kraken en snapshots canoniques, enrichir `MarketState`, calculer statistiques/indicateurs de contexte, gérer horizons et fraîcheur sans produire de signal autonome.
 
 Tests : fixtures, données manquantes/périmées, calculs déterministes, absence de look-ahead.
+
+Frontière : le Batch 04 consomme l'adapter public du Batch 03 ; il ne doit pas réintroduire des structures Kraken dans le domaine.
 
 ---
 
@@ -110,7 +129,7 @@ Tests critiques : cash insuffisant, SELL supérieur à position, frais, mise à 
 
 Objectif : autorité finale déterministe, `ALLOW` / `MODIFY` / `REJECT`, limites configurables et snapshot des raisons/limites appliquées.
 
-À décider : limites numériques et mapping initial de l’agressivité 1–10.
+À décider : limites numériques, mapping initial de l’agressivité 1–10 et règle métier de stale réellement appliquée par le Risk Engine.
 
 Tests : taille/exposition, vente non couverte, stale market, drawdown/perte si retenus, impossibilité pour l'agressivité de contourner une limite absolue.
 
@@ -241,6 +260,7 @@ Avant de transformer une proposition en implémentation canonique, enregistrer l
 - univers initial ;
 - cadence ;
 - indicateurs ;
+- seuil métier de fraîcheur ;
 - limites de risque ;
 - mapping agressivité ;
 - modèle PAPER ;
