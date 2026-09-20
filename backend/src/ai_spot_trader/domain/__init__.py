@@ -1,6 +1,13 @@
 """Canonical domain contracts and external boundary protocols."""
 
-from ai_spot_trader.domain.enums import ExecutionMode, LLMModel, RiskDecision, TradingAction
+from ai_spot_trader.domain.enums import (
+    ExecutionMode,
+    LLMModel,
+    RiskDecision,
+    RiskLimit,
+    RiskReason,
+    TradingAction,
+)
 from ai_spot_trader.domain.models import (
     AgentInput,
     AssetBalance,
@@ -21,6 +28,7 @@ from ai_spot_trader.domain.ports import (
     MarketDataSource,
     MarketObservationSource,
 )
+from ai_spot_trader.domain.symbols import parse_canonical_symbol
 
 __all__ = [
     "AgentInput",
@@ -42,5 +50,8 @@ __all__ = [
     "PortfolioState",
     "RiskAssessment",
     "RiskDecision",
+    "RiskLimit",
+    "RiskReason",
     "TradingAction",
+    "parse_canonical_symbol",
 ]

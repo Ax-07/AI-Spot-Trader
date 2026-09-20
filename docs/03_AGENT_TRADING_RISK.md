@@ -18,19 +18,23 @@ Cette frontière est centrale pour éviter de transformer AI Spot Trader en bot 
 
 L'agent IA est l'unique décideur stratégique. Il choisit parmi :
 
-- `BUY`
-- `SELL`
-- `HOLD`
+- `BUY` ;
+- `SELL` ;
+- `HOLD`.
+
+Pour `BUY` et `SELL`, l'agent/proposition stratégique fournit également la **quantité proposée**. Le Risk Engine n'est pas le sourceur principal du sizing : il peut uniquement conserver ou réduire cette quantité selon une policy explicite.
 
 Les systèmes déterministes peuvent calculer et présenter prix, spread, volume, bougies, statistiques, indicateurs, volatilité, exposition, P&L, contraintes et fraîcheur des données. Ils ne doivent pas décider silencieusement qu'un signal technique implique un `BUY` ou `SELL`.
 
-Le Risk Engine reste déterministe et possède l'autorité finale d'autoriser, modifier ou refuser une intention.
+Le Risk Engine reste déterministe et possède l'autorité finale d'autoriser, modifier ou refuser une proposition tradable.
+
+**L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
 ---
 
 ## 3. Chaîne de décision
 
-### Confirmé
+### Confirmé après Batch 06
 
 ```text
 MarketState + PortfolioState + config
@@ -40,6 +44,7 @@ MarketState + PortfolioState + config
                   |
                   v
          DecisionCandidate
+   action + proposed_quantity
                   |
         validation Pydantic
                   |
@@ -47,9 +52,11 @@ MarketState + PortfolioState + config
             Risk Engine
          /       |        \
      REJECT    MODIFY      ALLOW
-         \       |        /
-          v      v       v
-          ExecutionIntent
+         |        |          |
+   aucun intent   +----------+
+                  |
+                  v
+          ExecutionIntent PAPER
                   |
           MarketState pricing
                   |
@@ -59,17 +66,15 @@ MarketState + PortfolioState + config
              Fill + ledger
 ```
 
-Aucune sortie LLM ne déclenche directement un ordre Kraken.
+Aucune sortie LLM ne déclenche directement un ordre Kraken. Le Risk Engine n'appelle ni Kraken, ni le LLM, ni le Paper Broker.
 
-Au Batch 05, Market State, Portfolio State et Paper Broker sont implémentés. L'agent réel et le Risk Engine fonctionnel restent respectivement aux Batch 07 et 06.
+Le Batch 06 stabilise la frontière Risk que l'Agent Luna du Batch 07 alimentera et que la boucle autonome du Batch 08 orchestrera.
 
 ---
 
 ## 4. AgentInput
 
 ### Confirmé au Batch 02
-
-Le contrat initial est structuré et strict :
 
 ```text
 AgentInput
@@ -80,29 +85,37 @@ AgentInput
 - aggressiveness (1..10)
 ```
 
-Les snapshots imbriqués sont eux-mêmes des modèles Pydantic stricts. Les timestamps techniques sont timezone-aware et normalisés en UTC.
+Les snapshots imbriqués sont des modèles Pydantic stricts. Les timestamps techniques sont timezone-aware et normalisés en UTC.
 
-Les champs `risk_context`, `experiment_context`, `allowed_actions` ou métadonnées de politique ne sont pas encore figés. Le Risk Engine devra toujours revalider une décision tradable, même si le contexte présenté à l'agent indique déjà les contraintes.
+Les champs `risk_context`, `experiment_context` et métadonnées de politique ne sont pas encore figés. Le Risk Engine revalide toujours une proposition tradable, même si l'agent a déjà reçu des contraintes dans son contexte.
 
 ---
 
-## 5. DecisionCandidate
+## 5. DecisionCandidate et sizing stratégique
 
-### Confirmé au Batch 02
-
-L'action appartient à `BUY | SELL | HOLD`.
+### Confirmé au Batch 06
 
 ```text
 DecisionCandidate
 - decision_id
 - cycle_id
 - created_at
-- action
+- action = BUY | SELL | HOLD
 - symbol
+- proposed_quantity?   # obligatoire BUY/SELL, interdite HOLD
 - rationale?
 ```
 
-Le sizing stratégique n'est pas tranché dans `DecisionCandidate`. `confidence`, horizon et métadonnées restent également ouverts.
+Décision architecturale : la taille proposée est portée directement par le contrat stratégique canonique plutôt que par une interface parallèle.
+
+Conséquences :
+
+- `BUY` et `SELL` sans `proposed_quantity` sont invalides ;
+- `HOLD` avec une quantité est invalide ;
+- le Risk Engine peut réduire une quantité uniquement si sa policy l'autorise ;
+- le Risk Engine ne peut jamais augmenter la taille proposée ;
+- le Risk Engine ne peut jamais changer BUY en SELL, SELL en BUY ou changer de symbole ;
+- la future implémentation Luna devra donc produire action, symbole et taille proposée dans son contrat structuré.
 
 La `rationale` est une donnée d'audit optionnelle ; elle n'est jamais interprétée comme une commande d'exécution.
 
@@ -115,11 +128,13 @@ La `rationale` est une donnée d'audit optionnelle ; elle n'est jamais interpré
 - structure attendue ;
 - validation Pydantic stricte ;
 - enum d'action ;
+- BUY/SELL avec taille positive ;
+- HOLD sans taille ;
 - aucune action inconnue ;
 - aucune exécution si parsing/validation échoue ;
 - aucune donnée textuelle du LLM ne devient directement une commande Kraken.
 
-Le parsing d'une réponse fournisseur réelle, les retries et le prompt restent hors Batch 05.
+Le parsing d'une réponse fournisseur réelle, les retries et le prompt restent hors Batch 06.
 
 ---
 
@@ -129,11 +144,19 @@ Le parsing d'une réponse fournisseur réelle, les retries et le prompt restent 
 
 Le Risk Engine impose les règles de sécurité et d'intégrité. Il a autorité finale.
 
-Il ne doit pas inventer un signal de marché, convertir un `HOLD` en `BUY`, choisir un actif alternatif ou devenir la stratégie principale.
+Il ne doit pas inventer un signal de marché, convertir un `HOLD` en trade, choisir un actif alternatif, appeler Kraken/LLM/Broker, muter les snapshots ou devenir la stratégie principale.
 
-Il peut refuser, réduire une taille, normaliser une intention, empêcher une vente non couverte, bloquer des données trop anciennes et imposer des limites absolues.
+### Contrats Batch 06
 
-### Sortie initiale confirmée
+```text
+RiskPolicy
+- max_order_notional?
+- allowed_pairs?
+- stale_after?
+- allow_quantity_reduction = false
+```
+
+Aucune valeur produit n'est choisie silencieusement. `None` signifie qu'une limite optionnelle n'est pas appliquée. Une whitelist vide est invalide ; l'absence de whitelist signifie « pas de contrainte de paire par cette policy ».
 
 ```text
 RiskAssessment
@@ -141,37 +164,79 @@ RiskAssessment
 - cycle_id
 - decision_id
 - assessed_at
-- status: ALLOW | MODIFY | REJECT
-- reasons[]
+- status = ALLOW | MODIFY | REJECT
+- requested_quantity?
+- authorized_quantity?
+- evaluated_limits[] : RiskLimit
+- reasons[] : RiskReason
 ```
 
-Le détail d'une intention modifiée et les limites appliquées seront enrichis avec le Risk Engine réel si nécessaire.
+Les `RiskReason` sont des codes stables et testables, pas du texte libre dépendant de l'exécution. `evaluated_limits` enregistre les contrôles réellement atteints par le pipeline, y compris sur un `ALLOW`.
 
-### Règles candidates — toujours à décider/chiffrer
+### Sémantique
 
-- balance disponible suffisante ;
-- position disponible suffisante ;
-- max order notional ;
-- max exposure par actif ;
-- max total exposure ;
-- min cash reserve ;
-- max drawdown ;
-- max daily loss ;
+- `ALLOW` : proposition acceptée sans changement matériel ; pour un trade, quantité autorisée = quantité demandée.
+- `MODIFY` : quantité strictement réduite ; la réduction doit être explicitement activée par la policy.
+- `REJECT` : aucun `ExecutionIntent` n'est produit.
+- `HOLD` : reste une décision stratégique valide ; l'évaluation porte `ALLOW` + `HOLD_NO_EXECUTION`, sans quantité ni `ExecutionIntent`.
+
+### Contrôles effectivement implémentés
+
+- format canonique `BASE/QUOTE` ;
+- symbole du `MarketState` identique à la proposition ;
+- whitelist de paire optionnelle ;
+- `MarketState.as_of <= DecisionCandidate.created_at` ;
+- `PortfolioState.as_of <= DecisionCandidate.created_at` ;
+- stale métier optionnel évalué depuis `MarketContext.last_observed_at` jusqu'à `RiskAssessment.assessed_at` ;
+- seuil stale strict : égalité au seuil = encore acceptable, dépassement = stale ;
+- présence du quote asset nécessaire ;
+- cohérence des rôles balance/position ;
+- max order notional optionnel calculé sur `market_state.last_price * quantity` ;
+- solvabilité BUY avec estimation complète du coût PAPER prévisible ;
+- position SELL réellement disponible ;
+- aucune vente non couverte.
+
+### Limites volontairement non implémentées au Batch 06
+
+- drawdown maximal ;
+- daily loss ;
+- VaR, corrélations, bêta ;
+- allocation optimale ;
+- exposition portefeuille multi-actifs globale ;
 - cooldown/frequency ;
-- market data freshness ;
-- spread maximal éventuel ;
-- pair whitelist ;
-- précision/minimum Kraken.
+- précision/minimum Kraken ;
+- spread réel bid/ask maximal ;
+- mapping numérique de l'agressivité.
 
-Le fait que le Paper Broker refuse un cash insuffisant ou une vente non couverte est une dernière frontière d'intégrité, pas une implémentation parallèle du Risk Engine.
+Ces règles nécessitent soit des données encore absentes, soit une décision produit séparée. Elles ne sont pas simulées à partir d'informations insuffisantes.
 
 ---
 
-## 8. ExecutionIntent
+## 8. MODIFY et réductions autorisées
+
+### Confirmé au Batch 06
+
+La réduction est désactivée par défaut (`allow_quantity_reduction=False`). Lorsqu'elle est activée, le Risk Engine peut borner une quantité par :
+
+- le max order notional configuré ;
+- le cash BUY réellement disponible, coûts PAPER prévisibles inclus ;
+- la quantité SELL disponible.
+
+Le résultat est toujours le minimum sûr des limites effectivement rencontrées. Une quantité finale nulle ou négative devient un `REJECT`.
+
+Le Risk Engine ne peut jamais :
+
+- augmenter la quantité ;
+- changer l'action ;
+- changer le symbole ;
+- transformer HOLD en ordre ;
+- choisir une « meilleure » opportunité.
+
+---
+
+## 9. ExecutionIntent
 
 ### Confirmé
-
-L'intention d'exécution est distincte de la décision stratégique. Elle représente une requête déjà autorisée ou modifiée par le Risk Engine :
 
 ```text
 ExecutionIntent
@@ -186,61 +251,44 @@ ExecutionIntent
 - quantity > 0
 ```
 
-`HOLD` ne produit jamais d'`ExecutionIntent`. Le mode `LIVE` n'existe pas dans l'enum actuel.
+Au Batch 06, `ExecutionIntent.created_at` est le timestamp de l'évaluation Risk. L'ID d'exécution, l'ID d'évaluation et l'horloge sont injectables pour les tests/replays.
 
-La quantité exacte fixe uniquement ce dont le broker a besoin à sa frontière d'exécution ; elle ne tranche pas le mécanisme amont de sizing stratégique.
+La quantité de l'intention est exactement `RiskAssessment.authorized_quantity`. HOLD et REJECT ne produisent jamais d'intention.
 
 ---
 
-## 9. PAPER Broker et Fill
+## 10. PAPER Broker et estimation commune des coûts
 
-### Confirmé au Batch 05
+### Confirmé après Batch 06
 
-Le Paper Broker est l'unique cible d'exécution des premières versions.
+Le Paper Broker reste l'unique composant qui exécute et mute le portefeuille.
 
-Le port canonique reçoit explicitement l'intention et le contexte de pricing :
+Le port canonique reste :
 
 ```text
 Broker.execute(execution_intent, market_state) -> tuple[Fill, ...]
 ```
 
-Cela interdit un prix réseau caché et rend le replay/no-look-ahead auditables.
+Le Batch 06 factorise la mathématique PAPER dans `broker/pricing.py` :
 
-Le modèle initial est **fill immédiat complet ou rejet explicite**. Il n'existe pas de partial fill, carnet simulé, ordre limit/pending, matching engine ou aléatoire.
+- `PaperExecutionCostModel` ;
+- `PaperExecutionEstimate` ;
+- `estimate_paper_execution(...)`.
 
-Le `Fill` devient :
+Cette fonction est pure et sans effet de bord. Elle est utilisée :
 
-```text
-Fill
-- fill_id
-- execution_id
-- market_state_id
-- filled_at
-- pricing_as_of
-- action = BUY | SELL
-- symbol
-- quantity > 0
-- reference_price > 0
-- price > 0
-- notional > 0
-- fee >= 0
-- spread_cost >= 0
-- slippage_cost >= 0
-```
+- par le Risk Engine pour anticiper le cash BUY nécessaire ;
+- par le Paper Broker pour construire le fill réel.
 
-Le contrat valide sa propre cohérence arithmétique et le caractère adverse du prix exécuté par rapport au prix de référence.
+Il n'existe donc pas deux formules divergentes pour fee/spread/slippage. Le Risk Engine n'exécute jamais l'ordre pour connaître l'estimation.
 
-Le Paper Broker ne dépend d'aucun module Kraken et n'appelle aucun provider de marché.
+Le modèle reste **fill immédiat complet ou rejet explicite**. Aucun partial fill, carnet simulé, ordre limite/pending, matching engine ou aléatoire.
 
 ---
 
-## 10. Frais, spread et slippage
+## 11. Frais, spread et slippage
 
-### Confirmé au Batch 05
-
-Les trois sont pris en compte dans l'exécution PAPER et deviennent visibles dans le `Fill`.
-
-Le modèle est injecté et ne prétend pas être le barème Kraken réel :
+### Confirmé au Batch 05, factorisé au Batch 06
 
 ```text
 PaperExecutionCostModel
@@ -249,12 +297,12 @@ PaperExecutionCostModel
 - slippage_bps
 ```
 
-Sémantique retenue :
+Sémantique :
 
-- `fee_rate` est un taux décimal sur le notional exécuté ;
-- `spread_bps` est l'impact adverse appliqué **à chaque côté** ; ce n'est pas un spread bid/ask total ;
-- `slippage_bps` est un impact adverse additionnel par côté ;
-- aucun composant n'est aléatoire.
+- `fee_rate` = taux décimal sur le notional exécuté ;
+- `spread_bps` = impact adverse appliqué à chaque côté ;
+- `slippage_bps` = impact adverse additionnel par côté ;
+- aucun composant aléatoire.
 
 Avec `P` comme prix de référence :
 
@@ -263,48 +311,49 @@ BUY  = P * (1 + spread_bps/10000 + slippage_bps/10000)
 SELL = P * (1 - spread_bps/10000 - slippage_bps/10000)
 ```
 
-Les frais BUY sont débités en plus du notional. Les frais SELL sont déduits du produit. Tous les calculs utilisent `Decimal`, sans quantification fournisseur silencieuse.
+BUY débite `notional + fee`. SELL crédite `notional - fee`. Tous les calculs financiers utilisent `Decimal`, sans quantification fournisseur silencieuse.
 
-Les valeurs produit par défaut des coûts restent **À DÉCIDER**. Les tests utilisent des valeurs explicites uniquement pour vérifier les mathématiques.
+Le max order notional Risk reste distinct : il est évalué sur le notional de référence `P * quantity`, tandis que la solvabilité BUY utilise le coût PAPER estimé complet.
 
 ---
 
-## 11. Portfolio PAPER et invariants SPOT
+## 12. Portfolio PAPER et invariants SPOT
 
-### Confirmé au Batch 05
+### Confirmé
 
 Le `PortfolioState` distingue :
 
 - `balances` : actifs de règlement disponibles ;
 - `positions` : actifs détenus et disponibles à la vente.
 
-Les deux collections sont disjointes par actif. Les snapshots sont fournis par `PaperPortfolioLedger`, initialisé explicitement par un état fourni à sa construction.
+BUY : le Risk Engine anticipe la solvabilité ; le Paper Broker garde son contrôle final puis débite le quote et crédite la base.
 
-BUY : le broker doit disposer du quote asset nécessaire à `notional + fee`, puis débite le quote et crédite la position base.
+SELL : le Risk Engine refuse ou réduit selon la quantité disponible ; le Paper Broker conserve également ce garde-fou d'intégrité avant mutation.
 
-SELL : la position base doit exister et disposer de la quantité demandée, puis le broker débite la base et crédite le quote de `notional - fee`.
+Cette duplication est volontaire :
 
-Aucune balance ni position négative n'est permise. Un rejet laisse le portefeuille inchangé.
+- Risk Engine = décision de sécurité ;
+- Paper Broker = intégrité finale d'exécution.
 
-Aucune base de coût n'est introduite au Batch 05 ; les analytics/P&L complètes restent au Batch 12.
+Aucune balance ni position négative n'est permise.
 
 ---
 
-## 12. Agressivité
+## 13. Agressivité
 
 ### Confirmé
 
 Valeur entière de 1 à 10, validée dans la configuration et dans `AgentInput`.
 
-Le mapping exact reste à décider. L'agressivité ne peut jamais autoriser short/margin/levier, permettre de vendre plus que détenu, bypasser le Risk Engine ou contourner une limite absolue.
+Le mapping exact reste à décider. Le Batch 06 ne fige aucun coefficient. L'agressivité ne peut jamais autoriser short/margin/levier, vendre plus que détenu, bypasser le Risk Engine ou contourner une limite absolue.
 
 ---
 
-## 13. Objectif quotidien +4 %
+## 14. Objectif quotidien +4 %
 
 ### Confirmé
 
-Cible expérimentale : +4 % par jour.
+Cible expérimentale : +4 % par jour, jamais une garantie.
 
 Le système ne doit pas générer un trade uniquement parce que la journée est sous +4 %, augmenter automatiquement l'agressivité pour « rattraper » une perte sans expérience dédiée, masquer les jours négatifs, supprimer une mauvaise période ou utiliser le résultat futur pour modifier une décision passée.
 
@@ -312,15 +361,11 @@ L'objectif est une métrique, pas une obligation d'exécution.
 
 ---
 
-## 14. Identifiants, timestamps et audit
+## 15. Identifiants, timestamps et audit
 
-### Confirmé
+### Confirmé après Batch 06
 
-Les contrats utilisent des UUID explicites pour corréler les objets importants : snapshot de marché, snapshot de portefeuille, cycle, décision, évaluation de risque, exécution et fill.
-
-Les timestamps techniques sont timezone-aware et normalisés en UTC.
-
-Un cycle complet devra à terme permettre de relier :
+Un cycle complet pourra relier :
 
 ```text
 cycle_id
@@ -332,31 +377,28 @@ execution_id
 fill_id(s)
 ```
 
-Le `Fill` référence directement `market_state_id` et `pricing_as_of`, ce qui conserve la provenance du prix PAPER.
+Relations temporelles de la frontière Risk :
 
-Le format final de logs structurés, la persistance et la rétention restent à décider.
+```text
+market_state.as_of    <= decision_candidate.created_at
+portfolio_state.as_of <= decision_candidate.created_at
+                         <= risk_assessment.assessed_at
+                         == execution_intent.created_at   # si intent
+```
 
----
-
-## 15. Horloge injectable et no look-ahead
-
-### Confirmé
-
-`Clock.now()` et `SystemClock` UTC permettent timestamps déterministes et replays.
-
-Le Batch 04 interdit les observations futures dans un `MarketState` historique. Le Batch 05 ajoute :
+Le Paper Broker ajoute ensuite :
 
 ```text
 market_state.as_of <= execution_intent.created_at <= fill.filled_at
 ```
 
-Le Paper Broker rejette un contexte de pricing futur et ne fait aucun lookup réseau pendant une exécution/replay.
+Aucun lookup réseau n'est nécessaire pendant une évaluation Risk ou une exécution PAPER/replay.
 
 ---
 
 ## 16. Interfaces externes
 
-### Confirmé après Batch 05
+### Confirmé après Batch 06
 
 Ports canoniques :
 
@@ -365,7 +407,7 @@ Ports canoniques :
 - `LLMProvider.generate_decision(agent_input) -> DecisionCandidate` ;
 - `Broker.execute(execution_intent, market_state) -> tuple[Fill, ...]`.
 
-Les détails Kraken, le SDK LLM, credentials, retries et prompt restent isolés de ces contrats.
+Le Risk Engine est une frontière métier interne synchrone et déterministe ; il n'introduit pas de port externe supplémentaire.
 
 ---
 
@@ -373,7 +415,7 @@ Les détails Kraken, le SDK LLM, credentials, retries et prompt restent isolés 
 
 ### Confirmé
 
-Luna est le modèle initial pour raison de coût ; Sol est sélectionnable par configuration. Une future comparaison devra utiliser un protocole comparable : mêmes Market States, Portfolio States, limites de risque, coûts PAPER, mapping d'agressivité et versions de prompts/contracts lorsque possible.
+Luna est le modèle initial pour raison de coût ; Sol est sélectionnable par configuration. Une future comparaison devra utiliser des Market States, Portfolio States, Risk Policies, coûts PAPER, mapping d'agressivité et versions de prompts/contracts comparables lorsque possible.
 
 ---
 

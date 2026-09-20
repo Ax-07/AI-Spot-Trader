@@ -2,101 +2,62 @@
 
 ## 1. Rôle de ce document
 
-Ce document est la spécification fonctionnelle et architecturale principale d'**AI Spot Trader**. Il décrit les invariants confirmés, les interfaces conceptuelles et les objectifs du produit. Les détails plus spécialisés sont complétés par :
+Ce document est la spécification fonctionnelle et architecturale principale d'**AI Spot Trader**. Les détails spécialisés sont complétés par `02_ARCHITECTURE_TECHNIQUE.md`, `03_AGENT_TRADING_RISK.md`, `09_ROADMAP_DEVELOPPEMENT.md` et `10_DECISIONS_ET_CHANGELOG.md`.
 
-- [`02_ARCHITECTURE_TECHNIQUE.md`](02_ARCHITECTURE_TECHNIQUE.md) ;
-- [`03_AGENT_TRADING_RISK.md`](03_AGENT_TRADING_RISK.md) ;
-- [`09_ROADMAP_DEVELOPPEMENT.md`](09_ROADMAP_DEVELOPPEMENT.md) ;
-- [`10_DECISIONS_ET_CHANGELOG.md`](10_DECISIONS_ET_CHANGELOG.md).
-
-### Statuts utilisés
-
-- **Confirmé** : décision déjà prise et à respecter.
-- **Proposé** : option de conception recommandée, modifiable avant implémentation.
-- **À décider** : choix volontairement laissé ouvert.
-- **Hors périmètre pour l'instant** : non prévu dans les premières versions.
+Statuts utilisés : **Confirmé**, **Proposé**, **À décider** et **Hors périmètre pour l'instant**.
 
 ---
 
-## 2. Vision
+## 2. Vision et invariants
 
-**Confirmé.** AI Spot Trader est une application expérimentale de trading crypto **SPOT** dont la décision stratégique est confiée à **un agent IA unique**. Le système doit fournir à cet agent un contexte de marché et de portefeuille fiable, appliquer des contraintes déterministes de risque, simuler les exécutions de manière honnête en PAPER et mesurer les résultats sans biais rétrospectif.
+**Confirmé.** AI Spot Trader est une application expérimentale de trading crypto **SPOT** pilotée par **un agent IA unique**. L'agent conserve la décision stratégique ; les composants déterministes construisent le contexte, imposent les contraintes de risque, exécutent en PAPER et mesurent les résultats.
 
-Le projet n'a pas vocation à devenir silencieusement un bot algorithmique classique. Les indicateurs, statistiques et règles déterministes fournissent du contexte et imposent des garde-fous ; l'agent IA conserve la décision stratégique.
+Invariants principaux :
 
-La cible expérimentale annoncée est **+4 % de rendement quotidien**. Il s'agit d'un objectif de recherche très agressif, **jamais d'une garantie ni d'une hypothèse de rendement attendu**. Le système doit rapporter honnêtement les jours où cette cible n'est pas atteinte et ne doit pas forcer des trades pour la poursuivre.
+- Kraken est l'exchange initial ;
+- SPOT uniquement : aucun short, levier, margin, future ou perpetual ;
+- actions stratégiques `BUY`, `SELL`, `HOLD` ;
+- aucune vente d'un actif non détenu ;
+- GPT-5.6 Luna pour les premiers essais, Sol sélectionnable par configuration ;
+- Risk Engine déterministe avec autorité finale ;
+- aucune sortie LLM ne déclenche directement une exécution ;
+- premières versions exclusivement en PAPER ;
+- frais, spread et slippage pris en compte ;
+- toutes les décisions, y compris `HOLD`, doivent être journalisées ;
+- aucun secret dans Git, prompts ou logs ;
+- aucun look-ahead ;
+- frontend indépendant du moteur backend.
 
----
-
-## 3. Objectifs produit
-
-### 3.1 Objectifs confirmés
-
-- Exécuter une boucle autonome de décision `BUY`, `SELL` ou `HOLD`.
-- Utiliser Kraken comme premier exchange.
-- Opérer exclusivement en SPOT.
-- Interdire short, levier, margin, futures et perpetuals.
-- Ne jamais vendre un actif non détenu.
-- Utiliser GPT-5.6 Luna pour les premiers essais afin de réduire les coûts.
-- Pouvoir sélectionner GPT-5.6 Sol par configuration sans réécrire la logique métier.
-- Faire valider toute décision tradable par un Risk Engine déterministe avant toute exécution.
-- Commencer exclusivement en PAPER.
-- Prendre en compte frais, spread et slippage.
-- Journaliser toutes les décisions, y compris `HOLD`.
-- Séparer strictement PAPER et un éventuel LIVE futur.
-- Fournir un cockpit frontend sans rendre le moteur de trading dépendant de l'interface.
-
-### 3.2 Non-objectifs immédiats
-
-**Hors périmètre pour l'instant :** multi-exchange, short, margin, levier, futures, perpetuals, options, stratégie multi-agents, HFT, copy trading, custody/retraits, application mobile native, optimisation Rust sans besoin mesuré et passage automatique en LIVE.
+La cible expérimentale de **+4 %/jour** reste une métrique de recherche très agressive, jamais une garantie, une hypothèse de rendement attendu ou une obligation de forcer des trades.
 
 ---
 
-## 4. Périmètre V0 / V1
+## 3. Périmètre V0 / V1
 
 ### V0 — socle expérimental
 
-**Proposé comme définition de V0.**
-
-V0 est atteinte lorsque le backend peut, en PAPER et sans frontend obligatoire :
+V0 est atteinte lorsque le backend peut, sans frontend obligatoire :
 
 1. recevoir des données publiques Kraken ;
 2. construire un `MarketState` cohérent ;
 3. maintenir un `PortfolioState` PAPER ;
-4. interroger l'agent Luna avec un contrat structuré ;
-5. obtenir une décision `BUY` / `SELL` / `HOLD` ;
-6. soumettre cette décision au Risk Engine ;
+4. obtenir une décision structurée de l'agent Luna ;
+5. soumettre toute proposition tradable au Risk Engine ;
+6. produire `ALLOW`, `MODIFY` ou `REJECT` ;
 7. simuler l'exécution autorisée via le Paper Broker ;
-8. mettre à jour portefeuille, P&L et journal ;
-9. répéter la boucle de manière autonome ;
-10. exposer assez d'état via FastAPI pour être inspectée et contrôlée.
+8. mettre à jour le portefeuille et journaliser le cycle ;
+9. répéter le cycle de manière autonome ;
+10. exposer suffisamment d'état via FastAPI.
 
 ### V1 — cockpit et expérimentation instrumentée
 
-**Proposé comme définition de V1.**
-
-V1 ajoute cockpit Next.js/shadcn, historique décisions/exécutions, analytics P&L/drawdown/coûts/exposition, réglage contrôlé de l'agressivité, comparaisons Luna/Sol reproductibles, capacités de replay sans look-ahead et préparation des prérequis de sécurité pour évaluer un futur LIVE. Le LIVE lui-même n'est pas une condition de V1.
+V1 ajoute le cockpit Next.js/shadcn, historique, analytics P&L/drawdown/coûts/exposition, replay reproductible, expérimentations d'agressivité et comparaison Luna/Sol. Le LIVE n'est pas une condition de V1.
 
 ---
 
-## 5. Principes architecturaux
+## 4. Architecture et flux de confiance
 
-### 5.1 Principes confirmés
-
-1. **Backend = application de trading.**
-2. **Frontend = cockpit** de contrôle et visualisation.
-3. **Indépendance du frontend.** Fermer ou redémarrer le frontend ne doit jamais arrêter le moteur.
-4. **Interfaces aux frontières externes.** Kraken, LLM et Broker sont masqués derrière des ports dédiés.
-5. **Asynchrone côté backend.** Python + `asyncio`.
-6. **API de contrôle.** FastAPI + Pydantic.
-7. **REST et WebSocket** selon le besoin.
-8. **Risk Engine final.** Le LLM ne parle jamais directement à l'exchange/broker.
-9. **PAPER uniquement pour les premières versions.** Aucun chemin LIVE implicite.
-10. **PostgreSQL cible.** Schéma et ORM restent à décider.
-11. **Pas de Rust sans besoin mesuré.**
-12. **No look-ahead.** Tout contexte historique utilisé pour une décision ou une exécution à `T` doit être daté de `T` ou avant.
-
-### 5.2 Flux de confiance
+**Confirmé :** backend Python + `asyncio` + FastAPI + Pydantic ; frontend Next.js + TypeScript + shadcn/ui + Tailwind ; PostgreSQL cible ; REST/WebSocket selon le besoin.
 
 ```text
 Kraken public data
@@ -105,404 +66,231 @@ Kraken public data
 normalized observations
         |
         v
-Market State ------+
-                   |
-Portfolio State ---+--> Agent IA --> DecisionCandidate
-                                      |
-                                      v
+MarketState -----+
+                 |
+PortfolioState --+--> Agent IA --> DecisionCandidate
+                                    |
+                                    v
                                Risk Engine
-                               /    |     \
-                           reject  modify  allow
-                              \      |      /
-                               v     v     v
-                               Execution Intent
-                                      |
-                         Market State pricing
-                                      |
-                                      v
-                               Paper Broker
-                                      |
-                          +-----------+-----------+
-                          v                       v
-                  Portfolio State             Journal
+                            /       |       \
+                        REJECT    MODIFY    ALLOW
+                            \       |       /
+                                    v
+                              RiskAssessment
+                                    |
+                       ExecutionIntent si tradable
+                                    |
+                                    v
+                              Paper Broker
+                                    |
+                         Fill + PortfolioState
 ```
 
-Aucun adaptateur LIVE n'est autorisé dans l'état actuel. Le Paper Broker ne consulte jamais Kraken pour obtenir un prix caché : le contexte de pricing canonique lui est fourni explicitement.
+Principe absolu : **l'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
 ---
 
-## 6. Architecture backend / frontend
+## 5. Contrats de domaine canoniques
 
-### Backend
+Les frontières critiques utilisent des modèles Pydantic stricts avec champs supplémentaires interdits, UUID explicites et timestamps timezone-aware normalisés UTC.
 
-**Confirmé :** Python, `asyncio`, FastAPI, Pydantic.
+### Marché et portefeuille
 
-Responsabilités : ingestion/normalisation marché, `MarketState`, `PortfolioState`, orchestration, agent, validation, Risk Engine, Paper Broker, P&L/analytics, persistance/audit, API et santé opérationnelle.
+- `MarketObservation` : fait marché fournisseur-agnostique minimal ;
+- `MarketState` : snapshot déterministe, symbole canonique, dernier prix et contexte optionnel ;
+- `MarketContext` : fraîcheur descriptive et fenêtres multi-horizon ;
+- `PortfolioState` : snapshot PAPER avec `balances` et `positions` disjoints ;
+- `AssetBalance` : actif de règlement disponible ;
+- `AssetPosition` : quantité détenue et quantité disponible à la vente.
 
-### Frontend
+### Agent, Risk et exécution
 
-**Confirmé :** Next.js + TypeScript + shadcn/ui + Tailwind CSS, géré avec `pnpm`.
-
-Le frontend affiche et contrôle l'état autorisé mais ne contient pas la stratégie de trading et ne devient jamais l'ordonnanceur du moteur.
-
----
-
-## 7. Boucle de trading
-
-### 7.1 Séquence conceptuelle confirmée
-
-À chaque cycle :
-
-1. vérifier santé et fraîcheur des données ;
-2. figer un `MarketState` daté ;
-3. figer un `PortfolioState` daté ;
-4. fournir ces états et la configuration autorisée à l'agent ;
-5. recevoir une sortie LLM ;
-6. parser et valider strictement via Pydantic ;
-7. si invalide, ne rien exécuter et journaliser ;
-8. soumettre toute décision à conséquence financière au Risk Engine ;
-9. autoriser, réduire/modifier ou refuser ;
-10. en PAPER, simuler l'exécution avec un contexte de prix explicite et des coûts déterministes ;
-11. mettre à jour atomiquement le portefeuille ;
-12. calculer les métriques ;
-13. journaliser le cycle complet, y compris `HOLD`, refus et erreurs.
-
-### 7.2 Points à décider
-
-Cadence, déclenchement temporel/événementiel/hybride, nombre de paires par cycle, budget de latence LLM, politique métier sur données périmées, retries et politique avancée d'ordres PAPER restent ouverts.
-
----
-
-## 8. Contrats de domaine
-
-### 8.1 Principe confirmé
-
-Les frontières critiques reposent sur des modèles Pydantic stricts, `extra="forbid"`, avec UUID explicites et timestamps timezone-aware normalisés en UTC.
-
-### 8.2 Contrats canoniques
-
-- `MarketObservation` : observation normalisée fournisseur-agnostique avec timestamp, symbole et dernier prix positif.
-- `MarketState` : identifiant, timestamp de snapshot, symbole, dernier prix positif et `MarketContext` optionnel.
-- `MarketContext` : dernière observation utilisée, âge des données, seuil technique stale éventuellement évalué et fenêtres descriptives.
-- `MarketWindowStats` : horizon, bornes temporelles disponibles, nombre d'observations, complétude d'historique, min/max/amplitude, return et volatilité lorsque calculables.
-- `AssetBalance` : actif de règlement/cash PAPER et quantité disponible correspondante.
-- `AssetPosition` : actif détenu, quantité totale et quantité disponible à la vente.
-- `PortfolioState` : identifiant, timestamp, mode PAPER, balances et positions non négatives, uniques et sans chevauchement d'actif entre les deux collections.
-- `AgentInput` : cycle, timestamp, `MarketState`, `PortfolioState`, agressivité validée de 1 à 10.
-- `DecisionCandidate` : décision, cycle, timestamp, action, symbole, rationale optionnelle.
-- `RiskAssessment` : évaluation, cycle, décision, timestamp, statut `ALLOW|MODIFY|REJECT`, raisons.
-- `ExecutionIntent` : exécution corrélée au cycle/décision/risk, PAPER uniquement, `BUY|SELL`, quantité positive.
-- `Fill` : fait d'exécution corrélé à l'intention et au `MarketState`, avec timestamps, action, symbole, quantité, prix de référence, prix exécuté, notional, frais et coûts de spread/slippage.
-
-Le sizing stratégique n'est pas encore figé dans `DecisionCandidate`. La présence d'une quantité exacte dans `ExecutionIntent` exprime uniquement la frontière d'exécution après Risk Engine.
-
-### 8.3 Types confirmés
+`DecisionCandidate` contient désormais :
 
 ```text
-TradingAction = BUY | SELL | HOLD
-ExecutionMode = PAPER
-RiskDecision = ALLOW | MODIFY | REJECT
-LLMModel = gpt-5.6-luna | gpt-5.6-sol
+decision_id
+cycle_id
+created_at
+action = BUY | SELL | HOLD
+symbol
+proposed_quantity?   # obligatoire pour BUY/SELL, interdite pour HOLD
+rationale?
 ```
 
-Le LIVE ne peut pas être configuré dans l'état actuel du code.
+Le sizing initial est donc **stratégique** : le Risk Engine ne choisit pas arbitrairement une taille de départ.
+
+`RiskAssessment` contient :
+
+```text
+risk_assessment_id
+cycle_id
+decision_id
+assessed_at
+status = ALLOW | MODIFY | REJECT
+requested_quantity?
+authorized_quantity?
+evaluated_limits[]
+reasons[]
+```
+
+Les raisons sont des codes déterministes (`RiskReason`) et `evaluated_limits` utilise des identifiants `RiskLimit` stables pour tracer les contrôles réellement atteints, même sur ALLOW. `MODIFY` doit strictement réduire la quantité demandée. `REJECT` n'autorise aucune quantité.
+
+`ExecutionIntent` reste uniquement PAPER, BUY/SELL, et n'existe que si le Risk Engine autorise une quantité strictement positive. `HOLD` ne produit jamais d'intention d'exécution.
+
+`Fill` reste le fait d'exécution PAPER auditable avec contexte de pricing, prix de référence, prix exécuté, notional, frais, spread et slippage.
 
 ---
 
-## 9. Market State
-
-Le `MarketState` est le snapshot déterministe présenté aux couches supérieures et utilisé comme contexte de pricing PAPER.
+## 6. Market State
 
 ### Confirmé au Batch 04
 
-Le contrat conserve un unique `MarketState`. Le noyau historique reste :
+`MarketStateBuilder` est mono-symbole, déterministe et mémoire. Il garde un historique borné à 10 000 observations par défaut, impose un ordre temporel strict et construit les horizons 5 min / 30 min par défaut.
 
-```text
-market_state_id
-as_of
-symbol
-last_price
-```
+Les statistiques restent descriptives et en `Decimal` : count, min, max, amplitude, return simple et volatilité réalisée simple lorsqu'elles sont calculables. Elles ne produisent aucun signal stratégique.
 
-Il est enrichi par un `MarketContext` optionnel :
-
-```text
-MarketContext
-- last_observed_at
-- data_age_seconds
-- stale_after_seconds?
-- is_stale?
-- windows[]
-```
-
-Deux horizons descriptifs par défaut sont versionnés dans le code : **5 minutes** et **30 minutes**. Ils sont surchargeables lors de l'instanciation du builder. Ils ne représentent ni une cadence de décision, ni une fréquence de tick Kraken, ni une règle d'entrée/sortie.
-
-Pour chaque horizon, le Batch 04 calcule uniquement des faits descriptifs : nombre d'observations, minimum, maximum, amplitude absolue, return simple et volatilité réalisée simple lorsque calculables. Les calculs utilisent `Decimal` et n'introduisent pas NumPy/Pandas.
-
-### Complétude, données manquantes et fraîcheur
-
-- Une fenêtre est complète seulement si l'historique retenu atteint ou précède son début et qu'au moins une observation existe dans la fenêtre.
-- La complétude ne garantit pas une cadence de tick sans trou.
-- Une fenêtre vide reste explicitement vide ; aucune interpolation.
-- `data_age_seconds` reste descriptif ; `is_stale` n'est évalué que si un seuil technique est fourni.
-- Le seuil métier de refus de trader relève du futur Risk Engine.
-
-### Historique et ordre temporel
-
-Le builder garde un historique mémoire borné à **10 000 observations par instance** par défaut. Les observations sont ajoutées en ordre strictement croissant ; doublons temporels, données hors ordre et symboles différents dans une même instance sont rejetés.
-
-Pour un snapshot à l'instant `T`, toute observation postérieure à `T` est ignorée, même si elle a déjà été injectée dans l'historique.
-
-### Principe stratégique
-
-Aucune statistique du Market State ne produit `BUY`, `SELL`, `HOLD`, score de trading, label bullish/bearish ou autre signal. L'agent IA conserve la décision stratégique.
-
-Bid/ask, spread marché réel, volume, bougies, carnet et profondeur restent à ajouter uniquement si un besoin concret le justifie.
+Pour un snapshot à `T`, seules les observations `observed_at <= T` sont utilisées. Le seuil technique de stale du Market State reste distinct de la politique métier Risk.
 
 ---
 
-## 10. Portfolio State
-
-Le `PortfolioState` est la vue canonique de ce que le système considère comme détenu et disponible.
+## 7. Portfolio State et Paper Broker
 
 ### Confirmé au Batch 05
 
-Le contrat conserve deux rôles explicitement séparés :
+`balances` est la source canonique des actifs de règlement ; `positions` est la source canonique des actifs détenus/vendables. Les rôles sont uniques et non chevauchants.
 
-- `balances` est la source canonique des actifs de règlement disponibles à débiter/créditer ;
-- `positions` est la source canonique des actifs de base détenus, avec quantité totale et quantité disponible à la vente.
+`PaperPortfolioLedger` reçoit un état initial explicitement injecté. Aucun capital PAPER, devise de référence ou univers produit n'est imposé globalement. Les mutations sont copy-on-write et atomiques.
 
-Un actif ne peut pas apparaître simultanément dans `balances` et `positions`, et chaque actif doit être unique dans sa collection. Les quantités négatives sont interdites ; `AssetPosition.available` ne peut pas dépasser `quantity`.
-
-Le capital initial et la devise de référence produit **ne sont pas figés**. Le `PaperPortfolioLedger` reçoit explicitement un `PortfolioState` initial. Une fixture de test peut utiliser EUR ou BTC/EUR sans transformer ce choix en décision produit.
-
-Le ledger mémoire est l'unique état mutable du portefeuille PAPER dans ce batch. Il produit à tout instant un nouveau snapshot `PortfolioState` canonique, trié de manière déterministe par actif. Les mutations BUY/SELL sont préparées sur copies et ne remplacent l'état interne qu'après validation complète.
-
-### Invariant confirmé
-
-Une vente ne peut jamais dépasser la quantité détenue et disponible. Un achat ne peut jamais produire un solde quote négatif. Le Paper Broker conserve ces invariants d'intégrité même si le futur Risk Engine les contrôle aussi en amont.
-
-### Base de coût et P&L
-
-Le Batch 05 n'introduit pas de base de coût ni de moteur comptable P&L. Les informations d'exécution nécessaires aux analytics futures sont portées par `Fill`. Le P&L complet, drawdown et reporting restent au Batch 12.
-
----
-
-## 11. Interface de l'agent IA
-
-### 11.1 Rôle confirmé
-
-L'agent prend la décision stratégique à partir d'un contexte préparé par le backend. Il ne reçoit jamais de secrets et n'a aucun accès direct à Kraken.
-
-### 11.2 Modèle initial
-
-- **Confirmé :** GPT-5.6 Luna par défaut.
-- **Confirmé :** GPT-5.6 Sol sélectionnable par configuration.
-- **À décider :** paramètres exacts, budget tokens, retries et outils éventuels.
-
-### 11.3 Port confirmé
-
-```text
-LLMProvider.generate_decision(AgentInput) -> DecisionCandidate
-```
-
-Le provider réel et le prompt restent hors périmètre jusqu'au Batch 07.
-
----
-
-## 12. Risk Engine
-
-### 12.1 Autorité confirmée
-
-Le Risk Engine déterministe est **l'autorité finale** avant exécution. Il peut `ALLOW`, `MODIFY` ou `REJECT` et ne doit pas inventer une nouvelle stratégie de marché.
-
-### 12.2 Contraintes futures à chiffrer
-
-Actifs autorisés, taille maximale, exposition, cash minimum, quantité avant SELL, drawdown/perte, fraîcheur, fréquence/turnover, cooldown, précision/minimum Kraken.
-
-Le Paper Broker du Batch 05 protège uniquement les invariants absolus d'exécution et de comptabilité ; il ne remplace pas le Risk Engine du Batch 06.
-
----
-
-## 13. Paper Trading
-
-### 13.1 Confirmé au Batch 05
-
-Les premières versions sont exclusivement PAPER. `ExecutionMode` ne contient actuellement que `PAPER`.
-
-Le port canonique est désormais :
+`PaperBroker` reçoit explicitement `ExecutionIntent` et `MarketState` :
 
 ```text
 Broker.execute(execution_intent, market_state) -> tuple[Fill, ...]
 ```
 
-Le `MarketState` est explicitement fourni afin que le broker n'effectue aucun lookup réseau caché. Le symbole doit correspondre à l'intention et le snapshot de pricing ne peut pas être postérieur à `ExecutionIntent.created_at`.
+Il ne consulte jamais Kraken, fait un fill complet immédiat ou un rejet explicite, et conserve les garde-fous comptables SPOT comme dernière frontière d'intégrité.
 
-Le premier modèle PAPER est volontairement simple :
+### Pricing PAPER partagé
 
-- fill immédiat et complet ou rejet explicite ;
-- aucun order book simulé ;
-- aucun partial fill ;
-- aucun ordre limit/pending ;
-- aucun matching engine ;
-- aucun aléatoire.
+Le calcul des coûts est factorisé dans une fonction pure partagée par le Risk Engine et le Paper Broker. `PaperExecutionCostModel` reste injecté :
 
-Les coûts sont injectés via un objet `PaperExecutionCostModel` :
+- `fee_rate` décimal ;
+- `spread_bps` = impact adverse par côté ;
+- `slippage_bps` = impact adverse additionnel.
 
-- `fee_rate` : taux décimal appliqué au notional exécuté ;
-- `spread_bps` : impact adverse **par côté** exprimé en basis points ;
-- `slippage_bps` : impact adverse déterministe additionnel par côté.
+Cette factorisation évite qu'un BUY soit autorisé par Risk puis rejeté par le broker uniquement à cause de frais/spread/slippage déjà prévisibles.
 
-Pour un prix de référence `P` :
+---
+
+## 8. Risk Engine — état Batch 06
+
+### Autorité et pureté
+
+Le package canonique est `ai_spot_trader.risk`. Le moteur est synchrone, déterministe, sans FastAPI, Kraken, LLM, Broker ou I/O réseau. Il ne mute ni `MarketState` ni `PortfolioState` et n'exécute jamais lui-même un ordre.
+
+Une même entrée + même `RiskPolicy` + mêmes coûts PAPER + même horloge/factories produit le même résultat métier.
+
+### RiskPolicy injectée
+
+Aucune limite produit arbitraire n'est ajoutée à `Settings` ou `.env`. La policy peut actuellement porter :
+
+- `max_order_notional` optionnel ;
+- `allowed_pairs` optionnel ;
+- `stale_after` métier optionnel ;
+- `allow_quantity_reduction` explicite.
+
+Absence de whitelist = aucune contrainte de paire par cette policy. Absence de `stale_after` = aucun seuil stale inventé. Une policy invalide est rejetée à la construction.
+
+### Contrôles effectivement supportés
+
+Le Batch 06 vérifie honnêtement avec les données disponibles :
+
+- symbole canonique `BASE/QUOTE` et cohérence avec `MarketState` ;
+- chronologie sans look-ahead ;
+- whitelist optionnelle ;
+- fraîcheur métier optionnelle ;
+- max order notional au prix de référence ;
+- balance quote nécessaire ;
+- coût PAPER BUY estimé complet ;
+- position SELL réellement détenue et disponible ;
+- rôles base/quote compatibles ;
+- impossibilité d'une quantité résultante nulle ou négative.
+
+`MODIFY` ne peut que réduire la quantité. Il ne change jamais BUY↔SELL, le symbole ou l'actif et n'augmente jamais la taille stratégique.
+
+### HOLD
+
+`HOLD` traverse la frontière Risk afin de produire un `RiskAssessment` auditable `ALLOW` avec raison structurée `HOLD_NO_EXECUTION`, mais aucun `ExecutionIntent`.
+
+### Limites volontairement non implémentées
+
+Faute de données suffisantes ou parce qu'elles appartiennent à d'autres batches : drawdown, daily loss, VaR, corrélations, allocation optimale, exposition portefeuille avancée, cooldown/turnover, précision/minimum Kraken, mapping agressivité 1–10.
+
+---
+
+## 9. Chronologie et no look-ahead
+
+Pour une décision tradable :
 
 ```text
-BUY price  = P + spread impact + slippage impact
-SELL price = P - spread impact - slippage impact
+MarketState.as_of   <= DecisionCandidate.created_at
+PortfolioState.as_of <= DecisionCandidate.created_at
+DecisionCandidate.created_at <= RiskAssessment.assessed_at
+RiskAssessment.assessed_at = ExecutionIntent.created_at
+MarketState.as_of <= ExecutionIntent.created_at <= Fill.filled_at
 ```
 
-Les frais sont débités en plus du notional sur BUY et déduits du produit sur SELL. Aucun arrondi Kraken, minimum fournisseur ou quantification arbitraire n'est appliqué au Batch 05.
-
-`Fill` mémorise les coûts et le contexte de pricing pour qu'un futur moteur Analytics puisse expliquer une mutation sans reconstruire les coûts depuis une configuration qui aurait changé.
-
-### 13.2 Toujours à décider
-
-- valeurs produit par défaut de frais/spread/slippage ;
-- éventuel modèle plus réaliste basé sur bid/ask ou order book lorsque ces données existeront ;
-- partial fills, minimums/précision fournisseur et comportement avancé d'ordres ;
-- capital PAPER initial et devise de référence globale.
+Un `MarketState` ou un `PortfolioState` futur par rapport à la décision est rejeté par Risk. Le Paper Broker conserve indépendamment sa vérification du contexte de pricing.
 
 ---
 
-## 14. Agressivité 1–10
+## 10. Agent IA
 
-### Confirmé
+`LLMProvider.generate_decision(AgentInput) -> DecisionCandidate` reste le port canonique. Le provider Luna réel, prompt, parsing fournisseur et retries appartiennent au Batch 07.
 
-L'utilisateur peut configurer un entier de **1 à 10**. La validation existe au niveau configuration et `AgentInput`.
+Le contrat Batch 06 impose désormais au futur agent de fournir une `proposed_quantity` pour BUY/SELL. L'agent conserve donc le sourcing du sizing stratégique ; Risk ne peut que le borner pour la sécurité.
 
-Le mapping chiffré exact reste **À DÉCIDER** et devra être monotone, documenté, testable et versionné. Aucune valeur ne peut contourner les invariants SPOT ou le Risk Engine.
-
----
-
-## 15. Cible quotidienne +4 %
-
-### Confirmé
-
-+4 %/jour est une cible expérimentale, pas une promesse. Elle ne doit pas forcer un trade, masquer les pertes, provoquer de cherry-picking, ni conduire à une modification post-hoc des décisions.
-
-La frontière exacte d'une journée, la devise de référence et le calcul du capital de début de journée restent à décider.
+L'agressivité 1–10 reste validée dans `Settings` et `AgentInput`, mais son mapping chiffré n'est pas figé. Aucune agressivité ne peut contourner une limite absolue.
 
 ---
 
-## 16. Observabilité et journalisation
+## 11. Orchestration, persistance et analytics
 
-### Confirmé
+La boucle autonome reste au Batch 08 ; le Risk Engine peut être invoqué indépendamment.
 
-Toutes les décisions sont journalisées, y compris `HOLD`.
+PostgreSQL reste la cible future. Le Batch 06 n'ajoute aucune persistance.
 
-Les contrats portent des identifiants corrélables pour snapshots, cycles, décisions, évaluations de risque, exécutions et fills. Le `Fill` du Batch 05 référence aussi le `MarketState` qui a servi au pricing. Les timestamps techniques sont UTC-aware.
-
-### Toujours à décider
-
-Format final des logs structurés, rétention, verbosité et schéma de persistance. Aucun secret ne doit apparaître dans les logs ou prompts.
+P&L brut/net, drawdown, frais, slippage, exposition, nombre de trades et performance quotidienne/cumulée restent des objectifs Analytics. Le Batch 06 ne fabrique pas de métrique à partir de données inexistantes.
 
 ---
 
-## 17. Stockage
+## 12. Sécurité et séparation PAPER / LIVE
 
-### Confirmé
+`ExecutionMode` ne contient que `PAPER`. Le LIVE reste non représentable et nécessitera une décision dédiée. Aucun secret n'est ajouté ; aucune clé Kraken privée n'est requise.
 
-PostgreSQL est la base cible.
-
-### Données candidates
-
-Cycles, snapshots/références de marché et portefeuille, décisions agent, résultats Risk Engine, exécutions/fills PAPER, métriques P&L, configuration/version d'expérience et erreurs utiles.
-
-ORM, migrations, granularité de conservation et rétention restent à décider. Les Batch 04 et 05 conservent uniquement des états mémoire techniques ; aucune persistance n'est introduite.
+Le Risk Engine et le Paper Broker dupliquent volontairement certains invariants SPOT : Risk anticipe et explique la décision ; le broker protège l'intégrité finale de l'exécution.
 
 ---
 
-## 18. Sécurité des secrets
+## 13. Stratégie de tests
 
-### Confirmé
+Les tests de Risk doivent rester offline et déterministes. Cas critiques : ALLOW BUY/SELL, REJECT explicite, MODIFY avec réduction, cash insuffisant, SELL non détenu/supérieur au disponible, max notional et frontière exacte, whitelist, stale absent/configuré, snapshots futurs, HOLD sans intent, LIVE impossible, corrélations d'UUID, immutabilité des snapshots, exactitude `Decimal`, déterminisme et absence de dépendance Kraken/LLM/FastAPI.
 
-- aucun secret dans Git ;
-- aucun secret dans prompts/logs ;
-- aucun secret dans les fichiers de configuration versionnés ;
-- aucune clé Kraken avec droit de retrait ;
-- fournisseur LLM et Kraken derrière interfaces dédiées ;
-- futur LIVE séparé du PAPER.
+Aucun test réussi ne doit être déclaré s'il n'a pas réellement été exécuté.
 
 ---
 
-## 19. Séparation PAPER / LIVE
+## 14. Questions ouvertes prioritaires
 
-### Confirmé
-
-Le passage en LIVE doit être explicite, séparé et ultérieur. Le mode ne doit jamais être déduit d'une clé présente ou de l'environnement.
-
-`ExecutionMode` ne possède que la valeur `PAPER`, donc `LIVE` n'est pas activable.
-
----
-
-## 20. Horloge, timestamps et no look-ahead
-
-### Confirmé
-
-Une interface `Clock.now()` et une implémentation `SystemClock` UTC fournissent un point d'injection pour tests déterministes et replays.
-
-Les timestamps techniques sont stockés/échangés en UTC après normalisation. Cette convention ne décide pas de la frontière journalière des métriques.
-
-Le Batch 04 garantit qu'un `MarketState` construit à `T` ne contient aucune observation postérieure à `T`. Le Batch 05 prolonge cet invariant à l'exécution : un broker PAPER refuse un `MarketState.as_of` postérieur à `ExecutionIntent.created_at` et n'interroge jamais Kraken « maintenant » pendant un replay.
-
----
-
-## 21. Stratégie de tests
-
-### Principes confirmés
-
-- ne jamais présenter un test non exécuté comme réussi ;
-- tester les composants déterministes indépendamment du LLM/Kraken ;
-- ne pas nécessiter le frontend pour tester le moteur ;
-- éviter toute exécution LIVE dans les suites automatiques ;
-- tester explicitement absence de look-ahead, ordre temporel, fenêtres partielles et historique borné ;
-- tester les mutations portfolio atomiques et l'absence de solde/position négatif ;
-- tester précisément frais, spread, slippage et exactitude `Decimal` ;
-- tester qu'un rejet PAPER ne produit ni mutation partielle ni faux `Fill`.
-
-Pyramide : unitaires, contrats, intégration offline, intégration réseau publique contrôlée, replay, frontend/API, expérimentation modèles.
-
-Cas critiques : vente impossible au-delà du solde, cash insuffisant, symbole/pricing incohérent, sortie LLM invalide => zéro ordre, Risk reject => zéro exécution, HOLD journalisé, coûts visibles, frontend indépendant, reprise cohérente, données périmées => comportement sûr.
-
----
-
-## 22. Mesure des performances
-
-### Métriques confirmées
-
-P&L brut/net, drawdown, frais, slippage, exposition, nombre de trades, performance quotidienne et cumulée.
-
-### Intégrité expérimentale
-
-Conserver pertes et périodes défavorables, versionner configurations, ne pas réécrire l'historique, ne pas utiliser de données futures, éviter sélection post-hoc et comparer Luna/Sol avec un protocole comparable.
-
-Le `Fill` enrichi du Batch 05 fournit désormais les faits d'exécution nécessaires pour mesurer ultérieurement frais et impacts de prix sans les masquer dans les balances.
-
----
-
-## 23. Questions ouvertes prioritaires
-
-- capital PAPER et devise de référence ;
-- univers initial de paires Kraken ;
-- fréquence de décision ;
-- éventuelle évolution des horizons 5 min / 30 min ;
-- données marché supplémentaires réellement nécessaires (bid/ask, volume, bougies, etc.) ;
-- représentation du sizing dans `DecisionCandidate` ;
-- limites chiffrées du Risk Engine ;
-- seuil métier global de fraîcheur ;
+- capital PAPER et devise de référence produit ;
+- univers initial de paires ;
+- cadence de décision ;
+- valeurs produit des limites Risk ;
+- éventuel seuil stale global d'expérience ;
 - mapping agressivité 1–10 ;
-- valeurs de coûts PAPER de référence et éventuel modèle de fill plus réaliste ;
-- persistance des données de marché et portefeuille ;
-- frontière de journée ;
-- règles de reprise après panne.
+- valeurs de référence fee/spread/slippage ;
+- exposition simple ou avancée à introduire plus tard ;
+- frontière de journée et données P&L nécessaires au drawdown/daily loss ;
+- ORM, migrations, rétention et reprise après panne ;
+- conditions futures d'un éventuel LIVE.
 
-Ces choix doivent être consignés dans `10_DECISIONS_ET_CHANGELOG.md` lorsqu'ils deviennent confirmés.
+Ces choix doivent être consignés dans `10_DECISIONS_ET_CHANGELOG.md` lorsqu'ils deviennent canoniques.

@@ -5,7 +5,12 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
-from ai_spot_trader.domain.enums import ExecutionMode, RiskDecision, TradingAction
+from ai_spot_trader.domain.enums import (
+    ExecutionMode,
+    RiskDecision,
+    RiskReason,
+    TradingAction,
+)
 from ai_spot_trader.domain.models import (
     AgentInput,
     AssetBalance,
@@ -68,6 +73,7 @@ def test_valid_domain_contracts_and_enums() -> None:
         created_at=NOW,
         action=TradingAction.BUY,
         symbol="BTC/EUR",
+        proposed_quantity=Decimal("0.01"),
         rationale="Test decision",
     )
     risk = RiskAssessment(
@@ -76,6 +82,8 @@ def test_valid_domain_contracts_and_enums() -> None:
         decision_id=decision_id,
         assessed_at=NOW,
         status=RiskDecision.ALLOW,
+        requested_quantity=Decimal("0.01"),
+        authorized_quantity=Decimal("0.01"),
     )
     intent = ExecutionIntent(
         execution_id=uuid4(),
@@ -106,11 +114,80 @@ def test_valid_domain_contracts_and_enums() -> None:
 
     assert agent_input.aggressiveness == 6
     assert decision.action is TradingAction.BUY
+    assert decision.proposed_quantity == Decimal("0.01")
     assert "\"action\":\"BUY\"" in decision.model_dump_json()
     assert risk.status is RiskDecision.ALLOW
     assert intent.mode is ExecutionMode.PAPER
     assert fill.quantity == Decimal("0.01")
     assert fill.reference_price == Decimal("50000.00")
+
+
+def test_decision_candidate_enforces_trade_sizing_and_hold_has_no_size() -> None:
+    common = {
+        "decision_id": uuid4(),
+        "cycle_id": uuid4(),
+        "created_at": NOW,
+        "symbol": "BTC/EUR",
+    }
+    with pytest.raises(ValidationError, match="proposed_quantity"):
+        DecisionCandidate.model_validate(common | {"action": TradingAction.BUY})
+    with pytest.raises(ValidationError):
+        DecisionCandidate.model_validate(
+            common
+            | {
+                "action": TradingAction.SELL,
+                "proposed_quantity": Decimal("0"),
+            }
+        )
+    with pytest.raises(ValidationError, match="HOLD"):
+        DecisionCandidate.model_validate(
+            common
+            | {
+                "action": TradingAction.HOLD,
+                "proposed_quantity": Decimal("1"),
+            }
+        )
+
+    hold = DecisionCandidate.model_validate(common | {"action": TradingAction.HOLD})
+    assert hold.proposed_quantity is None
+
+
+def test_risk_assessment_contract_enforces_status_quantity_semantics() -> None:
+    common = {
+        "risk_assessment_id": uuid4(),
+        "cycle_id": uuid4(),
+        "decision_id": uuid4(),
+        "assessed_at": NOW,
+    }
+    with pytest.raises(ValidationError, match="strictly reduce"):
+        RiskAssessment.model_validate(
+            common
+            | {
+                "status": RiskDecision.MODIFY,
+                "requested_quantity": Decimal("1"),
+                "authorized_quantity": Decimal("1"),
+                "reasons": (RiskReason.MAX_ORDER_NOTIONAL_LIMIT,),
+            }
+        )
+    with pytest.raises(ValidationError, match="REJECT"):
+        RiskAssessment.model_validate(
+            common
+            | {
+                "status": RiskDecision.REJECT,
+                "requested_quantity": Decimal("1"),
+                "authorized_quantity": Decimal("0.5"),
+                "reasons": (RiskReason.INSUFFICIENT_CASH,),
+            }
+        )
+    with pytest.raises(ValidationError, match="preserve"):
+        RiskAssessment.model_validate(
+            common
+            | {
+                "status": RiskDecision.ALLOW,
+                "requested_quantity": Decimal("1"),
+                "authorized_quantity": Decimal("0.5"),
+            }
+        )
 
 
 def test_unknown_action_is_rejected() -> None:

@@ -9,7 +9,12 @@ from ai_spot_trader.broker.errors import (
     PricingContextError,
     PricingSymbolMismatchError,
 )
-from ai_spot_trader.broker.paper import PaperBroker, PaperExecutionCostModel
+from ai_spot_trader.broker.paper import PaperBroker
+from ai_spot_trader.broker.pricing import (
+    PaperExecutionCostModel,
+    PaperExecutionEstimate,
+    estimate_paper_execution,
+)
 
 __all__ = [
     "FuturePricingContextError",
@@ -19,6 +24,8 @@ __all__ = [
     "PaperBroker",
     "PaperBrokerError",
     "PaperExecutionCostModel",
+    "PaperExecutionEstimate",
     "PricingContextError",
     "PricingSymbolMismatchError",
+    "estimate_paper_execution",
 ]

@@ -1,54 +1,25 @@
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
 from uuid import UUID, uuid4
 
 from ai_spot_trader.broker.errors import (
     FuturePricingContextError,
     InvalidCanonicalSymbolError,
     InvalidExecutionTimeError,
-    InvalidPaperCostModelError,
     PricingSymbolMismatchError,
+)
+from ai_spot_trader.broker.pricing import (
+    PaperExecutionCostModel,
+    estimate_paper_execution,
 )
 from ai_spot_trader.core.clock import Clock, SystemClock
 from ai_spot_trader.domain.enums import ExecutionMode, TradingAction
 from ai_spot_trader.domain.models import ExecutionIntent, Fill, MarketState
+from ai_spot_trader.domain.symbols import parse_canonical_symbol
 from ai_spot_trader.portfolio.ledger import PaperPortfolioLedger
 
-BASIS_POINTS = Decimal(10_000)
 FillIdFactory = Callable[[], UUID]
-
-
-@dataclass(frozen=True, slots=True)
-class PaperExecutionCostModel:
-    """Injected deterministic PAPER costs; spread_bps is adverse impact per side."""
-
-    fee_rate: Decimal
-    spread_bps: Decimal
-    slippage_bps: Decimal
-
-    def __post_init__(self) -> None:
-        values = {
-            "fee_rate": self.fee_rate,
-            "spread_bps": self.spread_bps,
-            "slippage_bps": self.slippage_bps,
-        }
-        for name, value in values.items():
-            if not isinstance(value, Decimal):
-                raise InvalidPaperCostModelError(f"{name} must be a Decimal")
-            if not value.is_finite() or value < 0:
-                raise InvalidPaperCostModelError(
-                    f"{name} must be a finite non-negative Decimal"
-                )
-        if self.fee_rate >= Decimal(1):
-            raise InvalidPaperCostModelError("fee_rate must be lower than 1")
-        adverse_rate = (self.spread_bps + self.slippage_bps) / BASIS_POINTS
-        if adverse_rate >= Decimal(1):
-            raise InvalidPaperCostModelError(
-                "combined spread and slippage must keep SELL execution price positive"
-            )
 
 
 class PaperBroker:
@@ -103,21 +74,17 @@ class PaperBroker:
                 "execution clock cannot precede the ExecutionIntent creation time"
             )
 
-        base_asset, quote_asset = _parse_symbol(intent.symbol)
-        reference_price = market_state.last_price
-        spread_rate = self._cost_model.spread_bps / BASIS_POINTS
-        slippage_rate = self._cost_model.slippage_bps / BASIS_POINTS
-        spread_per_unit = reference_price * spread_rate
-        slippage_per_unit = reference_price * slippage_rate
+        try:
+            base_asset, quote_asset = parse_canonical_symbol(intent.symbol)
+        except ValueError as exc:
+            raise InvalidCanonicalSymbolError(str(exc)) from exc
 
-        if intent.action is TradingAction.BUY:
-            execution_price = reference_price + spread_per_unit + slippage_per_unit
-        else:
-            execution_price = reference_price - spread_per_unit - slippage_per_unit
-
-        quantity = intent.quantity
-        notional = execution_price * quantity
-        fee = notional * self._cost_model.fee_rate
+        estimate = estimate_paper_execution(
+            action=intent.action,
+            reference_price=market_state.last_price,
+            quantity=intent.quantity,
+            cost_model=self._cost_model,
+        )
         fill = Fill(
             fill_id=self._fill_id_factory(),
             execution_id=intent.execution_id,
@@ -126,40 +93,30 @@ class PaperBroker:
             pricing_as_of=market_state.as_of,
             action=intent.action,
             symbol=intent.symbol,
-            quantity=quantity,
-            reference_price=reference_price,
-            price=execution_price,
-            notional=notional,
-            fee=fee,
-            spread_cost=spread_per_unit * quantity,
-            slippage_cost=slippage_per_unit * quantity,
+            quantity=intent.quantity,
+            reference_price=estimate.reference_price,
+            price=estimate.price,
+            notional=estimate.notional,
+            fee=estimate.fee,
+            spread_cost=estimate.spread_cost,
+            slippage_cost=estimate.slippage_cost,
         )
 
         if intent.action is TradingAction.BUY:
             self._ledger.apply_buy(
                 base_asset=base_asset,
                 quote_asset=quote_asset,
-                quantity=quantity,
-                quote_debit=notional + fee,
+                quantity=intent.quantity,
+                quote_debit=estimate.buy_quote_debit,
             )
         else:
             self._ledger.apply_sell(
                 base_asset=base_asset,
                 quote_asset=quote_asset,
-                quantity=quantity,
-                quote_credit=notional - fee,
+                quantity=intent.quantity,
+                quote_credit=estimate.sell_quote_credit,
             )
         return (fill,)
-
-
-def _parse_symbol(symbol: str) -> tuple[str, str]:
-    parts = symbol.split("/")
-    if len(parts) != 2:
-        raise InvalidCanonicalSymbolError("symbol must use canonical BASE/QUOTE form")
-    base_asset, quote_asset = (part.strip() for part in parts)
-    if not base_asset or not quote_asset or base_asset == quote_asset:
-        raise InvalidCanonicalSymbolError("symbol must contain distinct BASE and QUOTE assets")
-    return base_asset, quote_asset
 
 
 def _normalize_clock_time(value: datetime) -> datetime:

@@ -13,7 +13,13 @@ from pydantic import (
     model_validator,
 )
 
-from ai_spot_trader.domain.enums import ExecutionMode, RiskDecision, TradingAction
+from ai_spot_trader.domain.enums import (
+    ExecutionMode,
+    RiskDecision,
+    RiskLimit,
+    RiskReason,
+    TradingAction,
+)
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 PositiveDecimal = Annotated[Decimal, Field(gt=0)]
@@ -222,14 +228,24 @@ class AgentInput(DomainModel):
 
 
 class DecisionCandidate(DomainModel):
-    """Validated strategic decision candidate before deterministic risk review."""
+    """Strategic action and proposed size before deterministic risk review."""
 
     decision_id: UUID
     cycle_id: UUID
     created_at: UtcDateTime
     action: TradingAction
     symbol: NonEmptyText
+    proposed_quantity: PositiveDecimal | None = None
     rationale: str | None = None
+
+    @model_validator(mode="after")
+    def validate_proposed_quantity(self) -> "DecisionCandidate":
+        if self.action is TradingAction.HOLD:
+            if self.proposed_quantity is not None:
+                raise ValueError("HOLD cannot propose an execution quantity")
+        elif self.proposed_quantity is None:
+            raise ValueError("BUY and SELL decisions require proposed_quantity")
+        return self
 
 
 class RiskAssessment(DomainModel):
@@ -240,7 +256,37 @@ class RiskAssessment(DomainModel):
     decision_id: UUID
     assessed_at: UtcDateTime
     status: RiskDecision
-    reasons: tuple[str, ...] = ()
+    requested_quantity: PositiveDecimal | None = None
+    authorized_quantity: PositiveDecimal | None = None
+    evaluated_limits: tuple[RiskLimit, ...] = ()
+    reasons: tuple[RiskReason, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_risk_outcome(self) -> "RiskAssessment":
+        if len(set(self.evaluated_limits)) != len(self.evaluated_limits):
+            raise ValueError("evaluated_limits must contain unique checks")
+        if self.status is RiskDecision.REJECT:
+            if self.authorized_quantity is not None:
+                raise ValueError("REJECT cannot authorize a quantity")
+            if not self.reasons:
+                raise ValueError("REJECT requires at least one reason")
+            return self
+
+        if self.status is RiskDecision.MODIFY:
+            if self.requested_quantity is None or self.authorized_quantity is None:
+                raise ValueError("MODIFY requires requested and authorized quantities")
+            if self.authorized_quantity >= self.requested_quantity:
+                raise ValueError("MODIFY must strictly reduce the requested quantity")
+            if not self.reasons:
+                raise ValueError("MODIFY requires at least one reason")
+            return self
+
+        if self.requested_quantity is None:
+            if self.authorized_quantity is not None:
+                raise ValueError("ALLOW without a requested quantity cannot authorize one")
+        elif self.authorized_quantity != self.requested_quantity:
+            raise ValueError("ALLOW must preserve the requested quantity")
+        return self
 
 
 class ExecutionIntent(DomainModel):

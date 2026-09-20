@@ -2,9 +2,9 @@
 
 AI Spot Trader est une application expérimentale de **trading crypto SPOT pilotée par un agent IA unique**.
 
-Le projet vise à étudier jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
+Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut du projet :** Batch 04 — Market State intégré sur `main` au commit `73acc4758427ea7575ddf0a43505e1c95fab5e9c`. Le Batch 05 — Portfolio State + Paper Broker est validé localement et reste à intégrer sur `main`. Les premières versions restent exclusivement en **PAPER trading**.
+> **Statut du projet :** le Batch 05 — Portfolio State + Paper Broker est intégré sur `main` au commit `c24551d36a863abbb5fdb86b79658b235c852772`. Le Batch 06 — Risk Engine est préparé dans la livraison courante et reste à valider localement puis à intégrer. Les premières versions restent exclusivement en **PAPER trading**.
 
 ## Principes du projet
 
@@ -13,23 +13,25 @@ Le projet vise à étudier jusqu'où un agent IA peut prendre des décisions de 
 - Aucun short, levier, margin, future ou perpetual.
 - Actions stratégiques de l'agent : `BUY`, `SELL`, `HOLD`.
 - Impossible de vendre un actif non détenu.
-- Un seul agent IA conserve la décision stratégique.
-- Les indicateurs et calculs déterministes fournissent du contexte, sans devenir silencieusement une stratégie algorithmique parallèle.
-- Le **Risk Engine** déterministe peut autoriser, modifier ou refuser une décision avant exécution.
+- Un seul agent IA conserve la décision stratégique et propose aussi la taille des BUY/SELL.
+- Le Risk Engine ne crée aucun signal et ne choisit jamais spontanément un actif ou un sens de trade.
+- Le **Risk Engine déterministe** peut autoriser, réduire ou refuser une proposition avant exécution.
 - Aucune sortie LLM ne peut déclencher directement un ordre Kraken.
 - Toutes les décisions, y compris `HOLD`, doivent être journalisées.
 - Les frais, le spread et le slippage sont explicitement modélisés dans l'exécution PAPER.
 - Le passage au **LIVE** sera explicite, séparé du PAPER et traité dans une phase ultérieure.
 
+Principe central : **l'IA propose. Le Risk Engine autorise, modifie ou refuse.**
+
 ## Agent IA
 
-Les premiers tests utiliseront **GPT-5.6 Luna** afin de réduire les coûts d’expérimentation. L’architecture permet de sélectionner **GPT-5.6 Sol** par configuration sans modifier le moteur de trading.
+Les premiers tests utiliseront **GPT-5.6 Luna** afin de réduire les coûts d'expérimentation. L'architecture permet de sélectionner **GPT-5.6 Sol** par configuration sans modifier le moteur de trading.
 
-Le niveau d’agressivité est prévu sur une échelle configurable de **1 à 10**. Son mapping exact reste à définir et sera traité dans un batch ultérieur.
+Le niveau d'agressivité est prévu sur une échelle configurable de **1 à 10**. Son mapping exact reste à définir. Aucune valeur d'agressivité ne pourra contourner les invariants absolus SPOT/PAPER ou une limite Risk active.
 
 ## Objectif expérimental
 
-Le projet conserve une cible expérimentale de **+4 % de rendement journalier** comme objectif de recherche et de mesure. Cette cible n’est ni une promesse ni une garantie ; les résultats doivent être mesurés honnêtement, sans look-ahead ni sélection rétrospective.
+Le projet conserve une cible expérimentale de **+4 % de rendement journalier** comme objectif de recherche et de mesure. Cette cible n'est ni une promesse ni une garantie ; les résultats doivent être mesurés honnêtement, sans look-ahead ni sélection rétrospective.
 
 ## Architecture
 
@@ -58,30 +60,33 @@ normalized observations
                         |
  Portfolio State -------+--> Agent IA
                               BUY / SELL / HOLD
+                         + quantité proposée BUY/SELL
                                      |
                                      v
                                 Risk Engine
-                         autorise / modifie / refuse
+                         ALLOW / MODIFY / REJECT
                                      |
-                                     v
-                              ExecutionIntent
-                                     |
-                           Market State pricing
-                                     |
-                                     v
-                               Paper Broker
-                                     |
-                             Fill + Portfolio
-                                     |
-                                     v
-                             Journal / Analytics
+                         +-----------+-----------+
+                         |                       |
+                  aucun intent              ExecutionIntent
+                   si REJECT                 PAPER seulement
+                                                 |
+                                      Market State pricing
+                                                 |
+                                                 v
+                                           Paper Broker
+                                                 |
+                                        Fill + Portfolio
+                                                 |
+                                                 v
+                                        Journal / Analytics
 ```
 
 Aucun chemin direct entre l'agent IA et Kraken ne doit exister. Le Paper Broker n'interroge pas Kraken : le `MarketState` utilisé pour le pricing lui est fourni explicitement.
 
 ## État backend actuel
 
-Le backend contient notamment :
+Le backend intégré contient notamment :
 
 ```text
 backend/
@@ -110,21 +115,54 @@ backend/
   pyproject.toml
 ```
 
-Composants désormais disponibles :
+Le patch Batch 06 ajoute et fait évoluer :
+
+```text
+backend/src/ai_spot_trader/
+  broker/
+    pricing.py
+  domain/
+    symbols.py
+  risk/
+    __init__.py
+    engine.py
+    errors.py
+    policy.py
+```
+
+Composants disponibles après application du patch Batch 06 :
 
 - contrats Pydantic stricts et timestamps UTC aware ;
 - données publiques Kraken normalisées ;
 - `MarketStateBuilder` déterministe multi-horizon avec no look-ahead ;
 - `PaperPortfolioLedger` mémoire avec état initial explicitement injecté ;
 - `PaperBroker` full-fill déterministe avec frais, spread et slippage auditables ;
-- `Fill` corrélé à l'exécution et au `MarketState` de pricing ;
+- `DecisionCandidate.proposed_quantity` comme sizing stratégique avant Risk ;
+- `RiskPolicy` injectée sans limites produit cachées ;
+- `RiskEngine` déterministe avec `ALLOW`, `MODIFY`, `REJECT` ;
+- `RiskAssessment` avec quantités demandée/autorisée, `RiskLimit` évaluées et codes `RiskReason` ;
+- `ExecutionIntent` PAPER créé uniquement après autorisation Risk ;
 - aucune API Kraken privée, aucun ordre réel et aucun LIVE.
 
 FastAPI expose toujours uniquement le healthcheck `GET /health` à ce stade. Le frontend reste un cockpit bootstrap sans orchestration du moteur.
 
+## Risk Engine initial
+
+Le Batch 06 conserve une frontière volontairement étroite :
+
+- aucune limite chiffrée produit n'est codée en dur ;
+- `max_order_notional`, whitelist de paires et seuil métier stale sont optionnels et injectés ;
+- la réduction de quantité est désactivée par défaut et doit être explicitement autorisée par la policy ;
+- un `MODIFY` peut uniquement **réduire** une quantité ; il ne change jamais action ni symbole ;
+- BUY vérifie le cash nécessaire en anticipant les mêmes frais/spread/slippage que le Paper Broker ;
+- SELL vérifie la quantité réellement disponible ;
+- les snapshots marché et portefeuille postérieurs à la décision sont refusés ;
+- HOLD reste une décision stratégique valide et ne crée jamais d'`ExecutionIntent` ;
+- drawdown, daily loss, VaR, corrélations et exposition multi-actifs ne sont pas fabriqués sans données adaptées.
+
 ## Modèle PAPER initial
 
-Le Batch 05 utilise un modèle volontairement simple et reproductible :
+Le Paper Broker utilise un modèle simple et reproductible :
 
 - une intention BUY/SELL donne un fill complet immédiat ou un rejet explicite ;
 - aucune simulation d'order book, partial fill, ordre limite ou hasard ;
@@ -134,7 +172,7 @@ Le Batch 05 utilise un modèle volontairement simple et reproductible :
 - frais calculés sur le notional exécuté ;
 - aucun capital initial, quote asset ou niveau de frais produit n'est codé en dur : ils sont injectés explicitement.
 
-Le Risk Engine fonctionnel reste le Batch 06. Les contrôles du broker sur cash et quantité détenue sont des invariants comptables/SPOT, pas une stratégie de risque parallèle.
+Le Risk Engine anticipe les coûts prévisibles pour la solvabilité d'un BUY, mais le Paper Broker reste la dernière frontière d'intégrité et réalise seul la mutation du portefeuille.
 
 ## Démarrage local
 
@@ -148,7 +186,7 @@ backend\.venv\Scripts\python.exe -m pip install -e "backend[dev]"
 backend\.venv\Scripts\python.exe -m pytest backend
 backend\.venv\Scripts\python.exe -m ruff check backend
 backend\.venv\Scripts\python.exe -m mypy backend\src backend\tests
-backend\.venv\Scripts\python.exe -m uvicorn ai_spot_trader.main:app --reload --app-dir backend\src
+git diff --check
 ```
 
 Le package backend accepte Python `>=3.12`. Les validations Windows précédentes ont été réalisées avec Python `3.13.14`.

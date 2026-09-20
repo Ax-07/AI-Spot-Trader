@@ -2,456 +2,309 @@
 
 ## 1. Objet
 
-Ce document complète le Project Master avec une vue technique. Il ne remplace pas les décisions de `01_PROJECT_MASTER.md`.
-
-### Statuts
-
-- **Confirmé** : décision actée.
-- **Proposé** : architecture recommandée à valider par l'implémentation.
-- **À décider** : choix non figé.
-- **Hors périmètre** : non prévu à court terme.
+Ce document décrit l'architecture technique courante d'AI Spot Trader. Il complète `01_PROJECT_MASTER.md` sans remplacer les décisions produit.
 
 ---
 
 ## 2. Vue d'ensemble
 
-### Confirmé
-
 ```text
 +--------------------------+
-|      Frontend cockpit    |
+| Frontend cockpit         |
 | Next.js / TS / shadcn    |
 +------------+-------------+
              |
        REST / WebSocket
              |
 +------------v-------------+
-|        FastAPI API       |
-| contrôle / lecture état  |
+| FastAPI API              |
 +------------+-------------+
              |
 +------------v---------------------------------------+
-|                 Backend trading                    |
+| Backend trading                                   |
 |                                                    |
-| Kraken -> observations -> Market State             |
-|                               |                    |
-| Portfolio State --------------+--> Agent -> Risk   |
-|                                      |             |
-|                               ExecutionIntent      |
-|                                      |             |
-| Market State ------------------------+-> Broker    |
-|                                      |             |
-|                               Portfolio ledger     |
-|                                      |             |
-|                             Portfolio State/Fill   |
+| Kraken -> observations -> MarketState              |
+| PortfolioState ---------> Agent -> DecisionCandidate|
+|                                   |                |
+|                                   v                |
+|                              Risk Engine            |
+|                                   |                |
+|                         RiskAssessment/Intent       |
+|                                   |                |
+| MarketState -----------------> Paper Broker         |
+|                                   |                |
+|                          Fill + portfolio ledger    |
 +----------------------------------------------------+
 ```
 
-Le backend est un processus/service autonome. Le frontend peut disparaître sans interrompre le moteur.
+Le backend est un service autonome ; le frontend n'est jamais l'ordonnanceur du moteur.
 
 ---
 
-## 3. Découpage logique backend
-
-### Confirmé après Batch 05
-
-Le backend reste une application Python unique sous layout `src/` :
+## 3. Découpage backend après Batch 06
 
 ```text
-backend/
-  src/
-    ai_spot_trader/
-      api/
-      broker/
-        errors.py
-        paper.py
-      core/
-        clock.py
-        config.py
-        runtime.py
-      domain/
-        enums.py
-        models.py
-        ports.py
-      integrations/
-        kraken/
-          errors.py
-          market_data.py
-          models.py
-          rest.py
-          symbols.py
-          websocket.py
-      market/
-        errors.py
-        state.py
-      portfolio/
-        errors.py
-        ledger.py
-      main.py
+backend/src/ai_spot_trader/
+  api/
+  broker/
+    errors.py
+    paper.py
+    pricing.py
+  core/
+    clock.py
+    config.py
+    runtime.py
+  domain/
+    enums.py
+    models.py
+    ports.py
+    symbols.py
+  integrations/kraken/
+  market/
+    errors.py
+    state.py
+  portfolio/
+    errors.py
+    ledger.py
+  risk/
+    __init__.py
+    engine.py
+    errors.py
+    policy.py
+  main.py
 ```
 
 Responsabilités :
 
-- `domain` : contrats canoniques indépendants des fournisseurs ;
-- `integrations/kraken/*` : données publiques Kraken et normalisation fournisseur ;
-- `market/*` : historique déterministe, fenêtres, fraîcheur et construction du `MarketState` ;
-- `portfolio/ledger.py` : état mémoire PAPER mutable et snapshots `PortfolioState` ;
-- `portfolio/errors.py` : erreurs d'intégrité du ledger ;
-- `broker/paper.py` : pricing PAPER déterministe et exécution immédiate complète ;
-- `broker/errors.py` : erreurs PAPER explicites de pricing/configuration.
-
-Les futurs domaines `agent`, `risk`, `trading`, `persistence`, `analytics` et `observability` ne sont créés que lorsqu'un batch le nécessite.
+- `domain` : contrats canoniques fournisseur-agnostiques et parsing du symbole canonique ;
+- `integrations/kraken` : structures et I/O spécifiques Kraken uniquement ;
+- `market` : historique et snapshots déterministes ;
+- `portfolio` : état mutable PAPER mémoire ;
+- `broker/pricing.py` : estimation PAPER pure et modèle de coûts partagé ;
+- `broker/paper.py` : exécution PAPER et mutation du ledger ;
+- `risk` : évaluation déterministe sans effets de bord.
 
 ---
 
 ## 4. Contrats de domaine
 
-### Confirmé au Batch 05
+Les contrats sont Pydantic stricts, `extra="forbid"`, timestamps aware normalisés UTC et valeurs financières en `Decimal`.
 
-Les échanges critiques utilisent des contrats Pydantic explicites, stricts et `extra="forbid"` dans `ai_spot_trader.domain`.
+### DecisionCandidate
 
-Contrats marché :
+BUY/SELL exigent une `proposed_quantity > 0`. HOLD interdit toute quantité. Cette quantité est la proposition stratégique amont.
 
-- `MarketObservation` : `observed_at`, `symbol`, `last_price` ;
-- `MarketState` : `market_state_id`, `as_of`, `symbol`, `last_price`, `context?` ;
-- `MarketContext` : fraîcheur et fenêtres descriptives ;
-- `MarketWindowStats` : statistiques de fenêtre disponibles.
+### RiskAssessment
 
-Contrats portfolio/exécution :
+Le contrat expose statut, quantité demandée, quantité autorisée, limites réellement évaluées (`RiskLimit`) et raisons structurées. Invariants :
 
-- `AssetBalance` : `asset`, `available >= 0` ;
-- `AssetPosition` : `asset`, `quantity >= 0`, `available >= 0`, avec `available <= quantity` ;
-- `PortfolioState` : snapshot PAPER, actifs uniques et aucun actif partagé entre `balances` et `positions` ;
-- `ExecutionIntent` : corrélation cycle/décision/risk, timestamp, PAPER, BUY/SELL, symbole, quantité positive ;
-- `Fill` : corrélation exécution + `market_state_id`, `filled_at`, `pricing_as_of`, action, symbole, quantité, `reference_price`, `price`, `notional`, `fee`, `spread_cost`, `slippage_cost`.
+- `ALLOW` conserve la quantité demandée ;
+- `MODIFY` réduit strictement la quantité ;
+- `REJECT` n'autorise aucune quantité et possède au moins une raison ;
+- HOLD peut être `ALLOW` sans quantité ni intent.
 
-Le `Fill` valide sa cohérence arithmétique : `notional = price * quantity` et les coûts de spread/slippage expliquent exactement l'écart adverse entre prix de référence et prix exécuté.
+### ExecutionIntent
 
-Toutes les quantités financières utilisent `Decimal`. Les timestamps du domaine restent timezone-aware et normalisés UTC.
+PAPER uniquement, BUY/SELL uniquement, quantité positive et corrélation au `RiskAssessment`.
 
 ---
 
-## 5. Interfaces externes
+## 5. Symboles canoniques
 
-### 5.1 Kraken
+`domain.symbols.parse_canonical_symbol()` est désormais la primitive générique `BASE/QUOTE` partagée par Risk et Paper Broker. Elle ne connaît aucun alias Kraken.
 
-**Confirmé :** Kraken est l'exchange initial.
-
-Le port historique reste :
-
-```text
-MarketDataSource.snapshot(symbol) -> MarketState
-```
-
-Le port d'observation normalisée reste :
-
-```text
-MarketObservationSource.observation(symbol) -> MarketObservation
-```
-
-```text
-Kraken Spot public APIs
-        |
-        +-- REST AssetPairs -> KrakenPairRegistry
-        |
-        +-- WebSocket v2 ticker -> KrakenTicker
-                                  |
-                                  v
-                           provider normalization
-                                  |
-                                  v
-                           MarketObservation
-                                  |
-                                  v
-                         MarketStateBuilder
-                                  |
-                                  v
-                            MarketState
-```
-
-Règles : aucune structure Kraken n'entre dans `market`, `portfolio` ou `broker`; aucune API privée, clé ou ordre n'est utilisé.
-
-### 5.2 LLM
-
-```text
-LLMProvider.generate_decision(agent_input) -> DecisionCandidate
-```
-
-Le provider réel, le SDK, le prompt et la politique de retry restent hors Batch 05.
-
-### 5.3 Broker
-
-Le port évolue au Batch 05 afin de rendre le pricing explicite :
-
-```text
-Broker.execute(execution_intent, market_state) -> tuple[Fill, ...]
-```
-
-`ExecutionIntent` reste uniquement `PAPER`. Le port ne contient aucun type Kraken et ne cache aucun lookup réseau.
+Les alias et métadonnées fournisseur restent confinés à `integrations/kraken/symbols.py`.
 
 ---
 
-## 6. Market State builder
+## 6. Market State
 
-### 6.1 Historique mémoire
+`MarketStateBuilder` reste synchrone, mono-symbole, mémoire, historique borné et no-look-ahead. Il ne contient aucune stratégie.
 
-`MarketStateBuilder` conserve un historique ordonné pour **un seul symbole canonique par instance**.
-
-- limite par défaut : 10 000 observations ;
-- limite surchargeable au constructeur ;
-- purge déterministe des plus anciennes ;
-- aucun PostgreSQL, Redis ou cache externe ;
-- aucun démarrage FastAPI nécessaire.
-
-Une observation dont le symbole change est rejetée. Les timestamps doivent être strictement croissants : doublon et insertion hors ordre sont des erreurs explicites.
-
-### 6.2 Horizons
-
-Deux horizons par défaut : 5 minutes et 30 minutes. Ils sont surchargeables et triés. Ils ne fixent ni cadence de trading, ni cadence d'ingestion, ni fréquence de décision.
-
-### 6.3 Statistiques
-
-Pour chaque horizon : `observation_count`, min, max, amplitude, return simple et volatilité réalisée lorsque calculables. Tout reste en `Decimal`; une statistique impossible reste `None`.
-
-### 6.4 Fraîcheur et no look-ahead
-
-Le contexte expose la dernière observation, son âge, un seuil technique optionnel et `is_stale` uniquement si ce seuil est évalué.
-
-Pour `build(as_of=T)` :
-
-```text
-observations utilisées = observations avec observed_at <= T
-```
-
-Toute observation postérieure à `T` est exclue même si elle se trouve déjà dans l'historique.
+Le `MarketContext` expose la dernière observation et son âge. Le stale technique éventuellement calculé au niveau Market State n'est pas automatiquement une décision Risk.
 
 ---
 
 ## 7. Portfolio ledger PAPER
 
-### 7.1 État initial explicite
+`PaperPortfolioLedger` reçoit un `PortfolioState` initial injecté. `balances` et `positions` restent les deux rôles canoniques disjoints.
 
-`PaperPortfolioLedger` est construit avec un `PortfolioState` initial fourni par l'appelant. Il n'existe aucun capital ou quote asset implicite dans le composant.
-
-```text
-PaperPortfolioLedger(initial_state=PortfolioState(...))
-```
-
-Cela permet aux tests et futures expériences de choisir leurs actifs/capitaux sans figer une décision produit dans le code.
-
-### 7.2 Sources canoniques
-
-- `balances` : actifs de règlement disponibles ;
-- `positions` : actifs détenus et vendables.
-
-Ces rôles sont disjoints. L'invariant est validé dans le contrat `PortfolioState`, puis préservé par le ledger.
-
-### 7.3 Mutations atomiques
-
-Le ledger prépare chaque mutation sur copies de ses dictionnaires internes. L'état interne n'est remplacé qu'après toutes les validations :
-
-```text
-validate -> copy -> compute -> assign
-```
-
-Un rejet laisse donc balances et positions inchangées.
-
-BUY : débit exact du quote asset, crédit de quantité base dans la position.
-
-SELL : débit de la position base, crédit exact du quote asset. Une position tombant exactement à zéro est retirée du snapshot.
-
-### 7.4 Snapshot
-
-`snapshot()` produit un nouveau `PortfolioState` immutable, avec UUID injectables en test et actifs triés pour une représentation déterministe. L'horloge est injectable.
+Les mutations sont copy-on-write ; un rejet ne laisse aucune modification partielle. Le ledger ne dépend ni de Kraken, ni FastAPI, ni Risk.
 
 ---
 
-## 8. Paper Broker
+## 8. Pricing PAPER partagé
 
-### 8.1 Modèle de pricing
-
-`PaperBroker` reçoit explicitement le `MarketState` associé à l'intention.
-
-Validations avant mutation :
-
-- mode PAPER ;
-- action BUY/SELL ;
-- symbole exact entre intent et Market State ;
-- symbole canonique `BASE/QUOTE` ;
-- `market_state.as_of <= intent.created_at` ;
-- horloge d'exécution timezone-aware et non antérieure à l'intention.
-
-Aucun appel Kraken n'est autorisé depuis `broker`.
-
-### 8.2 Coûts injectés
+`broker/pricing.py` contient :
 
 ```text
 PaperExecutionCostModel
-- fee_rate: Decimal
-- spread_bps: Decimal
-- slippage_bps: Decimal
+PaperExecutionEstimate
+estimate_paper_execution(...)
 ```
 
-Tous les paramètres sont finis et non négatifs. `fee_rate < 1`. La combinaison spread + slippage doit conserver un prix SELL strictement positif.
+La fonction d'estimation est pure et utilisée par :
 
-`spread_bps` représente un impact adverse **par côté**, pas un spread bid/ask total :
+- le Risk Engine pour anticiper le débit quote complet d'un BUY ;
+- le Paper Broker pour construire le fill réel.
+
+Cela crée une seule mathématique canonique des coûts PAPER et évite deux modèles divergents.
+
+Formules :
 
 ```text
 spread_rate   = spread_bps / 10000
 slippage_rate = slippage_bps / 10000
-
-BUY  = reference * (1 + spread_rate + slippage_rate)
-SELL = reference * (1 - spread_rate - slippage_rate)
+BUY price     = reference * (1 + spread_rate + slippage_rate)
+SELL price    = reference * (1 - spread_rate - slippage_rate)
+notional      = price * quantity
+fee           = notional * fee_rate
 ```
 
-Le calcul est strictement déterministe, sans randomisation ni arrondi silencieux.
+BUY débite `notional + fee`; SELL crédite `notional - fee`.
 
-### 8.3 Fill et mouvement de cash
+---
+
+## 9. Risk Engine
+
+### 9.1 Construction
+
+`RiskEngine` reçoit explicitement :
+
+- `RiskPolicy` ;
+- `PaperExecutionCostModel` ;
+- `Clock` ;
+- factories UUID pour assessment et execution.
+
+Aucune dépendance à `Settings`, FastAPI, Kraken, LLM ou `PaperBroker`.
+
+### 9.2 RiskPolicy
 
 ```text
-notional = execution_price * quantity
-fee      = notional * fee_rate
+RiskPolicy
+- max_order_notional: Decimal | None
+- allowed_pairs: frozenset[str] | None
+- stale_after: timedelta | None
+- allow_quantity_reduction: bool
 ```
 
-BUY : `quote_debit = notional + fee`.
+Les valeurs sont injectées par l'appelant. `None` signifie que la limite correspondante n'est pas appliquée. Une whitelist vide est refusée pour éviter une sémantique ambiguë.
 
-SELL : `quote_credit = notional - fee`.
+### 9.3 Pipeline d'évaluation
 
-Le `Fill` est construit et validé avant la mutation du ledger. Un échec de validation ou d'intégrité n'émet aucun fill retourné et ne modifie pas le portefeuille.
+Pour BUY/SELL :
 
-### 8.4 Concurrence locale
+1. horloge Risk non antérieure à la décision ;
+2. symbole canonique ;
+3. symbole `DecisionCandidate == MarketState` ;
+4. whitelist optionnelle ;
+5. snapshots marché et portefeuille non futurs par rapport à la décision ;
+6. stale métier optionnel ;
+7. max notional optionnel ;
+8. contrôle spécifique BUY ou SELL ;
+9. construction du `RiskAssessment` ;
+10. construction de l'`ExecutionIntent` uniquement si ALLOW/MODIFY.
 
-`PaperBroker.execute()` sérialise les exécutions d'une instance avec `asyncio.Lock`, afin que contrôle et mutation du ledger forment une opération cohérente dans le contexte asynchrone.
+Une violation métier normale retourne `REJECT`; les exceptions sont réservées aux états techniques invalides, par exemple une horloge d'évaluation impossible.
 
-Le ledger lui-même reste synchrone et sans I/O.
+### 9.4 BUY
 
----
+- l'actif base ne doit pas être un `balance` ;
+- le quote balance doit exister ;
+- le débit prévisible complet inclut prix adverse PAPER + frais ;
+- si le cash manque, REJECT ou réduction si la policy l'autorise ;
+- la quantité n'est jamais augmentée.
 
-## 9. Orchestration asynchrone
+### 9.5 SELL
 
-`asyncio` reste le socle asynchrone. Les frontières externes I/O sont asynchrones. `MarketStateBuilder` et `PaperPortfolioLedger` sont déterministes et synchrones.
+- le quote balance doit exister ;
+- le base ne doit pas être un `balance` ;
+- une position base doit exister ;
+- la quantité ne peut pas dépasser `available` ;
+- dépassement = REJECT ou réduction si explicitement autorisée ;
+- quantité disponible nulle = REJECT.
 
-Le Batch 05 ne démarre aucune boucle persistante ni scheduler. L'orchestration entre marché, agent, Risk et broker reste au Batch 08.
+### 9.6 HOLD
 
----
-
-## 10. API FastAPI
-
-FastAPI fournit le plan de contrôle/observation du backend. `GET /health` reste inchangé.
-
-Le Batch 05 n'ajoute aucune route portfolio/trading et ne lance aucune tâche dans le lifecycle FastAPI.
-
----
-
-## 11. Persistance et transactions
-
-PostgreSQL reste la cible future.
-
-Le Batch 05 ne crée ni ORM, ni migration, ni table. Le ledger mémoire est un composant PAPER technique, pas la politique finale de persistance/réconciliation.
-
----
-
-## 12. Configuration
-
-La configuration applicative `Settings` reste inchangée au Batch 05.
-
-Aucune nouvelle variable d'environnement n'est ajoutée pour :
-
-- capital initial ;
-- devise de référence ;
-- frais PAPER ;
-- spread PAPER ;
-- slippage PAPER.
-
-L'état initial et les coûts sont injectés explicitement aux composants concernés. Les valeurs produit globales restent à décider.
+HOLD retourne un `RiskAssessment` auditable mais aucun `ExecutionIntent`.
 
 ---
 
-## 13. Horloge, timestamps et reproductibilité
+## 10. Paper Broker
 
-`Clock` / `SystemClock` restent le seam temporel canonique.
+Le broker reste la dernière frontière d'intégrité. Il revalide PAPER, BUY/SELL, symbole, temporalité de pricing et les capacités du ledger.
 
-- observations, snapshots et fills : UTC aware ;
-- snapshots portfolio : horloge ou `as_of` explicite ;
-- pricing PAPER : `MarketState.as_of` doit précéder ou égaler `ExecutionIntent.created_at` ;
-- fill : `pricing_as_of` conserve le timestamp du contexte de prix ;
-- aucun lookup « prix actuel » n'est effectué par le broker.
+Cette duplication est volontaire :
 
-Une même intention, un même portefeuille, un même Market State, un même modèle de coûts et des factories/horloges identiques produisent les mêmes valeurs numériques.
+```text
+Risk Engine  -> décision de sécurité explicable
+Paper Broker -> intégrité finale de l'exécution
+```
+
+Le broker ne récupère jamais de prix réseau caché.
 
 ---
 
-## 14. Résilience et erreurs
+## 11. Chronologie
 
-La résilience Kraken des batches précédents reste inchangée.
+Relations canoniques du Batch 06 :
 
-Le portfolio/broker ajoute des rejets explicites :
+```text
+MarketState.as_of <= DecisionCandidate.created_at
+PortfolioState.as_of <= DecisionCandidate.created_at
+DecisionCandidate.created_at <= RiskAssessment.assessed_at
+RiskAssessment.assessed_at = ExecutionIntent.created_at
+MarketState.as_of <= ExecutionIntent.created_at <= Fill.filled_at
+```
 
-- quote balance inconnue ;
-- fonds insuffisants ;
-- position inexistante ;
-- position disponible insuffisante ;
-- rôle d'actif ambigu ;
-- symbole canonique invalide ;
-- symbole de pricing incompatible ;
-- pricing futur ;
-- horloge d'exécution invalide ;
-- modèle de coûts invalide.
+Le Risk Engine utilise l'âge marché calculé à `assessed_at` lorsqu'un seuil métier `stale_after` est injecté. La frontière est stricte : âge égal au seuil = encore autorisable ; âge supérieur = stale.
 
-Les rejets ne sont pas convertis en `return ()` silencieux.
+---
+
+## 12. Orchestration asynchrone
+
+Les composants déterministes (`MarketStateBuilder`, ledger, Risk Engine, estimateur PAPER) sont synchrones. Les I/O externes restent asynchrones. `PaperBroker.execute()` reste asynchrone et sérialisé avec `asyncio.Lock`.
+
+Le Batch 06 ne crée aucune boucle, tâche de fond ou scheduler. L'orchestration complète reste au Batch 08.
+
+---
+
+## 13. Configuration
+
+`Settings` et `.env.example` ne reçoivent aucune limite Risk au Batch 06. Aucune valeur globale de max order, stale, whitelist, capital ou réserve cash n'est imposée.
+
+Les valeurs produit seront décidées plus tard et pourront être injectées via une couche de configuration appropriée sans modifier la logique Risk.
+
+---
+
+## 14. Persistance, API et frontend
+
+Aucune persistance, migration, route FastAPI ou modification frontend n'est introduite au Batch 06. PostgreSQL reste la cible future.
 
 ---
 
 ## 15. Dépendances externes
 
-Aucune dépendance runtime supplémentaire n'est introduite au Batch 05.
-
-Les calculs utilisent la bibliothèque standard (`asyncio`, `dataclasses`, `datetime`, `decimal`, `uuid`) et Pydantic déjà présent pour les contrats.
-
-NumPy, Pandas, TA-Lib et SDK broker ne sont pas ajoutés.
+Aucune dépendance runtime supplémentaire. NumPy, Pandas, TA-Lib et SDK LLM/broker ne sont pas ajoutés.
 
 ---
 
-## 16. Sécurité technique
+## 16. Limites non calculables honnêtement au Batch 06
 
-Invariants préservés :
+Sont volontairement laissés à des batches ultérieurs :
 
-- pas de secrets versionnés ;
-- pas de secrets dans prompts/logs ;
-- aucune clé Kraken avec retrait ;
-- LIVE séparé ;
-- `ExecutionMode` reste PAPER uniquement ;
-- aucun accès exchange depuis le LLM ;
-- aucun accès Kraken depuis `portfolio` ou `broker` ;
-- aucun signal stratégique produit par les composants déterministes ;
-- aucune vente non couverte ;
-- aucune balance ou position négative.
-
----
-
-## 17. Déploiement
-
-Toujours à décider : local, Docker Compose, VM, etc.
-
-Le Batch 05 n'introduit ni microservice, ni worker séparé, ni infrastructure de cache.
+- max drawdown ;
+- max daily loss ;
+- P&L journalier ;
+- VaR/corrélations/bêta ;
+- exposition portefeuille avancée ;
+- cooldown/turnover ;
+- allocation optimale ;
+- précision et minimums Kraken ;
+- mapping agressivité 1–10.
 
 ---
 
-## 18. Critères architecturaux de qualité
+## 17. Qualité architecturale
 
-Chaque batch doit préserver :
-
-- séparation des responsabilités ;
-- contrats et interfaces testables ;
-- dépendances externes encapsulées ;
-- structures Kraken confinées à l'intégration ;
-- pas de logique financière critique dans le frontend ;
-- pas d'accès exchange depuis le LLM ;
-- pas de stratégie déterministe cachée ;
-- corrélation explicite des décisions/exécutions/pricing ;
-- timestamps non ambigus ;
-- no look-ahead ;
-- testabilité offline ;
-- mutations financières atomiques ;
-- calculs financiers en `Decimal` ;
-- remplacement Luna/Sol par configuration sans refonte métier.
+Chaque batch doit préserver : séparation des responsabilités, contrats testables, dépendances fournisseur confinées, calculs financiers `Decimal`, no-look-ahead, testabilité offline, aucune stratégie déterministe cachée, mutations atomiques et remplacement Luna/Sol par configuration sans refonte métier.

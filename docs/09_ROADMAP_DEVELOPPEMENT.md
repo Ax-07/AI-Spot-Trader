@@ -2,17 +2,7 @@
 
 ## 1. Principes
 
-La roadmap est organisée en **batches cohérents, limités et testables**. Chaque batch doit :
-
-- partir du HEAD GitHub `main` resynchronisé ;
-- auditer les composants existants ;
-- ne modifier que ce qui est nécessaire ;
-- inclure des tests adaptés ;
-- mettre à jour la documentation concernée ;
-- livrer un ZIP root-relative si plusieurs fichiers changent ;
-- distinguer tests réellement exécutés et tests à lancer localement.
-
-La séquence ci-dessous est proposée. Les invariants du Project Master restent confirmés, mais l'ordre peut évoluer si un audit technique le justifie.
+La roadmap est organisée en batches cohérents, limités et testables. Chaque batch part du HEAD GitHub `main`, audite l'existant, modifie uniquement le nécessaire, teste réellement ce qui peut l'être, met à jour la documentation et livre un ZIP root-relative lorsqu'il touche plusieurs fichiers.
 
 ---
 
@@ -20,212 +10,162 @@ La séquence ci-dessous est proposée. Les invariants du Project Master restent 
 
 **Statut : intégré sur `main`.**
 
-Objectif : établir la source de vérité documentaire, fixer les invariants, expliciter les zones à décider et préparer la roadmap.
+Établissement de la source de vérité documentaire, invariants et roadmap.
 
 ---
 
 ## Batch 01 — Bootstrap du projet
 
-**Statut : intégré sur `main` au commit `d9af0ca293dd9f2712969b246e394c4a8c188b5e` (`feat: bootstrap backend and frontend`).**
+**Statut : intégré sur `main` au commit `d9af0ca293dd9f2712969b246e394c4a8c188b5e`.**
 
-Intégré : backend Python installable, FastAPI minimal, configuration typée, lifecycle asynchrone, pytest/Ruff/mypy, frontend Next.js/TypeScript/shadcn/Tailwind, `pnpm`, `.env.example` sans secret.
-
-Validation locale Windows confirmée : Python `3.13.14`, `pytest` 4/4, Ruff OK, mypy OK et validations frontend OK.
+Backend Python/FastAPI installable, configuration typée, lifecycle asynchrone, tests et frontend Next.js/TypeScript/shadcn/Tailwind avec `pnpm`.
 
 ---
 
 ## Batch 02 — Contrats de domaine et configuration
 
-**Statut : intégré sur `main` au commit `bff0f8b03740da4a01072af90111a2e5d9f208ef` (`feat: add domain contracts and configuration`).**
+**Statut : intégré sur `main` au commit `bff0f8b03740da4a01072af90111a2e5d9f208ef`.**
 
-Intégré :
-
-- package `ai_spot_trader.domain` ;
-- enums `BUY|SELL|HOLD`, `PAPER`, `ALLOW|MODIFY|REJECT` et modèles Luna/Sol ;
-- contrats Pydantic stricts initiaux ;
-- UUID explicites ;
-- timestamps UTC aware ;
-- horloge injectable ;
-- ports `MarketDataSource`, `LLMProvider`, `Broker` ;
-- PAPER uniquement ; Luna par défaut ; Sol sélectionnable ; agressivité 1–10.
-
-Validation locale Windows confirmée avant intégration : Python `3.13.14`, `pytest` 20/20, Ruff OK et mypy OK.
+Contrats Pydantic stricts, UUID, timestamps UTC aware, horloge injectable, ports externes, PAPER uniquement, Luna/Sol configurable et agressivité 1–10.
 
 ---
 
 ## Batch 03 — Kraken Market Data
 
-**Statut : intégré sur `main` au commit `e7ac37955f08853024528fa9b9e10b5a75e05e3b` (`feat: add Kraken public market data`).**
+**Statut : intégré sur `main` au commit `e7ac37955f08853024528fa9b9e10b5a75e05e3b`.**
 
-Intégré :
-
-- package `ai_spot_trader.integrations.kraken` ;
-- REST public `AssetPairs` avec `assetVersion=1` ;
-- normalisation des alias Kraken vers symbole canonique ;
-- WebSocket Spot v2 `ticker` ;
-- parsing `last` / `symbol` / `timestamp` ;
-- heartbeat/messages système ignorés ;
-- reconnexion bornée/configurable ;
-- fermeture propre ;
-- stale detection technique optionnelle via `Clock` ;
-- erreurs fournisseur dédiées ;
-- `httpx` et `websockets` en runtime ;
-- aucune clé, API privée, ordre ou logique de trading.
-
-Validation locale Windows finale avant intégration :
-
-- Python `3.13.14` ;
-- `pytest` : **40 tests passés** ;
-- Ruff : **OK** ;
-- mypy : **OK sur 21 fichiers source** ;
-- `git diff --check` : aucune erreur ;
-- 2 warnings FastAPI/Starlette dans les dépendances, sans échec ;
-- aucun test réseau Kraken requis par défaut.
+Données publiques Kraken Spot, normalisation des symboles, REST AssetPairs, WebSocket ticker, reconnexion bornée et aucune API privée.
 
 ---
 
 ## Batch 04 — Market State
 
-**Statut : intégré sur `main` au commit `73acc4758427ea7575ddf0a43505e1c95fab5e9c` (`feat: add deterministic market state`).**
+**Statut : intégré sur `main` au commit `73acc4758427ea7575ddf0a43505e1c95fab5e9c`.**
 
-Intégré :
+`MarketObservation`, `MarketStateBuilder`, historique borné, horizons 5/30 min, statistiques `Decimal`, fraîcheur descriptive et no-look-ahead.
 
-- `MarketObservation` fournisseur-agnostique ;
-- port `MarketObservationSource` ;
-- adapter Kraken capable d'émettre l'observation normalisée ;
-- package `ai_spot_trader.market` sans dépendance Kraken ;
-- `MarketStateBuilder` mono-symbole ;
-- historique mémoire borné à 10 000 observations par défaut ;
-- ordre temporel strict, doublons/hors ordre rejetés ;
-- horizons 5 min et 30 min par défaut, surchargeables ;
-- min/max/amplitude, return simple et volatilité réalisée simple en `Decimal` ;
-- fenêtres vides/partielles explicites ;
-- âge des données et évaluation stale optionnelle avec seuil injecté ;
-- no look-ahead explicite pour tout `build(as_of=T)` ;
-- `MarketState` enrichi par `MarketContext` optionnel ;
-- aucune interpolation, aucun label de marché, aucun `BUY/SELL/HOLD`, aucun Risk Engine, aucun LLM.
-
-Validation locale Windows finale avant intégration :
-
-- Python `3.13.14` ;
-- `pytest` : **59 tests passés** ;
-- Ruff : **All checks passed** ;
-- mypy : **OK sur 24 fichiers source** ;
-- `git diff --check` : aucune erreur ;
-- uniquement les warnings habituels LF → CRLF ;
-- 2 warnings FastAPI/Starlette dans les dépendances, sans échec ;
-- aucun test réseau requis ;
-- working tree propre après commit/push.
-
-Frontière : le Batch 04 consomme uniquement des observations déjà normalisées ; il ne parse aucun payload Kraken.
+Validation locale Windows finale : **59 tests**, Ruff OK, mypy OK sur 24 fichiers source, `git diff --check` sans erreur.
 
 ---
 
 ## Batch 05 — Portfolio State + Paper Broker
 
-**Statut : validation locale complète réussie ; intégration Git en attente.**
+**Statut : intégré sur `main` au commit `c24551d36a863abbb5fdb86b79658b235c852772` (`feat: add paper portfolio and broker`).**
 
-Objectif : portefeuille PAPER canonique, état mutable mémoire, exécution simulée déterministe, frais/spread/slippage auditables et invariant « pas de vente non détenue ».
+Intégré :
 
-Implémentation du patch :
+- rôles `balances` / `positions` canoniques et disjoints ;
+- `PaperPortfolioLedger` mémoire et état initial injecté ;
+- mutations copy-on-write atomiques ;
+- `PaperBroker` full-fill immédiat ;
+- `Broker.execute(execution_intent, market_state)` ;
+- coûts PAPER injectés en `Decimal` ;
+- frais/spread/slippage auditables dans `Fill` ;
+- aucun lookup Kraken caché ;
+- aucun capital ou coût produit imposé globalement.
 
-- `PortfolioState` valide l'unicité des actifs et interdit qu'un même actif apparaisse simultanément comme balance et position ;
-- `balances` sont la source canonique des actifs de règlement disponibles ;
-- `positions` sont la source canonique des quantités détenues et disponibles à la vente ;
-- `PaperPortfolioLedger` mémoire construit exclusivement depuis un état initial injecté ;
-- aucun capital ou devise produit globale par défaut ;
-- mutations BUY/SELL copy-on-write sans état partiellement appliqué ;
-- `PaperBroker` derrière le port canonique `Broker` ;
-- évolution du port en `Broker.execute(execution_intent, market_state)` afin de rendre le pricing explicite et d'interdire tout lookup réseau caché ;
-- fill immédiat complet ou exception métier explicite ;
-- aucun order book simulé, partial fill complexe, limite, pending order ou hasard ;
-- `PaperExecutionCostModel` injecté : `fee_rate`, `spread_bps`, `slippage_bps` ;
-- `spread_bps` = impact adverse par côté, pas spread bid/ask total ;
-- BUY : `price = reference * (1 + spread + slippage)` ;
-- SELL : `price = reference * (1 - spread - slippage)` ;
-- frais calculés sur le notional exécuté ;
-- `Fill` enrichi avec contexte de pricing et décomposition des coûts ;
-- rejet d'un `MarketState` plus récent que l'`ExecutionIntent` ;
-- aucune dépendance Kraken dans `portfolio` ou `broker` ;
-- aucune nouvelle dépendance runtime ;
-- aucune variable d'environnement Batch 05 ;
-- aucune base de coût/P&L complet : les fills auditables conservent les données nécessaires au futur Batch Analytics.
+Validation locale Windows finale confirmée avant intégration :
 
-Validation locale Windows finale avant intégration : `pytest backend` **92/92**, Ruff **All checks passed**, mypy **Success: no issues found in 40 source files**, `git diff --check` sans erreur ; uniquement les warnings LF → CRLF habituels et 2 warnings FastAPI/Starlette sans échec. Aucun test réseau requis. Validation complémentaire ChatGPT : Python `3.13.5`, suite ciblée **64/64**, `compileall` OK et lignes Python du patch `<= 100` OK.
-
-Tests critiques couverts : état initial explicite, snapshot UTC, BUY/SELL, cash/position insuffisants, vente non détenue, frais, spread, slippage, combinaison des coûts, `Decimal`, atomicité, symbol mismatch, pricing futur, HOLD/LIVE impossibles, corrélation des fills, déterminisme et absence de dépendance Kraken.
+- `pytest backend` : **92 tests passés** ;
+- Ruff : **All checks passed** ;
+- mypy : **Success: no issues found in 40 source files** ;
+- `git diff --check` : aucune erreur ;
+- warnings LF → CRLF habituels uniquement ;
+- 2 warnings FastAPI/Starlette sans échec ;
+- aucun test réseau requis.
 
 ---
 
 ## Batch 06 — Risk Engine
 
-Objectif : autorité finale déterministe, `ALLOW` / `MODIFY` / `REJECT`, limites configurables et snapshot des raisons/limites appliquées.
+**Statut : patch livré, validation locale utilisateur et intégration Git à effectuer.**
 
-À décider : limites numériques, mapping initial de l’agressivité 1–10 et règle métier stale réellement appliquée par le Risk Engine.
+Objectif : premier Risk Engine déterministe canonique, indépendant de l'agent et du broker.
 
-Tests : taille/exposition, vente non couverte, stale market, drawdown/perte si retenus, impossibilité pour l'agressivité de contourner une limite absolue.
+Implémentation du patch :
+
+- `DecisionCandidate.proposed_quantity` : sizing stratégique obligatoire pour BUY/SELL, absent pour HOLD ;
+- `RiskAssessment` enrichi de la quantité demandée/autorisée, des limites réellement évaluées et de raisons structurées ;
+- enum `RiskReason` stable et testable ;
+- package `ai_spot_trader.risk` ;
+- `RiskPolicy` explicitement injectée ;
+- sorties `ALLOW`, `MODIFY`, `REJECT` ;
+- `MODIFY` limité à une réduction de quantité ;
+- HOLD audité sans `ExecutionIntent` ;
+- symboles canoniques partagés via `domain.symbols` ;
+- whitelist optionnelle ;
+- seuil stale métier optionnel ;
+- max order notional optionnel ;
+- BUY contrôlé avec coût PAPER complet prévisible ;
+- SELL borné par la position réellement disponible ;
+- rejet de snapshots futurs ;
+- aucune mutation de portefeuille/marché ;
+- aucune dépendance Kraken/FastAPI/LLM dans Risk ;
+- estimateur de pricing PAPER pur partagé entre Risk et Paper Broker ;
+- aucune variable d'environnement Risk ajoutée ;
+- aucune stratégie algorithmique introduite.
+
+Volontairement non implémenté : drawdown/daily loss sans historique P&L, VaR/corrélations, exposition avancée, cooldown, précision Kraken, mapping agressivité 1–10.
+
+Validation ChatGPT réellement exécutée sur le patch : suite ciblée domaine + Risk + régressions Paper Broker **77/77**, `compileall` et contrôle de longueur de lignes. Ruff/mypy et la suite backend complète restent à valider localement.
 
 ---
 
 ## Batch 07 — Agent Luna
 
-Objectif : provider Luna derrière le port LLM, prompt/contrat versionné, sortie structurée validée et aucune exécution directe.
+Objectif : implémenter le provider Luna derrière `LLMProvider`, prompt/contrat versionné, parsing structuré et aucune exécution directe.
 
-Tests : provider mocké, réponses invalides, actions inconnues, BUY/SELL/HOLD et vérification qu'une sortie invalide n'atteint pas le broker.
+Point d'intégration désormais fixé : toute décision BUY/SELL doit fournir `proposed_quantity`; HOLD ne porte aucune quantité.
+
+Tests attendus : provider mocké, sortie invalide, action inconnue, quantité invalide/absente, BUY/SELL/HOLD et preuve qu'une sortie invalide n'atteint jamais Risk/Broker.
 
 ---
 
 ## Batch 08 — Boucle autonome
 
-Objectif : orchestrer Market State + Portfolio State + Agent + Risk + Paper Broker, cycle IDs, cadence, start/stop propre, timeouts/retries et comportement sûr en erreur.
+Objectif : orchestrer Market State + Portfolio State + Agent + Risk + Paper Broker, corréler les IDs, cadence, start/stop propre, timeouts et comportement sûr en erreur.
 
-Critère : plusieurs cycles PAPER tournent sans frontend ; `HOLD` inclus ; aucune dépendance au cockpit.
+Le Risk Engine doit être invoqué avant toute exécution tradable ; `REJECT` ne déclenche rien et `HOLD` reste journalisé.
 
 ---
 
 ## Batch 09 — Persistance et journal d'audit
 
-Objectif : PostgreSQL, schéma/migrations, cycles, décisions, risk assessments, fills, métriques et reprise cohérente des données nécessaires.
+Objectif : PostgreSQL, schéma/migrations, cycles, décisions, RiskAssessment, intents, fills, métriques et reprise cohérente.
 
-À décider : ORM, migrations, rétention, snapshots.
+À décider : ORM, migrations, granularité de snapshots et rétention.
 
 ---
 
 ## Batch 10 — API FastAPI de contrôle
 
-Objectif : exposer état moteur, portefeuille, décisions, performance, réglages autorisés, start/stop si retenu et WebSocket utiles au cockpit.
+Objectif : état moteur, portefeuille, décisions, risque, performance, réglages autorisés, start/stop si retenu et WebSocket utiles au cockpit.
 
 ---
 
 ## Batch 11 — Frontend cockpit
 
-Objectif : compléter le bootstrap Next.js, dashboard, marché, portefeuille, décisions, trades PAPER, performance, état système et réglages autorisés.
-
-Critère central : arrêter/redémarrer le frontend ne change pas l'état du moteur backend.
+Objectif : dashboard marché/portefeuille/décisions/trades PAPER/performance/état système. Le frontend reste indépendant du moteur.
 
 ---
 
 ## Batch 12 — Analytics, P&L et expérimentation reproductible
 
-Objectif : P&L brut/net, drawdown, frais, spread/slippage, exposition, nombre de trades, quotidien/cumulé, export/vue d'expérience et premières capacités de replay si les données le permettent.
+Objectif : P&L brut/net, drawdown, frais, spread/slippage, exposition, nombre de trades, quotidien/cumulé et replay.
 
-Tests : fixtures comptables, cohérence brut/net, frontières de journée, replay sans données futures.
+Ce batch fournira les données qui permettront d'introduire honnêtement des limites Risk de drawdown/daily loss si elles sont décidées.
 
 ---
 
 ## Batch 13 — Expérimentation agressivité 1–10
 
-Objectif : figer un mapping versionné, tester plusieurs niveaux sur un protocole comparable et mesurer rendement, drawdown, turnover, coûts et comportement du Risk Engine.
-
-Règle : aucun cherry-picking ; toutes les configurations sont documentées.
+Objectif : figer un mapping versionné et comparer plusieurs niveaux sur un protocole identique. Aucune agressivité ne contourne les limites absolues Risk.
 
 ---
 
 ## Batch 14 — Comparaison Luna / Sol
 
-Objectif : passer de Luna à Sol par configuration, exécuter un protocole comparable et mesurer performance, stabilité de format, latence et coût.
-
-Aucune conclusion n'est présupposée.
+Objectif : protocole comparable entre Luna et Sol, mêmes snapshots, RiskPolicy, coûts PAPER et configuration expérimentale.
 
 ---
 
@@ -233,9 +173,7 @@ Aucune conclusion n'est présupposée.
 
 **Hors périmètre jusqu'à décision explicite.**
 
-Objectif potentiel : audit de readiness, adaptateur privé Kraken, réconciliation, permissions minimales, aucun retrait, garde-fous LIVE, mode explicite, tests et checklist.
-
-Sa présence dans la roadmap ne vaut pas autorisation de trading réel.
+Audit de readiness, adaptateur privé Kraken, réconciliation, permissions minimales, aucun retrait, garde-fous LIVE et activation volontaire. Sa présence dans la roadmap ne vaut pas autorisation de trading réel.
 
 ---
 
@@ -277,23 +215,17 @@ Sa présence dans la roadmap ne vaut pas autorisation de trading réel.
 
 ---
 
-## Décisions à prendre au fil de la roadmap
+## Décisions encore ouvertes
 
-À consigner lorsqu'elles deviennent canoniques :
-
-- capital PAPER ;
-- devise de référence produit ;
-- univers initial ;
-- cadence ;
-- éventuelle évolution des horizons 5 min / 30 min ;
-- données marché supplémentaires ;
-- seuil métier de fraîcheur ;
-- limites de risque ;
+- capital PAPER et devise de référence produit ;
+- univers initial de paires ;
+- cadence de décision ;
+- valeurs produit du max order notional, whitelist et stale métier ;
+- éventuelles limites d'exposition ;
+- drawdown/daily loss une fois les données disponibles ;
 - mapping agressivité ;
-- valeurs de référence expérimentales pour fee/spread/slippage PAPER ;
-- éventuelle évolution du modèle de fill au-delà du full fill immédiat ;
-- ORM/migrations ;
-- auth cockpit ;
-- déploiement ;
+- valeurs de référence fee/spread/slippage PAPER ;
+- ORM/migrations/rétention ;
 - frontière de journée ;
+- auth/déploiement ;
 - activation éventuelle du LIVE.
