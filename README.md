@@ -4,7 +4,7 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut :** le Batch 09 — Persistance et journal d'audit est intégré sur `main`. Le Batch 10 — API FastAPI de contrôle et d'observation est actuellement un **patch proposé, non intégré** tant que la validation locale, le commit et le push n'ont pas été confirmés.
+> **Statut :** le Batch 10 — API FastAPI de contrôle et d'observation est **intégré sur `main`** au commit `e6bcfd4dd345c934769b2f90fa7822232a80dd80` (`feat: add paper control and observation api`). La prochaine étape est le Batch 11 — Frontend cockpit.
 
 ## Principes
 
@@ -111,7 +111,7 @@ Le schéma `0001_audit_journal` conserve :
 
 Le graphe est transactionnel et idempotent par `cycle_id`. La persistance ne garantit pas encore un exactly-once global entre la mutation du ledger PAPER mémoire et le commit PostgreSQL ; la reconstruction/réconciliation après crash reste différée.
 
-## API FastAPI — Batch 10 proposé
+## API FastAPI — Batch 10 intégré
 
 Le Batch 10 ajoute une façade REST versionnée `/api/v1` sans seconde logique de trading.
 
@@ -168,16 +168,16 @@ Le mot de passe versionné dans `docker-compose.yml` est uniquement une valeur l
 
 ## Validation
 
-Batch 09 intégré, validation Windows confirmée :
+Batch 10 intégré, validation locale Windows confirmée avant commit/push :
 
 ```text
-pytest backend                  209 tests passés
+pytest backend                  222 tests passés, 2 warnings de dépréciation non bloquants
 ruff check backend              All checks passed
-mypy backend\src backend\tests  63 fichiers sans erreur
-git diff --check                aucune erreur
+mypy backend\src backend\tests  Success: no issues found in 70 source files
+git diff --check                aucune erreur ; warnings LF -> CRLF uniquement
 ```
 
-Pour le **patch Batch 10**, l'environnement ChatGPT a exécuté les tests FastAPI ciblés et la compilation Python. La suite complète, Ruff, mypy, `git diff --check`, le test SQL `aiosqlite` et la validation PostgreSQL doivent encore être rejoués localement avant intégration.
+Commit/push confirmé sur `main` : `e6bcfd4dd345c934769b2f90fa7822232a80dd80` (`feat: add paper control and observation api`).
 
 Commandes minimales :
 

@@ -53,7 +53,7 @@ V0 est atteinte lorsque le backend peut, sans frontend obligatoire :
 10. journaliser durablement les cycles ;
 11. exposer suffisamment d'état via FastAPI.
 
-Le Batch 08 réalise le point 9. Le Batch 09 réalise le socle durable du point 10. Le Batch 10 propose le socle REST du point 11 ; il reste **non intégré** jusqu'à validation locale et commit/push confirmés.
+Le Batch 08 réalise le point 9. Le Batch 09 réalise le socle durable du point 10. Le Batch 10 réalise le socle REST du point 11 et est **intégré sur `main`** au commit `e6bcfd4dd345c934769b2f90fa7822232a80dd80`.
 
 ### V1 — cockpit et expérimentation instrumentée
 
@@ -289,7 +289,7 @@ La cadence est injectée et `> 0`. `start()` refuse une seconde loop et `stop()`
 
 ## 12. Runtime FastAPI et composition
 
-Le patch Batch 10 étend `AppRuntime` sans déplacer la logique métier dans FastAPI. Le runtime peut recevoir :
+Le Batch 10 étend `AppRuntime` sans déplacer la logique métier dans FastAPI. Le runtime peut recevoir :
 
 - un `TradingEngine` canonique contrôlable (`start`, `stop`, état et dernier résultat) ;
 - un lecteur de portefeuille PAPER ;
@@ -413,11 +413,11 @@ Aucun replay automatique d'un intent n'est introduit au Batch 09.
 
 ---
 
-## 14. API de contrôle et d'observation — Batch 10 proposé, non intégré
+## 14. API de contrôle et d'observation — Batch 10 intégré
 
-Le patch Batch 10 introduit une façade REST versionnée `/api/v1` et une couche de lecture `SqlAlchemyCycleAuditQueryService` entre FastAPI et les records SQLAlchemy.
+Le Batch 10 introduit une façade REST versionnée `/api/v1` et une couche de lecture `SqlAlchemyCycleAuditQueryService` entre FastAPI et les records SQLAlchemy.
 
-Capacités proposées :
+Capacités intégrées :
 
 - `GET /api/v1/engine` ;
 - `POST /api/v1/engine/start` ;
@@ -448,7 +448,7 @@ Le provider OpenAI ne dispose d'aucun outil d'exécution et ne connaît ni Broke
 
 La base PostgreSQL ne doit recevoir aucun secret. `database_url` est chargée depuis l'environnement via `SecretStr`.
 
-Le patch Batch 10 n'ajoute pas d'authentification complexe. Le bind API par défaut reste local (`127.0.0.1`) ; l'exposition réseau distante des commandes lifecycle devra être protégée explicitement avant tout usage non local.
+Le Batch 10 n'ajoute pas d'authentification complexe. Le bind API par défaut reste local (`127.0.0.1`) ; l'exposition réseau distante des commandes lifecycle devra être protégée explicitement avant tout usage non local.
 
 ---
 
@@ -458,7 +458,7 @@ Les tests restent déterministes et offline autant que possible.
 
 Batch 09 couvre la persistance d'écriture via SQLite async et PostgreSQL réel.
 
-Le patch Batch 10 ajoute des tests pour :
+Le Batch 10 ajoute des tests pour :
 
 - health non régressé ;
 - état moteur, absence d'auto-start et start/stop injectés ;
@@ -480,13 +480,13 @@ Validation Batch 09 intégrée :
 - mypy : **63 fichiers sans erreur** ;
 - `git diff --check` : aucune erreur.
 
-Validation du patch Batch 10 exécutée dans l'environnement ChatGPT :
+Validation finale Batch 10 confirmée localement avant intégration :
 
-- tests FastAPI ciblés : **15 passés** ;
-- compilation Python des sources/tests concernés : **OK** ;
-- routes FastAPI générées/importées : **OK**.
-
-La suite complète, Ruff, mypy, `git diff --check`, le test `aiosqlite` du query service et PostgreSQL réel restent à rejouer localement avant intégration.
+- `pytest backend` : **222 tests passés**, 2 warnings de dépréciation non bloquants ;
+- Ruff : **All checks passed** ;
+- mypy : **70 fichiers sans erreur** ;
+- `git diff --check` : aucune erreur, seulement warnings LF -> CRLF ;
+- commit/push confirmé sur `main` : `e6bcfd4dd345c934769b2f90fa7822232a80dd80`.
 
 ---
 

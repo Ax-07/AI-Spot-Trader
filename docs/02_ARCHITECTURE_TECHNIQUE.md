@@ -2,7 +2,7 @@
 
 ## 1. Objet
 
-Ce document décrit l'architecture technique courante d'AI Spot Trader et le patch Batch 10 proposé. Les choix produit non figés restent explicitement séparés de l'architecture.
+Ce document décrit l'architecture technique courante d'AI Spot Trader, incluant le Batch 10 intégré. Les choix produit non figés restent explicitement séparés de l'architecture.
 
 ---
 
@@ -124,7 +124,7 @@ L'API ne peut ni créer `DecisionCandidate`, ni appeler le LLM, ni construire `R
 
 ---
 
-## 5. Runtime FastAPI proposé au Batch 10
+## 5. Runtime FastAPI intégré au Batch 10
 
 `create_app()` reste sans I/O externe et sans démarrage du trading à l'import.
 

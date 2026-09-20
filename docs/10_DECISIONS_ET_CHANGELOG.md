@@ -6,8 +6,6 @@ Ce document conserve les décisions architecturales durables et un changelog syn
 
 Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 
-Le Batch 10 reste un patch proposé : ses nouvelles décisions ne deviennent canoniques qu'après validation locale et intégration confirmée sur `main`.
-
 ---
 
 ## 2. Décisions acceptées existantes
@@ -152,38 +150,38 @@ Le Batch 10 reste un patch proposé : ses nouvelles décisions ne deviennent can
 
 ---
 
-## 3. Décisions proposées par le Batch 10
+## 3. Décisions acceptées au Batch 10
 
-### ADR-P005 — Façade REST séparée du métier de trading
-- **Statut : PROPOSÉE**
+### ADR-047 — Façade REST séparée du métier de trading
+- **Statut : ACCEPTÉE**
 - FastAPI expose observation et lifecycle, mais ne crée aucun artefact Agent/Risk/Broker.
 - Les modèles HTTP sont dédiés et n'exposent pas directement les records ORM.
 
-### ADR-P006 — Query service de lecture durable
-- **Statut : PROPOSÉE**
+### ADR-048 — Query service de lecture durable
+- **Statut : ACCEPTÉE**
 - `CycleAuditReader` constitue la frontière de lecture.
 - `SqlAlchemyCycleAuditQueryService` est l'implémentation SQLAlchemy.
 - Les routes FastAPI ne doivent pas dépendre directement des records SQLAlchemy.
 
-### ADR-P007 — Start/stop uniquement sur moteur canonique injecté
-- **Statut : PROPOSÉE**
+### ADR-049 — Start/stop uniquement sur moteur canonique injecté
+- **Statut : ACCEPTÉE**
 - L'API peut appeler `TradingEngine.start()` / `stop()` mais ne construit aucune boucle alternative.
 - Aucun auto-start au lifecycle FastAPI.
 - Sans moteur injecté, la commande est indisponible explicitement.
 
-### ADR-P008 — Pas de WebSocket au Batch 10
-- **Statut : PROPOSÉE**
+### ADR-050 — Pas de WebSocket au Batch 10
+- **Statut : ACCEPTÉE**
 - Aucun bus d'événements canonique n'existe encore.
 - REST est suffisant pour le premier cockpit.
 - Un WebSocket sera ajouté uniquement avec une source d'événements et un besoin de fréquence explicitement définis.
 
-### ADR-P009 — Réutiliser le schéma Batch 09 sans migration API
-- **Statut : PROPOSÉE**
+### ADR-051 — Réutiliser le schéma Batch 09 sans migration API
+- **Statut : ACCEPTÉE**
 - Les besoins de lecture du Batch 10 sont satisfaits par `0001_audit_journal`.
 - Le schéma ne doit pas être modifié uniquement pour simplifier les routes.
 
-### ADR-P010 — Erreurs API sanitizées et DB lifecycle explicite
-- **Statut : PROPOSÉE**
+### ADR-052 — Erreurs API sanitizées et DB lifecycle explicite
+- **Statut : ACCEPTÉE**
 - Erreur de cycle : `stage`, `error_type`, `timed_out` seulement.
 - Aucun message brut, DSN ou secret dans les réponses.
 - Si FastAPI crée la DB depuis `database_url`, il en possède la fermeture.
@@ -231,13 +229,13 @@ Le Batch 10 reste un patch proposé : ses nouvelles décisions ne deviennent can
 
 ### 2026-09-20 — Batch 10 API FastAPI de contrôle/observation
 
-**État : patch proposé, non intégré.**
+**État : intégré sur `main` au commit `e6bcfd4dd345c934769b2f90fa7822232a80dd80`.**
 
 - Resynchronisation confirmée sur GitHub `main` au HEAD `328cdcea155905e2859e73ab3c46a195dc52047e` (`docs: record Batch 09 integration`).
 - Référence fonctionnelle Batch 09 confirmée : `c53d04f14bcda82359d11c2e14fc1eb601ed14e0`.
-- Ajout proposé de modèles HTTP Pydantic dédiés.
-- Ajout proposé d'un `CycleAuditReader` et d'un query service SQLAlchemy pour le journal durable.
-- Endpoints proposés pour moteur, portefeuille, cycles, décisions, Risk, exécutions/fills, dernière erreur et dernier marché durable.
+- Ajout de modèles HTTP Pydantic dédiés.
+- Ajout d'un `CycleAuditReader` et d'un query service SQLAlchemy pour le journal durable.
+- Endpoints intégrés pour moteur, portefeuille, cycles, décisions, Risk, exécutions/fills, dernière erreur et dernier marché durable.
 - Pagination `limit`/`offset`, ordre déterministe et filtres simples.
 - Start/stop uniquement via le moteur canonique injecté ; aucun auto-start.
 - Lifecycle DB possédé par FastAPI seulement lorsque créé depuis `database_url`.
@@ -245,13 +243,14 @@ Le Batch 10 reste un patch proposé : ses nouvelles décisions ne deviennent can
 - Aucune nouvelle migration, aucun WebSocket, aucune API Kraken privée, aucun LIVE.
 - Le bootstrap produit (capital/paire/cadence/RiskPolicy) reste volontairement non inventé.
 
-Validation réellement exécutée dans l'environnement ChatGPT :
+Validation finale locale confirmée :
 
-- tests FastAPI ciblés : **15 passés** ;
-- compilation Python des sources/tests concernés : **OK** ;
-- import/génération des routes FastAPI : **OK**.
-
-Reste à exécuter localement avant intégration : suite complète pytest, test `aiosqlite` du query service, Ruff, mypy, `git diff --check` et validation PostgreSQL/API ciblée.
+- `pytest backend` : **222 tests passés**, 2 warnings de dépréciation non bloquants ;
+- Ruff : **All checks passed** ;
+- mypy : **Success: no issues found in 70 source files** ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- commit/push fonctionnel confirmé sur `main` : `e6bcfd4dd345c934769b2f90fa7822232a80dd80` (`feat: add paper control and observation api`) ;
+- working tree local confirmé propre après push.
 
 ### 2026-09-20 — Batch 09 Persistance et journal d'audit
 

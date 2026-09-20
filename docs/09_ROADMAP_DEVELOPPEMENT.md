@@ -90,13 +90,13 @@ Limite conservée : pas encore d'exactly-once global entre ledger mémoire et co
 
 ## Batch 10 — API FastAPI de contrôle et d'observation
 
-**État : patch proposé, non intégré.**
+**État : intégré.**
 
 ### Objectif
 
 Fournir au futur cockpit une façade REST cohérente sans déplacer l'autorité du backend ni du Risk Engine.
 
-### Périmètre proposé
+### Périmètre intégré
 
 - état moteur ;
 - start/stop uniquement via le `TradingEngine` canonique injecté ;
@@ -111,7 +111,7 @@ Fournir au futur cockpit une façade REST cohérente sans déplacer l'autorité 
 - pagination, ordre et filtres déterministes ;
 - lifecycle DB FastAPI explicite.
 
-### Décisions proposées
+### Décisions retenues
 
 - modèles Pydantic HTTP dédiés ;
 - `CycleAuditReader` + `SqlAlchemyCycleAuditQueryService` entre routes et ORM ;
@@ -121,18 +121,15 @@ Fournir au futur cockpit une façade REST cohérente sans déplacer l'autorité 
 - DB absente/indisponible gérée sans fuite de secrets ;
 - pas de WebSocket tant qu'aucun bus d'événements canonique n'existe.
 
-### Validation avant intégration
+### Validation d'intégration
 
-À exécuter localement :
+Validation locale confirmée :
 
-```powershell
-backend\.venv\Scripts\python.exe -m pytest backend
-backend\.venv\Scripts\python.exe -m ruff check backend
-backend\.venv\Scripts\python.exe -m mypy backend\src backend\tests
-git diff --check
-```
-
-Puis valider PostgreSQL/API avec Docker si nécessaire. Le batch ne doit être marqué intégré qu'après résultat propre et commit/push confirmé.
+- `pytest backend` : **222 tests passés**, 2 warnings non bloquants ;
+- Ruff : **All checks passed** ;
+- mypy : **70 fichiers sans erreur** ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- commit/push confirmé : `e6bcfd4dd345c934769b2f90fa7822232a80dd80`.
 
 ---
 
