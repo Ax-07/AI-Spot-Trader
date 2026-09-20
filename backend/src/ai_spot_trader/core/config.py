@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     kraken_ws_max_reconnect_attempts: int = Field(default=2, ge=0, le=10)
     kraken_ws_reconnect_delay_seconds: float = Field(default=1.0, ge=0)
     kraken_stale_after_seconds: float | None = Field(default=None, gt=0)
+    database_url: SecretStr | None = None
 
 
 @lru_cache
