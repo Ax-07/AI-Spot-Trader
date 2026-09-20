@@ -4,7 +4,7 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut du projet :** le Batch 08 — Boucle autonome est intégré sur `main` au commit `8deb72faeeaa1ac065189480c64ba16410c0d451` (`feat: add autonomous trading loop`). La prochaine étape prévue est le Batch 09 — Persistance et journal d'audit. Les premières versions restent exclusivement en **PAPER trading**.
+> **Statut du projet :** le Batch 09 — Persistance et journal d'audit est intégré sur `main` au commit `c53d04f14bcda82359d11c2e14fc1eb601ed14e0` (`feat: add durable audit persistence`). La prochaine étape prévue est le Batch 10 — API FastAPI de contrôle. Les premières versions restent exclusivement en **PAPER trading**.
 
 ## Principes du projet
 
@@ -17,7 +17,7 @@ Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading a
 - Le Risk Engine ne crée aucun signal et ne choisit jamais spontanément un actif ou un sens de trade.
 - Le **Risk Engine déterministe** peut autoriser, réduire ou refuser une proposition avant exécution.
 - Aucune sortie LLM ne déclenche directement un appel Broker ou un ordre Kraken.
-- Toutes les décisions, y compris `HOLD`, doivent pouvoir être journalisées.
+- Toutes les décisions, y compris `HOLD`, sont auditables et peuvent être persistées durablement.
 - Frais, spread et slippage sont explicitement modélisés dans l'exécution PAPER.
 - Le passage au **LIVE** sera explicite, séparé du PAPER et traité dans une phase ultérieure.
 
@@ -44,7 +44,7 @@ rationale           # texte optionnel, jamais une commande
 
 `decision_id`, `cycle_id` et `created_at` restent sous contrôle applicatif. Le symbole doit être exactement celui du `MarketState` fourni. Le prompt système est versionné sous `agent-luna-v1` et l'adapter OpenAI utilise la Responses API avec Structured Outputs stricts.
 
-Le niveau d'agressivité est un entier de **1 à 10**. Son mapping stratégique exact reste volontairement ouvert ; l'orchestrateur du Batch 08 le transmet tel quel à `AgentInput` et ne modifie jamais la quantité stratégique en fonction de cette valeur.
+Le niveau d'agressivité est un entier de **1 à 10**. Son mapping stratégique exact reste volontairement ouvert ; l'orchestrateur le transmet tel quel à `AgentInput` et ne modifie jamais la quantité stratégique en fonction de cette valeur.
 
 ## Objectif expérimental
 
@@ -57,9 +57,9 @@ Le **backend constitue l'application de trading**. Le frontend est uniquement un
 Stack décidée :
 
 - **Backend** : Python, `asyncio`, FastAPI, Pydantic.
+- **Persistance** : PostgreSQL, SQLAlchemy 2 async, `asyncpg`, Alembic.
 - **Frontend** : Next.js, TypeScript, shadcn/ui, Tailwind CSS.
 - **Communication** : REST et WebSocket selon le besoin.
-- **Base cible** : PostgreSQL.
 - **Intégrations externes** : Kraken et le fournisseur LLM derrière des interfaces dédiées.
 
 Rust ne sera introduit que si un besoin mesuré ou une décision architecturale explicite le justifie.
@@ -90,27 +90,22 @@ Kraken public data
                                                 Paper Broker
                                                        |
                                               Fill(s) + Portfolio
+                                                       |
+                                                       v
+                                             TradingCycleResult
+                                                       |
+                                                       v
+                                      AuditedTradingCycleRunner
+                                                       |
+                                                       v
+                                   PostgreSQL durable audit journal
 ```
 
-Aucun chemin direct entre l'agent IA et Kraken n'existe. Le Paper Broker n'interroge pas Kraken : le `MarketState` utilisé pour le pricing lui est fourni explicitement.
+Aucun chemin direct entre l'agent IA et Kraken n'existe. Le Paper Broker n'interroge pas Kraken : le `MarketState` utilisé pour le pricing lui est fourni explicitement. La persistance n'est jamais une source de stratégie ; elle conserve les faits produits par les composants canoniques.
 
 ## Batch 08 — Boucle autonome PAPER
 
-Le patch ajoute deux niveaux d'orchestration dans `ai_spot_trader.trading` :
-
-```text
-TradingCycleRunner.run_cycle()
-        |
-        v
-un cycle exact et testable
-
-TradingEngine
-        |
-        v
-répète run_cycle séquentiellement
-```
-
-### Sémantique d'un cycle
+`TradingCycleRunner.run_cycle()` exécute exactement un cycle PAPER et `TradingEngine` répète ce runner strictement séquentiellement.
 
 Un cycle :
 
@@ -133,60 +128,153 @@ Aucun refresh marché caché n'a lieu entre Agent, Risk et Broker. L'orchestrate
 - `MODIFY` transmet exactement l'intent et la quantité produits par Risk.
 - `ALLOW` transmet exactement l'intent produit par Risk.
 
-### Erreurs et timeouts
+Les erreurs techniques Market, Portfolio/Input, Agent, Risk, Broker ou snapshot post-exécution restent des résultats `FAILED`, jamais des HOLD synthétiques.
 
-Les erreurs techniques Market, Portfolio/Input, Agent, Risk, Broker ou snapshot post-exécution sont représentées par un résultat de cycle `FAILED` avec étape et type d'erreur. Une erreur LLM n'est jamais convertie en `HOLD`.
+## Batch 09 — Persistance et journal d'audit
 
-Les I/O Market, Agent et Broker sont entourées de timeouts explicitement injectés et strictement positifs. Risk reste synchrone et déterministe, sans timeout artificiel. Les messages d'exception distants ne sont pas recopiés dans le résultat d'orchestration.
+Le package `ai_spot_trader.persistence` introduit une frontière de persistance dédiée sans modifier Agent, Risk ou Broker.
 
-### Séquentialité et cadence
+### Stack
 
-Le runner possède un verrou de cycle. Un appel manuel et la boucle autonome utilisant le même runner ne peuvent donc jamais se chevaucher.
+- SQLAlchemy 2 async ;
+- `asyncpg` pour PostgreSQL ;
+- Alembic pour les migrations ;
+- `aiosqlite` uniquement dans les tests offline de persistance ;
+- PostgreSQL 18 de développement fourni par `docker-compose.yml`.
 
-La boucle respecte :
+### Journal durable
+
+`SqlAlchemyCycleAuditRepository` persiste atomiquement le graphe atteint par un `TradingCycleResult` :
 
 ```text
-cycle N terminé
+audit_cycles
     |
-attente cadence
+    +--> audit_decisions
     |
-cycle N+1
+    +--> audit_risk_assessments
+    |
+    +--> audit_execution_intents   # seulement si Risk a produit un intent
+             |
+             +--> audit_fills      # seulement si exécution
 ```
 
-Elle ne tente jamais de rattraper une cadence dépassée. La valeur de cadence est injectée au `TradingEngine` et doit être positive ; aucune valeur produit n'est codée en dur ni ajoutée à `Settings` dans ce batch.
+Le cycle conserve également les snapshots nécessaires disponibles dans `AgentInput`, le snapshot portfolio post-exécution éventuel, les IDs, timestamps et les métadonnées d'erreur technique sanitizées.
 
-`start()` refuse une seconde loop simultanée. `stop()` réveille immédiatement l'attente de cadence et attend coopérativement le cycle borné déjà en cours. `AppRuntime` peut posséder un moteur injecté et l'arrête lors du shutdown FastAPI. Aucun moteur réel n'est démarré automatiquement à l'import ou à la création de l'application.
+Les modèles métier Pydantic restent canoniques. La base stocke leur représentation JSON/JSONB pour audit et ajoute uniquement les colonnes relationnelles/indexables utiles.
 
-## État backend après intégration du Batch 08
+### Idempotence et atomicité
+
+- `cycle_id` est l'identité métier du journal.
+- Un replay exactement identique est idempotent et n'ajoute pas de doublon.
+- La réutilisation du même `cycle_id` avec un contenu différent déclenche `CycleAuditConflictError`.
+- L'écriture d'un graphe de cycle est transactionnelle : une erreur d'écriture provoque un rollback complet.
+- `AuditedTradingCycleRunner` enveloppe le runner canonique puis persiste son résultat ; il ne duplique aucune orchestration et ne change aucune décision.
+
+### Limite de reprise après crash
+
+Le Batch 09 **ne garantit pas** un exactly-once global entre mutation du `PaperPortfolioLedger` mémoire et commit PostgreSQL. Un crash dans cette fenêtre peut nécessiter une réconciliation ultérieure.
+
+Le journal durable fournit le socle nécessaire à cette future reprise, mais la reconstruction automatique du ledger, la réconciliation et la politique exacte de recovery restent différées.
+
+## PostgreSQL local avec Docker Desktop
+
+Depuis la racine du repository :
+
+```powershell
+docker compose up -d
+docker compose ps
+```
+
+La configuration versionnée crée un PostgreSQL de développement local avec volume persistant. Le mot de passe présent dans `docker-compose.yml` est uniquement une valeur locale de développement et ne doit pas être réutilisé en production.
+
+Configurer ensuite l'URL SQLAlchemy dans la session PowerShell :
+
+```powershell
+$env:AI_SPOT_TRADER_DATABASE_URL="postgresql+asyncpg://ai_spot_trader:local_dev_password@localhost:5432/ai_spot_trader"
+```
+
+Appliquer les migrations :
+
+```powershell
+python -m alembic -c backend\alembic.ini upgrade head
+```
+
+Arrêter PostgreSQL sans supprimer les données :
+
+```powershell
+docker compose down
+```
+
+`docker compose down -v` supprime le volume et doit être réservé à une réinitialisation volontaire de la base locale.
+
+## Validation du Batch 09
+
+Validation locale Windows confirmée avant intégration fonctionnelle :
+
+```text
+pytest backend                    209 tests passés
+ruff check backend                All checks passed
+mypy backend\src backend\tests  Success, 63 fichiers
+git diff --check                  aucune erreur
+```
+
+Deux warnings de dépréciation FastAPI/Starlette restent non bloquants.
+
+Validation PostgreSQL réelle confirmée avec Docker Desktop :
+
+- conteneur `ai-spot-trader-postgres` : `healthy` ;
+- PostgreSQL : `18.6-bookworm` ;
+- Alembic `upgrade head` : réussi ;
+- révision appliquée : `0001_audit_journal` ;
+- tables créées : `audit_cycles`, `audit_decisions`, `audit_risk_assessments`, `audit_execution_intents`, `audit_fills` et `alembic_version`.
+
+Le commit fonctionnel intégré est :
+
+```text
+c53d04f14bcda82359d11c2e14fc1eb601ed14e0
+feat: add durable audit persistence
+```
+
+## État backend après intégration du Batch 09
 
 ```text
 backend/
+  alembic.ini
+  alembic/
+    env.py
+    versions/
+      0001_create_audit_journal.py
   src/ai_spot_trader/
     agent/
     api/
     broker/
     core/
-      clock.py
-      config.py
-      runtime.py
     domain/
     integrations/kraken/
     market/
+    persistence/
+      __init__.py
+      audit.py
+      db.py
+      models.py
+      repository.py
     portfolio/
     risk/
     trading/
-      __init__.py
-      engine.py
     main.py
   tests/
-    test_trading_engine.py
+    test_persistence.py
+    ...
+docker-compose.yml
 ```
 
-Le Batch 08 n'ajoute ni PostgreSQL, ni route FastAPI de contrôle trading, ni WebSocket cockpit, ni frontend, ni scanner multi-paires, ni API Kraken privée, ni LIVE.
+Le Batch 09 n'ajoute aucune API Kraken privée, aucun LIVE, aucune route FastAPI de contrôle trading et aucune logique stratégique déterministe.
 
 ## Configuration
 
-Le patch n'invente aucune nouvelle valeur produit. Les réglages existants OpenAI/Kraken restent inchangés. La cadence et les timeouts du cycle sont des dépendances explicites de composition ; la paire, le capital PAPER, la RiskPolicy et les coûts PAPER restent eux aussi explicitement fournis par l'appelant.
+Les réglages OpenAI/Kraken restent inchangés. Batch 09 ajoute `AI_SPOT_TRADER_DATABASE_URL`, qui reste optionnelle tant qu'une composition runtime avec persistance n'est pas activée.
+
+Les secrets et mots de passe réels restent uniquement dans l'environnement local ou `.env` non versionné.
 
 ## Démarrage et validation locale
 
@@ -206,16 +294,17 @@ Aucun appel OpenAI ou Kraken réel n'est requis pour les tests automatisés.
 - `docs/00_ETAT_ACTUEL.md` — mémoire courte de reprise.
 - `docs/01_PROJECT_MASTER.md` — spécification principale.
 - `docs/02_ARCHITECTURE_TECHNIQUE.md` — architecture et frontières techniques.
-- `docs/03_AGENT_TRADING_RISK.md` — responsabilités Agent/Risk/Trading.
+- `docs/03_AGENT_TRADING_RISK.md` — responsabilités Agent/Risk/Trading/Persistence.
 - `docs/09_ROADMAP_DEVELOPPEMENT.md` — roadmap.
 - `docs/10_DECISIONS_ET_CHANGELOG.md` — ADR et changelog.
 
 ## Sécurité
 
-- Aucun secret ou clé API ne doit être versionné, journalisé ou injecté dans les prompts.
+- Aucun secret ou clé API réel ne doit être versionné, journalisé ou injecté dans les prompts.
 - Une future clé Kraken ne devra jamais disposer du droit de retrait.
 - PAPER et LIVE restent explicitement séparés.
 - Toute exécution future doit continuer à passer par Risk ; aucune sortie LLM ne doit atteindre directement un Broker.
+- PostgreSQL est un journal d'audit et une base de données applicative, jamais une source de stratégie.
 
 ## Avertissement
 

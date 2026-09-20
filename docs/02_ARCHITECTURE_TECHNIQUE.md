@@ -35,52 +35,75 @@ Ce document décrit l'architecture technique courante d'AI Spot Trader. Il compl
 |                                   |                   |
 |                          Fill + portfolio ledger       |
 |                                   |                   |
-|                         TradingCycleResult mémoire     |
-+-------------------------------------------------------+
+|                         TradingCycleResult             |
+|                                   |                   |
+|                                   v                   |
+|                         Audit persistence              |
++-----------------------------------+-------------------+
+                                    |
+                                    v
+                               PostgreSQL
 ```
 
-Le backend est un service autonome ; le frontend n'est jamais l'ordonnanceur du moteur.
+Le backend est un service autonome ; le frontend n'est jamais l'ordonnanceur du moteur. PostgreSQL est une dépendance de persistance et d'audit, pas un moteur de stratégie.
 
 ---
 
-## 3. Découpage backend après application du patch Batch 08
+## 3. Découpage backend après intégration du Batch 09
 
 ```text
-backend/src/ai_spot_trader/
-  agent/
-    errors.py
-    openai_client.py
-    prompt.py
-    provider.py
-  api/
-  broker/
-    errors.py
-    paper.py
-    pricing.py
-  core/
-    clock.py
-    config.py
-    runtime.py
-  domain/
-    enums.py
-    models.py
-    ports.py
-    symbols.py
-  integrations/kraken/
-  market/
-    errors.py
-    state.py
-  portfolio/
-    errors.py
-    ledger.py
-  risk/
-    engine.py
-    errors.py
-    policy.py
-  trading/
-    __init__.py
-    engine.py
-  main.py
+backend/
+  alembic.ini
+  alembic/
+    env.py
+    script.py.mako
+    versions/
+      0001_create_audit_journal.py
+  src/ai_spot_trader/
+    agent/
+      errors.py
+      openai_client.py
+      prompt.py
+      provider.py
+    api/
+    broker/
+      errors.py
+      paper.py
+      pricing.py
+    core/
+      clock.py
+      config.py
+      runtime.py
+    domain/
+      enums.py
+      models.py
+      ports.py
+      symbols.py
+    integrations/kraken/
+    market/
+      errors.py
+      state.py
+    persistence/
+      __init__.py
+      audit.py
+      db.py
+      models.py
+      repository.py
+    portfolio/
+      errors.py
+      ledger.py
+    risk/
+      engine.py
+      errors.py
+      policy.py
+    trading/
+      __init__.py
+      engine.py
+    main.py
+  tests/
+    test_persistence.py
+    ...
+docker-compose.yml
 ```
 
 Responsabilités :
@@ -93,7 +116,8 @@ Responsabilités :
 - `broker/paper.py` : exécution PAPER et mutation du ledger ;
 - `risk` : évaluation déterministe sans effets de bord ;
 - `agent` : transformation d'un `AgentInput` en `DecisionCandidate`, sans exécution ;
-- `trading` : orchestration du cycle et répétition séquentielle, sans stratégie.
+- `trading` : orchestration du cycle et répétition séquentielle, sans stratégie ;
+- `persistence` : conservation durable du résultat de cycle sans logique stratégique.
 
 ---
 
@@ -115,6 +139,8 @@ BUY/SELL exigent `proposed_quantity > 0`. HOLD interdit toute quantité. Cette q
 ### ExecutionIntent
 
 PAPER uniquement, BUY/SELL uniquement, quantité positive et corrélation au `RiskAssessment`. L'orchestrateur n'en construit jamais.
+
+Les modèles SQLAlchemy ne remplacent pas ces contrats. Ils servent uniquement au mapping durable.
 
 ---
 
@@ -173,13 +199,13 @@ Les composants canoniques des Batches 04 à 06 sont réutilisés directement :
 - `RiskEngine.evaluate()` est synchrone et produit `RiskResult` ;
 - `PaperBroker.execute(intent, market_state)` réalise l'unique mutation PAPER d'exécution.
 
-Le Batch 08 ne duplique aucun de ces composants.
+La persistance n'est appelée qu'après production du `TradingCycleResult`.
 
 ---
 
 ## 10. Primitive un-cycle
 
-`TradingCycleRunner` est la frontière d'orchestration canonique du Batch 08.
+`TradingCycleRunner` reste la frontière d'orchestration canonique.
 
 ```text
 run_cycle()
@@ -200,17 +226,13 @@ Le runner reçoit explicitement `symbol`, `aggressiveness`, `TradingCycleTimeout
 
 Il n'existe qu'un appel Market par cycle. Le `MarketState` placé dans `AgentInput` est exactement celui passé à Risk puis au Broker. Le `PortfolioState` pré-cycle placé dans `AgentInput` est exactement celui passé à Risk.
 
-Le runner réutilise les objets validés contenus dans `AgentInput` afin de rendre cette identité explicite et testable.
-
 ### Verrou de cycle
 
-Un `asyncio.Lock` couvre tout `run_cycle()`. Un appel manuel et la boucle autonome partageant le même runner ne peuvent pas se chevaucher. Aucun autre cycle ne peut muter le ledger entre snapshot, Risk et Broker via cette orchestration.
+Un `asyncio.Lock` couvre tout `run_cycle()`. Un appel manuel et la boucle autonome partageant le même runner ne peuvent pas se chevaucher.
 
 ---
 
 ## 11. Chronologie technique
-
-Le runner utilise uniquement `Clock` pour ses timestamps testables.
 
 ```text
 market.as_of <= input.created_at
@@ -222,7 +244,7 @@ market.as_of <= fill.filled_at
 fill.filled_at <= post_portfolio.as_of
 ```
 
-L'Agent, Risk et Broker gardent leurs propres validations temporelles. Cette redondance protège chaque frontière sans créer de stratégie.
+L'Agent, Risk et Broker gardent leurs propres validations temporelles. La persistance conserve ces timestamps tels qu'ils ont été produits.
 
 ---
 
@@ -257,9 +279,7 @@ error_type
 timed_out
 ```
 
-Le message brut de l'exception n'est pas copié dans ce résultat mémoire, ce qui évite de faire transiter accidentellement un détail distant sensible. Batch 09 décidera du format de journal durable.
-
-Étapes distinguées : Market, Portfolio, Input, Agent, Risk, Broker, Post-Portfolio.
+Le message brut de l'exception n'est pas copié dans le résultat mémoire ni dans le journal durable.
 
 ---
 
@@ -267,15 +287,9 @@ Le message brut de l'exception n'est pas copié dans ce résultat mémoire, ce q
 
 `TradingCycleTimeouts` impose trois durées explicitement injectées : Market, Agent et Broker. Elles doivent être numériques, finies et strictement positives.
 
-`asyncio.timeout` borne les attentes I/O de l'orchestrateur. Les adapters peuvent garder leurs propres timeouts plus bas niveau ; l'enveloppe de cycle reste une borne explicite supplémentaire.
-
 Risk n'a pas de timeout artificiel car il est synchrone et déterministe.
 
-### Broker PAPER et annulation
-
-`PaperBroker.execute()` prend son propre verrou puis appelle un chemin synchrone sans `await` jusqu'à la fin de la mutation. Une expiration asyncio ne peut donc pas interrompre la mutation à mi-chemin une fois ce chemin démarré.
-
-Cette propriété n'est pas généralisée à un futur broker réseau. Si un futur appel externe laisse une exécution incertaine, la boucle ne devra jamais rejouer automatiquement le même intent sans persistance/réconciliation.
+Le Broker PAPER canonique ne contient pas de `await` entre le calcul du fill et la mutation ledger après acquisition de son verrou. Cette propriété n'est pas généralisée à un futur broker réseau.
 
 ---
 
@@ -291,58 +305,198 @@ while not stop:
 
 La cadence commence après la fin du cycle. Il n'existe aucun calcul de retard ni lancement concurrent pour rattraper une échéance manquée.
 
-`start()` crée une seule tâche nommée et refuse un second démarrage actif. `stop()` pose l'event de stop, réveille la cadence immédiatement et attend la tâche. Il ne laisse pas de tâche orpheline.
-
-Les échecs techniques représentés par `TradingCycleResult` sont des retours normaux du runner. Une exception inattendue du runner est isolée par la boucle ; son type est mémorisé, puis la cadence normale est attendue avant un nouveau cycle afin d'éviter une boucle serrée.
+`start()` crée une seule tâche et refuse un second démarrage actif. `stop()` pose l'event de stop, réveille la cadence immédiatement et attend la tâche.
 
 ---
 
 ## 16. Runtime FastAPI
 
-`AppRuntime` possède désormais optionnellement un objet satisfaisant le protocole `StoppableTradingEngine`. Son `close()` :
-
-1. pose `shutdown_requested` ;
-2. appelle et attend `trading_engine.stop()` si un moteur a été injecté ;
-3. rend la main à FastAPI.
+`AppRuntime` possède optionnellement un objet satisfaisant le protocole `StoppableTradingEngine`.
 
 `create_app(settings, trading_engine=...)` ne démarre jamais le moteur. Aucun appel réseau n'a lieu à l'import ni au lifespan par défaut.
 
-Batch 10 ajoutera les routes de contrôle si retenues. Le frontend reste sans autorité de lifecycle directe sur le moteur.
+Batch 10 ajoutera les routes de contrôle utiles.
 
 ---
 
-## 17. Configuration produit
+## 17. Frontière de persistance Batch 09
 
-Le Batch 08 n'ajoute aucune cadence, paire, capital, RiskPolicy ou coût PAPER par défaut à `Settings`.
+Le port minimal est :
 
-Les timeouts de cycle et la cadence sont des paramètres explicites de composition. Les timeouts OpenAI/Kraken existants restent des paramètres d'adapters et ne deviennent pas silencieusement la policy de cycle.
+```python
+class CycleAuditWriter(Protocol):
+    async def record(self, result: TradingCycleResult) -> bool: ...
+```
 
----
+Le wrapper :
 
-## 18. Persistance, API et frontend
+```text
+AuditedTradingCycleRunner
+    |
+    +--> delegate.run_cycle()
+    |
+    +--> audit_writer.record(result)
+    |
+    +--> return result
+```
 
-Aucune persistance, migration, route FastAPI de trading, WebSocket cockpit ou modification frontend n'est introduite au Batch 08.
+La couche de persistance ne se branche pas directement dans Agent, Risk ou Broker. Elle ne duplique pas `TradingCycleRunner`.
 
-La frontière Batch 09 est nette : `TradingCycleResult` fournit les données en mémoire nécessaires pour concevoir ensuite le journal durable, mais aucune reprise après crash ou réconciliation n'est prétendue ici.
-
----
-
-## 19. Tests et reproductibilité
-
-Les tests Batch 08 injectent :
-
-- `FakeMarketData` ;
-- `FakeAgent` ;
-- Risk canonique instrumenté ;
-- Broker PAPER canonique ou fake d'erreur/blocage ;
-- `Clock` fixe ;
-- factories UUID fixes ;
-- timeouts/cadences très courts uniquement dans les tests.
-
-Ils ne dépendent ni d'Internet, ni d'un compte OpenAI, ni de Kraken. La suite ciblée valide les chemins métier, les timeouts, la chronologie, l'identité des snapshots, l'absence de chevauchement, start/stop et le shutdown runtime.
+Une panne du journal est propagée ; elle n'est jamais convertie en HOLD ou en faux succès durable.
 
 ---
 
-## 20. Qualité architecturale
+## 18. SQLAlchemy async et lifecycle
 
-Chaque batch doit préserver : séparation des responsabilités, contrats testables, dépendances fournisseur confinées, calculs financiers `Decimal`, no-look-ahead, testabilité offline, aucune stratégie déterministe cachée, mutations atomiques et remplacement Luna/Sol par configuration sans refonte métier.
+`Database` encapsule :
+
+- `AsyncEngine` ;
+- `async_sessionmaker[AsyncSession]` ;
+- création du schéma uniquement pour les tests isolés ;
+- `close()` pour disposer les connexions.
+
+Le driver de production est `asyncpg`.
+
+`AI_SPOT_TRADER_DATABASE_URL` est chargé via `Settings.database_url: SecretStr | None`.
+
+---
+
+## 19. Modèle relationnel
+
+### audit_cycles
+
+Clé primaire : `cycle_id`.
+
+Conserve notamment :
+
+- statut technique ;
+- empreinte `result_digest` ;
+- erreur technique sanitizée ;
+- IDs des snapshots ;
+- timestamps des snapshots ;
+- `AgentInput` JSON/JSONB ;
+- portfolio post-cycle JSON/JSONB.
+
+### audit_decisions
+
+Une décision maximum par cycle, corrélée par `cycle_id`.
+
+### audit_risk_assessments
+
+Un assessment maximum par cycle, corrélé au cycle et à la décision.
+
+### audit_execution_intents
+
+Absent pour HOLD et REJECT. Corrélé au cycle, à la décision et au RiskAssessment.
+
+### audit_fills
+
+Zéro ou plusieurs fills rattachés à l'intent.
+
+Les contraintes FK sont configurées avec `ON DELETE CASCADE` pour préserver un graphe cohérent.
+
+---
+
+## 20. Idempotence et atomicité
+
+`SqlAlchemyCycleAuditRepository.record()` calcule une empreinte déterministe du `TradingCycleResult`.
+
+Cas :
+
+```text
+cycle_id absent
+    -> écrit le graphe
+    -> True
+
+cycle_id présent + même digest
+    -> aucune nouvelle écriture
+    -> False
+
+cycle_id présent + digest différent
+    -> CycleAuditConflictError
+```
+
+Une transaction unique couvre l'ensemble du graphe. Les tests injectent un échec après ajout des records et vérifient que le rollback laisse toutes les tables vides.
+
+---
+
+## 21. Alembic
+
+La migration initiale est :
+
+```text
+0001_audit_journal
+```
+
+Le runtime Alembic exige explicitement `AI_SPOT_TRADER_DATABASE_URL`.
+
+Le schéma de production ne doit pas être créé avec `Base.metadata.create_all()` ; cette méthode reste réservée aux tests isolés.
+
+Validation réelle confirmée sur PostgreSQL 18 : `upgrade head` réussi et `alembic_version = 0001_audit_journal`.
+
+---
+
+## 22. PostgreSQL local avec Docker
+
+`docker-compose.yml` fournit :
+
+- image `postgres:18.6-bookworm` ;
+- base `ai_spot_trader` ;
+- utilisateur de développement `ai_spot_trader` ;
+- port local 5432 ;
+- volume persistant ;
+- healthcheck `pg_isready`.
+
+Pour PostgreSQL 18, le volume est monté sur `/var/lib/postgresql`.
+
+Cette composition est destinée au développement local, pas au déploiement production.
+
+---
+
+## 23. Reprise, réconciliation et exactly-once
+
+Le Batch 09 ne prétend pas résoudre l'atomicité entre deux systèmes distincts :
+
+1. le `PaperPortfolioLedger` mémoire ;
+2. PostgreSQL.
+
+Le scénario suivant reste possible :
+
+```text
+Broker mutile le ledger PAPER
+        |
+process crash
+        |
+journal PostgreSQL non commité
+```
+
+Le journal durable améliore fortement l'audit et prépare la reprise, mais il ne peut pas inventer un état durable absent.
+
+La future stratégie de recovery devra décider explicitement de la source de vérité du ledger, des checkpoints et de la réconciliation. Aucun replay automatique d'`ExecutionIntent` n'est autorisé entre-temps.
+
+---
+
+## 24. Tests et reproductibilité
+
+Tests Batch 09 :
+
+- SQLite async mémoire pour le repository ;
+- aucune instance PostgreSQL externe nécessaire à la suite standard ;
+- HOLD et REJECT sans intent/fill ;
+- ALLOW/MODIFY avec graphe complet ;
+- IDs/snapshots/status ;
+- erreur technique ;
+- idempotence ;
+- rollback transactionnel ;
+- wrapper audité ;
+- lifecycle DB.
+
+Validation locale : **209 tests**, Ruff OK, mypy OK sur 63 fichiers, `git diff --check` OK.
+
+Validation PostgreSQL séparée : Docker healthy, migration réelle réussie, tables et révision Alembic vérifiées.
+
+---
+
+## 25. Qualité architecturale
+
+Chaque batch doit préserver : séparation des responsabilités, contrats testables, dépendances fournisseur confinées, calculs financiers `Decimal`, no-look-ahead, testabilité offline, aucune stratégie déterministe cachée, mutations atomiques, persistance factuelle et remplacement Luna/Sol par configuration sans refonte métier.

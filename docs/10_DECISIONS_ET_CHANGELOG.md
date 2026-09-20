@@ -70,9 +70,9 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 - **Statut : ACCEPTÉE**
 - HOLD, refus et modifications doivent être conservés.
 
-### ADR-016 — PostgreSQL comme base cible
+### ADR-016 — PostgreSQL comme base durable
 - **Statut : ACCEPTÉE**
-- ORM/migrations restent à décider.
+- PostgreSQL est la base cible du journal durable PAPER.
 
 ### ADR-017 — Sécurité des secrets
 - **Statut : ACCEPTÉE**
@@ -101,7 +101,7 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 
 ### ADR-024 — Ports externes minimaux via Protocol
 - **Statut : ACCEPTÉE**
-- `MarketDataSource`, `MarketObservationSource`, `LLMProvider`, `Broker` sont les ports canoniques actuels.
+- `MarketDataSource`, `MarketObservationSource`, `LLMProvider`, `Broker` sont les ports métier canoniques.
 
 ### ADR-025 — Adapter Kraken Spot public minimal
 - **Statut : ACCEPTÉE**
@@ -174,15 +174,46 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 
 ### ADR-041 — Boucle autonome séquentielle sur snapshots cohérents
 - **Statut : ACCEPTÉE**
-- La primitive canonique du Batch 08 est `TradingCycleRunner.run_cycle()` ; `TradingEngine` ne fait que la répéter.
-- Un verrou partagé couvre tout le cycle : aucun appel manuel et aucune loop utilisant le même runner ne se chevauchent.
+- La primitive canonique est `TradingCycleRunner.run_cycle()` ; `TradingEngine` ne fait que la répéter.
+- Un verrou partagé couvre tout le cycle.
 - Chaque cycle utilise un unique `MarketState` pour Agent, Risk et Broker, et un unique `PortfolioState` pré-cycle pour Agent et Risk.
-- Seul Risk crée l'`ExecutionIntent`; l'orchestrateur ne modifie jamais action, symbole ou quantité.
-- HOLD et REJECT sont des issues métier complètes ; les pannes techniques sont distinctes et ne deviennent jamais des HOLD.
-- Market, Agent et Broker ont des timeouts explicitement injectés ; Risk n'a pas de timeout artificiel.
-- La cadence est attendue après la fin d'un cycle ; aucun rattrapage concurrent n'est effectué.
-- Le stop est coopératif et réveille l'attente de cadence ; FastAPI peut attendre l'arrêt via `AppRuntime`.
-- Aucune valeur produit de cadence/timeouts n'est imposée par `Settings` dans ce batch.
+- Seul Risk crée l'`ExecutionIntent`.
+- HOLD et REJECT sont des issues métier complètes ; les pannes techniques sont distinctes.
+- Market, Agent et Broker ont des timeouts explicitement injectés.
+- La cadence est attendue après la fin d'un cycle.
+- Le stop est coopératif et FastAPI peut attendre l'arrêt via `AppRuntime`.
+
+### ADR-042 — SQLAlchemy async + asyncpg + Alembic pour PostgreSQL
+- **Statut : ACCEPTÉE**
+- SQLAlchemy 2 async est la couche d'accès PostgreSQL.
+- `asyncpg` est le driver de production.
+- Alembic est l'unique mécanisme normal de migration du schéma durable.
+- `aiosqlite` reste une dépendance de développement pour les tests offline.
+
+### ADR-043 — Journal durable factuel derrière CycleAuditWriter
+- **Statut : ACCEPTÉE**
+- `CycleAuditWriter.record(TradingCycleResult)` est la frontière minimale.
+- `AuditedTradingCycleRunner` enveloppe le runner canonique après production du résultat.
+- Agent, Risk et Broker ne dépendent pas directement de PostgreSQL.
+- La persistance ne devient jamais une source de stratégie.
+
+### ADR-044 — Un graphe durable immuable par cycle_id
+- **Statut : ACCEPTÉE**
+- `cycle_id` est l'identité métier du journal.
+- Une empreinte déterministe du résultat permet les replays idempotents.
+- Même `cycle_id` + faits différents = conflit explicite.
+- Le graphe complet est transactionnel et rollback intégral en cas d'échec.
+
+### ADR-045 — PostgreSQL Docker Compose pour le développement local
+- **Statut : ACCEPTÉE**
+- `docker-compose.yml` fournit PostgreSQL 18 local avec volume persistant et healthcheck.
+- Cette composition est une commodité de développement, pas une définition de production.
+
+### ADR-046 — Pas de fausse garantie exactly-once au Batch 09
+- **Statut : ACCEPTÉE**
+- Le ledger PAPER reste mémoire.
+- L'idempotence du journal n'implique pas une atomicité globale entre mutation du ledger et commit PostgreSQL.
+- Reconstruction du ledger et réconciliation après crash restent des étapes futures explicites.
 
 ---
 
@@ -217,8 +248,8 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 - valeurs expérimentales fee/spread/slippage ;
 - modèle de fill plus riche éventuel ;
 - base de coût et frontière de journée ;
-- ORM/migrations/rétention ;
-- idempotence/réconciliation et reprise après panne ;
+- politique de rétention PostgreSQL ;
+- reconstruction du ledger, réconciliation et stratégie de reprise après panne ;
 - auth et déploiement ;
 - versionnement explicite des schémas si nécessaire ;
 - éventuelle policy de retry LLM bornée ;
@@ -227,6 +258,46 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 ---
 
 ## 5. Changelog
+
+### 2026-09-20 — Batch 09 Persistance et journal d'audit
+
+**État : intégré fonctionnellement sur `main` au commit `c53d04f14bcda82359d11c2e14fc1eb601ed14e0` (`feat: add durable audit persistence`).**
+
+- Resynchronisation initiale sur GitHub `main` au HEAD `4af32bb6ddf714d71405392d4e515312ba89e2a6` (`docs: record Batch 08 integration`).
+- Choix de SQLAlchemy 2 async, `asyncpg` et Alembic.
+- Ajout de `ai_spot_trader.persistence` avec `Database`, `CycleAuditWriter`, `AuditedTradingCycleRunner` et `SqlAlchemyCycleAuditRepository`.
+- Journal durable des cycles, décisions, RiskAssessment, ExecutionIntent et fills.
+- Conservation des snapshots disponibles, IDs, timestamps et erreurs techniques sanitizées.
+- Payloads métier canoniques stockés en JSON/JSONB sans seconde logique métier.
+- HOLD et REJECT sont persistés sans intent/fill.
+- ALLOW et MODIFY conservent l'intent Risk et les fills.
+- Idempotence stricte par `cycle_id` et digest du résultat.
+- Conflit explicite si la même identité métier est réutilisée avec des faits différents.
+- Transaction unique et rollback complet du graphe en cas d'échec.
+- Tests offline via `aiosqlite`.
+- Ajout d'Alembic avec révision `0001_audit_journal`.
+- Ajout de `docker-compose.yml` pour PostgreSQL 18 de développement.
+- Aucune API Kraken privée, aucune route FastAPI de contrôle et aucun LIVE.
+
+Validation locale Windows finale confirmée :
+
+- `pytest backend` : **209/209** ;
+- Ruff : **All checks passed** ;
+- mypy : **Success: no issues found in 63 source files** ;
+- `git diff --check` : aucune erreur ;
+- 2 warnings de dépréciation FastAPI/Starlette sans échec ;
+- commit/push fonctionnel confirmé et working tree propre.
+
+Validation PostgreSQL réelle :
+
+- Docker Desktop 4.47.0 / Engine 28.4.0 ;
+- conteneur PostgreSQL `healthy` ;
+- image `postgres:18.6-bookworm` ;
+- Alembic `upgrade head` réussi ;
+- `alembic_version = 0001_audit_journal` ;
+- tables d'audit et table de version vérifiées avec `psql`.
+
+Limite documentée : aucune garantie exactly-once globale entre ledger PAPER mémoire et PostgreSQL. Reconstruction du ledger et réconciliation restent différées.
 
 ### 2026-09-20 — Batch 08 Boucle autonome
 
@@ -246,9 +317,7 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 - Aucun paramètre produit de capital, paire, cadence, RiskPolicy ou coûts PAPER ajouté silencieusement.
 - Aucune persistance durable, API de contrôle, API Kraken privée ou fonctionnalité LIVE.
 
-Validation finale locale Windows confirmée avant intégration : `ruff check backend` **All checks passed**, `pytest backend` **203/203**, mypy **Success: no issues found in 57 source files**, `git diff --check` sans erreur ; 2 warnings de dépréciation FastAPI/Starlette sans échec. Le commit/push sur `main` a été confirmé et `git status --short` était vide après intégration.
-
-Validation complémentaire réellement exécutée dans l'environnement ChatGPT : suite ciblée Health + Trading **37/37**, `compileall` ciblé et contrôles statiques. Aucun appel OpenAI/Kraken réel.
+Validation finale locale Windows confirmée avant intégration : `ruff check backend` **All checks passed**, `pytest backend` **203/203**, mypy **Success: no issues found in 57 source files**, `git diff --check` sans erreur ; 2 warnings de dépréciation FastAPI/Starlette sans échec.
 
 ### 2026-09-20 — Batch 07 Agent Luna
 
@@ -256,9 +325,9 @@ Validation complémentaire réellement exécutée dans l'environnement ChatGPT :
 
 - Provider unique Luna/Sol, prompt `agent-luna-v1`, Structured Outputs stricts, sortie limitée aux champs stratégiques et IDs/timestamps applicatifs.
 - Aucun import Risk/Broker/Kraken/FastAPI depuis l'agent ; aucun tool-calling ; aucune exécution directe.
-- Commit documentaire post-intégration : `6415064b0f9bb0ee625cc42e8209cdf4388167e0`.
+- Commit documentaire post-intégration : `6415064b0f9bb0ee625cc42e8209cdf4388167e0` (`docs: record Batch 07 integration`).
 
-Validation locale finale confirmée : `pytest backend` **168/168**, Ruff **All checks passed**, mypy **Success: no issues found in 54 source files**, `git diff --check` sans erreur ; warnings LF → CRLF habituels et 2 warnings FastAPI/Starlette sans échec.
+Validation locale finale confirmée : `pytest backend` **168/168**, Ruff **All checks passed**, mypy **Success: no issues found in 54 source files**, `git diff --check` sans erreur.
 
 ### 2026-09-20 — Batch 06 Risk Engine
 

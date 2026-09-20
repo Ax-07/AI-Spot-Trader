@@ -6,10 +6,10 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- Commit fonctionnel Batch 08 audité le 20 septembre 2026 : `8deb72faeeaa1ac065189480c64ba16410c0d451`
-- Commit : `feat: add autonomous trading loop`
-- Batch 08 — Boucle autonome : **intégré sur `main`**.
-- Le push `6415064..8deb72f` a été confirmé et le `git status --short` local était vide après intégration.
+- HEAD fonctionnel Batch 09 audité le 20 septembre 2026 : `c53d04f14bcda82359d11c2e14fc1eb601ed14e0`
+- Commit : `feat: add durable audit persistence`
+- Batch 09 — Persistance et journal d'audit : **intégré fonctionnellement sur `main`**.
+- Le push `4af32bb..c53d04f` a été confirmé et `git status --short` était vide après intégration fonctionnelle.
 
 ## État backend intégré
 
@@ -19,27 +19,40 @@
 - Risk Engine déterministe avec ALLOW/MODIFY/REJECT ; seul Risk crée l'`ExecutionIntent`.
 - `TradingCycleRunner.run_cycle()` orchestre un cycle PAPER cohérent avec un unique `MarketState` partagé Agent/Risk/Broker.
 - `TradingEngine` répète les cycles séquentiellement, sans chevauchement ni rattrapage concurrent.
-- HOLD traverse Risk et n'appelle pas Broker ; REJECT reste une issue métier normale.
-- Erreurs techniques et timeouts Market/Agent/Broker restent distincts d'un HOLD.
-- `AppRuntime` peut arrêter proprement un moteur injecté au shutdown FastAPI ; aucun trading ne démarre automatiquement.
-- Aucune persistance durable, aucune API Kraken privée et aucun LIVE.
+- HOLD traverse Risk ; REJECT reste une issue métier normale ; erreurs techniques distinctes.
+- Persistance durable via SQLAlchemy async + PostgreSQL + `asyncpg`, migrations Alembic.
+- `AuditedTradingCycleRunner` persiste le `TradingCycleResult` sans dupliquer l'orchestration.
+- Journal corrélé par `cycle_id` : décision, Risk, intent éventuel, fills, snapshots disponibles et erreurs techniques.
+- Idempotence stricte par `cycle_id` + empreinte du résultat ; rollback transactionnel complet.
+- PostgreSQL local reproductible via Docker Compose.
+- Aucune API Kraken privée et aucun LIVE.
 
-## Validation finale du Batch 08
+## Validation finale connue du Batch 09
 
-Validation locale Windows confirmée par l'utilisateur avant intégration :
+Validation locale Windows confirmée :
 
+- `pytest backend` : **209 tests passés**, 2 warnings de dépréciation FastAPI/Starlette sans échec ;
 - `ruff check backend` : **All checks passed** ;
-- `pytest backend` : **203 tests passés**, 2 warnings de dépréciation FastAPI/Starlette sans échec ;
-- mypy : **Success: no issues found in 57 source files** ;
-- `git diff --check` : aucune erreur, uniquement les warnings habituels LF → CRLF ;
-- `git status --short` : vide après commit/push ;
-- commit/push confirmé sur `main` : `8deb72f`.
+- mypy : **Success: no issues found in 63 source files** ;
+- `git diff --check` : aucune erreur ;
+- commit/push fonctionnel confirmé sur `main` : `c53d04f`.
 
-Tests complémentaires réellement exécutés dans l'environnement ChatGPT pendant le Batch 08 : suite ciblée Health + Trading **37/37**, `compileall` ciblé et contrôles statiques de cohérence. Aucun appel OpenAI ou Kraken réel.
+Validation PostgreSQL réelle confirmée :
+
+- Docker Desktop actif ;
+- `ai-spot-trader-postgres` : **healthy** ;
+- image : `postgres:18.6-bookworm` ;
+- `python -m alembic -c backend\alembic.ini upgrade head` : **OK** ;
+- révision : `0001_audit_journal` ;
+- tables : `audit_cycles`, `audit_decisions`, `audit_risk_assessments`, `audit_execution_intents`, `audit_fills`, `alembic_version`.
+
+## Limite de reprise
+
+Le journal durable ne garantit pas encore un exactly-once global entre la mutation du ledger PAPER mémoire et le commit PostgreSQL. Reconstruction du ledger, réconciliation après crash et stratégie de recovery restent à traiter explicitement.
 
 ## Prochaine étape
 
-**Batch 09 — Persistance et journal d'audit** : PostgreSQL, migrations et conservation durable des cycles, décisions, HOLD, REJECT, MODIFY, ALLOW, erreurs techniques, intents et fills, avec reprise/réconciliation/idempotence à cadrer.
+**Batch 10 — API FastAPI de contrôle** : exposition de l'état moteur, portefeuille, décisions, Risk, historique et contrôles autorisés, sans donner au frontend l'autorité sur la logique de trading.
 
 ## Points encore à décider
 
@@ -49,4 +62,6 @@ Tests complémentaires réellement exécutés dans l'environnement ChatGPT penda
 - Valeurs produit des limites Risk.
 - Mapping exact de l'agressivité 1–10.
 - Valeurs de référence fee/spread/slippage PAPER.
-- ORM, migrations, rétention, frontière de journée et stratégie de reprise après panne.
+- Politique de rétention.
+- Frontière de journée et données P&L.
+- Reconstruction/reprise du ledger et réconciliation après panne.

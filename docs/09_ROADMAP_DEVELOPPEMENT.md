@@ -126,17 +126,61 @@ Validation complémentaire exécutée dans l'environnement ChatGPT : suite cibl�
 
 ## Batch 09 — Persistance et journal d'audit
 
-**Prochaine étape prévue.**
+**Statut : intégré fonctionnellement sur `main` au commit `c53d04f14bcda82359d11c2e14fc1eb601ed14e0` (`feat: add durable audit persistence`).**
 
-Objectif : PostgreSQL, schéma/migrations, cycles, décisions, `RiskAssessment`, intents, fills, erreurs techniques, métriques et reprise cohérente.
+HEAD intégré de départ audité : `4af32bb6ddf714d71405392d4e515312ba89e2a6` (`docs: record Batch 08 integration`).
 
-À décider : ORM, migrations, granularité des snapshots, rétention, idempotence/réconciliation et stratégie de reprise après crash.
+Intégré :
+
+- package `ai_spot_trader.persistence` ;
+- SQLAlchemy 2 async + `asyncpg` ;
+- Alembic et migration initiale `0001_audit_journal` ;
+- PostgreSQL comme journal durable ;
+- `CycleAuditWriter` comme port minimal ;
+- `AuditedTradingCycleRunner` comme wrapper du runner canonique ;
+- tables cycles, décisions, Risk assessments, intents et fills ;
+- conservation JSON/JSONB des objets métier canoniques ;
+- IDs et timestamps corrélés ;
+- erreurs techniques sanitizées ;
+- HOLD et REJECT sans intent/fill ;
+- ALLOW/MODIFY avec graphe d'exécution complet ;
+- idempotence par `cycle_id` + digest ;
+- conflit explicite si un même `cycle_id` représente des faits différents ;
+- transaction unique et rollback complet ;
+- lifecycle async DB explicite ;
+- tests offline avec SQLite async ;
+- `docker-compose.yml` pour PostgreSQL 18 local persistant ;
+- aucune API Kraken privée, aucune route de contrôle FastAPI et aucun LIVE.
+
+Validation locale Windows finale confirmée :
+
+- `pytest backend` : **209 tests passés**, 2 warnings de dépréciation non bloquants ;
+- `ruff check backend` : **All checks passed** ;
+- mypy : **Success: no issues found in 63 source files** ;
+- `git diff --check` : aucune erreur ;
+- commit/push fonctionnel confirmé ;
+- `git status --short` vide après push.
+
+Validation PostgreSQL réelle confirmée :
+
+- Docker Desktop actif ;
+- conteneur `ai-spot-trader-postgres` : **healthy** ;
+- image `postgres:18.6-bookworm` ;
+- Alembic `upgrade head` : **OK** ;
+- `alembic_version = 0001_audit_journal` ;
+- tables `audit_cycles`, `audit_decisions`, `audit_risk_assessments`, `audit_execution_intents`, `audit_fills` présentes.
+
+Limite assumée : le ledger PAPER reste mémoire. L'exactly-once bout-en-bout entre mutation du ledger et commit PostgreSQL, la reconstruction du ledger et la réconciliation après crash restent différés.
 
 ---
 
 ## Batch 10 — API FastAPI de contrôle
 
-Objectif : état moteur, portefeuille, décisions, risque, performance, réglages autorisés, start/stop si retenu et WebSocket utiles au cockpit.
+**Prochaine étape prévue.**
+
+Objectif : état moteur, portefeuille, décisions, risque, historique durable, performance disponible, réglages autorisés, start/stop si retenu et WebSocket utiles au cockpit.
+
+La couche API ne doit ni dupliquer l'orchestration, ni permettre au frontend de contourner Risk ou le backend autonome.
 
 ---
 
@@ -220,8 +264,8 @@ Audit de readiness, adaptateur privé Kraken, réconciliation, permissions minim
 - drawdown/daily loss une fois les données disponibles ;
 - mapping agressivité ;
 - valeurs expérimentales fee/spread/slippage ;
-- ORM/migrations/rétention ;
+- politique de rétention ;
 - frontière de journée ;
-- reprise/réconciliation/idempotence ;
-- auth/déploiement ;
+- reconstruction du ledger, réconciliation et reprise après panne ;
+- auth et déploiement ;
 - activation éventuelle du LIVE.

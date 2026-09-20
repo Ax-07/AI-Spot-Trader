@@ -8,7 +8,8 @@ Ce document fixe la frontière entre :
 2. la décision stratégique de l'agent IA ;
 3. les règles déterministes de sécurité ;
 4. l'orchestration PAPER ;
-5. l'exécution PAPER.
+5. l'exécution PAPER ;
+6. la persistance durable des faits de cycle.
 
 Cette frontière est centrale pour éviter de transformer AI Spot Trader en bot algorithmique traditionnel.
 
@@ -21,6 +22,8 @@ L'agent IA est l'unique décideur stratégique. Il choisit parmi `BUY`, `SELL`, 
 Les systèmes déterministes peuvent calculer et présenter prix, statistiques, volatilité, exposition, P&L, contraintes et fraîcheur des données. Ils ne doivent pas décider silencieusement qu'un signal technique implique un BUY ou SELL.
 
 Le Risk Engine reste déterministe et possède l'autorité finale d'autoriser, réduire ou refuser une proposition tradable.
+
+La persistance conserve ce qui s'est produit ; elle ne décide jamais de ce qui doit se produire.
 
 **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
@@ -58,9 +61,12 @@ MarketState + PortfolioState + aggressiveness
          +-------------------+
                   |
           TradingCycleResult
+                  |
+                  v
+       Audit persistence PostgreSQL
 ```
 
-Aucune sortie LLM ne déclenche directement un ordre. Le package Agent n'importe ni Risk, ni Broker, ni Kraken, ni FastAPI. Le package `trading` orchestre les frontières mais ne prend aucune décision stratégique.
+Aucune sortie LLM ne déclenche directement un ordre. Le package Agent n'importe ni Risk, ni Broker, ni Kraken, ni FastAPI, ni persistance. Le package `trading` orchestre les frontières mais ne prend aucune décision stratégique.
 
 ---
 
@@ -75,7 +81,7 @@ AgentInput
 - aggressiveness (1..10)
 ```
 
-Les snapshots imbriqués restent les contrats Pydantic canoniques. Le runner Batch 08 crée l'input seulement après avoir acquis les deux snapshots du cycle.
+Les snapshots imbriqués restent les contrats Pydantic canoniques. Le runner crée l'input seulement après avoir acquis les deux snapshots du cycle.
 
 ### No look-ahead côté Agent
 
@@ -128,7 +134,7 @@ rationale
 
 `decision_id`, `cycle_id` et `created_at` appartiennent à l'application : factory UUID injectable, `cycle_id` recopié de l'input et `Clock` injectable.
 
-Le modèle doit produire exactement `agent_input.market_state.symbol`. Une décision pour un autre symbole est rejetée avant création d'un `DecisionCandidate` utilisable.
+Le modèle doit produire exactement `agent_input.market_state.symbol`.
 
 ---
 
@@ -146,8 +152,6 @@ Le JSON Schema OpenAI strict autorise uniquement :
 ```
 
 Les quatre propriétés sont requises, `additionalProperties=false`, puis la réponse est revalidée localement.
-
-Le parsing refuse notamment : sortie vide, JSON invalide, constantes non standard, quantité fournie comme chaîne, champs inattendus, action inconnue, BUY/SELL sans quantité positive et HOLD avec quantité.
 
 Aucune réparation silencieuse n'est tentée.
 
@@ -185,7 +189,7 @@ Luna = gpt-5.6-luna
 Sol  = gpt-5.6-sol
 ```
 
-Le choix est porté par `LLMModel`. Le Batch 08 n'ajoute aucune sélection dynamique ni comparaison de performance.
+Le choix est porté par `LLMModel`.
 
 ---
 
@@ -237,9 +241,10 @@ Agent
  -> RiskAssessment(ALLOW + HOLD_NO_EXECUTION)
  -> aucun ExecutionIntent
  -> aucun Broker
+ -> journal durable du cycle/décision/assessment
 ```
 
-Le `TradingCycleResult` conserve la décision et l'assessment pour que Batch 09 puisse les persister.
+La persistance Batch 09 vérifie que HOLD ne crée ni intent ni fill.
 
 ---
 
@@ -251,7 +256,8 @@ Pour `RiskDecision.REJECT` :
 - aucun Broker ;
 - aucun fill ;
 - aucune mutation du ledger ;
-- résultat technique `COMPLETED` avec décision et assessment conservés.
+- résultat technique `COMPLETED` avec décision et assessment conservés ;
+- journal durable du cycle/décision/assessment.
 
 ---
 
@@ -266,7 +272,7 @@ L'orchestrateur vérifie que :
 - l'intent référence le bon assessment ;
 - la quantité de l'intent est exactement `authorized_quantity`.
 
-Il ne recalcule ni n'arrondit cette quantité.
+Le journal conserve la décision originale, l'assessment MODIFY, l'intent Risk et les fills réellement retournés.
 
 ---
 
@@ -280,6 +286,7 @@ DecisionCandidate
  -> ExecutionIntent créé par Risk
  -> Broker.execute(intent, same_market_state)
  -> Fill(s)
+ -> audit durable
 ```
 
 Il n'existe aucun autre chemin d'exécution.
@@ -306,13 +313,17 @@ Le snapshot portfolio post-trade n'est pris qu'après retour de fills valides.
 
 Risk utilise la même estimation de coût que le Paper Broker pour la solvabilité BUY. Tous les calculs financiers utilisent `Decimal`.
 
+Les fills persistés conservent prix de référence, prix exécuté, notional, frais, spread et slippage via leur payload canonique.
+
 ---
 
 ## 18. Agressivité
 
 Valeur entière de 1 à 10, validée dans `Settings` et `AgentInput`.
 
-Le mapping exact reste à décider. Le Batch 08 transmet la valeur à `AgentInput` sans coefficient, taille, seuil technique ou changement de stratégie déterministe.
+Le mapping exact reste à décider. L'orchestrateur transmet la valeur à `AgentInput` sans coefficient, taille, seuil technique ou changement de stratégie déterministe.
+
+La persistance ne l'interprète pas.
 
 ---
 
@@ -343,9 +354,11 @@ market_state.as_of <= fill.filled_at                    # si fill
 
 Le `cycle_id` vient d'une factory injectable au runner. Le LLM ne l'invente jamais.
 
+Le journal utilise `cycle_id` comme identité principale du graphe durable.
+
 ---
 
-## 20. Cohérence des snapshots Batch 08
+## 20. Cohérence des snapshots
 
 Chaque cycle capture exactement :
 
@@ -354,9 +367,7 @@ Chaque cycle capture exactement :
 
 Ces objets sont placés dans `AgentInput`. Après validation de l'input, l'orchestrateur réutilise explicitement ces mêmes références : marché + portefeuille pour Risk, puis marché pour Broker.
 
-Aucun refresh marché n'est autorisé avant l'exécution de cette décision.
-
-Le verrou global du runner garantit qu'un autre cycle utilisant ce runner ne peut pas muter le ledger entre Risk et Broker.
+Le journal conserve l'`AgentInput` complet et le snapshot post-cycle s'il existe.
 
 ---
 
@@ -376,6 +387,8 @@ Il peut conserver selon l'étape :
 - métadonnée de panne technique éventuelle.
 
 HOLD et REJECT sont `COMPLETED`. Une panne technique est `FAILED`.
+
+Batch 09 persiste ce résultat tel qu'il a été produit.
 
 ---
 
@@ -397,7 +410,7 @@ Une exception technique Risk empêche le Broker. Elle reste distincte d'un `REJE
 
 Une erreur Broker est conservée comme échec explicite. Aucun fill synthétique n'est créé.
 
-Le résultat technique ne recopie que le type d'exception, pas son message brut.
+Le résultat technique ne recopie que le type d'exception, pas son message brut. Le journal durable reprend cette métadonnée sanitizée.
 
 ---
 
@@ -407,9 +420,9 @@ Les attentes Market, Agent et Broker sont bornées avec `asyncio.timeout`, avec 
 
 Risk reste sans timeout artificiel.
 
-Le Broker PAPER canonique exécute son calcul/mutation de manière synchrone après acquisition de son verrou. Le Batch 08 n'introduit donc aucune reprise automatique d'un intent après timeout.
+Le Broker PAPER canonique exécute son calcul/mutation de manière synchrone après acquisition de son verrou.
 
-Un futur broker réseau pouvant laisser une mutation incertaine nécessitera persistance, idempotence/réconciliation et politique dédiée ; ces sujets sont différés.
+Un futur broker réseau pouvant laisser une mutation incertaine nécessitera une politique dédiée de réconciliation.
 
 ---
 
@@ -427,33 +440,108 @@ cycle N+1
 
 Il n'existe aucun cycle de rattrapage concurrent. Une erreur de cycle est isolée puis la cadence normale est respectée avant de retenter un nouveau cycle.
 
-`start()` refuse les doubles démarrages. `stop()` réveille l'attente de cadence et attend la fin du cycle borné en cours. Le runtime FastAPI peut appeler `stop()` au shutdown.
+`start()` refuse les doubles démarrages. `stop()` réveille l'attente de cadence et attend la fin du cycle borné en cours.
 
 ---
 
-## 25. Interfaces externes
+## 25. Frontière de persistance Batch 09
 
-Ports canoniques inchangés :
+`AuditedTradingCycleRunner` est un wrapper, pas un nouvel orchestrateur :
+
+```text
+TradingCycleRunner
+      |
+      v
+TradingCycleResult
+      |
+      v
+SqlAlchemyCycleAuditRepository
+```
+
+La persistance :
+
+- ne modifie pas le résultat ;
+- ne réévalue pas Risk ;
+- ne reconstruit pas un intent ;
+- ne synthétise pas de fill ;
+- ne transforme pas une erreur en HOLD ;
+- ne rejoue pas automatiquement un intent.
+
+Une panne de persistance est une panne technique et doit rester visible.
+
+---
+
+## 26. Idempotence métier du journal
+
+Le repository calcule une empreinte déterministe du résultat complet.
+
+- premier `cycle_id` : écriture ;
+- replay strictement identique : no-op ;
+- même `cycle_id` avec contenu différent : conflit explicite.
+
+Cette politique prévient les doubles écritures du journal. Elle ne garantit pas à elle seule un exactly-once d'exécution.
+
+---
+
+## 27. Reprise après crash
+
+Le ledger PAPER reste mémoire au Batch 09.
+
+Il existe donc encore une fenêtre :
+
+```text
+PaperBroker mutate le ledger
+        |
+crash
+        |
+journal durable pas encore commité
+```
+
+La persistance apporte les données nécessaires à une future réconciliation, mais elle ne peut pas garantir que cette fenêtre n'existe pas.
+
+La prochaine architecture de reprise devra être décidée sans rejouer post-hoc les décisions de l'IA.
+
+---
+
+## 28. Interfaces externes
+
+Ports canoniques métier inchangés :
 
 - `MarketDataSource.snapshot(symbol) -> MarketState` ;
 - `MarketObservationSource.observation(symbol) -> MarketObservation` ;
 - `LLMProvider.generate_decision(agent_input) -> DecisionCandidate` ;
 - `Broker.execute(execution_intent, market_state) -> tuple[Fill, ...]`.
 
-Le Risk Engine reste une frontière interne synchrone. Le Batch 08 n'ajoute pas de port externe généraliste.
+Port de persistance ajouté :
+
+- `CycleAuditWriter.record(TradingCycleResult) -> bool`.
+
+Risk reste une frontière interne synchrone.
 
 ---
 
-## 26. Tests Batch 08
+## 29. Tests Batch 09
 
-La suite ciblée vérifie notamment : HOLD complet et passage Risk, BUY/SELL ALLOW, MODIFY exact, REJECT sans Broker, identité Market/Portfolio, corrélation `cycle_id`, clock/factory injectables, erreurs avant décision/Agent/Risk/Broker, timeouts Market/Agent/Broker, absence de refresh caché, sérialisation de cycles, double start impossible, stop pendant cadence, absence de tâche orpheline, absence de boucle serrée, portfolio post BUY/SELL et shutdown runtime.
+La suite de persistance vérifie notamment :
 
-Aucun réseau ni secret réel n'est requis.
+- HOLD durable sans intent/fill ;
+- REJECT durable sans intent/fill ;
+- ALLOW et MODIFY avec relation complète ;
+- conservation des IDs de snapshots ;
+- erreurs techniques sanitizées ;
+- replay idempotent ;
+- rollback transactionnel ;
+- wrapper audité ;
+- lifecycle de la DB.
+
+La suite standard utilise SQLite async mémoire et reste indépendante d'un service PostgreSQL externe.
+
+Une validation séparée réelle a appliqué la migration Alembic sur PostgreSQL 18 sous Docker Desktop et vérifié les tables créées.
 
 ---
 
-## 27. Persistance et LIVE
+## 30. Persistance et LIVE
 
-Batch 09 ajoutera le journal durable. Batch 08 ne prétend pas offrir de reprise après crash.
+Le journal durable reste PAPER uniquement.
 
 Le LIVE reste hors périmètre : aucune API Kraken privée, aucune clé de trading, aucune permission de retrait et aucune exécution réelle.
