@@ -18,7 +18,7 @@ La séquence ci-dessous est **proposée**. Les invariants du Project Master rest
 
 ## Batch 00 — Documentation initiale
 
-**Statut : patch préparé dans cette discussion, non intégré tant qu'il n'est pas commité.**
+**Statut : intégré sur `main`.**
 
 Objectif :
 
@@ -43,20 +43,24 @@ Critère de sortie : documentation cohérente, liens valides, aucun choix non d�
 
 ## Batch 01 — Bootstrap du projet
 
+**Statut : patch préparé et validé localement sous Windows, non intégré au moment de sa génération.**
+
 **Objectif :** créer un socle exécutable et testable sans logique de trading.
 
-Proposé :
+Implémenté dans le patch :
 
-- structure repository backend/frontend ;
-- backend Python ;
-- gestion de dépendances ;
-- FastAPI minimal ;
-- Pydantic/config typée ;
-- `asyncio` prêt ;
-- tests minimaux ;
-- lint/format/type-check à décider ;
-- squelette Next.js + TypeScript + shadcn/Tailwind si cela reste raisonnable dans le batch ;
+- structure repository `backend/` + `frontend/` ;
+- backend Python installable avec layout `src/` ;
+- FastAPI minimal et endpoint `GET /health` ;
+- configuration typée avec `pydantic-settings` ;
+- cycle de vie asynchrone prêt à accueillir de futures tâches `asyncio` ;
+- tests `pytest` ;
+- Ruff et mypy configurés côté backend ;
+- squelette Next.js + TypeScript + shadcn/ui + Tailwind CSS ;
+- `pnpm` comme gestionnaire de paquets frontend ;
+- ESLint et type-check TypeScript côté frontend ;
 - `.env.example` sans secret ;
+- `.gitignore` commun ;
 - commandes de développement documentées.
 
 Critère de sortie :
@@ -64,8 +68,10 @@ Critère de sortie :
 - backend démarre ;
 - endpoint health minimal ;
 - tests de bootstrap passent ;
-- frontend éventuel démarre indépendamment ;
+- frontend démarre indépendamment ;
 - aucun secret versionné.
+
+Les validations Windows sont confirmées : backend sous Python `3.13.14` (`pytest`, Ruff, mypy) et frontend via `pnpm 10.15.1` (install, ESLint, type-check, build Next.js). L'intégration Git reste à effectuer avant de considérer le batch intégré.
 
 ---
 
@@ -285,8 +291,8 @@ Tests :
 
 Objectif :
 
-- Next.js + TypeScript ;
-- shadcn/ui + Tailwind ;
+- compléter le bootstrap Next.js + TypeScript déjà présent ;
+- étendre shadcn/ui + Tailwind ;
 - dashboard ;
 - marché ;
 - portefeuille ;

@@ -135,6 +135,22 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 - Les secrets restent côté backend.
 - La gestion opérationnelle exacte des secrets reste à définir.
 
+### ADR-018 — Bootstrap en deux applications découplées
+
+- **Statut : ACCEPTÉE**
+- Le repository contient un backend sous `backend/` et un frontend sous `frontend/`.
+- Le backend démarre comme une application/service Python unique avec modules internes clairs.
+- Le frontend est un processus séparé et n'est jamais requis pour maintenir le backend en fonctionnement.
+- Aucun microservice n'est introduit dans le bootstrap.
+
+
+### ADR-019 — pnpm comme gestionnaire de paquets frontend
+
+- **Statut : ACCEPTÉE**
+- Le frontend utilise `pnpm` comme gestionnaire de paquets canonique.
+- Les commandes de développement et de validation sont documentées depuis la racine du repository avec `pnpm --dir frontend ...`.
+- Le Batch 01 a été validé avec pnpm `10.15.1`.
+
 ---
 
 ## 3. Propositions non encore décidées
@@ -143,7 +159,7 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 
 - **Statut : PROPOSÉE**
 - Utiliser des contrats explicites pour `MarketState`, `PortfolioState`, `DecisionCandidate`, `RiskAssessment`, etc.
-- À confirmer lors du bootstrap / batch contrats.
+- À confirmer lors du batch contrats.
 
 ### ADR-P002 — Horloge injectable
 
@@ -153,9 +169,9 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 
 ### ADR-P003 — Architecture modulaire dans un backend unique
 
-- **Statut : PROPOSÉE**
-- Démarrer par un backend déployable comme une application/service unique avec modules internes clairs.
-- Ne pas introduire de microservices sans besoin.
+- **Statut : SUPERSEDÉE par ADR-018**
+- La proposition a été concrétisée au bootstrap par un backend déployable comme application/service unique avec modules internes clairs.
+- Les microservices restent hors périmètre sans besoin démontré.
 
 ### ADR-P004 — Logs structurés corrélés
 
@@ -191,15 +207,31 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 
 ## 5. Changelog
 
+### 2026-09-20 — Batch 01 bootstrap du projet
+
+**État : patch préparé, non intégré au moment de sa génération.**
+
+- Audit du HEAD GitHub `main` : `c4d6aa6da9dde19a52b12dc54535af3b98aa1523`.
+- Création du backend Python/FastAPI installable sous `backend/`.
+- Ajout de la configuration typée via `pydantic-settings` et d'un `.env.example` sans secret.
+- Ajout du cycle de vie asynchrone minimal et du healthcheck `GET /health`.
+- Ajout des tests `pytest` et configuration Ruff/mypy.
+- Création du frontend Next.js + TypeScript + Tailwind CSS v4 + socle shadcn/ui sous `frontend/`.
+- Ajout des checks ESLint et TypeScript côté frontend.
+- Validation locale frontend réussie via `pnpm 10.15.1` : install, lint, type-check et build Next.js.
+- Validation locale backend réussie sous Python `3.13.14` : installation editable, `pytest` 4/4, Ruff et mypy.
+- Standardisation des commandes de développement depuis la racine du repository.
+- Ajout d'un `.gitignore` commun et des commandes de démarrage/validation.
+- Aucune intégration Kraken, LLM, Risk Engine, Paper Broker, PostgreSQL ou logique BUY/SELL/HOLD n'est introduite.
+
 ### 2026-09-20 — Batch 00 documentation initiale
 
-**État : patch proposé, non intégré au moment de sa génération.**
+**État : intégré sur `main`.**
 
-- Audit du HEAD GitHub `main` : `f5b967d8736075781d8142c8cc80a99cbd96fae3`.
-- Repository observé avant batch : `README.md` uniquement.
-- Création de la documentation initiale sous `docs/`.
+- Repository initial observé au commit `f5b967d8736075781d8142c8cc80a99cbd96fae3`.
+- Documentation initiale intégrée au commit `bd58ec3502fecca6c8c693af6fe71daea22b9167`.
+- README et état courant rafraîchis au commit `c4d6aa6da9dde19a52b12dc54535af3b98aa1523`.
 - Formalisation des invariants fonctionnels et techniques.
 - Définition d'une roadmap par batches testables.
-- Correction prévue du placeholder du repository dans `README.md`.
 
-Aucune implémentation Kraken, LLM, Risk Engine, Paper Broker ou moteur de trading n'est introduite par ce batch.
+Aucune implémentation Kraken, LLM, Risk Engine, Paper Broker ou moteur de trading n'a été introduite par ce batch documentaire.

@@ -4,7 +4,7 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet vise à étudier jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché structuré, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut du projet :** phase de conception et de documentation. Les premières versions seront exclusivement en **PAPER trading**.
+> **Statut du projet :** Batch 01 — bootstrap technique préparé. Les premières versions restent exclusivement en **PAPER trading**.
 
 ## Principes du projet
 
@@ -23,19 +23,17 @@ Le projet vise à étudier jusqu'où un agent IA peut prendre des décisions de 
 
 ## Agent IA
 
-Les premiers tests utiliseront **GPT-5.6 Luna** afin de réduire les coûts d'expérimentation. L'architecture doit permettre de sélectionner **GPT-5.6 Sol** par configuration sans modifier le moteur de trading.
+Les premiers tests utiliseront **GPT-5.6 Luna** afin de réduire les coûts d’expérimentation. L’architecture doit permettre de sélectionner **GPT-5.6 Sol** par configuration sans modifier le moteur de trading.
 
-Le niveau d'agressivité de l'agent est prévu sur une échelle configurable de **1 à 10**. Sa traduction exacte en contraintes et comportement reste à définir et devra être mesurée expérimentalement.
+Le niveau d’agressivité est prévu sur une échelle configurable de **1 à 10**. Son mapping exact reste à définir et sera traité dans un batch ultérieur.
 
 ## Objectif expérimental
 
-Le projet utilise une cible expérimentale de **+4 % de rendement journalier** comme objectif de recherche et de mesure.
+Le projet conserve une cible expérimentale de **+4 % de rendement journalier** comme objectif de recherche et de mesure. Cette cible n’est ni une promesse ni une garantie ; les résultats doivent être mesurés sans look-ahead ni sélection rétrospective.
 
-Cette cible n'est **ni une promesse, ni une garantie de rendement**. Les résultats devront être évalués sans look-ahead ni sélection rétrospective, en mesurant notamment le P&L brut et net, le drawdown, les frais, le slippage, l'exposition et le nombre de trades.
+## Architecture
 
-## Architecture cible
-
-Le **backend constitue l'application de trading**. Il doit continuer à fonctionner indépendamment du frontend.
+Le **backend constitue l'application de trading**. Il doit fonctionner indépendamment du frontend.
 
 Le frontend est uniquement un cockpit de contrôle et de visualisation : le fermer ou le redémarrer ne doit jamais arrêter le moteur de trading.
 
@@ -48,8 +46,6 @@ Stack décidée :
 - **Intégrations externes** : Kraken et le fournisseur LLM derrière des interfaces dédiées.
 
 Rust ne sera introduit que si un besoin mesuré ou une décision architecturale explicite le justifie.
-
-## Flux de décision simplifié
 
 ```text
 Kraken / Market Data
@@ -80,9 +76,62 @@ Kraken / Market Data
 
 Aucun chemin direct entre l'agent IA et Kraken ne doit exister.
 
-## Documentation
+## Bootstrap actuel
 
-La documentation versionnée constitue la référence détaillée du projet :
+```text
+backend/
+  src/ai_spot_trader/
+    api/
+    core/
+    main.py
+  tests/
+  pyproject.toml
+frontend/
+  src/app/
+  src/components/ui/
+  src/lib/
+  package.json
+```
+
+Le backend expose actuellement uniquement un healthcheck `GET /health` et une configuration typée. Le frontend affiche une page d'accueil technique et ne communique pas encore avec le backend.
+
+## Démarrage local
+
+### Backend
+
+Toutes les commandes de développement sont prévues pour être exécutées depuis la racine du repository sous PowerShell.
+
+```powershell
+uv venv --python 3.13.14 --seed backend\.venv
+backend\.venv\Scripts\python.exe -m pip install -e "backend[dev]"
+backend\.venv\Scripts\python.exe -m pytest backend
+backend\.venv\Scripts\python.exe -m ruff check backend
+backend\.venv\Scripts\python.exe -m mypy backend\src
+backend\.venv\Scripts\python.exe -m uvicorn ai_spot_trader.main:app --reload --app-dir backend\src
+```
+
+Le package backend accepte Python `>=3.12`. La validation Windows du Batch 01 a été réalisée avec Python `3.13.14`.
+
+### Frontend
+
+Dans un second terminal, toujours depuis la racine :
+
+```powershell
+pnpm --dir frontend install
+pnpm --dir frontend dev
+```
+
+Checks frontend utiles :
+
+```powershell
+pnpm --dir frontend lint
+pnpm --dir frontend typecheck
+pnpm --dir frontend build
+```
+
+`pnpm` est le gestionnaire de paquets frontend canonique du projet. La validation du Batch 01 a été réalisée avec pnpm `10.15.1`.
+
+## Documentation
 
 - [`docs/00_ETAT_ACTUEL.md`](docs/00_ETAT_ACTUEL.md) — mémoire courte pour reprendre le projet rapidement.
 - [`docs/01_PROJECT_MASTER.md`](docs/01_PROJECT_MASTER.md) — spécification fonctionnelle et principes généraux.
@@ -90,12 +139,6 @@ La documentation versionnée constitue la référence détaillée du projet :
 - [`docs/03_AGENT_TRADING_RISK.md`](docs/03_AGENT_TRADING_RISK.md) — responsabilités de l'agent, du trading et du Risk Engine.
 - [`docs/09_ROADMAP_DEVELOPPEMENT.md`](docs/09_ROADMAP_DEVELOPPEMENT.md) — roadmap par batches cohérents et testables.
 - [`docs/10_DECISIONS_ET_CHANGELOG.md`](docs/10_DECISIONS_ET_CHANGELOG.md) — décisions architecturales et changelog.
-
-## État de développement
-
-La documentation initiale est en place. Le prochain chantier recommandé est le **bootstrap technique du projet** : structure backend/frontend, configuration, outillage qualité et tests minimaux, avant l'implémentation de Kraken ou de l'agent de trading.
-
-Pour l'état exact du repository et les prochaines décisions ouvertes, consulter [`docs/00_ETAT_ACTUEL.md`](docs/00_ETAT_ACTUEL.md).
 
 ## Sécurité
 
