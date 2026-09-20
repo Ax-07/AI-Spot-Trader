@@ -12,7 +12,7 @@ La roadmap est organisée en **batches cohérents, limités et testables**. Chaq
 - livrer un ZIP root-relative si plusieurs fichiers changent ;
 - distinguer tests réellement exécutés et tests à lancer localement.
 
-La séquence ci-dessous est **proposée**. Les invariants du Project Master restent confirmés, mais l'ordre peut évoluer si un audit technique le justifie.
+La séquence ci-dessous est proposée. Les invariants du Project Master restent confirmés, mais l'ordre peut évoluer si un audit technique le justifie.
 
 ---
 
@@ -20,341 +20,165 @@ La séquence ci-dessous est **proposée**. Les invariants du Project Master rest
 
 **Statut : intégré sur `main`.**
 
-Objectif :
+Objectif : établir la source de vérité documentaire, fixer les invariants, expliciter les zones à décider et préparer la roadmap.
 
-- établir la source de vérité documentaire ;
-- fixer les invariants ;
-- expliciter les zones encore à décider ;
-- préparer la roadmap.
-
-Livrables :
-
-- `docs/00_ETAT_ACTUEL.md`
-- `docs/01_PROJECT_MASTER.md`
-- `docs/02_ARCHITECTURE_TECHNIQUE.md`
-- `docs/03_AGENT_TRADING_RISK.md`
-- `docs/09_ROADMAP_DEVELOPPEMENT.md`
-- `docs/10_DECISIONS_ET_CHANGELOG.md`
-- correction documentaire de `README.md`
-
-Critère de sortie : documentation cohérente, liens valides, aucun choix non décidé présenté comme acquis.
+Livrables principaux : `docs/00_ETAT_ACTUEL.md`, `01_PROJECT_MASTER.md`, `02_ARCHITECTURE_TECHNIQUE.md`, `03_AGENT_TRADING_RISK.md`, `09_ROADMAP_DEVELOPPEMENT.md`, `10_DECISIONS_ET_CHANGELOG.md` et correction du README.
 
 ---
 
 ## Batch 01 — Bootstrap du projet
 
-**Statut : patch préparé et validé localement sous Windows, non intégré au moment de sa génération.**
+**Statut : intégré sur `main` au commit `d9af0ca293dd9f2712969b246e394c4a8c188b5e` (`feat: bootstrap backend and frontend`).**
 
-**Objectif :** créer un socle exécutable et testable sans logique de trading.
+Objectif : créer un socle exécutable et testable sans logique de trading.
 
-Implémenté dans le patch :
+Intégré :
 
 - structure repository `backend/` + `frontend/` ;
 - backend Python installable avec layout `src/` ;
 - FastAPI minimal et endpoint `GET /health` ;
 - configuration typée avec `pydantic-settings` ;
-- cycle de vie asynchrone prêt à accueillir de futures tâches `asyncio` ;
+- cycle de vie asynchrone ;
 - tests `pytest` ;
-- Ruff et mypy configurés côté backend ;
+- Ruff et mypy configurés ;
 - squelette Next.js + TypeScript + shadcn/ui + Tailwind CSS ;
 - `pnpm` comme gestionnaire de paquets frontend ;
-- ESLint et type-check TypeScript côté frontend ;
+- ESLint et type-check TypeScript ;
 - `.env.example` sans secret ;
 - `.gitignore` commun ;
-- commandes de développement documentées.
+- commandes de développement depuis la racine.
 
-Critère de sortie :
-
-- backend démarre ;
-- endpoint health minimal ;
-- tests de bootstrap passent ;
-- frontend démarre indépendamment ;
-- aucun secret versionné.
-
-Les validations Windows sont confirmées : backend sous Python `3.13.14` (`pytest`, Ruff, mypy) et frontend via `pnpm 10.15.1` (install, ESLint, type-check, build Next.js). L'intégration Git reste à effectuer avant de considérer le batch intégré.
+Validation locale Windows confirmée : Python `3.13.14`, `pytest` 4/4, Ruff OK, mypy OK, `pnpm 10.15.1`, install/lint/typecheck/build frontend OK. Deux warnings de dépréciation Starlette/FastAPI ont été observés sans échec.
 
 ---
 
 ## Batch 02 — Contrats de domaine et configuration
 
-**Pourquoi avant Kraken :** stabiliser les frontières évite de laisser le format de l'exchange dicter tout le domaine.
+**Statut : patch préparé et validé localement sous Windows ; intégration Git en attente.**
 
-Objectif :
+Pourquoi avant Kraken : stabiliser les frontières évite de laisser le format de l'exchange dicter le domaine.
 
-- modèles Pydantic initiaux ;
-- types d'action ;
-- identifiants/corrélation ;
-- abstraction de clock si retenue ;
-- mode `PAPER`;
-- configuration du modèle LLM et agressivité ;
-- interfaces Kraken/LLM/Broker sans implémentation métier complète.
+Implémentation préparée :
 
-Contrats candidats :
+- package `ai_spot_trader.domain` ;
+- enums `BUY|SELL|HOLD`, `PAPER`, `ALLOW|MODIFY|REJECT` et modèles Luna/Sol ;
+- contrats Pydantic stricts initiaux `MarketState`, `PortfolioState`, `AgentInput`, `DecisionCandidate`, `RiskAssessment`, `ExecutionIntent`, `Fill` ;
+- UUID explicites de corrélation ;
+- timestamps aware normalisés UTC ;
+- mode `PAPER` uniquement ;
+- Luna par défaut, Sol sélectionnable ;
+- agressivité 1–10 lorsqu’elle est configurée ;
+- horloge injectable minimale ;
+- ports `MarketDataSource`, `LLMProvider`, `Broker` sans providers réels ;
+- correction documentaire du statut du Batch 01.
 
-- `MarketState`
-- `PortfolioState`
-- `AgentInput`
-- `DecisionCandidate`
-- `RiskAssessment`
-- `ExecutionIntent`
-- `Fill`
+Ce batch ne fige pas : sizing stratégique, limites chiffrées du Risk Engine, capital PAPER, univers Kraken, cadence, frontière statistique journalière, frais/slippage/fill, prompt LLM ou logique d'exécution.
 
-Tests :
-
-- validation stricte ;
-- sérialisation ;
-- enums/invariants de base.
+Tests : environnement ChatGPT `pytest` 20/20 et `compileall` OK ; validation locale Windows `pytest` 20/20, Ruff OK et mypy OK. Deux warnings de dépréciation Starlette/FastAPI sont observés dans les dépendances de test, sans échec.
 
 ---
 
 ## Batch 03 — Kraken Market Data
 
-Objectif :
+Objectif : connexion aux données publiques Kraken, WebSocket pour les flux nécessaires, récupération/normalisation des métadonnées utiles, reconnexion et stale detection, sans clé privée.
 
-- connexion aux données publiques Kraken ;
-- WebSocket pour les flux nécessaires ;
-- récupération/normalisation des métadonnées utiles ;
-- reconnexion et stale detection ;
-- aucune clé privée nécessaire.
+Tests : unitaires avec fixtures ; intégration réseau publique optionnelle et séparée.
 
-Le batch ne construit pas encore toute la stratégie ni le Paper Broker.
-
-Tests :
-
-- unitaires avec messages fixtures ;
-- intégration réseau publique optionnelle et clairement séparée.
-
-À décider avant/pendant le batch :
-
-- paires initiales ;
-- flux Kraken requis ;
-- politique de reconnexion.
+À décider : paires initiales, flux Kraken requis, politique de reconnexion.
 
 ---
 
 ## Batch 04 — Market State
 
-Objectif :
+Objectif : agréger les flux Kraken en snapshots canoniques, enrichir `MarketState`, calculer statistiques/indicateurs de contexte, gérer fraîcheur/timestamps sans produire de signal autonome.
 
-- agréger les flux Kraken en snapshots canoniques ;
-- calculer statistiques/indicateurs de contexte retenus ;
-- gérer fraîcheur et timestamps ;
-- ne produire aucun signal de trading autonome.
-
-Tests :
-
-- construction à partir de fixtures ;
-- données manquantes/périmées ;
-- calculs déterministes ;
-- absence de look-ahead.
+Tests : fixtures, données manquantes/périmées, calculs déterministes, absence de look-ahead.
 
 ---
 
 ## Batch 05 — Portfolio State + Paper Broker
 
-Objectif :
+Objectif : portefeuille PAPER canonique, balances/positions, exécution simulée, frais/spread/slippage et invariant « pas de vente non détenue ».
 
-- portefeuille PAPER canonique ;
-- balances/positions ;
-- exécution simulée ;
-- frais/spread/slippage ;
-- invariant "pas de vente non détenue".
+À décider : capital initial, devise de référence, modèle de fill/slippage, barème de frais.
 
-À décider :
-
-- capital initial ;
-- devise de référence ;
-- modèle de fill/slippage ;
-- barème de frais.
-
-Tests critiques :
-
-- BUY avec cash insuffisant ;
-- SELL supérieur à la position ;
-- calculs de frais ;
-- mise à jour des positions ;
-- P&L de base.
+Tests critiques : cash insuffisant, SELL supérieur à position, frais, mise à jour positions, P&L de base.
 
 ---
 
 ## Batch 06 — Risk Engine
 
-Objectif :
+Objectif : autorité finale déterministe, `ALLOW` / `MODIFY` / `REJECT`, limites configurables et snapshot des raisons/limites appliquées.
 
-- autorité finale déterministe ;
-- `ALLOW` / `MODIFY` / `REJECT` ;
-- limites de risque configurables ;
-- snapshot des raisons et limites appliquées.
+À décider : limites numériques et mapping initial de l’agressivité 1–10.
 
-À décider :
-
-- limites numériques ;
-- mapping initial agressivité 1–10.
-
-Tests :
-
-- limites de taille/exposition ;
-- vente non couverte ;
-- stale market ;
-- drawdown/perte si retenus ;
-- agressivité ne contourne jamais une limite absolue.
+Tests : taille/exposition, vente non couverte, stale market, drawdown/perte si retenus, impossibilité pour l'agressivité de contourner une limite absolue.
 
 ---
 
 ## Batch 07 — Agent Luna
 
-Objectif :
+Objectif : provider Luna derrière le port LLM, prompt/contrat versionné, sortie structurée validée et aucune exécution directe.
 
-- abstraction LLM ;
-- provider Luna ;
-- prompt/contrat versionné ;
-- sortie structurée validée ;
-- aucune exécution directe.
+Tests : provider mocké, réponses invalides, actions inconnues, BUY/SELL/HOLD et vérification qu'une sortie invalide n'atteint pas le broker.
 
-Tests :
-
-- provider mocké ;
-- réponses invalides ;
-- actions inconnues ;
-- BUY/SELL/HOLD ;
-- vérification qu'une sortie invalide n'atteint pas le broker.
-
-L'accès réel au LLM peut rester un test manuel/intégration séparé selon credentials et coûts.
+L'accès réel au LLM peut rester un test d'intégration séparé selon credentials et coûts.
 
 ---
 
 ## Batch 08 — Boucle autonome
 
-Objectif :
+Objectif : orchestrer Market State + Portfolio State + Agent + Risk + Paper Broker, cycle IDs, cadence, start/stop propre, timeouts/retries et comportement sûr en erreur.
 
-- orchestrer Market State + Portfolio State + Agent + Risk + Paper Broker ;
-- cycle IDs ;
-- cadence ;
-- start/stop propre ;
-- gestion timeouts/retries ;
-- comportement sûr en cas d'erreur.
-
-Critère de sortie :
-
-- plusieurs cycles PAPER peuvent tourner sans frontend ;
-- `HOLD` inclus ;
-- aucune dépendance au cockpit.
+Critère : plusieurs cycles PAPER tournent sans frontend ; `HOLD` inclus ; aucune dépendance au cockpit.
 
 ---
 
 ## Batch 09 — Persistance et journal d'audit
 
-Objectif :
+Objectif : PostgreSQL, schéma/migrations, cycles, décisions, risk assessments, fills, métriques et reprise cohérente des données nécessaires.
 
-- PostgreSQL ;
-- schéma/migrations ;
-- cycles, décisions, risk assessments, fills, métriques ;
-- reprise cohérente des données nécessaires.
-
-À décider :
-
-- ORM ;
-- migrations ;
-- rétention ;
-- stratégie de snapshots.
-
-Tests :
-
-- migrations ;
-- contraintes DB ;
-- reconstruction d'un cycle ;
-- absence de secret dans les champs journalisés.
+À décider : ORM, migrations, rétention, snapshots.
 
 ---
 
 ## Batch 10 — API FastAPI de contrôle
 
-Objectif :
+Objectif : exposer état moteur, portefeuille, décisions, performance, réglages autorisés, start/stop si retenu et WebSocket utiles au cockpit.
 
-- exposer l'état du moteur ;
-- portefeuille ;
-- décisions ;
-- performance ;
-- réglages autorisés ;
-- start/stop si retenu ;
-- flux WebSocket utiles au cockpit.
-
-Tests :
-
-- API contracts ;
-- erreurs ;
-- moteur indépendant de la connexion frontend.
+Tests : contrats API, erreurs, indépendance du moteur vis-à-vis du frontend.
 
 ---
 
 ## Batch 11 — Frontend cockpit
 
-Objectif :
+Objectif : compléter le bootstrap Next.js, dashboard, marché, portefeuille, décisions, trades PAPER, performance, état système et réglages autorisés.
 
-- compléter le bootstrap Next.js + TypeScript déjà présent ;
-- étendre shadcn/ui + Tailwind ;
-- dashboard ;
-- marché ;
-- portefeuille ;
-- décisions ;
-- trades PAPER ;
-- performance ;
-- état système ;
-- réglages autorisés.
-
-Critère central :
-
-- arrêter/redémarrer le frontend ne change pas l'état du moteur backend.
+Critère central : arrêter/redémarrer le frontend ne change pas l'état du moteur backend.
 
 ---
 
 ## Batch 12 — Analytics, P&L et expérimentation reproductible
 
-Objectif :
+Objectif : P&L brut/net, drawdown, frais, spread/slippage, exposition, nombre de trades, quotidien/cumulé, export/vue d'expérience et premières capacités de replay si les données le permettent.
 
-- P&L brut/net ;
-- drawdown ;
-- frais ;
-- spread/slippage ;
-- exposition ;
-- nombre de trades ;
-- quotidien/cumulé ;
-- export ou vue d'expérience ;
-- premières capacités de replay si les données le permettent.
-
-Tests :
-
-- fixtures comptables ;
-- cohérence brut/net ;
-- frontières de journée ;
-- replay sans données futures.
+Tests : fixtures comptables, cohérence brut/net, frontières de journée, replay sans données futures.
 
 ---
 
 ## Batch 13 — Expérimentation agressivité 1–10
 
-Objectif :
+Objectif : figer un mapping versionné, tester plusieurs niveaux sur un protocole comparable et mesurer rendement, drawdown, turnover, coûts et comportement du Risk Engine.
 
-- figer un mapping versionné ;
-- tester plusieurs niveaux sur un protocole comparable ;
-- mesurer rendement, drawdown, turnover, coûts et comportement du Risk Engine.
-
-Règle :
-
-- ne pas choisir rétrospectivement uniquement les runs favorables ;
-- documenter toutes les configurations.
+Règle : aucun cherry-picking ; toutes les configurations sont documentées.
 
 ---
 
 ## Batch 14 — Comparaison Luna / Sol
 
-Objectif :
+Objectif : passer de Luna à Sol par configuration, exécuter un protocole comparable et mesurer performance, stabilité de format, latence et coût.
 
-- passer de Luna à Sol par configuration ;
-- exécuter un protocole comparable ;
-- mesurer performance, stabilité de format, latence et coût.
-
-Le résultat peut justifier de conserver Luna, passer à Sol ou continuer les tests ; aucune conclusion n'est présupposée.
+Aucune conclusion n'est présupposée.
 
 ---
 
@@ -362,18 +186,9 @@ Le résultat peut justifier de conserver Luna, passer à Sol ou continuer les te
 
 **Hors périmètre jusqu'à décision explicite.**
 
-Objectif potentiel :
+Objectif potentiel : audit de readiness, adaptateur privé Kraken, réconciliation, permissions minimales, aucun retrait, garde-fous LIVE, mode explicite, tests et checklist.
 
-- audit de readiness ;
-- adapter privé Kraken ;
-- réconciliation ;
-- permissions minimales ;
-- aucun retrait ;
-- garde-fous LIVE ;
-- mode explicite ;
-- tests et checklist.
-
-Ce batch ne doit être démarré qu'après une décision dédiée. Sa présence dans la roadmap ne vaut pas autorisation de trading réel.
+Sa présence dans la roadmap ne vaut pas autorisation de trading réel.
 
 ---
 

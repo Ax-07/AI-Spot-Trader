@@ -22,38 +22,9 @@ L'agent IA est l'unique décideur stratégique. Il choisit parmi :
 - `SELL`
 - `HOLD`
 
-Les systèmes déterministes peuvent calculer et présenter :
+Les systèmes déterministes peuvent calculer et présenter prix, spread, volume, bougies, statistiques, indicateurs, volatilité, exposition, P&L, contraintes et fraîcheur des données. Ils ne doivent pas décider silencieusement qu'un signal technique implique un `BUY` ou `SELL`.
 
-- prix ;
-- spread ;
-- volume ;
-- bougies ;
-- statistiques ;
-- indicateurs ;
-- volatilité ;
-- exposition ;
-- P&L ;
-- contraintes ;
-- fraîcheur des données.
-
-Ils ne doivent pas décider silencieusement qu'un signal technique implique un `BUY` ou `SELL`.
-
-### Exemple de frontière correcte
-
-```text
-Déterministe : RSI=72, volatilité=..., spread=...
-Agent : interprète ce contexte et propose HOLD.
-Risk Engine : vérifie que HOLD est valide, journalise.
-```
-
-### Exemple à éviter
-
-```text
-if RSI < 30 and MACD_cross:
-    BUY
-```
-
-Une telle règle deviendrait une stratégie algorithmique parallèle et contredirait la philosophie actuelle, sauf décision architecturale explicite ultérieure.
+Le Risk Engine reste déterministe et possède l'autorité finale d'autoriser, modifier ou refuser une intention.
 
 ---
 
@@ -86,64 +57,54 @@ MarketState + PortfolioState + config
 
 Aucune sortie LLM ne déclenche directement un ordre Kraken.
 
+Le Batch 02 stabilise les contrats mais n'implémente ni l'agent réel, ni le Risk Engine, ni le Paper Broker.
+
 ---
 
 ## 4. AgentInput
 
-### Proposé
+### Confirmé au Batch 02
 
-L'entrée de l'agent devrait être un objet structuré, pas un assemblage de texte arbitraire.
+Le contrat initial est structuré et strict :
 
 ```text
 AgentInput
-- schema_version
 - cycle_id
-- timestamp
+- created_at
 - market_state
 - portfolio_state
-- aggressiveness
-- allowed_actions
-- risk_context
-- experiment_context
+- aggressiveness (1..10)
 ```
 
-`allowed_actions` doit respecter les invariants du portefeuille. Par exemple, si aucun actif n'est détenu, une vente doit être impossible ou explicitement présentée comme non disponible.
+Les snapshots imbriqués sont eux-mêmes des modèles Pydantic stricts. Les timestamps techniques sont timezone-aware et normalisés en UTC.
 
-Le Risk Engine doit malgré tout revalider la sortie : on ne fait jamais confiance au seul prompt.
+Les champs `risk_context`, `experiment_context`, `allowed_actions` ou métadonnées de politique ne sont pas figés dans ce batch ; ils pourront être ajoutés lorsqu'un besoin concret apparaîtra.
+
+Le Risk Engine devra toujours revalider une décision tradable, même si le contexte présenté à l'agent indique déjà les contraintes.
 
 ---
 
 ## 5. DecisionCandidate
 
-### Confirmé
+### Confirmé au Batch 02
 
 L'action appartient à `BUY | SELL | HOLD`.
 
-### Proposé
+Contrat initial :
 
 ```text
 DecisionCandidate
-- schema_version
 - decision_id
 - cycle_id
 - created_at
 - action
 - symbol
-- sizing_intent
-- rationale
-- confidence
-- horizon
+- rationale?
 ```
 
-Le contenu de `rationale` doit rester exploitable pour l'audit, mais ne doit pas être interprété comme une commande d'exécution.
+Le contrat reste volontairement minimal. En particulier, la représentation du sizing stratégique n'est pas tranchée par le Batch 02. `confidence`, horizon et métadonnées restent également ouverts.
 
-### À décider
-
-- représentation du sizing : montant en devise, pourcentage de cash, pourcentage de position, cible d'exposition ;
-- confidence obligatoire ou non ;
-- longueur et stockage du raisonnement/rationale ;
-- horizon ;
-- décision sur une seule paire ou sélection parmi plusieurs paires par cycle.
+La `rationale` est une donnée d'audit optionnelle ; elle n'est jamais interprétée comme une commande d'exécution.
 
 ---
 
@@ -151,22 +112,14 @@ Le contenu de `rationale` doit rester exploitable pour l'audit, mais ne doit pas
 
 ### Confirmé par principe de sécurité
 
-- JSON/structure attendue ;
+- structure attendue ;
 - validation Pydantic stricte ;
 - enum d'action ;
-- symbole autorisé ;
-- nombres finis et bornables ;
 - aucune action inconnue ;
-- aucune exécution si parsing/validation échoue.
+- aucune exécution si parsing/validation échoue ;
+- aucune donnée textuelle du LLM ne devient directement une commande Kraken.
 
-### Proposé
-
-En cas d'échec :
-
-1. journaliser l'erreur ;
-2. éventuellement effectuer un retry borné si la politique le prévoit ;
-3. si l'échec persiste, traiter le cycle comme non tradable ;
-4. ne jamais "deviner" une décision depuis du texte invalide.
+Le Batch 02 couvre la validation des contrats ; le parsing d'une réponse fournisseur réelle, les retries et le prompt sont hors périmètre.
 
 ---
 
@@ -176,38 +129,25 @@ En cas d'échec :
 
 Le Risk Engine impose les règles de sécurité et d'intégrité. Il a autorité finale.
 
-Il ne doit pas :
+Il ne doit pas inventer un signal de marché, convertir un `HOLD` en `BUY`, choisir un actif alternatif « meilleur » ou devenir la stratégie principale.
 
-- inventer un signal de marché ;
-- convertir un `HOLD` en `BUY` ;
-- choisir un actif alternatif "meilleur" ;
-- devenir la stratégie principale.
+Il peut refuser, réduire une taille, normaliser une intention, empêcher une vente non couverte, bloquer des données trop anciennes et imposer des limites absolues.
 
-Il peut :
-
-- refuser ;
-- réduire une taille ;
-- normaliser précision/notional ;
-- empêcher une vente non couverte ;
-- bloquer des données trop anciennes ;
-- imposer des limites absolues.
-
-### Sortie proposée
+### Sortie initiale confirmée au Batch 02
 
 ```text
 RiskAssessment
+- risk_assessment_id
+- cycle_id
 - decision_id
+- assessed_at
 - status: ALLOW | MODIFY | REJECT
 - reasons[]
-- original_intent
-- approved_intent
-- limits_snapshot
-- assessed_at
 ```
 
-### Règles candidates
+Le Batch 02 ne fige pas encore `limits_snapshot`, ni le détail d'une intention modifiée. Ces éléments seront ajoutés avec le Risk Engine réel lorsque les limites et le sizing seront décidés.
 
-**Proposées, valeurs à décider :**
+### Règles candidates — toujours à décider/chiffrer
 
 - balance disponible suffisante ;
 - position disponible suffisante ;
@@ -225,177 +165,150 @@ RiskAssessment
 
 ---
 
-## 8. PAPER Broker
+## 8. ExecutionIntent
+
+### Confirmé au Batch 02
+
+L'intention d'exécution est distincte de la décision stratégique. Elle représente une requête déjà autorisée ou modifiée par le Risk Engine et contient :
+
+```text
+ExecutionIntent
+- execution_id
+- cycle_id
+- decision_id
+- risk_assessment_id
+- created_at
+- mode = PAPER
+- action = BUY | SELL
+- symbol
+- quantity > 0
+```
+
+`HOLD` ne produit jamais d'`ExecutionIntent`. Le mode `LIVE` n'existe pas dans l'enum actuel et ne peut donc pas être activé par configuration.
+
+Le fait de porter une quantité exacte dans `ExecutionIntent` ne tranche pas le mécanisme amont de sizing stratégique ; il fixe uniquement ce dont un broker a besoin à sa frontière d'exécution.
+
+---
+
+## 9. PAPER Broker et Fill
 
 ### Confirmé
 
 Le Paper Broker est l'unique cible d'exécution des premières versions.
 
-### Responsabilités proposées
+Le port `Broker` existe au Batch 02 sans implémentation. Il reçoit un `ExecutionIntent` PAPER et retourne zéro ou plusieurs `Fill`.
 
-- valider à nouveau les contraintes d'exécution triviales ;
-- simuler prix et quantité exécutés ;
-- appliquer frais ;
-- appliquer spread ;
-- appliquer slippage ;
-- produire un ou plusieurs `Fill` ;
-- mettre à jour balances et positions ;
-- conserver une trace reproductible de la méthode utilisée.
+Contrat initial de `Fill` :
 
-### À décider
+```text
+Fill
+- fill_id
+- execution_id
+- filled_at
+- action = BUY | SELL
+- symbol
+- quantity > 0
+- price > 0
+```
 
-Trois niveaux de réalisme possibles :
-
-1. **simple** : fill immédiat au bid/ask + slippage paramétrique ;
-2. **intermédiaire** : fill selon taille et profondeur observée ;
-3. **avancé** : simulation d'ordres et fills partiels.
-
-Le choix doit être fait en fonction de la qualité de données disponible et du besoin expérimental. Le modèle retenu doit rester déterministe pour un même snapshot/configuration lorsque possible.
+Les frais, spread, slippage, fills partiels et règles précises d'exécution ne sont pas modélisés dans ce batch ; ils restent explicitement hors périmètre.
 
 ---
 
-## 9. Frais, spread et slippage
+## 10. Frais, spread et slippage
 
 ### Confirmé
 
-Les trois doivent être pris en compte.
+Les trois devront être pris en compte dans le Paper Broker et les métriques nettes.
 
-### Règles d'intégrité
-
-- ne pas afficher uniquement le P&L avant coûts ;
-- distinguer coût de frais, spread et slippage ;
-- versionner les hypothèses ;
-- ne pas ajuster rétroactivement le modèle de coûts pour améliorer les résultats ;
-- conserver le modèle utilisé pour chaque expérience.
-
-Le barème précis Kraken et le modèle de slippage restent à décider.
+Le barème précis Kraken, la méthode de slippage et le modèle de fill restent à décider. Le Batch 02 ne crée aucun paramètre chiffré anticipé pour ces sujets.
 
 ---
 
-## 10. Agressivité
+## 11. Agressivité
 
 ### Confirmé
 
-Valeur entière de 1 à 10.
+Valeur entière de 1 à 10, validée dans la configuration et dans `AgentInput`.
 
-### Proposition de sémantique
-
-L'agressivité est un paramètre d'expérience qui peut agir sur :
-
-- exposition maximale autorisée ;
-- taille maximale d'une nouvelle position ;
-- réserve de cash ;
-- fréquence/cooldown ;
-- contexte transmis à l'agent.
-
-Elle ne peut jamais :
-
-- autoriser short/margin/levier ;
-- permettre de vendre plus que détenu ;
-- bypasser le Risk Engine ;
-- contourner une limite absolue de sécurité.
-
-### À décider
-
-Le mapping chiffré. Il devra être :
-
-- monotone ;
-- documenté ;
-- testable ;
-- versionné ;
-- visible dans les logs/expériences.
+Le mapping exact reste à décider. L'agressivité ne peut jamais autoriser short/margin/levier, permettre de vendre plus que détenu, bypasser le Risk Engine ou contourner une limite absolue.
 
 ---
 
-## 11. Objectif quotidien +4 %
+## 12. Objectif quotidien +4 %
 
 ### Confirmé
 
 Cible expérimentale : +4 % par jour.
 
-### Garde-fous d'interprétation
+Le système ne doit pas générer un trade uniquement parce que la journée est sous +4 %, augmenter automatiquement l'agressivité pour « rattraper » une perte sans expérience dédiée, masquer les jours négatifs, supprimer une mauvaise période ou utiliser le résultat futur pour modifier une décision passée.
 
-Le système ne doit pas :
-
-- générer un trade uniquement parce que la journée est sous +4 % ;
-- augmenter automatiquement l'agressivité pour "rattraper" une perte, sauf expérience explicitement décidée ;
-- masquer les jours négatifs ;
-- réinitialiser une expérience pour supprimer une mauvaise période ;
-- utiliser le résultat futur pour modifier une décision passée.
-
-L'objectif est évalué comme métrique, pas comme obligation d'exécution.
+L'objectif est une métrique, pas une obligation d'exécution.
 
 ---
 
-## 12. Journal d'audit d'un cycle
+## 13. Identifiants, timestamps et audit
 
-### Proposé
+### Confirmé au Batch 02
 
-Un cycle complet devrait pouvoir être reconstruit avec :
+Les contrats utilisent des UUID explicites pour corréler les objets importants : snapshot de marché, snapshot de portefeuille, cycle, décision, évaluation de risque, exécution et fill.
+
+Les timestamps techniques sont timezone-aware et normalisés en UTC.
+
+Un cycle complet devra à terme permettre de relier :
 
 ```text
 cycle_id
-timestamps
-model + config
-aggressiveness
 market_state_id
-portfolio_state_before_id
-agent_input_version
-decision_candidate
-validation_result
-risk_assessment
-execution_intent
-fills
-costs
-portfolio_state_after_id
-performance_snapshot
-errors/retries
+portfolio_state_id
+decision_id
+risk_assessment_id
+execution_id
+fill_id(s)
 ```
 
-Le stockage exact de l'entrée/sortie brute LLM est à décider en fonction de l'auditabilité, du coût de stockage et des exigences de confidentialité, mais aucun secret ne peut y apparaître.
+Le format final de logs structurés, la persistance et la rétention restent à décider. La frontière de journée statistique reste ouverte et n'est pas déduite de la convention UTC technique.
 
 ---
 
-## 13. Comparaison Luna / Sol
+## 14. Horloge injectable
+
+### Confirmé au Batch 02
+
+Une interface minimale `Clock.now()` et une implémentation `SystemClock` UTC sont introduites. Elles créent un seam de test concret pour :
+
+- timestamps déterministes ;
+- futurs replays ;
+- prévention du look-ahead dans les composants temporels.
+
+Aucune infrastructure de simulation temporelle supplémentaire n'est introduite à ce stade.
+
+---
+
+## 15. Interfaces externes
+
+### Confirmé au Batch 02
+
+Trois ports minimaux stabilisent les dépendances sans implémenter les providers :
+
+- `MarketDataSource.snapshot(symbol) -> MarketState` ;
+- `LLMProvider.generate_decision(agent_input) -> DecisionCandidate` ;
+- `Broker.execute(execution_intent) -> tuple[Fill, ...]`.
+
+Les détails Kraken, le SDK LLM, les credentials, les retries, le prompt et l'algorithme Paper Broker restent hors périmètre.
+
+---
+
+## 16. Comparaison Luna / Sol
 
 ### Confirmé
 
-Luna est le modèle initial pour raison de coût ; l'architecture doit permettre Sol par configuration.
-
-### Protocole proposé
-
-Pour éviter une comparaison trompeuse :
-
-- même univers d'actifs ;
-- mêmes Market States ;
-- mêmes Portfolio States lorsque l'expérience le permet ;
-- mêmes limites de risque ;
-- mêmes coûts PAPER ;
-- même mapping d'agressivité ;
-- prompts/contracts versionnés ;
-- reporting des coûts et latences LLM ;
-- pas de sélection post-hoc des seuls cas favorables.
-
-### À décider
-
-Le protocole exact d'A/B ou de replay et la métrique principale de comparaison.
+Luna est le modèle initial pour raison de coût ; Sol est sélectionnable par configuration. Une future comparaison devra utiliser un protocole comparable : mêmes Market States, Portfolio States, limites de risque, coûts PAPER, mapping d'agressivité et versions de prompts/contracts lorsque possible.
 
 ---
 
-## 14. Conditions minimales avant discussion LIVE
+## 17. Conditions minimales avant discussion LIVE
 
-**Hors périmètre pour l'instant**, mais les conditions candidates incluent :
-
-- stabilité PAPER sur une durée significative ;
-- journal d'audit complet ;
-- modèle de coûts validé ;
-- limites de risque chiffrées et testées ;
-- réconciliation de portefeuille ;
-- gestion robuste des erreurs réseau ;
-- séparation credentials PAPER/LIVE ;
-- aucune permission de retrait ;
-- activation explicite ;
-- revue de sécurité ;
-- limites financières initiales très basses.
+**Hors périmètre pour l'instant.** Les conditions candidates restent : stabilité PAPER significative, journal d'audit complet, modèle de coûts validé, limites de risque chiffrées et testées, réconciliation de portefeuille, gestion robuste des erreurs réseau, credentials séparés, aucune permission de retrait, activation explicite et revue de sécurité.
 
 La satisfaction de ces points ne constitue pas automatiquement une autorisation de passage en LIVE.

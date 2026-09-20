@@ -4,6 +4,8 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from ai_spot_trader.domain.enums import ExecutionMode, LLMModel
+
 Environment = Literal["development", "test", "production"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
@@ -23,6 +25,9 @@ class Settings(BaseSettings):
     api_host: str = "127.0.0.1"
     api_port: int = Field(default=8000, ge=1, le=65535)
     log_level: LogLevel = "INFO"
+    execution_mode: ExecutionMode = ExecutionMode.PAPER
+    llm_model: LLMModel = LLMModel.LUNA
+    aggressiveness: int | None = Field(default=None, ge=1, le=10)
 
 
 @lru_cache

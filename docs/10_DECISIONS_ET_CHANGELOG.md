@@ -15,26 +15,26 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 
 ---
 
-## 2. Décisions initiales
+## 2. Décisions acceptées
 
 ### ADR-001 — Un agent IA unique
 
 - **Statut : ACCEPTÉE**
 - AI Spot Trader utilise un seul agent IA de trading.
-- Une architecture multi-agents est hors périmètre tant qu'une décision explicite ne la remplace pas.
+- Une architecture multi-agents est hors périmètre sans décision explicite.
 
 ### ADR-002 — SPOT uniquement
 
 - **Statut : ACCEPTÉE**
 - Le projet opère uniquement en crypto SPOT.
-- Short, levier, margin, futures et perpetuals sont interdits dans le périmètre actuel.
+- Short, levier, margin, futures et perpetuals sont interdits.
 - Une vente ne peut porter que sur un actif réellement détenu.
 
 ### ADR-003 — Kraken comme exchange initial
 
 - **Statut : ACCEPTÉE**
 - Kraken est l'exchange initial.
-- L'intégration Kraken doit rester derrière une interface afin de ne pas contaminer le domaine avec des détails fournisseurs.
+- L'intégration Kraken reste derrière une interface afin de ne pas contaminer le domaine avec des détails fournisseurs.
 
 ### ADR-004 — Backend Python asynchrone
 
@@ -63,7 +63,7 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 
 - **Statut : ACCEPTÉE**
 - L'agent IA conserve la décision stratégique.
-- Les calculs déterministes peuvent produire contexte, statistiques, indicateurs et contraintes.
+- Les calculs déterministes produisent contexte, statistiques, indicateurs et contraintes.
 - Ils ne doivent pas devenir silencieusement une stratégie algorithmique parallèle.
 
 ### ADR-008 — Risk Engine déterministe avec autorité finale
@@ -96,8 +96,8 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 ### ADR-012 — Luna initial, Sol configurable
 
 - **Statut : ACCEPTÉE**
-- GPT-5.6 Luna est utilisé pour les premiers tests pour limiter les coûts.
-- L'architecture doit permettre de sélectionner GPT-5.6 Sol par configuration.
+- GPT-5.6 Luna est utilisé pour les premiers tests afin de limiter les coûts.
+- GPT-5.6 Sol doit être sélectionnable par configuration.
 - Le fournisseur LLM est isolé derrière une interface.
 
 ### ADR-013 — Agressivité configurable de 1 à 10
@@ -113,7 +113,7 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 - +4 %/jour est une cible expérimentale.
 - Ce n'est ni une garantie ni une hypothèse de rendement attendu.
 - Le système ne doit pas forcer des trades pour atteindre la cible.
-- Les performances doivent être rapportées sans cherry-picking ni look-ahead.
+- Les performances sont rapportées sans cherry-picking ni look-ahead.
 
 ### ADR-015 — Journaliser toutes les décisions
 
@@ -143,13 +143,49 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 - Le frontend est un processus séparé et n'est jamais requis pour maintenir le backend en fonctionnement.
 - Aucun microservice n'est introduit dans le bootstrap.
 
-
 ### ADR-019 — pnpm comme gestionnaire de paquets frontend
 
 - **Statut : ACCEPTÉE**
 - Le frontend utilise `pnpm` comme gestionnaire de paquets canonique.
-- Les commandes de développement et de validation sont documentées depuis la racine du repository avec `pnpm --dir frontend ...`.
+- Les commandes de développement et validation sont documentées depuis la racine avec `pnpm --dir frontend ...`.
 - Le Batch 01 a été validé avec pnpm `10.15.1`.
+
+### ADR-020 — Contrats Pydantic stricts aux frontières du domaine
+
+- **Statut : ACCEPTÉE**
+- Les contrats critiques initiaux sont centralisés dans `backend/src/ai_spot_trader/domain/`.
+- Ils utilisent Pydantic avec validation stricte et refusent les champs supplémentaires.
+- Les contrats initiaux sont `MarketState`, `PortfolioState`, `AgentInput`, `DecisionCandidate`, `RiskAssessment`, `ExecutionIntent` et `Fill`.
+- Les modèles restent minimaux et sont enrichis uniquement lorsqu'un besoin de batch le justifie.
+- Le sizing stratégique de `DecisionCandidate` n'est pas figé par cette décision.
+
+### ADR-021 — PAPER est le seul mode d'exécution actuellement représentable
+
+- **Statut : ACCEPTÉE**
+- `ExecutionMode` ne contient que `PAPER`.
+- `LIVE` ne peut pas être activé par variable d'environnement ou configuration dans l'état actuel.
+- Un futur LIVE nécessitera une décision et un batch dédiés.
+
+### ADR-022 — Timestamps techniques aware normalisés en UTC
+
+- **Statut : ACCEPTÉE**
+- Les timestamps des contrats de domaine doivent être timezone-aware.
+- Ils sont normalisés en UTC aux frontières Pydantic.
+- Cette convention de stockage/échange ne tranche pas la frontière statistique d'une journée, qui reste ouverte.
+
+### ADR-023 — Horloge injectable minimale
+
+- **Statut : ACCEPTÉE**
+- Le backend fournit une interface `Clock.now()` et une implémentation `SystemClock` UTC.
+- L'objectif est de fournir un seam minimal pour tests déterministes, futurs replays et prévention du look-ahead.
+- Aucun framework de simulation temporelle supplémentaire n'est introduit au Batch 02.
+
+### ADR-024 — Ports externes minimaux via Protocol
+
+- **Statut : ACCEPTÉE**
+- Les frontières externes initiales sont `MarketDataSource`, `LLMProvider` et `Broker`.
+- Elles sont définies comme `Protocol` et dépendent des contrats de domaine, pas des SDK fournisseurs.
+- Aucun provider Kraken, LLM ou broker réel n'est implémenté au Batch 02.
 
 ---
 
@@ -157,15 +193,14 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 
 ### ADR-P001 — Contrats Pydantic versionnés entre composants
 
-- **Statut : PROPOSÉE**
-- Utiliser des contrats explicites pour `MarketState`, `PortfolioState`, `DecisionCandidate`, `RiskAssessment`, etc.
-- À confirmer lors du batch contrats.
+- **Statut : SUPERSEDÉE par ADR-020**
+- Le principe de contrats Pydantic explicites est désormais confirmé.
+- La nécessité d'un champ explicite de version de schéma par modèle reste à décider lorsqu'une compatibilité inter-version devient concrète.
 
 ### ADR-P002 — Horloge injectable
 
-- **Statut : PROPOSÉE**
-- Introduire une abstraction d'horloge pour tests et replay sans look-ahead.
-- À confirmer avant les premiers composants temporels.
+- **Statut : SUPERSEDÉE par ADR-023**
+- L'abstraction minimale a été introduite au Batch 02.
 
 ### ADR-P003 — Architecture modulaire dans un backend unique
 
@@ -176,8 +211,8 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 ### ADR-P004 — Logs structurés corrélés
 
 - **Statut : PROPOSÉE**
-- Utiliser `cycle_id`, `decision_id` et timestamps pour reconstruire un cycle.
-- Format et bibliothèque à décider.
+- Les contrats portent désormais des UUID explicites, mais le format/bibliothèque de logs structurés n'est pas encore choisi.
+- La proposition de corréler les logs par `cycle_id`, `decision_id` et autres IDs reste à confirmer lors du batch observabilité/persistance.
 
 ---
 
@@ -190,6 +225,8 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 - univers de paires Kraken ;
 - cadence de décision ;
 - horizons/indicateurs ;
+- enrichissement exact du `MarketState` ;
+- représentation du sizing stratégique dans `DecisionCandidate` ;
 - taille et exposition maximales ;
 - max drawdown / max daily loss ;
 - mapping agressivité 1–10 ;
@@ -201,17 +238,37 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 - auth du cockpit ;
 - stratégie de déploiement ;
 - politique de reprise après panne ;
-- contrat final de `DecisionCandidate`.
+- versionnement explicite des schémas si nécessaire.
 
 ---
 
 ## 5. Changelog
 
+### 2026-09-20 — Batch 02 contrats de domaine et configuration
+
+**État : patch préparé et validé localement sous Windows ; intégration Git en attente.**
+
+- Resynchronisation confirmée : GitHub `main` est identique au HEAD `d9af0ca293dd9f2712969b246e394c4a8c188b5e`.
+- Correction documentaire : le Batch 01 est désormais indiqué comme intégré sur `main`.
+- Ajout des enums `TradingAction`, `ExecutionMode`, `RiskDecision` et `LLMModel`.
+- Ajout des contrats stricts `MarketState`, `PortfolioState`, `AgentInput`, `DecisionCandidate`, `RiskAssessment`, `ExecutionIntent` et `Fill`.
+- Ajout de modèles minimaux `AssetBalance` et `AssetPosition` pour exprimer le portefeuille sans introduire le P&L ou le sizing complet.
+- Ajout d'UUID de corrélation explicites.
+- Rejet des timestamps naïfs et normalisation des timestamps aware en UTC.
+- Ajout d'une horloge injectable minimale `Clock` / `SystemClock`.
+- Ajout des ports `MarketDataSource`, `LLMProvider` et `Broker` sans implémentation fournisseur.
+- Extension de la configuration : PAPER uniquement, Luna par défaut, Sol sélectionnable, agressivité optionnelle validée de 1 à 10, sans valeur par défaut décidée.
+- Mise à jour de `backend/.env.example` sans secret.
+- Aucun Kraken réel, appel OpenAI, Risk Engine fonctionnel, Paper Broker fonctionnel, PostgreSQL ou LIVE n'est introduit.
+- Tests exécutés dans l'environnement ChatGPT : `pytest` 20/20 ; `compileall` OK.
+- Validation locale Windows : `pytest` 20/20, Ruff OK et mypy OK.
+- Deux warnings de dépréciation Starlette/FastAPI sont observés dans les dépendances de test, sans échec.
+
 ### 2026-09-20 — Batch 01 bootstrap du projet
 
-**État : patch préparé, non intégré au moment de sa génération.**
+**État : intégré sur `main` au commit `d9af0ca293dd9f2712969b246e394c4a8c188b5e`.**
 
-- Audit du HEAD GitHub `main` : `c4d6aa6da9dde19a52b12dc54535af3b98aa1523`.
+- Base documentaire précédente : `c4d6aa6da9dde19a52b12dc54535af3b98aa1523`.
 - Création du backend Python/FastAPI installable sous `backend/`.
 - Ajout de la configuration typée via `pydantic-settings` et d'un `.env.example` sans secret.
 - Ajout du cycle de vie asynchrone minimal et du healthcheck `GET /health`.
@@ -221,8 +278,7 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 - Validation locale frontend réussie via `pnpm 10.15.1` : install, lint, type-check et build Next.js.
 - Validation locale backend réussie sous Python `3.13.14` : installation editable, `pytest` 4/4, Ruff et mypy.
 - Standardisation des commandes de développement depuis la racine du repository.
-- Ajout d'un `.gitignore` commun et des commandes de démarrage/validation.
-- Aucune intégration Kraken, LLM, Risk Engine, Paper Broker, PostgreSQL ou logique BUY/SELL/HOLD n'est introduite.
+- Aucune intégration Kraken, LLM, Risk Engine, Paper Broker, PostgreSQL ou logique de trading n'a été introduite.
 
 ### 2026-09-20 — Batch 00 documentation initiale
 
@@ -233,5 +289,3 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 - README et état courant rafraîchis au commit `c4d6aa6da9dde19a52b12dc54535af3b98aa1523`.
 - Formalisation des invariants fonctionnels et techniques.
 - Définition d'une roadmap par batches testables.
-
-Aucune implémentation Kraken, LLM, Risk Engine, Paper Broker ou moteur de trading n'a été introduite par ce batch documentaire.
