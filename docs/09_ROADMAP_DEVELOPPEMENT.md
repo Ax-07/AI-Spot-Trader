@@ -99,11 +99,11 @@ Validation locale Windows finale confirmée avant intégration :
 
 ## Batch 07 — Agent Luna
 
-**Statut : patch préparé et validation locale finale réussie, non encore intégré.**
+**Statut : intégré sur `main` au commit `caff3851d8299630f328b955c69eb31eb11baef0` (`feat: add Luna agent provider`).**
 
 Objectif : implémenter le premier provider LLM canonique derrière `LLMProvider` sans créer de chemin d'exécution direct.
 
-Patch préparé :
+Intégré :
 
 - package `ai_spot_trader.agent` ;
 - `OpenAIDecisionProvider` commun Luna/Sol ;
@@ -141,7 +141,7 @@ Validation locale Windows finale confirmée :
 
 ## Batch 08 — Boucle autonome
 
-**Prochaine étape prévue après intégration du Batch 07.**
+**Prochaine étape prévue.**
 
 Objectif : orchestrer `MarketState + PortfolioState + Agent + Risk + Paper Broker`, corréler les IDs, définir cadence/start/stop, timeouts et comportement sûr en erreur.
 

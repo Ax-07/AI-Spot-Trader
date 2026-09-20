@@ -236,9 +236,10 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 
 ### 2026-09-20 — Batch 07 Agent Luna
 
-**État : patch préparé ; validation locale finale réussie ; intégration Git à effectuer.**
+**État : intégré sur `main` au commit `caff3851d8299630f328b955c69eb31eb11baef0` (`feat: add Luna agent provider`).**
 
 - Resynchronisation confirmée sur GitHub `main` au HEAD `d3271d6404ea2af38a42ff09e5a1df1eed5e141e` (`feat: add deterministic risk engine`).
+- Intégration finale du Batch 07 confirmée sur `main` au commit `caff3851d8299630f328b955c69eb31eb11baef0` (`feat: add Luna agent provider`).
 - Correction documentaire : Batch 06 enregistré comme intégré avec validation locale finale 131 tests, Ruff OK, mypy OK sur 47 fichiers source et `git diff --check` OK.
 - Port `LLMProvider` conservé inchangé.
 - Ajout du package `ai_spot_trader.agent`.

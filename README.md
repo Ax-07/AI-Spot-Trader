@@ -4,7 +4,7 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut du projet :** le Batch 06 — Risk Engine est intégré sur `main` au commit `d3271d6404ea2af38a42ff09e5a1df1eed5e141e`. Le Batch 07 — Agent Luna est préparé et sa validation locale finale est réussie ; il reste à commit/push sur `main`. Les premières versions restent exclusivement en **PAPER trading**.
+> **Statut du projet :** le Batch 07 — Agent Luna est intégré sur `main` au commit `caff3851d8299630f328b955c69eb31eb11baef0` (`feat: add Luna agent provider`). Le Batch 08 — Boucle autonome est la prochaine étape prévue. Les premières versions restent exclusivement en **PAPER trading**.
 
 ## Principes du projet
 
@@ -126,7 +126,7 @@ Aucun chemin direct entre l'agent IA et Kraken ne doit exister. Le package `agen
 
 ## État backend actuel
 
-Après application du patch Batch 07, le backend contient notamment :
+Le backend intégré contient notamment :
 
 ```text
 backend/
