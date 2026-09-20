@@ -4,7 +4,7 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut :** GitHub `main` est resynchronisé au HEAD documentaire Batch 12 `bc1b06ad25a2aa0ba7781d50c9e642dc113850ad` (`docs: record Batch 12 integration`), avec commit fonctionnel Batch 12 `3f39999736b6fc3800ecfd36ddee0253c734d25d`. Le **patch Batch 13 — Expérimentation agressivité 1–10 est préparé mais non intégré** tant que la validation locale complète, le commit et le push ne sont pas confirmés.
+> **Statut :** le **Batch 13 — Expérimentation agressivité 1–10 est intégré** sur GitHub `main` au commit fonctionnel `1747beb5efd1fe9763bc9b2d23f3a115575daaec` (`feat: add versioned aggressiveness experiments`), après validation locale complète et push confirmé. Le Batch 12 reste référencé par `3f39999736b6fc3800ecfd36ddee0253c734d25d`.
 
 ## Principes
 
@@ -91,9 +91,9 @@ LLMProvider.generate_decision(agent_input: AgentInput) -> DecisionCandidate
 
 Le fournisseur ne produit que `action`, `symbol`, `proposed_quantity` et `rationale`. Les IDs et timestamps restent sous contrôle applicatif. GPT-5.6 Luna est le modèle initial ; Sol reste sélectionnable par configuration.
 
-### Agressivité — patch Batch 13
+### Agressivité — Batch 13 intégré
 
-Le patch Batch 13 fixe une interprétation **discrète et versionnée** des niveaux `1..10` sous `aggressiveness-map-v1`. Chaque niveau fournit un `AggressivenessContext` explicite (posture + instruction stratégique) transmis dans `AgentInput`.
+Le Batch 13 fixe une interprétation **discrète et versionnée** des niveaux `1..10` sous `aggressiveness-map-v1`. Chaque niveau fournit un `AggressivenessContext` explicite (posture + instruction stratégique) transmis dans `AgentInput`.
 
 L'agressivité peut influencer uniquement la **volonté stratégique d'agir** et la **quantité proposée par l'Agent**. Elle ne modifie jamais `RiskPolicy`, les balances, les positions détenues, la solvabilité BUY, les contraintes temporelles, les coûts PAPER ou l'autorité finale de Risk.
 
@@ -110,7 +110,7 @@ Les comparaisons d'agressivité réutilisent directement les rapports `paper-ana
 - MODIFY utilise exactement la quantité autorisée par Risk.
 - ALLOW transmet l'intent produit par Risk.
 - Les erreurs Market/Portfolio/Agent/Risk/Broker restent des cycles `FAILED`, jamais des HOLD synthétiques.
-- Le patch Batch 13 n'ajoute aucun chemin d'exécution et ne permet jamais à l'agressivité de produire un `ExecutionIntent`.
+- Le Batch 13 n'ajoute aucun chemin d'exécution et ne permet jamais à l'agressivité de produire un `ExecutionIntent`.
 
 ## Persistance durable — Batch 09 intégré
 
@@ -126,7 +126,7 @@ Le schéma `0001_audit_journal` conserve :
 
 Le graphe est transactionnel et idempotent par `cycle_id`. La persistance ne garantit pas encore un exactly-once global entre la mutation du ledger PAPER mémoire et le commit PostgreSQL ; la reconstruction/réconciliation après crash reste différée.
 
-Le patch Batch 13 n'ajoute pas de table ni de migration : `AgentInput` est déjà persisté intégralement en JSON/JSONB, donc le mapping et le manifeste expérimental éventuel deviennent automatiquement des faits durables et participent au `result_digest` du cycle.
+Le Batch 13 n'ajoute pas de table ni de migration : `AgentInput` est déjà persisté intégralement en JSON/JSONB, donc le mapping et le manifeste expérimental éventuel deviennent automatiquement des faits durables et participent au `result_digest` du cycle.
 
 ## API FastAPI — Batch 10 intégré
 
@@ -147,7 +147,7 @@ Le Batch 10 expose une façade REST versionnée `/api/v1` sans seconde logique d
 - `GET /api/v1/market/latest`
 - `GET /api/v1/analytics`
 
-Le patch Batch 13 n'ajoute aucun endpoint : le protocole expérimental reste une responsabilité backend/domaine, et le cockpit demeure une surface d'observation.
+Le Batch 13 n'ajoute aucun endpoint : le protocole expérimental reste une responsabilité backend/domaine, et le cockpit demeure une surface d'observation.
 
 ## Frontend cockpit — Batch 11 intégré
 
@@ -157,19 +157,23 @@ Le cockpit affiche l'état backend/moteur, portefeuille, marché durable, cycles
 
 Le reducer analytics reste **pur, déterministe et en lecture seule** au-dessus du journal durable. Les coûts sont lus dans les fills persistés, chaque point est valorisé au `MarketState` durable du même cycle et la reproductibilité des métriques repose sur `paper-analytics-v1` + digest des `result_digest`.
 
-Le patch Batch 13 réutilise ces rapports tels quels pour comparer factuellement les niveaux : P&L brut/net, coûts, drawdown, exposition, trades, HOLD, REJECT, MODIFY, FAILED et séries quotidiennes/cumulées.
+Le Batch 13 réutilise ces rapports tels quels pour comparer factuellement les niveaux : P&L brut/net, coûts, drawdown, exposition, trades, HOLD, REJECT, MODIFY, FAILED et séries quotidiennes/cumulées.
 
-## Validation du patch Batch 13 dans cet environnement
+## Validation Batch 13
 
-Exécuté réellement pendant la préparation :
+Validation locale finale confirmée :
 
 ```text
-pytest ciblé test_experiments.py + test_agent_provider.py : 47 tests réussis
-python -m py_compile sur les fichiers Python du patch       : réussi
-smoke TradingCycleRunner niveau 10 + manifeste + REJECT Risk : réussi
+Python                                  : 3.13.14
+pytest backend                          : 249 tests passés, 2 warnings externes
+ruff check backend                      : All checks passed
+mypy backend/src backend/tests          : 81 fichiers sans erreur
+git diff --check                        : aucune erreur, warnings LF -> CRLF uniquement
+commit/push                             : 1747beb5efd1fe9763bc9b2d23f3a115575daaec
+working tree après push                 : propre
 ```
 
-Ruff n'était pas installé dans l'environnement de préparation. La suite backend complète, Ruff, mypy et `git diff --check` doivent être exécutés localement dans le repository réel avant toute intégration. Aucun test frontend n'est requis puisque le frontend n'est pas modifié.
+Validation de préparation également exécutée : 47 tests ciblés, `py_compile` réussi et smoke `TradingCycleRunner` niveau 10 confirmant REJECT Risk avec Broker non appelé. Aucun test frontend additionnel n'était requis puisque le frontend n'a pas été modifié.
 
 ## Sécurité
 

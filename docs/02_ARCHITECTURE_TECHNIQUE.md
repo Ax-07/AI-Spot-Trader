@@ -2,7 +2,7 @@
 
 ## 1. Objet
 
-Ce document décrit l'architecture technique courante d'AI Spot Trader, incluant les Batches 10, 11 et 12 intégrés et le **patch Batch 13 préparé mais non intégré**. Les choix produit non figés restent explicitement séparés de l'architecture.
+Ce document décrit l'architecture technique courante d'AI Spot Trader, incluant les Batches 10 à 13 intégrés. Le Batch 13 est référencé par le commit fonctionnel `1747beb5efd1fe9763bc9b2d23f3a115575daaec`. Les choix produit non figés restent explicitement séparés de l'architecture.
 
 ---
 
@@ -47,7 +47,7 @@ TradingCycleResult -> AuditedTradingCycleRunner -> journal durable
 
 Le frontend n'est jamais l'ordonnanceur du moteur. PostgreSQL conserve des faits ; il ne produit aucune stratégie.
 
-Le patch Batch 13 ajoute un protocole expérimental backend/domaine sans modifier ce flux de confiance.
+Le Batch 13 ajoute un protocole expérimental backend/domaine sans modifier ce flux de confiance.
 
 ---
 
@@ -382,18 +382,23 @@ Les tests Batch 13 ciblent :
 - lecture analytics Batch 12 d'un `AgentInput` enrichi ;
 - validation provider modèle/prompt/manifeste avant appel LLM.
 
-Validation réellement exécutée pendant préparation :
+Validation d'intégration confirmée :
 
 ```text
-pytest ciblé test_experiments.py + test_agent_provider.py : 47 passed
-python -m py_compile fichiers Python du patch          : réussi
+Python                                      : 3.13.14
+pytest backend                              : 249 passed, 2 warnings externes
+ruff check backend                          : All checks passed
+mypy backend/src backend/tests              : 81 fichiers sans erreur
+git diff --check                            : aucune erreur, warnings LF -> CRLF uniquement
+commit/push                                 : 1747beb5efd1fe9763bc9b2d23f3a115575daaec
+working tree après push                     : propre
 ```
 
-Ruff n'était pas disponible dans l'environnement de préparation. La suite backend complète, Ruff, mypy et `git diff --check` doivent être exécutés localement avant intégration.
+Validation de préparation également exécutée : 47 tests ciblés, `py_compile` réussi et smoke `TradingCycleRunner` niveau 10 confirmant REJECT Risk / Broker non appelé.
 
 ---
 
-## 17. Hors périmètre du patch Batch 13
+## 17. Hors périmètre du Batch 13
 
 - configuration de stratégie/Risk/agressivité par cockpit ;
 - lancement d'expériences via FastAPI ;

@@ -61,7 +61,7 @@ V1 ajoute le cockpit Next.js/shadcn, historique, analytics P&L/drawdown/coûts/e
 
 Le Batch 11 fournit le socle cockpit et est **intégré sur `main`** au commit `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`. Le Batch 12 fournit les analytics PAPER reproductibles et est **intégré** au commit fonctionnel `3f39999736b6fc3800ecfd36ddee0253c734d25d`. Le HEAD documentaire GitHub resynchronisé avant Batch 13 est `bc1b06ad25a2aa0ba7781d50c9e642dc113850ad`.
 
-Le Batch 13 est **préparé mais non intégré** : il fige le mapping d'agressivité et le protocole expérimental, sans modifier l'autorité Risk ni les analytics Batch 12.
+Le Batch 13 est **intégré sur `main`** au commit `1747beb5efd1fe9763bc9b2d23f3a115575daaec` : il fige le mapping d'agressivité et le protocole expérimental, sans modifier l'autorité Risk ni les analytics Batch 12.
 
 ---
 
@@ -258,7 +258,7 @@ HOLD traverse Risk et produit `ALLOW + HOLD_NO_EXECUTION`, sans `ExecutionIntent
 
 ---
 
-## 9. Agent IA — Batch 07 intégré, prompt Batch 13 proposé
+## 9. Agent IA — Batch 07 intégré, prompt Batch 13 intégré
 
 Le port canonique reste :
 
@@ -272,7 +272,7 @@ L'Agent est limité au symbole de `agent_input.market_state.symbol`. Une sortie 
 
 L'adapter OpenAI utilise la Responses API et un JSON Schema strict. La réponse est parsée et revalidée localement sans réparation stratégique silencieuse.
 
-Le patch Batch 13 fait évoluer le prompt vers `agent-strategy-v2`. Le prompt indique que `aggressiveness_context` est une posture stratégique uniquement et ne relâche jamais Risk.
+Le Batch 13 fait évoluer le prompt vers `agent-strategy-v2`. Le prompt indique que `aggressiveness_context` est une posture stratégique uniquement et ne relâche jamais Risk.
 
 Lorsqu'un `ExperimentManifest` est présent, le provider valide avant l'appel LLM :
 
@@ -409,7 +409,7 @@ Batch 13 **réutilise** ces rapports ; il n'implémente aucune formule analytics
 
 ---
 
-## 17. Expérimentation agressivité — patch Batch 13
+## 17. Expérimentation agressivité — Batch 13 intégré
 
 ### Mapping
 
@@ -461,22 +461,18 @@ Les tests restent déterministes et offline autant que possible.
 
 Validation intégrée Batch 12 : `pytest backend` 231 tests, Ruff OK, mypy 76 fichiers, frontend lint/typecheck/build OK et `git diff --check` sans erreur.
 
-Validation réellement exécutée pendant préparation Batch 13 :
+Validation Batch 13 confirmée :
 
-- `test_experiments.py` + `test_agent_provider.py` : **47 tests réussis** ;
-- `python -m py_compile` sur les fichiers Python du patch : **réussi**.
-- smoke `TradingCycleRunner` niveau 10 + manifeste : **REJECT Risk confirmé, Broker non appelé**.
+- Python local : **3.13.14** ;
+- `pytest backend` : **249 tests passés**, 2 warnings externes ;
+- Ruff : **All checks passed** ;
+- mypy : **81 fichiers sans erreur** ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- commit/push : `1747beb5efd1fe9763bc9b2d23f3a115575daaec` ;
+- working tree propre après push ;
+- préparation : **47 tests ciblés**, `py_compile` réussi et smoke `TradingCycleRunner` niveau 10 confirmant REJECT Risk / Broker non appelé.
 
-À exécuter localement avant intégration Batch 13 :
-
-```text
-pytest backend
-ruff check backend
-mypy backend/src backend/tests
-git diff --check
-```
-
-Aucun test frontend additionnel n'est requis tant que le frontend n'est pas modifié.
+Aucun test frontend additionnel n'était requis puisque le frontend n'a pas été modifié.
 
 ---
 

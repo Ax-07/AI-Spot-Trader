@@ -47,7 +47,7 @@ Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 **ACCEPTÉE.** Luna pour les premiers essais ; Sol sélectionnable par configuration.
 
 ### ADR-013 — Agressivité configurable de 1 à 10
-**ACCEPTÉE.** La plage `1..10` est canonique et aucune valeur ne contourne Risk. Le mapping exact est proposé au Batch 13 sous `aggressiveness-map-v1` et ne devient accepté qu'après intégration du batch.
+**ACCEPTÉE.** La plage `1..10` est canonique et aucune valeur ne contourne Risk. Le mapping exact `aggressiveness-map-v1` est intégré avec le Batch 13.
 
 ### ADR-014 — Cible expérimentale de +4 % par jour
 **ACCEPTÉE.** Cible de recherche, jamais garantie ni obligation de trader.
@@ -259,45 +259,45 @@ Ces décisions sont intégrées avec le Batch 12 au commit fonctionnel `3f399997
 
 ---
 
-## 5 bis. Décisions proposées au Batch 13
+## 5 bis. Décisions acceptées au Batch 13
 
-Ces décisions appartiennent au patch Batch 13. Elles restent **PROPOSÉES** tant que la validation locale complète et le commit/push ne sont pas confirmés.
+Ces décisions sont intégrées avec le Batch 13 au commit fonctionnel `1747beb5efd1fe9763bc9b2d23f3a115575daaec`, après validation locale complète et push confirmé.
 
 ### ADR-062 — Mapping discret d'agressivité versionné
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - Les niveaux `1..10` sont mappés explicitement par `aggressiveness-map-v1`.
 - Le mapping décrit une posture et une instruction stratégique, pas un seuil Risk ni une formule de sizing déterministe.
 - Tout changement sémantique futur du mapping exige une nouvelle version.
 
 ### ADR-063 — Agressivité limitée à la stratégie Agent
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - L'agressivité peut influencer la volonté d'agir et la quantité proposée par l'Agent.
 - Elle n'est jamais passée comme paramètre au `RiskEngine.evaluate(...)`.
 - Elle ne peut modifier balance, position, max notional, whitelist, fraîcheur, solvabilité ou coûts PAPER.
 - Seul Risk continue de créer un `ExecutionIntent`.
 
 ### ADR-064 — Prompt Agent `agent-strategy-v2`
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - Le prompt explicite le mapping d'agressivité comme contexte stratégique uniquement.
 - Le provider vérifie modèle, prompt et digest du manifeste avant l'appel LLM lorsqu'un manifeste est présent.
 - Les anciens `AgentInput` sans contexte restent lisibles ; le provider peut normaliser le contexte avant appel.
 
 ### ADR-065 — Manifeste expérimental durable dans AgentInput
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - `paper-experiment-v1` enregistre niveau/mapping, modèle, prompt, univers, snapshot RiskPolicy, coûts PAPER, source/dataset, fenêtre et version analytics.
 - Le manifeste porte un digest SHA-256 de sa représentation canonique.
 - Il est persisté via le payload `AgentInput` existant ; aucune migration n'est requise.
 - Le digest identifie le protocole, pas une garantie de déterminisme LLM.
 
 ### ADR-066 — Comparaison d'agressivité par réutilisation directe de Batch 12
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - Les comparaisons consomment des `PaperAnalyticsReport` déjà calculés.
 - Aucun recalcul divergent de P&L/drawdown/coûts/exposition n'est introduit.
 - Les runs doivent être identiques sur tous les champs contrôlés hors agressivité.
 - La sortie reste factuelle et ne produit ni classement automatique ni sélection rétrospective.
 
 ### ADR-067 — Pas d'API/frontend expérimental au Batch 13
-- **Statut : PROPOSÉE**
+- **Statut : ACCEPTÉE**
 - Le protocole expérimental reste backend/domaine.
 - Le cockpit n'obtient pas encore de configurateur d'agressivité/Risk/coûts.
 - Une surface de lancement d'expériences sera décidée séparément si elle devient nécessaire.
@@ -343,30 +343,33 @@ Ces décisions appartiennent au patch Batch 13. Elles restent **PROPOSÉES** tan
 
 ## 8. Changelog
 
-### 2026-09-20 — Batch 13 Expérimentation agressivité 1–10
+### 2026-09-21 — Batch 13 Expérimentation agressivité 1–10
 
-**État : patch préparé, non intégré. Référence GitHub resynchronisée : `bc1b06ad25a2aa0ba7781d50c9e642dc113850ad`.**
+**État : intégré sur `main` au commit fonctionnel `1747beb5efd1fe9763bc9b2d23f3a115575daaec` (`feat: add versioned aggressiveness experiments`).**
 
-- HEAD fonctionnel Batch 12 confirmé : `3f39999736b6fc3800ecfd36ddee0253c734d25d` ; le commit `bc1b06ad...` est documentaire uniquement.
-- Audit confirmé : agressivité déjà validée `1..10` et passée à `AgentInput`, mais mapping exact absent ; prompt `agent-luna-v1` indiquait explicitement que la politique numérique n'était pas fixée.
-- Mapping discret proposé : `aggressiveness-map-v1` avec dix postures stratégiques.
-- Ajout de `AggressivenessContext` et `ExperimentManifest` aux contrats `AgentInput`, en restant compatibles avec les anciens payloads grâce à des champs optionnels.
-- Prompt proposé : `agent-strategy-v2`.
-- Manifeste `paper-experiment-v1` et digest SHA-256 déterministe.
+- Référence GitHub de départ : `bc1b06ad25a2aa0ba7781d50c9e642dc113850ad` (`docs: record Batch 12 integration`).
+- Mapping discret intégré : `aggressiveness-map-v1` avec dix postures stratégiques.
+- `AggressivenessContext` et `ExperimentManifest` ajoutés aux contrats `AgentInput`, avec compatibilité des anciens payloads grâce à des champs optionnels.
+- Prompt Agent intégré : `agent-strategy-v2`.
+- Manifeste `paper-experiment-v1` avec digest SHA-256 déterministe.
 - Snapshot de `RiskPolicy` et des coûts PAPER enregistré dans l'identité expérimentale ; aucune valeur produit inventée.
 - Persistance via le JSON/JSONB `AgentInput` existant ; aucune migration.
-- Comparaison pure de runs via `PaperAnalyticsReport`, sans recalcul des métriques Batch 12.
-- Comparaison refusée si modèle, prompt, Risk, coûts, univers, source/dataset, fenêtre ou version analytics diffèrent.
+- Comparaison pure de runs via `PaperAnalyticsReport`, sans recalcul divergent des métriques Batch 12 et sans ranking automatique.
+- Comparaison refusée si modèle, prompt, Risk, coûts, univers, source/dataset, fenêtre ou version analytics diffèrent hors dimension expérimentale autorisée.
 - Aucun changement API/frontend, aucun LIVE, aucune API Kraken privée.
-- Limite explicitée : même manifeste + mêmes faits ne garantit pas une sortie LLM bit-à-bit identique.
+- Limite conservée : même manifeste + mêmes faits ne garantit pas une sortie LLM bit-à-bit identique.
 
-Validation réellement exécutée dans l'environnement de préparation :
+Validation locale finale confirmée :
 
-- tests ciblés `test_experiments.py` + `test_agent_provider.py` : **47 réussis** ;
-- compilation Python des fichiers du patch : **réussie** ;
-- smoke `TradingCycleRunner` niveau 10 + manifeste : **REJECT Risk confirmé, Broker non appelé** ;
-- Ruff : non exécuté, binaire absent ;
-- suite backend complète, mypy et `git diff --check` restent à exécuter localement.
+- Python : **3.13.14** ;
+- `pytest backend` : **249 tests passés**, 2 warnings de dépréciation externes ;
+- Ruff : **All checks passed** ;
+- mypy : **Success: no issues found in 81 source files** ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- commit/push confirmé sur `main` : `1747beb5efd1fe9763bc9b2d23f3a115575daaec` ;
+- working tree confirmé propre après push.
+
+Validation de préparation : **47 tests ciblés**, `py_compile` réussi et smoke `TradingCycleRunner` niveau 10 confirmant REJECT Risk avec Broker non appelé.
 
 ### 2026-09-20 — Batch 12 Analytics et expérimentation reproductible
 

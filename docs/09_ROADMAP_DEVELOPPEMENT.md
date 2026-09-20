@@ -134,13 +134,13 @@ Le Batch 12 reproduit **les métriques** à partir des faits immuables. Il ne pr
 
 ## Batch 13 — Expérimentation agressivité 1–10
 
-**État : patch préparé, non intégré.**
+**État : intégré** au commit fonctionnel `1747beb5efd1fe9763bc9b2d23f3a115575daaec`.
 
 ### Objectif
 
 Figer un protocole expérimental explicite, versionné, reproductible et mesurable pour l'agressivité `1..10`, sans déplacer l'autorité stratégique vers un bot déterministe et sans contourner Risk.
 
-### Architecture retenue dans le patch
+### Périmètre intégré
 
 - mapping **discret** `aggressiveness-map-v1` ;
 - dix postures stratégiques explicites, sans seuil Risk ni multiplicateur d'exécution ;
@@ -168,15 +168,16 @@ Figer un protocole expérimental explicite, versionné, reproductible et mesurab
 
 Le digest du manifeste identifie le protocole/configuration. Il ne garantit pas une sortie LLM bit-à-bit identique. Pour isoler strictement l'agressivité, les runs doivent partager les mêmes faits sources ; un dataset figé avec `source_digest` identique est préférable à deux passages live successifs.
 
-### Validation réellement exécutée pendant préparation
+### Validation d'intégration
 
-- tests ciblés `test_experiments.py` + `test_agent_provider.py` : **47 réussis** ;
-- compilation Python (`py_compile`) des fichiers du patch : **réussie** ;
-- smoke `TradingCycleRunner` niveau 10 + manifeste : **REJECT Risk confirmé, Broker non appelé** ;
-- Ruff : non exécuté dans l'environnement de préparation (outil absent) ;
-- suite backend complète, mypy et `git diff --check` : à exécuter localement avant intégration.
-
-Ne pas passer cet état à **intégré** avant validation locale complète, commit et push confirmés.
+- Python local : **3.13.14** ;
+- `pytest backend` : **249 tests passés**, 2 warnings externes ;
+- Ruff : **All checks passed** ;
+- mypy : **81 fichiers sans erreur** ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- commit/push confirmé : `1747beb5efd1fe9763bc9b2d23f3a115575daaec` ;
+- working tree propre après push ;
+- en préparation : **47 tests ciblés**, `py_compile` réussi et smoke `TradingCycleRunner` niveau 10 confirmant REJECT Risk / Broker non appelé.
 
 ---
 
