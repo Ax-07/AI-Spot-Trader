@@ -29,6 +29,10 @@ class LLMProvider(Protocol):
 
 
 class Broker(Protocol):
-    """Execution boundary; only a PAPER implementation is allowed initially."""
+    """Execution boundary; PAPER pricing context is explicit and provider-agnostic."""
 
-    async def execute(self, intent: ExecutionIntent) -> tuple[Fill, ...]: ...
+    async def execute(
+        self,
+        intent: ExecutionIntent,
+        market_state: MarketState,
+    ) -> tuple[Fill, ...]: ...

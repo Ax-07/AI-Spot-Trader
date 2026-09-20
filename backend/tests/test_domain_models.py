@@ -90,11 +90,18 @@ def test_valid_domain_contracts_and_enums() -> None:
     fill = Fill(
         fill_id=uuid4(),
         execution_id=intent.execution_id,
+        market_state_id=market_state.market_state_id,
         filled_at=NOW,
+        pricing_as_of=NOW,
         action=TradingAction.BUY,
         symbol="BTC/EUR",
         quantity=Decimal("0.01"),
+        reference_price=Decimal("50000.00"),
         price=Decimal("50010.00"),
+        notional=Decimal("500.1000"),
+        fee=Decimal("0.50"),
+        spread_cost=Decimal("0.05"),
+        slippage_cost=Decimal("0.05"),
     )
 
     assert agent_input.aggressiveness == 6
@@ -103,6 +110,7 @@ def test_valid_domain_contracts_and_enums() -> None:
     assert risk.status is RiskDecision.ALLOW
     assert intent.mode is ExecutionMode.PAPER
     assert fill.quantity == Decimal("0.01")
+    assert fill.reference_price == Decimal("50000.00")
 
 
 def test_unknown_action_is_rejected() -> None:
@@ -123,6 +131,16 @@ def test_naive_timestamp_is_rejected() -> None:
             as_of=datetime(2026, 9, 20, 10, 30),
             symbol="BTC/EUR",
             last_price=Decimal("50000"),
+        )
+
+
+def test_market_state_rejects_non_positive_price() -> None:
+    with pytest.raises(ValidationError):
+        MarketState(
+            market_state_id=uuid4(),
+            as_of=NOW,
+            symbol="BTC/EUR",
+            last_price=Decimal("0"),
         )
 
 
@@ -153,12 +171,49 @@ def test_negative_position_quantities_are_rejected(field_name: str) -> None:
         AssetPosition.model_validate(values)
 
 
+def test_negative_asset_balance_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        AssetBalance(asset="EUR", available=Decimal("-0.01"))
+
+
 def test_available_position_cannot_exceed_held_quantity() -> None:
     with pytest.raises(ValidationError):
         AssetPosition(
             asset="BTC",
             quantity=Decimal("0.5"),
             available=Decimal("0.6"),
+        )
+
+
+def test_portfolio_assets_have_unique_disjoint_roles() -> None:
+    with pytest.raises(ValidationError, match="unique assets"):
+        PortfolioState(
+            portfolio_state_id=uuid4(),
+            as_of=NOW,
+            balances=(
+                AssetBalance(asset="EUR", available=Decimal("1")),
+                AssetBalance(asset="EUR", available=Decimal("2")),
+            ),
+        )
+
+    with pytest.raises(ValidationError, match="unique assets"):
+        PortfolioState(
+            portfolio_state_id=uuid4(),
+            as_of=NOW,
+            positions=(
+                AssetPosition(asset="BTC", quantity=Decimal("1"), available=Decimal("1")),
+                AssetPosition(asset="BTC", quantity=Decimal("2"), available=Decimal("2")),
+            ),
+        )
+
+    with pytest.raises(ValidationError, match="roles must be disjoint"):
+        PortfolioState(
+            portfolio_state_id=uuid4(),
+            as_of=NOW,
+            balances=(AssetBalance(asset="BTC", available=Decimal("1")),),
+            positions=(
+                AssetPosition(asset="BTC", quantity=Decimal("1"), available=Decimal("1")),
+            ),
         )
 
 
@@ -183,22 +238,48 @@ def test_execution_intent_rejects_hold_and_non_positive_quantity() -> None:
     }
 
     with pytest.raises(ValidationError):
-        ExecutionIntent(**base, action=TradingAction.HOLD, quantity=Decimal("1"))
+        ExecutionIntent.model_validate(
+            base | {"action": TradingAction.HOLD, "quantity": Decimal("1")}
+        )
 
     with pytest.raises(ValidationError):
-        ExecutionIntent(**base, action=TradingAction.BUY, quantity=Decimal("0"))
+        ExecutionIntent.model_validate(
+            base | {"action": TradingAction.BUY, "quantity": Decimal("0")}
+        )
 
 
-def test_fill_rejects_hold() -> None:
+def test_fill_rejects_hold_and_inconsistent_cost_audit() -> None:
+    common = {
+        "fill_id": uuid4(),
+        "execution_id": uuid4(),
+        "market_state_id": uuid4(),
+        "filled_at": NOW,
+        "pricing_as_of": NOW,
+        "symbol": "BTC/EUR",
+        "quantity": Decimal("0.01"),
+        "reference_price": Decimal("50000"),
+        "price": Decimal("50000"),
+        "notional": Decimal("500"),
+        "fee": Decimal("0"),
+        "spread_cost": Decimal("0"),
+        "slippage_cost": Decimal("0"),
+    }
     with pytest.raises(ValidationError):
-        Fill(
-            fill_id=uuid4(),
-            execution_id=uuid4(),
-            filled_at=NOW,
-            action=TradingAction.HOLD,
-            symbol="BTC/EUR",
-            quantity=Decimal("0.01"),
-            price=Decimal("50000"),
+        Fill.model_validate(common | {"action": TradingAction.HOLD})
+
+    with pytest.raises(ValidationError, match="notional"):
+        Fill.model_validate(
+            common | {"action": TradingAction.BUY, "notional": Decimal("501")}
+        )
+
+    with pytest.raises(ValidationError, match="explain"):
+        Fill.model_validate(
+            common
+            | {
+                "action": TradingAction.BUY,
+                "price": Decimal("50010"),
+                "notional": Decimal("500.10"),
+            }
         )
 
 

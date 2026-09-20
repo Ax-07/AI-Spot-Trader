@@ -86,17 +86,15 @@ Validation locale Windows finale avant intégration :
 
 ## Batch 04 — Market State
 
-**Statut : patch préparé et testé offline ; intégration Git en attente au moment de cette livraison.**
+**Statut : intégré sur `main` au commit `73acc4758427ea7575ddf0a43505e1c95fab5e9c` (`feat: add deterministic market state`).**
 
-Objectif : agréger les observations normalisées en contexte marché canonique, descriptif et reproductible, sans produire de signal autonome.
-
-Implémentation du patch :
+Intégré :
 
 - `MarketObservation` fournisseur-agnostique ;
 - port `MarketObservationSource` ;
-- adapter Kraken capable d'émettre l'observation normalisée tout en conservant le `snapshot()` historique ;
+- adapter Kraken capable d'émettre l'observation normalisée ;
 - package `ai_spot_trader.market` sans dépendance Kraken ;
-- `MarketStateBuilder` pour un symbole par instance ;
+- `MarketStateBuilder` mono-symbole ;
 - historique mémoire borné à 10 000 observations par défaut ;
 - ordre temporel strict, doublons/hors ordre rejetés ;
 - horizons 5 min et 30 min par défaut, surchargeables ;
@@ -107,7 +105,17 @@ Implémentation du patch :
 - `MarketState` enrichi par `MarketContext` optionnel ;
 - aucune interpolation, aucun label de marché, aucun `BUY/SELL/HOLD`, aucun Risk Engine, aucun LLM.
 
-Tests exécutés dans l'environnement ChatGPT : Python `3.13.5`, `pytest` **59/59**, `compileall` OK. Ruff et mypy restent à exécuter localement sous Windows car ils ne sont pas installés dans l'environnement ChatGPT utilisé pour cette livraison. Aucun test réseau n'est requis par défaut.
+Validation locale Windows finale avant intégration :
+
+- Python `3.13.14` ;
+- `pytest` : **59 tests passés** ;
+- Ruff : **All checks passed** ;
+- mypy : **OK sur 24 fichiers source** ;
+- `git diff --check` : aucune erreur ;
+- uniquement les warnings habituels LF → CRLF ;
+- 2 warnings FastAPI/Starlette dans les dépendances, sans échec ;
+- aucun test réseau requis ;
+- working tree propre après commit/push.
 
 Frontière : le Batch 04 consomme uniquement des observations déjà normalisées ; il ne parse aucun payload Kraken.
 
@@ -115,11 +123,37 @@ Frontière : le Batch 04 consomme uniquement des observations déjà normalisée
 
 ## Batch 05 — Portfolio State + Paper Broker
 
-Objectif : portefeuille PAPER canonique, balances/positions, exécution simulée, frais/spread/slippage et invariant « pas de vente non détenue ».
+**Statut : validation locale complète réussie ; intégration Git en attente.**
 
-À décider : capital initial, devise de référence, modèle de fill/slippage, barème de frais.
+Objectif : portefeuille PAPER canonique, état mutable mémoire, exécution simulée déterministe, frais/spread/slippage auditables et invariant « pas de vente non détenue ».
 
-Tests critiques : cash insuffisant, SELL supérieur à position, frais, mise à jour positions, P&L de base.
+Implémentation du patch :
+
+- `PortfolioState` valide l'unicité des actifs et interdit qu'un même actif apparaisse simultanément comme balance et position ;
+- `balances` sont la source canonique des actifs de règlement disponibles ;
+- `positions` sont la source canonique des quantités détenues et disponibles à la vente ;
+- `PaperPortfolioLedger` mémoire construit exclusivement depuis un état initial injecté ;
+- aucun capital ou devise produit globale par défaut ;
+- mutations BUY/SELL copy-on-write sans état partiellement appliqué ;
+- `PaperBroker` derrière le port canonique `Broker` ;
+- évolution du port en `Broker.execute(execution_intent, market_state)` afin de rendre le pricing explicite et d'interdire tout lookup réseau caché ;
+- fill immédiat complet ou exception métier explicite ;
+- aucun order book simulé, partial fill complexe, limite, pending order ou hasard ;
+- `PaperExecutionCostModel` injecté : `fee_rate`, `spread_bps`, `slippage_bps` ;
+- `spread_bps` = impact adverse par côté, pas spread bid/ask total ;
+- BUY : `price = reference * (1 + spread + slippage)` ;
+- SELL : `price = reference * (1 - spread - slippage)` ;
+- frais calculés sur le notional exécuté ;
+- `Fill` enrichi avec contexte de pricing et décomposition des coûts ;
+- rejet d'un `MarketState` plus récent que l'`ExecutionIntent` ;
+- aucune dépendance Kraken dans `portfolio` ou `broker` ;
+- aucune nouvelle dépendance runtime ;
+- aucune variable d'environnement Batch 05 ;
+- aucune base de coût/P&L complet : les fills auditables conservent les données nécessaires au futur Batch Analytics.
+
+Validation locale Windows finale avant intégration : `pytest backend` **92/92**, Ruff **All checks passed**, mypy **Success: no issues found in 40 source files**, `git diff --check` sans erreur ; uniquement les warnings LF → CRLF habituels et 2 warnings FastAPI/Starlette sans échec. Aucun test réseau requis. Validation complémentaire ChatGPT : Python `3.13.5`, suite ciblée **64/64**, `compileall` OK et lignes Python du patch `<= 100` OK.
+
+Tests critiques couverts : état initial explicite, snapshot UTC, BUY/SELL, cash/position insuffisants, vente non détenue, frais, spread, slippage, combinaison des coûts, `Decimal`, atomicité, symbol mismatch, pricing futur, HOLD/LIVE impossibles, corrélation des fills, déterminisme et absence de dépendance Kraken.
 
 ---
 
@@ -248,7 +282,7 @@ Sa présence dans la roadmap ne vaut pas autorisation de trading réel.
 À consigner lorsqu'elles deviennent canoniques :
 
 - capital PAPER ;
-- devise de référence ;
+- devise de référence produit ;
 - univers initial ;
 - cadence ;
 - éventuelle évolution des horizons 5 min / 30 min ;
@@ -256,7 +290,8 @@ Sa présence dans la roadmap ne vaut pas autorisation de trading réel.
 - seuil métier de fraîcheur ;
 - limites de risque ;
 - mapping agressivité ;
-- modèle PAPER ;
+- valeurs de référence expérimentales pour fee/spread/slippage PAPER ;
+- éventuelle évolution du modèle de fill au-delà du full fill immédiat ;
 - ORM/migrations ;
 - auth cockpit ;
 - déploiement ;

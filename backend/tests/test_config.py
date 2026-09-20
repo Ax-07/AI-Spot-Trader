@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 from pydantic import ValidationError
 
@@ -5,8 +7,14 @@ from ai_spot_trader.core.config import Settings
 from ai_spot_trader.domain.enums import ExecutionMode, LLMModel
 
 
+def _settings(**overrides: Any) -> Settings:
+    values: dict[str, Any] = {"_env_file": None}
+    values.update(overrides)
+    return Settings(**values)
+
+
 def test_settings_defaults_are_safe_for_local_bootstrap() -> None:
-    settings = Settings(_env_file=None)
+    settings = _settings()
 
     assert settings.environment == "development"
     assert settings.api_host == "127.0.0.1"
@@ -28,7 +36,7 @@ def test_settings_read_prefixed_environment_variables(monkeypatch: pytest.Monkey
     monkeypatch.setenv("AI_SPOT_TRADER_LLM_MODEL", "gpt-5.6-sol")
     monkeypatch.setenv("AI_SPOT_TRADER_AGGRESSIVENESS", "8")
 
-    settings = Settings(_env_file=None)
+    settings = _settings()
 
     assert settings.environment == "test"
     assert settings.api_port == 8123
@@ -39,9 +47,9 @@ def test_settings_read_prefixed_environment_variables(monkeypatch: pytest.Monkey
 @pytest.mark.parametrize("aggressiveness", [0, 11])
 def test_aggressiveness_must_stay_between_one_and_ten(aggressiveness: int) -> None:
     with pytest.raises(ValidationError):
-        Settings(aggressiveness=aggressiveness, _env_file=None)
+        _settings(aggressiveness=aggressiveness)
 
 
 def test_live_execution_mode_is_not_configurable() -> None:
     with pytest.raises(ValidationError):
-        Settings(execution_mode="LIVE", _env_file=None)  # type: ignore[arg-type]
+        _settings(execution_mode="LIVE")

@@ -2,9 +2,9 @@
 
 AI Spot Trader est une application expérimentale de **trading crypto SPOT pilotée par un agent IA unique**.
 
-Le projet vise à étudier jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché structuré, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
+Le projet vise à étudier jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut du projet :** Batch 01 — bootstrap technique préparé. Les premières versions restent exclusivement en **PAPER trading**.
+> **Statut du projet :** Batch 04 — Market State intégré sur `main` au commit `73acc4758427ea7575ddf0a43505e1c95fab5e9c`. Le Batch 05 — Portfolio State + Paper Broker est validé localement et reste à intégrer sur `main`. Les premières versions restent exclusivement en **PAPER trading**.
 
 ## Principes du projet
 
@@ -18,18 +18,18 @@ Le projet vise à étudier jusqu'où un agent IA peut prendre des décisions de 
 - Le **Risk Engine** déterministe peut autoriser, modifier ou refuser une décision avant exécution.
 - Aucune sortie LLM ne peut déclencher directement un ordre Kraken.
 - Toutes les décisions, y compris `HOLD`, doivent être journalisées.
-- Les frais, le spread et le slippage doivent être pris en compte dans les mesures de performance.
+- Les frais, le spread et le slippage sont explicitement modélisés dans l'exécution PAPER.
 - Le passage au **LIVE** sera explicite, séparé du PAPER et traité dans une phase ultérieure.
 
 ## Agent IA
 
-Les premiers tests utiliseront **GPT-5.6 Luna** afin de réduire les coûts d’expérimentation. L’architecture doit permettre de sélectionner **GPT-5.6 Sol** par configuration sans modifier le moteur de trading.
+Les premiers tests utiliseront **GPT-5.6 Luna** afin de réduire les coûts d’expérimentation. L’architecture permet de sélectionner **GPT-5.6 Sol** par configuration sans modifier le moteur de trading.
 
 Le niveau d’agressivité est prévu sur une échelle configurable de **1 à 10**. Son mapping exact reste à définir et sera traité dans un batch ultérieur.
 
 ## Objectif expérimental
 
-Le projet conserve une cible expérimentale de **+4 % de rendement journalier** comme objectif de recherche et de mesure. Cette cible n’est ni une promesse ni une garantie ; les résultats doivent être mesurés sans look-ahead ni sélection rétrospective.
+Le projet conserve une cible expérimentale de **+4 % de rendement journalier** comme objectif de recherche et de mesure. Cette cible n’est ni une promesse ni une garantie ; les résultats doivent être mesurés honnêtement, sans look-ahead ni sélection rétrospective.
 
 ## Architecture
 
@@ -48,52 +48,93 @@ Stack décidée :
 Rust ne sera introduit que si un besoin mesuré ou une décision architecturale explicite le justifie.
 
 ```text
-Kraken / Market Data
-        │
-        ▼
-   Market State
-        │
-        ├──────────────┐
-        ▼              │
- Portfolio State       │
-        │              │
-        └──────┬───────┘
-               ▼
-          Agent IA
-      BUY / SELL / HOLD
-               │
-               ▼
-         Risk Engine
-      autorise / modifie
-            / refuse
-               │
-               ▼
-         Paper Broker
-               │
-               ▼
-      Journal / Analytics
+Kraken public data
+        |
+        v
+normalized observations
+        |
+        v
+   Market State --------+
+                        |
+ Portfolio State -------+--> Agent IA
+                              BUY / SELL / HOLD
+                                     |
+                                     v
+                                Risk Engine
+                         autorise / modifie / refuse
+                                     |
+                                     v
+                              ExecutionIntent
+                                     |
+                           Market State pricing
+                                     |
+                                     v
+                               Paper Broker
+                                     |
+                             Fill + Portfolio
+                                     |
+                                     v
+                             Journal / Analytics
 ```
 
-Aucun chemin direct entre l'agent IA et Kraken ne doit exister.
+Aucun chemin direct entre l'agent IA et Kraken ne doit exister. Le Paper Broker n'interroge pas Kraken : le `MarketState` utilisé pour le pricing lui est fourni explicitement.
 
-## Bootstrap actuel
+## État backend actuel
+
+Le backend contient notamment :
 
 ```text
 backend/
   src/ai_spot_trader/
     api/
+    broker/
+      errors.py
+      paper.py
     core/
+      clock.py
+      config.py
+      runtime.py
+    domain/
+      enums.py
+      models.py
+      ports.py
+    integrations/kraken/
+    market/
+      errors.py
+      state.py
+    portfolio/
+      errors.py
+      ledger.py
     main.py
   tests/
   pyproject.toml
-frontend/
-  src/app/
-  src/components/ui/
-  src/lib/
-  package.json
 ```
 
-Le backend expose actuellement uniquement un healthcheck `GET /health` et une configuration typée. Le frontend affiche une page d'accueil technique et ne communique pas encore avec le backend.
+Composants désormais disponibles :
+
+- contrats Pydantic stricts et timestamps UTC aware ;
+- données publiques Kraken normalisées ;
+- `MarketStateBuilder` déterministe multi-horizon avec no look-ahead ;
+- `PaperPortfolioLedger` mémoire avec état initial explicitement injecté ;
+- `PaperBroker` full-fill déterministe avec frais, spread et slippage auditables ;
+- `Fill` corrélé à l'exécution et au `MarketState` de pricing ;
+- aucune API Kraken privée, aucun ordre réel et aucun LIVE.
+
+FastAPI expose toujours uniquement le healthcheck `GET /health` à ce stade. Le frontend reste un cockpit bootstrap sans orchestration du moteur.
+
+## Modèle PAPER initial
+
+Le Batch 05 utilise un modèle volontairement simple et reproductible :
+
+- une intention BUY/SELL donne un fill complet immédiat ou un rejet explicite ;
+- aucune simulation d'order book, partial fill, ordre limite ou hasard ;
+- calculs financiers en `Decimal` ;
+- `spread_bps` = impact adverse **par côté** ;
+- `slippage_bps` = impact adverse additionnel par côté ;
+- frais calculés sur le notional exécuté ;
+- aucun capital initial, quote asset ou niveau de frais produit n'est codé en dur : ils sont injectés explicitement.
+
+Le Risk Engine fonctionnel reste le Batch 06. Les contrôles du broker sur cash et quantité détenue sont des invariants comptables/SPOT, pas une stratégie de risque parallèle.
 
 ## Démarrage local
 
@@ -106,11 +147,11 @@ uv venv --python 3.13.14 --seed backend\.venv
 backend\.venv\Scripts\python.exe -m pip install -e "backend[dev]"
 backend\.venv\Scripts\python.exe -m pytest backend
 backend\.venv\Scripts\python.exe -m ruff check backend
-backend\.venv\Scripts\python.exe -m mypy backend\src
+backend\.venv\Scripts\python.exe -m mypy backend\src backend\tests
 backend\.venv\Scripts\python.exe -m uvicorn ai_spot_trader.main:app --reload --app-dir backend\src
 ```
 
-Le package backend accepte Python `>=3.12`. La validation Windows du Batch 01 a été réalisée avec Python `3.13.14`.
+Le package backend accepte Python `>=3.12`. Les validations Windows précédentes ont été réalisées avec Python `3.13.14`.
 
 ### Frontend
 
@@ -129,7 +170,7 @@ pnpm --dir frontend typecheck
 pnpm --dir frontend build
 ```
 
-`pnpm` est le gestionnaire de paquets frontend canonique du projet. La validation du Batch 01 a été réalisée avec pnpm `10.15.1`.
+`pnpm` est le gestionnaire de paquets frontend canonique du projet.
 
 ## Documentation
 

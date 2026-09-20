@@ -85,8 +85,8 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 ### ADR-011 — Frais, spread et slippage inclus
 
 - **Statut : ACCEPTÉE**
-- L'évaluation PAPER doit intégrer frais, spread et slippage.
-- Le P&L net doit être mesuré séparément du P&L brut.
+- L'évaluation PAPER intègre frais, spread et slippage.
+- Le P&L net devra être mesuré séparément du P&L brut.
 
 ### ADR-012 — Luna initial, Sol configurable
 
@@ -171,8 +171,8 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 ### ADR-024 — Ports externes minimaux via Protocol
 
 - **Statut : ACCEPTÉE**
-- Les frontières externes initiales sont `MarketDataSource`, `LLMProvider` et `Broker`.
-- Elles dépendent des contrats de domaine, pas des SDK fournisseurs.
+- Les frontières externes sont modélisées avec des `Protocol` dépendant des contrats du domaine, pas des SDK fournisseurs.
+- `MarketDataSource`, `MarketObservationSource`, `LLMProvider` et `Broker` restent les ports canoniques actuels.
 
 ### ADR-025 — Adapter Kraken Spot public minimal
 
@@ -189,19 +189,54 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 ### ADR-026 — Market State déterministe, multi-horizon et sans look-ahead
 
 - **Statut : ACCEPTÉE**
-- Le Batch 04 introduit `MarketObservation` comme fait fournisseur-agnostique minimal : timestamp, symbole canonique et dernier prix positif.
-- `MarketObservationSource` formalise la frontière d'observation ; l'adapter Kraken l'implémente tout en conservant `MarketDataSource.snapshot()` pour compatibilité.
-- Il n'existe qu'un seul `MarketState` canonique. Il peut porter un `MarketContext` optionnel construit par la couche `market`.
-- `MarketStateBuilder` travaille sur un seul symbole par instance et conserve un historique mémoire borné à 10 000 observations par défaut, valeur technique surchargeable.
-- Les observations doivent être strictement ordonnées ; doublons temporels, données hors ordre et changement de symbole sont rejetés.
-- Deux horizons descriptifs sont définis par défaut : 5 minutes et 30 minutes. Ils sont surchargeables et ne représentent ni cadence de décision, ni signal de trading.
-- Les statistiques retenues sont : nombre d'observations, min, max, amplitude absolue, return simple et volatilité réalisée simple.
-- La volatilité réalisée est l'écart-type population des returns simples consécutifs et n'est calculée qu'à partir de trois observations.
-- Les calculs financiers/statistiques utilisent `Decimal` ; aucune dépendance NumPy/Pandas/TA-Lib n'est introduite.
-- Les valeurs indisponibles restent explicitement absentes ; aucune interpolation n'est effectuée.
-- La fraîcheur expose âge et seuil technique éventuellement évalué. Aucun seuil métier global Risk n'est fixé.
-- Pour un snapshot à `T`, seules les observations `observed_at <= T` sont utilisées, même si des observations futures sont déjà présentes dans l'historique d'un replay.
-- Les statistiques restent descriptives et ne produisent aucun `BUY`, `SELL`, `HOLD`, score ou label stratégique.
+- `MarketObservation` est le fait fournisseur-agnostique minimal : timestamp, symbole canonique et dernier prix positif.
+- Il n'existe qu'un seul `MarketState` canonique ; `MarketContext` l'enrichit optionnellement.
+- `MarketStateBuilder` est mono-symbole et conserve un historique mémoire borné à 10 000 observations par défaut.
+- Les observations doivent être strictement ordonnées ; doublons, hors ordre et changement de symbole sont rejetés.
+- Les horizons descriptifs par défaut sont 5 minutes et 30 minutes, surchargeables.
+- Les statistiques sont count, min, max, amplitude, return simple et volatilité réalisée simple en `Decimal`.
+- Les valeurs indisponibles restent absentes ; aucune interpolation n'est effectuée.
+- La fraîcheur reste descriptive et le seuil métier final appartient au futur Risk Engine.
+- Pour un snapshot à `T`, seules les observations `observed_at <= T` sont utilisées.
+- Les statistiques ne produisent aucun signal stratégique.
+
+### ADR-027 — Rôles canoniques du Portfolio State
+
+- **Statut : ACCEPTÉE**
+- `PortfolioState` conserve deux collections non chevauchantes.
+- `balances` est la source canonique des actifs de règlement disponibles pour débiter/créditer une exécution.
+- `positions` est la source canonique des actifs détenus, avec quantité totale et quantité disponible à la vente.
+- Les actifs sont uniques dans chaque collection et un même symbole d'actif ne peut pas appartenir simultanément aux deux rôles dans un snapshot.
+- Cette décision évite une double source de vérité sans imposer une devise de référence produit globale.
+
+### ADR-028 — Ledger PAPER mémoire et état initial injecté
+
+- **Statut : ACCEPTÉE**
+- `PaperPortfolioLedger` est l'unique état mutable du portefeuille PAPER au Batch 05.
+- Il est instancié depuis un `PortfolioState` explicitement fourni ; aucun capital initial ou actif de règlement par défaut n'est codé dans le produit.
+- Les mutations BUY/SELL calculent un nouvel état avant de remplacer l'état interne, afin qu'un rejet ne laisse aucune mutation partielle.
+- Aucune base PostgreSQL, persistance, tâche de fond ou dépendance FastAPI n'est ajoutée.
+- Aucune base de coût n'est introduite au Batch 05 : elle n'est pas requise pour l'intégrité du portefeuille et les fills conservent les coûts nécessaires aux analytics ultérieures.
+
+### ADR-029 — Pricing PAPER explicite via MarketState
+
+- **Statut : ACCEPTÉE**
+- Le port canonique évolue en `Broker.execute(execution_intent, market_state) -> tuple[Fill, ...]`.
+- Le Paper Broker ne consulte jamais Kraken et ne récupère aucun prix réseau caché.
+- Le symbole du `MarketState` doit correspondre à l'intention.
+- Le `MarketState.as_of` ne peut pas être postérieur à `ExecutionIntent.created_at` ; cette règle préserve le no look-ahead lors des replays.
+- Le modèle initial fait un fill complet immédiat ou lève une erreur explicite ; aucun order book, partial fill complexe, pending order ou hasard n'est simulé.
+
+### ADR-030 — Modèle de coûts PAPER déterministe et auditable
+
+- **Statut : ACCEPTÉE**
+- Les coûts sont injectés dans `PaperExecutionCostModel` et ne deviennent pas des variables d'environnement globales au Batch 05.
+- `fee_rate` est un taux décimal appliqué au notional exécuté.
+- `spread_bps` représente un **impact adverse par côté**, et non le spread bid/ask total.
+- `slippage_bps` représente un impact adverse additionnel par côté.
+- BUY : le prix exécuté est augmenté des impacts spread + slippage ; SELL : il est diminué des mêmes impacts.
+- Le modèle est symétrique, déterministe, sans aléatoire, sans quantification Kraken et entièrement en `Decimal`.
+- `Fill` enregistre `market_state_id`, `pricing_as_of`, prix de référence, prix exécuté, notional, frais, coût spread et coût slippage afin que les coûts restent auditables même si la configuration future change.
 
 ---
 
@@ -232,20 +267,21 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 
 À consigner comme ADR lorsqu'elles sont tranchées :
 
-- capital PAPER initial ;
-- devise de référence ;
+- capital PAPER initial produit ;
+- devise de référence produit ;
 - univers de paires Kraken ;
 - cadence de décision ;
 - éventuelle évolution des horizons 5 min / 30 min ;
-- données supplémentaires du Market State : bid/ask, spread, volume, bougies, profondeur, etc. ;
+- données supplémentaires du Market State : bid/ask, spread réel, volume, bougies, profondeur, etc. ;
 - stratégie de streaming/caching persistant du futur moteur marché ;
 - seuil métier global de fraîcheur/stale ;
 - représentation du sizing stratégique dans `DecisionCandidate` ;
 - taille et exposition maximales ;
 - max drawdown / max daily loss ;
 - mapping agressivité 1–10 ;
-- modèle de fill/slippage ;
-- barème de frais de référence ;
+- valeurs de référence expérimentales pour fee/spread/slippage PAPER ;
+- éventuelle évolution vers un modèle de fill plus riche ;
+- méthode de base de coût si nécessaire aux analytics ;
 - frontière de journée ;
 - ORM/migrations ;
 - politique de rétention ;
@@ -258,48 +294,57 @@ Les détails historiques volumineux ne doivent pas migrer dans `00_ETAT_ACTUEL.m
 
 ## 5. Changelog
 
+### 2026-09-20 — Batch 05 Portfolio State + Paper Broker
+
+**État : validation locale complète réussie ; intégration Git en attente.**
+
+- Resynchronisation confirmée : GitHub `main` est au HEAD `73acc4758427ea7575ddf0a43505e1c95fab5e9c` (`feat: add deterministic market state`).
+- Correction documentaire intégrée au patch : le Batch 04 est désormais enregistré comme intégré à ce HEAD.
+- Ajout de validations d'unicité et de non-chevauchement des rôles d'actifs dans `PortfolioState`.
+- Ajout de `ai_spot_trader.portfolio` et du `PaperPortfolioLedger` mémoire.
+- L'état initial du portefeuille est injecté ; aucun capital ou actif de référence global n'est créé.
+- Ajout de `ai_spot_trader.broker` et du `PaperBroker`.
+- Évolution du port `Broker` pour recevoir explicitement le `MarketState` de pricing.
+- Modèle full-fill immédiat, déterministe et sans ordre réseau.
+- Modèle de coûts injecté : taux de frais + impact spread par côté + slippage par côté.
+- BUY débite exactement notional + frais et crédite la position base.
+- SELL débite uniquement une quantité disponible et crédite notional - frais.
+- Rejets explicites et atomiques pour cash insuffisant, position insuffisante/non détenue, quote balance absente, symbole incompatible, prix futur ou configuration invalide.
+- `Fill` enrichi pour rendre prix de référence, coûts et contexte de pricing auditables.
+- Aucun `float`, aucune quantification fournisseur, aucune base de coût/P&L complet, aucune persistance, aucun Risk Engine parallèle.
+- Aucune dépendance runtime, variable d'environnement ou lifecycle FastAPI ajouté.
+- Validation locale Windows finale : `pytest backend` **92/92**, Ruff **All checks passed**, mypy **Success: no issues found in 40 source files**, `git diff --check` sans erreur.
+- Seuls les warnings LF → CRLF habituels et 2 warnings de dépréciation FastAPI/Starlette sont présents, sans échec.
+- Validation complémentaire dans l'environnement ChatGPT : Python `3.13.5`, suite ciblée domaine/clock/Market State/portfolio/broker **64/64**, `compileall` OK, lignes Python du patch `<= 100` OK.
+- Aucun test réseau Kraken exécuté ou requis.
+
 ### 2026-09-20 — Batch 04 Market State
 
-**État : patch préparé et testé offline ; intégration Git en attente.**
+**État : intégré sur `main` au commit `73acc4758427ea7575ddf0a43505e1c95fab5e9c` (`feat: add deterministic market state`).**
 
-- Resynchronisation confirmée : GitHub `main` est au HEAD `e7ac37955f08853024528fa9b9e10b5a75e05e3b` (`feat: add Kraken public market data`).
-- Correction documentaire : le Batch 03 est désormais enregistré comme intégré à ce HEAD.
-- Ajout de `MarketObservation`, `MarketContext`, `MarketWindowStats` et du port `MarketObservationSource`.
-- `MarketState` reste unique et reçoit un contexte optionnel, sans dupliquer le snapshot canonique.
-- Extension minimale de `KrakenMarketDataSource` avec `observation()` ; le parsing Kraken reste exclusivement dans `integrations/kraken`.
-- Ajout de `ai_spot_trader.market` avec un builder mémoire borné, mono-symbole et déterministe.
-- Horizons par défaut : 5 min / 30 min, surchargeables sans variable d'environnement.
-- Statistiques : count, min/max, amplitude, return simple et volatilité réalisée simple, en `Decimal`.
-- Fenêtres partielles/vides explicitement représentées ; aucune donnée inventée ou interpolée.
-- Âge des données et évaluation stale optionnelle ; aucune règle Risk globale.
-- No look-ahead testé : les observations futures déjà injectées sont exclues d'un snapshot historique à `T`.
-- Aucun signal stratégique, agent, Risk Engine, Paper Broker, persistance ou tâche autonome n'est introduit.
-- Aucune dépendance runtime ajoutée.
-- Tests exécutés dans l'environnement ChatGPT : Python `3.13.5`, `pytest` 59/59, `compileall` OK.
-- Ruff et mypy non disponibles dans cet environnement ; validation locale Windows requise.
-- Aucun test réseau Kraken n'est exécuté ni requis par défaut.
+- Ajout de `MarketObservation`, `MarketContext`, `MarketWindowStats` et `MarketObservationSource`.
+- `MarketState` reste unique et reçoit un contexte optionnel.
+- Extension de `KrakenMarketDataSource` avec `observation()` sans fuite de structure Kraken.
+- Ajout de `ai_spot_trader.market` avec builder mémoire borné, mono-symbole et déterministe.
+- Horizons 5 min / 30 min par défaut ; statistiques `Decimal` ; fenêtres partielles/vides explicites.
+- Âge des données et stale technique optionnel ; aucune règle Risk globale.
+- No look-ahead testé ; aucun signal stratégique, Risk Engine, Paper Broker ou persistance.
+- Validation locale Windows finale : Python `3.13.14`, `pytest` 59/59, Ruff All checks passed, mypy OK sur 24 fichiers source, `git diff --check` sans erreur.
+- Uniquement les warnings LF → CRLF habituels et 2 warnings FastAPI/Starlette sans échec ; aucun test réseau requis.
 
 ### 2026-09-20 — Batch 03 Kraken Market Data
 
 **État : intégré sur `main` au commit `e7ac37955f08853024528fa9b9e10b5a75e05e3b` (`feat: add Kraken public market data`).**
 
-- Base intégrée avant Batch 03 : `bff0f8b03740da4a01072af90111a2e5d9f208ef`.
 - Ajout de `ai_spot_trader.integrations.kraken` et d'une implémentation publique de `MarketDataSource`.
-- REST `AssetPairs?assetVersion=1` pour découvrir les paires Spot et normaliser leurs alias.
-- WebSocket Spot v2 `ticker`, parsing `last`/`symbol`/`timestamp`, heartbeat ignoré et fermeture propre.
-- Reconnexion bornée/configurable avec réabonnement.
-- Stale detection technique via `Clock`, sans seuil métier global par défaut.
-- `httpx` et `websockets` comme dépendances runtime directes.
+- REST `AssetPairs?assetVersion=1`, WebSocket Spot v2 `ticker`, normalisation des alias, reconnexion bornée et stale technique optionnel.
 - Aucun endpoint privé, ordre, Risk Engine fonctionnel, Paper Broker, LLM, PostgreSQL ou LIVE.
-- Validation locale Windows finale avant intégration : Python `3.13.14`, `pytest` 40/40, Ruff OK, mypy OK sur 21 fichiers source, `git diff --check` sans erreur.
-- Deux warnings de dépréciation FastAPI/Starlette observés sans échec.
-- Aucun test réseau Kraken requis par défaut.
+- Validation locale Windows finale : Python `3.13.14`, `pytest` 40/40, Ruff OK, mypy OK sur 21 fichiers source, `git diff --check` sans erreur.
 
 ### 2026-09-20 — Batch 02 contrats de domaine et configuration
 
 **État : intégré sur `main` au commit `bff0f8b03740da4a01072af90111a2e5d9f208ef` (`feat: add domain contracts and configuration`).**
 
-- Base intégrée : `d9af0ca293dd9f2712969b246e394c4a8c188b5e`.
 - Ajout des enums, contrats Pydantic stricts, UUID, timestamps UTC aware, horloge injectable et ports externes.
 - PAPER uniquement, Luna par défaut, Sol sélectionnable, agressivité 1–10.
 - Validation locale Windows : Python `3.13.14`, `pytest` 20/20, Ruff OK et mypy OK.

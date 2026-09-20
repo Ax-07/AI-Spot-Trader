@@ -36,14 +36,14 @@ class DomainModel(BaseModel):
 
 
 class AssetBalance(DomainModel):
-    """Available amount for one portfolio asset."""
+    """Available amount for one portfolio settlement asset."""
 
     asset: NonEmptyText
     available: NonNegativeDecimal
 
 
 class AssetPosition(DomainModel):
-    """Held and currently available quantity for one asset."""
+    """Held and currently available quantity for one portfolio position asset."""
 
     asset: NonEmptyText
     quantity: NonNegativeDecimal
@@ -188,13 +188,27 @@ class MarketState(DomainModel):
 
 
 class PortfolioState(DomainModel):
-    """Minimal canonical PAPER portfolio snapshot."""
+    """Canonical PAPER portfolio snapshot with disjoint balance and position roles."""
 
     portfolio_state_id: UUID
     as_of: UtcDateTime
     mode: ExecutionMode = ExecutionMode.PAPER
     balances: tuple[AssetBalance, ...] = ()
     positions: tuple[AssetPosition, ...] = ()
+
+    @model_validator(mode="after")
+    def asset_roles_must_be_unambiguous(self) -> "PortfolioState":
+        balance_assets = tuple(balance.asset for balance in self.balances)
+        position_assets = tuple(position.asset for position in self.positions)
+        if len(set(balance_assets)) != len(balance_assets):
+            raise ValueError("portfolio balances must contain unique assets")
+        if len(set(position_assets)) != len(position_assets):
+            raise ValueError("portfolio positions must contain unique assets")
+        overlap = set(balance_assets) & set(position_assets)
+        if overlap:
+            names = ", ".join(sorted(overlap))
+            raise ValueError(f"portfolio asset roles must be disjoint: {names}")
+        return self
 
 
 class AgentInput(DomainModel):
@@ -250,18 +264,41 @@ class ExecutionIntent(DomainModel):
 
 
 class Fill(DomainModel):
-    """Minimal fact describing a simulated PAPER fill."""
+    """Auditable fact describing one complete simulated PAPER fill."""
 
     fill_id: UUID
     execution_id: UUID
+    market_state_id: UUID
     filled_at: UtcDateTime
+    pricing_as_of: UtcDateTime
     action: TradingAction
     symbol: NonEmptyText
     quantity: PositiveDecimal
+    reference_price: PositiveDecimal
     price: PositiveDecimal
+    notional: PositiveDecimal
+    fee: NonNegativeDecimal
+    spread_cost: NonNegativeDecimal
+    slippage_cost: NonNegativeDecimal
 
     @model_validator(mode="after")
-    def hold_cannot_fill(self) -> "Fill":
+    def validate_paper_fill(self) -> "Fill":
         if self.action is TradingAction.HOLD:
             raise ValueError("HOLD cannot produce a fill")
+        if self.pricing_as_of > self.filled_at:
+            raise ValueError("pricing snapshot cannot be newer than the fill")
+        if self.notional != self.price * self.quantity:
+            raise ValueError("fill notional must equal execution price times quantity")
+
+        if self.action is TradingAction.BUY:
+            adverse_price_delta = self.price - self.reference_price
+        else:
+            adverse_price_delta = self.reference_price - self.price
+        if adverse_price_delta < 0:
+            raise ValueError("PAPER execution costs cannot improve the reference price")
+        expected_execution_cost = adverse_price_delta * self.quantity
+        if self.spread_cost + self.slippage_cost != expected_execution_cost:
+            raise ValueError(
+                "spread_cost plus slippage_cost must explain the execution price delta"
+            )
         return self

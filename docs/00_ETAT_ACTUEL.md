@@ -6,9 +6,9 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub audité, base du Batch 04 : `e7ac37955f08853024528fa9b9e10b5a75e05e3b`
-- Commit : `feat: add Kraken public market data` — 20 septembre 2026
-- Batch 03 intégré sur `main`.
+- HEAD GitHub audité, base du Batch 05 : `73acc4758427ea7575ddf0a43505e1c95fab5e9c`
+- Commit : `feat: add deterministic market state` — 20 septembre 2026
+- Batch 04 intégré sur `main`.
 
 ## État courant intégré
 
@@ -16,62 +16,75 @@
 - Kraken comme exchange initial ; premières versions exclusivement en PAPER.
 - Backend Python + `asyncio` + FastAPI + Pydantic ; frontend Next.js indépendant du moteur.
 - Agent stratégique ; Risk Engine déterministe avec autorité finale.
-- Contrats Pydantic stricts et ports externes intégrés.
-- Adapter public Kraken Spot intégré : découverte `AssetPairs`, normalisation des symboles, ticker WebSocket v2, retry borné, fermeture propre et stale detection technique optionnelle.
-- Aucun secret, aucune API Kraken privée, aucun ordre, aucun LIVE.
+- Adapter public Kraken Spot intégré, sans API privée ni ordre.
+- `MarketObservation`, `MarketStateBuilder`, `MarketContext` et fenêtres 5 min / 30 min intégrés.
+- Market State déterministe en `Decimal`, historique mémoire borné, ordre temporel strict et no look-ahead.
+- Aucun secret, aucun LIVE, aucune persistance, aucun Risk Engine fonctionnel ni agent LLM réel à ce stade.
 
-## Validation finale du Batch 03 avant intégration
+## Validation finale du Batch 04 avant intégration
 
 Validation locale Windows confirmée :
 
 - Python `3.13.14` ;
-- `pytest` : **40 tests passés** ;
-- Ruff : **OK** ;
-- mypy : **OK sur 21 fichiers source** ;
+- `pytest` : **59 tests passés** ;
+- Ruff : **All checks passed** ;
+- mypy : **OK sur 24 fichiers source** ;
 - `git diff --check` : aucune erreur ;
+- uniquement les warnings habituels LF → CRLF sous Windows ;
 - 2 warnings de dépréciation FastAPI/Starlette dans les dépendances de test, sans échec ;
-- aucun test réseau Kraken requis par la suite principale.
+- aucun test réseau requis ;
+- working tree propre après commit/push.
 
-## Patch Batch 04 préparé dans cette livraison
+## Patch Batch 05 préparé dans cette livraison
 
-- Nouveau package fournisseur-agnostique `ai_spot_trader.market`.
-- Nouvelle observation normalisée `MarketObservation` et port `MarketObservationSource` ; l'adapter Kraken expose cette observation sans fuite de structure fournisseur.
-- `MarketState` reste le snapshot canonique unique et reçoit un `MarketContext` optionnel.
-- Deux horizons descriptifs par défaut, 5 min et 30 min, surchargeables au constructeur ; ils ne définissent aucune cadence de trading.
-- Statistiques déterministes : nombre d'observations, min/max, amplitude, return simple et volatilité réalisée simple.
-- Fraîcheur explicite : timestamp de dernière observation, âge, seuil technique optionnel et résultat stale seulement lorsqu'un seuil est évalué.
-- Historique en mémoire borné à 10 000 observations par builder ; insertion strictement temporelle ; doublons/hors ordre rejetés.
-- No look-ahead : un snapshot à `T` ignore explicitement toute observation postérieure à `T`, y compris lors d'un replay.
-- Aucune interpolation, aucun signal `BUY/SELL/HOLD`, aucune stratégie déterministe, aucun Risk Engine, aucune persistance.
+- `PortfolioState` conserve des rôles d'actifs explicites et non chevauchants : `balances` pour les actifs de règlement disponibles, `positions` pour les actifs détenus/vendables.
+- Nouveau package `ai_spot_trader.portfolio` avec ledger PAPER mémoire, déterministe, sans persistance et mutations copy-on-write atomiques.
+- État initial obligatoirement injecté ; aucun capital PAPER ou devise globale n'est imposé.
+- Nouveau package `ai_spot_trader.broker` avec `PaperBroker` derrière le port canonique `Broker`.
+- Le port `Broker` reçoit explicitement le `MarketState` utilisé comme contexte de pricing ; aucun lookup Kraken caché.
+- Fill immédiat et complet ou rejet explicite ; aucun order book simulé, partial fill, ordre limite, pending order ou aléatoire.
+- Modèle de coûts injecté : fee rate, spread en bps comme impact adverse par côté et slippage en bps additionnel.
+- BUY : débit quote = notional exécuté + frais ; crédit exact de la position base.
+- SELL : débit exact de la position disponible ; crédit quote = notional exécuté - frais.
+- Rejets atomiques pour cash insuffisant, position insuffisante/non détenue, quote balance absente, symbole incompatible, pricing futur ou configuration invalide.
+- `Fill` enrichi avec `market_state_id`, timestamp de pricing, prix de référence, prix exécuté, notional, frais, coût spread et coût slippage.
+- Aucun arrondi Kraken, aucune quantification silencieuse, aucun `float`, aucun P&L complet et aucune base de coût introduite.
+- Aucun paramètre Batch 05 ajouté à `Settings` ou `.env.example` : capital, devise et coûts restent injectés explicitement.
 
-## Validation du patch Batch 04 dans l'environnement ChatGPT
+## Validation finale du Batch 05 avant intégration
 
-- Python `3.13.5`.
-- `pytest` : **59 tests passés**.
-- `compileall` : **OK**.
-- Ruff et mypy ne sont pas installés dans l'environnement ChatGPT utilisé pour cette livraison ; validation locale Windows requise.
-- Aucun test réseau Kraken n'a été exécuté ni ajouté à la suite par défaut.
+Validation locale Windows confirmée après application du correctif mypy :
+
+- `pytest backend` : **92 tests passés** ;
+- Ruff : **All checks passed** ;
+- mypy : **Success: no issues found in 40 source files** ;
+- `git diff --check` : aucune erreur ;
+- uniquement les warnings habituels LF → CRLF sous Windows ;
+- 2 warnings de dépréciation FastAPI/Starlette dans les dépendances de test, sans échec ;
+- aucun test réseau requis.
+
+Validation complémentaire dans l'environnement ChatGPT : Python `3.13.5`, suite ciblée **64/64**, `compileall` OK et contrôle des lignes Python du patch `<= 100` OK.
 
 ## Dernier batch intégré
 
-**Batch 03 — Kraken Market Data** : intégré sur `main` au HEAD `e7ac37955f08853024528fa9b9e10b5a75e05e3b`.
+**Batch 04 — Market State** : intégré sur `main` au HEAD `73acc4758427ea7575ddf0a43505e1c95fab5e9c`.
 
 ## Batch en cours
 
-**Batch 04 — Market State** : patch préparé et testé offline ; intégration Git par l'utilisateur encore à effectuer.
+**Batch 05 — Portfolio State + Paper Broker** : validation locale complète réussie ; intégration Git par l'utilisateur encore à effectuer.
 
 ## Prochain batch recommandé
 
-**Batch 05 — Portfolio State + Paper Broker** après intégration et validation locale du Batch 04.
+**Batch 06 — Risk Engine**, uniquement après extraction, validation locale et intégration du Batch 05.
 
 ## Points encore à décider
 
-- Capital PAPER initial et devise de référence.
+- Capital PAPER initial et devise de référence produit.
 - Univers d'actifs/paires Kraken initial.
 - Cadence de la boucle de décision.
-- Éventuelle évolution des horizons 5 min / 30 min selon les besoins mesurés.
 - Seuil métier global de fraîcheur/stale du futur Risk Engine.
 - Représentation du sizing stratégique dans `DecisionCandidate`.
 - Limites chiffrées du Risk Engine et traduction exacte de l’agressivité 1–10.
-- Modèle précis de spread/slippage/fill en PAPER.
+- Barème de frais PAPER de référence pour les expériences ; le moteur accepte déjà un taux injecté.
+- Valeurs de spread/slippage PAPER de référence pour les expériences ; le moteur accepte déjà des bps injectés.
 - Frontière journalière des statistiques et politique de rétention/persistance.
