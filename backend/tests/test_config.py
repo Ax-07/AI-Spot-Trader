@@ -1,7 +1,7 @@
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from ai_spot_trader.core.config import Settings
 from ai_spot_trader.domain.enums import ExecutionMode, LLMModel
@@ -23,11 +23,13 @@ def test_settings_defaults_are_safe_for_local_bootstrap() -> None:
     assert settings.execution_mode is ExecutionMode.PAPER
     assert settings.llm_model is LLMModel.LUNA
     assert settings.aggressiveness is None
+    assert settings.openai_api_key is None
+    assert settings.openai_base_url == "https://api.openai.com/v1"
+    assert settings.openai_timeout_seconds == 30.0
     assert settings.kraken_rest_url == "https://api.kraken.com"
     assert settings.kraken_ws_url == "wss://ws.kraken.com/v2"
     assert settings.kraken_ws_max_reconnect_attempts == 2
     assert settings.kraken_stale_after_seconds is None
-    assert not any("api_key" in name or "secret" in name for name in Settings.model_fields)
 
 
 def test_settings_read_prefixed_environment_variables(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -35,6 +37,7 @@ def test_settings_read_prefixed_environment_variables(monkeypatch: pytest.Monkey
     monkeypatch.setenv("AI_SPOT_TRADER_API_PORT", "8123")
     monkeypatch.setenv("AI_SPOT_TRADER_LLM_MODEL", "gpt-5.6-sol")
     monkeypatch.setenv("AI_SPOT_TRADER_AGGRESSIVENESS", "8")
+    monkeypatch.setenv("AI_SPOT_TRADER_OPENAI_API_KEY", "test-only-secret")
 
     settings = _settings()
 
@@ -42,6 +45,9 @@ def test_settings_read_prefixed_environment_variables(monkeypatch: pytest.Monkey
     assert settings.api_port == 8123
     assert settings.llm_model is LLMModel.SOL
     assert settings.aggressiveness == 8
+    assert isinstance(settings.openai_api_key, SecretStr)
+    assert settings.openai_api_key.get_secret_value() == "test-only-secret"
+    assert "test-only-secret" not in repr(settings)
 
 
 @pytest.mark.parametrize("aggressiveness", [0, 11])

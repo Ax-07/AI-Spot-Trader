@@ -1,8 +1,6 @@
 # 09 — Roadmap de développement
 
-## 1. Principes
-
-La roadmap est organisée en batches cohérents, limités et testables. Chaque batch part du HEAD GitHub `main`, audite l'existant, modifie uniquement le nécessaire, teste réellement ce qui peut l'être, met à jour la documentation et livre un ZIP root-relative lorsqu'il touche plusieurs fichiers.
+Cette roadmap découpe AI Spot Trader en batches cohérents, limités et testables. Un batch n'est considéré comme intégré qu'après validation locale et commit/push confirmés sur `main`.
 
 ---
 
@@ -10,11 +8,11 @@ La roadmap est organisée en batches cohérents, limités et testables. Chaque b
 
 **Statut : intégré sur `main`.**
 
-Établissement de la source de vérité documentaire, invariants et roadmap.
+Vision, architecture cible, responsabilités Agent/Risk/Broker, roadmap et décisions initiales.
 
 ---
 
-## Batch 01 — Bootstrap du projet
+## Batch 01 — Bootstrap backend/frontend
 
 **Statut : intégré sur `main` au commit `d9af0ca293dd9f2712969b246e394c4a8c188b5e`.**
 
@@ -42,7 +40,7 @@ Données publiques Kraken Spot, normalisation des symboles, REST AssetPairs, Web
 
 **Statut : intégré sur `main` au commit `73acc4758427ea7575ddf0a43505e1c95fab5e9c`.**
 
-`MarketObservation`, `MarketStateBuilder`, historique borné, horizons 5/30 min, statistiques `Decimal`, fraîcheur descriptive et no-look-ahead.
+`MarketObservation`, `MarketStateBuilder`, historique borné, horizons multi-fenêtres, statistiques `Decimal`, fraîcheur descriptive et no-look-ahead.
 
 Validation locale Windows finale : **59 tests**, Ruff OK, mypy OK sur 24 fichiers source, `git diff --check` sans erreur.
 
@@ -64,76 +62,104 @@ Intégré :
 - aucun lookup Kraken caché ;
 - aucun capital ou coût produit imposé globalement.
 
-Validation locale Windows finale confirmée avant intégration :
-
-- `pytest backend` : **92 tests passés** ;
-- Ruff : **All checks passed** ;
-- mypy : **Success: no issues found in 40 source files** ;
-- `git diff --check` : aucune erreur ;
-- warnings LF → CRLF habituels uniquement ;
-- 2 warnings FastAPI/Starlette sans échec ;
-- aucun test réseau requis.
+Validation locale Windows finale confirmée avant intégration : **92 tests**, Ruff OK, mypy OK sur 40 fichiers source, `git diff --check` sans erreur.
 
 ---
 
 ## Batch 06 — Risk Engine
 
-**Statut : patch livré, validation locale utilisateur et intégration Git à effectuer.**
+**Statut : intégré sur `main` au commit `d3271d6404ea2af38a42ff09e5a1df1eed5e141e` (`feat: add deterministic risk engine`).**
 
-Objectif : premier Risk Engine déterministe canonique, indépendant de l'agent et du broker.
+Intégré :
 
-Implémentation du patch :
-
-- `DecisionCandidate.proposed_quantity` : sizing stratégique obligatoire pour BUY/SELL, absent pour HOLD ;
-- `RiskAssessment` enrichi de la quantité demandée/autorisée, des limites réellement évaluées et de raisons structurées ;
-- enum `RiskReason` stable et testable ;
-- package `ai_spot_trader.risk` ;
+- `DecisionCandidate.proposed_quantity` obligatoire pour BUY/SELL, absente pour HOLD ;
+- `RiskAssessment` avec quantité demandée/autorisée, limites évaluées et raisons structurées ;
+- package canonique `ai_spot_trader.risk` ;
 - `RiskPolicy` explicitement injectée ;
 - sorties `ALLOW`, `MODIFY`, `REJECT` ;
 - `MODIFY` limité à une réduction de quantité ;
 - HOLD audité sans `ExecutionIntent` ;
 - symboles canoniques partagés via `domain.symbols` ;
-- whitelist optionnelle ;
-- seuil stale métier optionnel ;
-- max order notional optionnel ;
-- BUY contrôlé avec coût PAPER complet prévisible ;
-- SELL borné par la position réellement disponible ;
-- rejet de snapshots futurs ;
-- aucune mutation de portefeuille/marché ;
-- aucune dépendance Kraken/FastAPI/LLM dans Risk ;
-- estimateur de pricing PAPER pur partagé entre Risk et Paper Broker ;
-- aucune variable d'environnement Risk ajoutée ;
+- whitelist, stale métier et max order notional optionnels ;
+- BUY contrôlé avec coût PAPER prévisible complet ;
+- SELL borné par la position disponible ;
+- snapshots futurs rejetés ;
 - aucune stratégie algorithmique introduite.
 
-Volontairement non implémenté : drawdown/daily loss sans historique P&L, VaR/corrélations, exposition avancée, cooldown, précision Kraken, mapping agressivité 1–10.
+Validation locale Windows finale confirmée avant intégration :
 
-Validation ChatGPT réellement exécutée sur le patch : suite ciblée domaine + Risk + régressions Paper Broker **77/77**, `compileall` et contrôle de longueur de lignes. Ruff/mypy et la suite backend complète restent à valider localement.
+- `pytest backend` : **131 tests passés** ;
+- Ruff : **All checks passed** ;
+- mypy : **Success: no issues found in 47 source files** ;
+- `git diff --check` : aucune erreur ;
+- warnings LF → CRLF habituels uniquement ;
+- 2 warnings FastAPI/Starlette sans échec.
 
 ---
 
 ## Batch 07 — Agent Luna
 
-Objectif : implémenter le provider Luna derrière `LLMProvider`, prompt/contrat versionné, parsing structuré et aucune exécution directe.
+**Statut : patch préparé et validation locale finale réussie, non encore intégré.**
 
-Point d'intégration désormais fixé : toute décision BUY/SELL doit fournir `proposed_quantity`; HOLD ne porte aucune quantité.
+Objectif : implémenter le premier provider LLM canonique derrière `LLMProvider` sans créer de chemin d'exécution direct.
 
-Tests attendus : provider mocké, sortie invalide, action inconnue, quantité invalide/absente, BUY/SELL/HOLD et preuve qu'une sortie invalide n'atteint jamais Risk/Broker.
+Patch préparé :
+
+- package `ai_spot_trader.agent` ;
+- `OpenAIDecisionProvider` commun Luna/Sol ;
+- OpenAI Responses API avec Structured Outputs stricts ;
+- prompt versionné `agent-luna-v1` ;
+- sortie stratégique limitée à action/symbole/quantité/rationale ;
+- UUID/timestamp/cycle contrôlés par l'application ;
+- symbole strictement limité au `MarketState` fourni ;
+- parsing `Decimal` sans réparation/coercition silencieuse ;
+- erreurs transport / fournisseur / validation / contrat séparées ;
+- clé OpenAI via `SecretStr` et environnement ;
+- aucun retry automatique ;
+- aucun import Risk/Broker/Kraken/FastAPI dans l'agent ;
+- aucun nouvel appel marché ;
+- aucune nouvelle dépendance runtime : réutilisation de `httpx`.
+
+Validation ChatGPT réellement exécutée sur le patch :
+
+- suite ciblée Agent/OpenAI/configuration : **42 tests passés** ;
+- aucun réseau réel ;
+- `compileall` : OK ;
+- aucune ligne Python > 100 caractères ;
+- aucun espace de fin de ligne détecté.
+
+Validation locale Windows finale confirmée :
+
+- `pytest backend` : **168 tests passés** ;
+- Ruff : **All checks passed** ;
+- mypy : **Success: no issues found in 54 source files** ;
+- `git diff --check` : aucune erreur ;
+- warnings LF → CRLF habituels uniquement ;
+- 2 warnings FastAPI/Starlette sans échec.
 
 ---
 
 ## Batch 08 — Boucle autonome
 
-Objectif : orchestrer Market State + Portfolio State + Agent + Risk + Paper Broker, corréler les IDs, cadence, start/stop propre, timeouts et comportement sûr en erreur.
+**Prochaine étape prévue après intégration du Batch 07.**
 
-Le Risk Engine doit être invoqué avant toute exécution tradable ; `REJECT` ne déclenche rien et `HOLD` reste journalisé.
+Objectif : orchestrer `MarketState + PortfolioState + Agent + Risk + Paper Broker`, corréler les IDs, définir cadence/start/stop, timeouts et comportement sûr en erreur.
+
+Le pipeline devra être explicite :
+
+```text
+Agent -> DecisionCandidate -> Risk -> ExecutionIntent éventuel -> Paper Broker
+```
+
+`REJECT` ne déclenche rien ; `HOLD` reste journalisé ; aucune sortie LLM ne contourne Risk.
 
 ---
 
 ## Batch 09 — Persistance et journal d'audit
 
-Objectif : PostgreSQL, schéma/migrations, cycles, décisions, RiskAssessment, intents, fills, métriques et reprise cohérente.
+Objectif : PostgreSQL, schéma/migrations, cycles, décisions, `RiskAssessment`, intents, fills, métriques et reprise cohérente.
 
-À décider : ORM, migrations, granularité de snapshots et rétention.
+À décider : ORM, migrations, granularité des snapshots et rétention.
 
 ---
 
@@ -153,7 +179,7 @@ Objectif : dashboard marché/portefeuille/décisions/trades PAPER/performance/é
 
 Objectif : P&L brut/net, drawdown, frais, spread/slippage, exposition, nombre de trades, quotidien/cumulé et replay.
 
-Ce batch fournira les données qui permettront d'introduire honnêtement des limites Risk de drawdown/daily loss si elles sont décidées.
+Ce batch fournira les données nécessaires à d'éventuelles limites Risk de drawdown/daily loss.
 
 ---
 
@@ -165,7 +191,7 @@ Objectif : figer un mapping versionné et comparer plusieurs niveaux sur un prot
 
 ## Batch 14 — Comparaison Luna / Sol
 
-Objectif : protocole comparable entre Luna et Sol, mêmes snapshots, RiskPolicy, coûts PAPER et configuration expérimentale.
+Objectif : protocole comparable entre Luna et Sol, mêmes snapshots, RiskPolicy, coûts PAPER, versions de prompt et configuration expérimentale.
 
 ---
 
@@ -224,7 +250,7 @@ Audit de readiness, adaptateur privé Kraken, réconciliation, permissions minim
 - éventuelles limites d'exposition ;
 - drawdown/daily loss une fois les données disponibles ;
 - mapping agressivité ;
-- valeurs de référence fee/spread/slippage PAPER ;
+- valeurs expérimentales fee/spread/slippage ;
 - ORM/migrations/rétention ;
 - frontière de journée ;
 - auth/déploiement ;

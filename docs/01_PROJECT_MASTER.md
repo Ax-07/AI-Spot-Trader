@@ -88,6 +88,8 @@ PortfolioState --+--> Agent IA --> DecisionCandidate
 
 Principe absolu : **l'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
+Le package Agent ne possède aucun chemin direct vers Risk, Broker, Kraken, FastAPI ou une base de données. Le Batch 08 sera responsable de l'orchestration explicite de ces frontières.
+
 ---
 
 ## 5. Contrats de domaine canoniques
@@ -105,7 +107,7 @@ Les frontières critiques utilisent des modèles Pydantic stricts avec champs su
 
 ### Agent, Risk et exécution
 
-`DecisionCandidate` contient désormais :
+`DecisionCandidate` contient :
 
 ```text
 decision_id
@@ -117,7 +119,7 @@ proposed_quantity?   # obligatoire pour BUY/SELL, interdite pour HOLD
 rationale?
 ```
 
-Le sizing initial est donc **stratégique** : le Risk Engine ne choisit pas arbitrairement une taille de départ.
+Le sizing initial est **stratégique** : le Risk Engine ne choisit pas arbitrairement une taille de départ.
 
 `RiskAssessment` contient :
 
@@ -133,7 +135,7 @@ evaluated_limits[]
 reasons[]
 ```
 
-Les raisons sont des codes déterministes (`RiskReason`) et `evaluated_limits` utilise des identifiants `RiskLimit` stables pour tracer les contrôles réellement atteints, même sur ALLOW. `MODIFY` doit strictement réduire la quantité demandée. `REJECT` n'autorise aucune quantité.
+Les raisons sont des codes déterministes (`RiskReason`) et `evaluated_limits` utilise des identifiants `RiskLimit` stables. `MODIFY` doit strictement réduire la quantité demandée. `REJECT` n'autorise aucune quantité.
 
 `ExecutionIntent` reste uniquement PAPER, BUY/SELL, et n'existe que si le Risk Engine autorise une quantité strictement positive. `HOLD` ne produit jamais d'intention d'exécution.
 
@@ -145,9 +147,9 @@ Les raisons sont des codes déterministes (`RiskReason`) et `evaluated_limits` u
 
 ### Confirmé au Batch 04
 
-`MarketStateBuilder` est mono-symbole, déterministe et mémoire. Il garde un historique borné à 10 000 observations par défaut, impose un ordre temporel strict et construit les horizons 5 min / 30 min par défaut.
+`MarketStateBuilder` est mono-symbole, déterministe et mémoire. Il garde un historique borné, impose un ordre temporel strict et construit les horizons descriptifs configurés.
 
-Les statistiques restent descriptives et en `Decimal` : count, min, max, amplitude, return simple et volatilité réalisée simple lorsqu'elles sont calculables. Elles ne produisent aucun signal stratégique.
+Les statistiques restent descriptives et en `Decimal`. Elles ne produisent aucun signal stratégique.
 
 Pour un snapshot à `T`, seules les observations `observed_at <= T` sont utilisées. Le seuil technique de stale du Market State reste distinct de la politique métier Risk.
 
@@ -171,23 +173,15 @@ Il ne consulte jamais Kraken, fait un fill complet immédiat ou un rejet explici
 
 ### Pricing PAPER partagé
 
-Le calcul des coûts est factorisé dans une fonction pure partagée par le Risk Engine et le Paper Broker. `PaperExecutionCostModel` reste injecté :
-
-- `fee_rate` décimal ;
-- `spread_bps` = impact adverse par côté ;
-- `slippage_bps` = impact adverse additionnel.
-
-Cette factorisation évite qu'un BUY soit autorisé par Risk puis rejeté par le broker uniquement à cause de frais/spread/slippage déjà prévisibles.
+Le calcul des coûts est factorisé dans une fonction pure partagée par le Risk Engine et le Paper Broker. `PaperExecutionCostModel` reste injecté : `fee_rate`, `spread_bps`, `slippage_bps`.
 
 ---
 
-## 8. Risk Engine — état Batch 06
+## 8. Risk Engine — intégré au Batch 06
 
 ### Autorité et pureté
 
-Le package canonique est `ai_spot_trader.risk`. Le moteur est synchrone, déterministe, sans FastAPI, Kraken, LLM, Broker ou I/O réseau. Il ne mute ni `MarketState` ni `PortfolioState` et n'exécute jamais lui-même un ordre.
-
-Une même entrée + même `RiskPolicy` + mêmes coûts PAPER + même horloge/factories produit le même résultat métier.
+Le package canonique est `ai_spot_trader.risk`. Le moteur est synchrone, déterministe, sans FastAPI, Kraken, LLM ou I/O réseau. Il ne mute ni `MarketState` ni `PortfolioState` et n'exécute jamais lui-même un ordre.
 
 ### RiskPolicy injectée
 
@@ -198,11 +192,7 @@ Aucune limite produit arbitraire n'est ajoutée à `Settings` ou `.env`. La poli
 - `stale_after` métier optionnel ;
 - `allow_quantity_reduction` explicite.
 
-Absence de whitelist = aucune contrainte de paire par cette policy. Absence de `stale_after` = aucun seuil stale inventé. Une policy invalide est rejetée à la construction.
-
 ### Contrôles effectivement supportés
-
-Le Batch 06 vérifie honnêtement avec les données disponibles :
 
 - symbole canonique `BASE/QUOTE` et cohérence avec `MarketState` ;
 - chronologie sans look-ahead ;
@@ -219,61 +209,116 @@ Le Batch 06 vérifie honnêtement avec les données disponibles :
 
 ### HOLD
 
-`HOLD` traverse la frontière Risk afin de produire un `RiskAssessment` auditable `ALLOW` avec raison structurée `HOLD_NO_EXECUTION`, mais aucun `ExecutionIntent`.
+`HOLD` traverse la frontière Risk afin de produire un `RiskAssessment` auditable `ALLOW` avec raison `HOLD_NO_EXECUTION`, mais aucun `ExecutionIntent`.
 
 ### Limites volontairement non implémentées
 
-Faute de données suffisantes ou parce qu'elles appartiennent à d'autres batches : drawdown, daily loss, VaR, corrélations, allocation optimale, exposition portefeuille avancée, cooldown/turnover, précision/minimum Kraken, mapping agressivité 1–10.
+Drawdown, daily loss, VaR, corrélations, allocation optimale, exposition portefeuille avancée, cooldown/turnover, précision/minimum Kraken et mapping agressivité 1–10 restent différés tant que les données ou décisions produit nécessaires n'existent pas.
 
 ---
 
-## 9. Chronologie et no look-ahead
+## 9. Agent IA — Batch 07 préparé
 
-Pour une décision tradable :
+Le port canonique reste inchangé :
 
 ```text
-MarketState.as_of   <= DecisionCandidate.created_at
-PortfolioState.as_of <= DecisionCandidate.created_at
-DecisionCandidate.created_at <= RiskAssessment.assessed_at
-RiskAssessment.assessed_at = ExecutionIntent.created_at
-MarketState.as_of <= ExecutionIntent.created_at <= Fill.filled_at
+LLMProvider.generate_decision(AgentInput) -> DecisionCandidate
 ```
 
-Un `MarketState` ou un `PortfolioState` futur par rapport à la décision est rejeté par Risk. Le Paper Broker conserve indépendamment sa vérification du contexte de pricing.
+### Frontière stratégique
+
+Le modèle fournisseur ne produit que :
+
+```text
+action
+symbol
+proposed_quantity
+rationale
+```
+
+`decision_id`, `cycle_id` et `created_at` ne sont pas laissés au LLM :
+
+- `decision_id` vient d'une factory UUID injectable ;
+- `cycle_id` est recopié depuis `AgentInput` ;
+- `created_at` vient d'un `Clock` injectable.
+
+Cette enveloppe rend les tests et replays déterministes sans transformer le LLM lui-même en composant déterministe.
+
+### Symbole autorisé
+
+L'Agent Luna est limité au symbole porté par `agent_input.market_state.symbol`. Une sortie structurée proposant un autre symbole est rejetée avant construction d'un `DecisionCandidate` utilisable.
+
+Cette contrainte empêche l'IA de trader un actif dont aucun `MarketState` ne lui a été fourni. Le Risk Engine conserve indépendamment son propre contrôle de cohérence symbole/snapshot.
+
+### Structured Outputs
+
+L'adapter OpenAI utilise la Responses API et un JSON Schema strict. Les quatre clés sont requises ; les champs optionnels au sens métier sont représentés par `null` lorsque nécessaire. Les champs supplémentaires sont interdits.
+
+La réponse est ensuite parsée et revalidée côté application sans coercition stratégique silencieuse. Sont rejetés notamment : JSON invalide, action inconnue, champ manquant/inattendu, quantité string, quantité nulle/négative, BUY/SELL sans quantité et HOLD avec quantité.
+
+### Prompt
+
+Le prompt système `agent-luna-v1` est versionné dans le code. Il rappelle : SPOT/PAPER uniquement, BUY/SELL/HOLD, aucun short/levier/margin/future/perpetual, SELL couvert, sizing obligatoire pour BUY/SELL, agressivité 1–10 non mappée définitivement, objectif +4 % non obligatoire, aucune garantie, aucune donnée inventée et décision limitée au seul `AgentInput` fourni.
+
+### Modèles et configuration
+
+Les identifiants API vérifiés pour ce batch sont :
+
+- Luna : `gpt-5.6-luna` ;
+- Sol : `gpt-5.6-sol`.
+
+`OpenAIDecisionProvider` est commun aux deux modèles. Le choix reste porté par `Settings.llm_model`.
+
+### Secrets et transport
+
+`Settings.openai_api_key` est un `SecretStr | None` chargé via l'environnement. Aucune clé n'est codée en dur, injectée dans le prompt ou incluse dans une exception.
+
+L'adapter REST réutilise `httpx`, déjà dépendance runtime du projet ; aucun SDK supplémentaire n'est ajouté. Les tests utilisent un client HTTP injecté et `MockTransport`.
+
+Aucun retry automatique n'est implémenté au Batch 07. Les catégories d'erreur sont explicites : transport, enveloppe fournisseur inutilisable, sortie structurée invalide, invariant Agent violé.
 
 ---
 
-## 10. Agent IA
+## 10. Chronologie et no look-ahead
 
-`LLMProvider.generate_decision(AgentInput) -> DecisionCandidate` reste le port canonique. Le provider Luna réel, prompt, parsing fournisseur et retries appartiennent au Batch 07.
+Avant d'appeler le fournisseur LLM :
 
-Le contrat Batch 06 impose désormais au futur agent de fournir une `proposed_quantity` pour BUY/SELL. L'agent conserve donc le sourcing du sizing stratégique ; Risk ne peut que le borner pour la sécurité.
+```text
+MarketState.as_of    <= AgentInput.created_at
+PortfolioState.as_of <= AgentInput.created_at
+```
 
-L'agressivité 1–10 reste validée dans `Settings` et `AgentInput`, mais son mapping chiffré n'est pas figé. Aucune agressivité ne peut contourner une limite absolue.
+La décision créée respecte ensuite :
+
+```text
+AgentInput.created_at <= DecisionCandidate.created_at
+```
+
+Le provider ne fait aucun nouveau lookup Kraken, refresh de prix ou enrichissement réseau. Le Risk Engine conserve en plus ses propres contrôles temporels avant toute intention d'exécution.
 
 ---
 
 ## 11. Orchestration, persistance et analytics
 
-La boucle autonome reste au Batch 08 ; le Risk Engine peut être invoqué indépendamment.
+La boucle autonome reste au Batch 08. Le Batch 07 ne relie pas automatiquement Agent, Risk et Broker.
 
-PostgreSQL reste la cible future. Le Batch 06 n'ajoute aucune persistance.
+PostgreSQL reste la cible future. Le Batch 07 n'ajoute aucune persistance.
 
-P&L brut/net, drawdown, frais, slippage, exposition, nombre de trades et performance quotidienne/cumulée restent des objectifs Analytics. Le Batch 06 ne fabrique pas de métrique à partir de données inexistantes.
+P&L brut/net, drawdown, frais, slippage, exposition, nombre de trades et performance quotidienne/cumulée restent des objectifs Analytics ultérieurs.
 
 ---
 
 ## 12. Sécurité et séparation PAPER / LIVE
 
-`ExecutionMode` ne contient que `PAPER`. Le LIVE reste non représentable et nécessitera une décision dédiée. Aucun secret n'est ajouté ; aucune clé Kraken privée n'est requise.
+`ExecutionMode` ne contient que `PAPER`. Le LIVE reste non représentable et nécessitera une décision dédiée. Aucune clé Kraken privée n'est requise.
 
-Le Risk Engine et le Paper Broker dupliquent volontairement certains invariants SPOT : Risk anticipe et explique la décision ; le broker protège l'intégrité finale de l'exécution.
+Le provider OpenAI ne dispose d'aucun outil d'exécution et ne connaît ni Broker ni Kraken. Une `rationale` reste du texte d'audit et ne peut jamais être interprétée comme commande.
 
 ---
 
 ## 13. Stratégie de tests
 
-Les tests de Risk doivent rester offline et déterministes. Cas critiques : ALLOW BUY/SELL, REJECT explicite, MODIFY avec réduction, cash insuffisant, SELL non détenu/supérieur au disponible, max notional et frontière exacte, whitelist, stale absent/configuré, snapshots futurs, HOLD sans intent, LIVE impossible, corrélations d'UUID, immutabilité des snapshots, exactitude `Decimal`, déterminisme et absence de dépendance Kraken/LLM/FastAPI.
+Les tests du Batch 07 restent offline et déterministes. Cas critiques : BUY/SELL/HOLD valides, structure invalide, action inconnue, quantité absente/non positive, HOLD avec quantité, champs inattendus, absence de coercition sûre, symbole divergent, IDs/timestamps injectables, prompt versionné, Luna/Sol via le même provider, erreurs HTTP/refus/incomplétude et absence d'import Risk/Broker/Kraken/FastAPI dans `agent`.
 
 Aucun test réussi ne doit être déclaré s'il n'a pas réellement été exécuté.
 
@@ -285,10 +330,9 @@ Aucun test réussi ne doit être déclaré s'il n'a pas réellement été exécu
 - univers initial de paires ;
 - cadence de décision ;
 - valeurs produit des limites Risk ;
-- éventuel seuil stale global d'expérience ;
 - mapping agressivité 1–10 ;
 - valeurs de référence fee/spread/slippage ;
-- exposition simple ou avancée à introduire plus tard ;
+- exposition portefeuille à introduire plus tard ;
 - frontière de journée et données P&L nécessaires au drawdown/daily loss ;
 - ORM, migrations, rétention et reprise après panne ;
 - conditions futures d'un éventuel LIVE.

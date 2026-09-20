@@ -20,31 +20,37 @@ Ce document décrit l'architecture technique courante d'AI Spot Trader. Il compl
 | FastAPI API              |
 +------------+-------------+
              |
-+------------v---------------------------------------+
-| Backend trading                                   |
-|                                                    |
-| Kraken -> observations -> MarketState              |
-| PortfolioState ---------> Agent -> DecisionCandidate|
-|                                   |                |
-|                                   v                |
-|                              Risk Engine            |
-|                                   |                |
-|                         RiskAssessment/Intent       |
-|                                   |                |
-| MarketState -----------------> Paper Broker         |
-|                                   |                |
-|                          Fill + portfolio ledger    |
-+----------------------------------------------------+
++------------v------------------------------------------+
+| Backend trading                                      |
+|                                                       |
+| Kraken -> observations -> MarketState                 |
+| PortfolioState ---------> Agent -> DecisionCandidate  |
+|                                   |                   |
+|                                   v                   |
+|                              Risk Engine               |
+|                                   |                   |
+|                         RiskAssessment/Intent          |
+|                                   |                   |
+| MarketState -----------------> Paper Broker            |
+|                                   |                   |
+|                          Fill + portfolio ledger       |
++-------------------------------------------------------+
 ```
 
 Le backend est un service autonome ; le frontend n'est jamais l'ordonnanceur du moteur.
 
 ---
 
-## 3. Découpage backend après Batch 06
+## 3. Découpage backend après application du Batch 07
 
 ```text
 backend/src/ai_spot_trader/
+  agent/
+    __init__.py
+    errors.py
+    openai_client.py
+    prompt.py
+    provider.py
   api/
   broker/
     errors.py
@@ -76,13 +82,14 @@ backend/src/ai_spot_trader/
 
 Responsabilités :
 
-- `domain` : contrats canoniques fournisseur-agnostiques et parsing du symbole canonique ;
-- `integrations/kraken` : structures et I/O spécifiques Kraken uniquement ;
+- `domain` : contrats canoniques fournisseur-agnostiques ;
+- `integrations/kraken` : I/O et structures spécifiques Kraken uniquement ;
 - `market` : historique et snapshots déterministes ;
 - `portfolio` : état mutable PAPER mémoire ;
-- `broker/pricing.py` : estimation PAPER pure et modèle de coûts partagé ;
+- `broker/pricing.py` : estimation PAPER pure partagée ;
 - `broker/paper.py` : exécution PAPER et mutation du ledger ;
-- `risk` : évaluation déterministe sans effets de bord.
+- `risk` : évaluation déterministe sans effets de bord ;
+- `agent` : transformation d'un `AgentInput` en `DecisionCandidate`, sans exécution.
 
 ---
 
@@ -96,8 +103,6 @@ BUY/SELL exigent une `proposed_quantity > 0`. HOLD interdit toute quantité. Cet
 
 ### RiskAssessment
 
-Le contrat expose statut, quantité demandée, quantité autorisée, limites réellement évaluées (`RiskLimit`) et raisons structurées. Invariants :
-
 - `ALLOW` conserve la quantité demandée ;
 - `MODIFY` réduit strictement la quantité ;
 - `REJECT` n'autorise aucune quantité et possède au moins une raison ;
@@ -109,199 +114,203 @@ PAPER uniquement, BUY/SELL uniquement, quantité positive et corrélation au `Ri
 
 ---
 
-## 5. Symboles canoniques
+## 5. Frontière Agent / fournisseur LLM
 
-`domain.symbols.parse_canonical_symbol()` est désormais la primitive générique `BASE/QUOTE` partagée par Risk et Paper Broker. Elle ne connaît aucun alias Kraken.
+Le port `LLMProvider` reste inchangé :
 
-Les alias et métadonnées fournisseur restent confinés à `integrations/kraken/symbols.py`.
-
----
-
-## 6. Market State
-
-`MarketStateBuilder` reste synchrone, mono-symbole, mémoire, historique borné et no-look-ahead. Il ne contient aucune stratégie.
-
-Le `MarketContext` expose la dernière observation et son âge. Le stale technique éventuellement calculé au niveau Market State n'est pas automatiquement une décision Risk.
-
----
-
-## 7. Portfolio ledger PAPER
-
-`PaperPortfolioLedger` reçoit un `PortfolioState` initial injecté. `balances` et `positions` restent les deux rôles canoniques disjoints.
-
-Les mutations sont copy-on-write ; un rejet ne laisse aucune modification partielle. Le ledger ne dépend ni de Kraken, ni FastAPI, ni Risk.
-
----
-
-## 8. Pricing PAPER partagé
-
-`broker/pricing.py` contient :
-
-```text
-PaperExecutionCostModel
-PaperExecutionEstimate
-estimate_paper_execution(...)
+```python
+async def generate_decision(self, agent_input: AgentInput) -> DecisionCandidate: ...
 ```
 
-La fonction d'estimation est pure et utilisée par :
+`OpenAIDecisionProvider` implémente structurellement ce port. Il dépend seulement de :
 
-- le Risk Engine pour anticiper le débit quote complet d'un BUY ;
-- le Paper Broker pour construire le fill réel.
-
-Cela crée une seule mathématique canonique des coûts PAPER et évite deux modèles divergents.
-
-Formules :
-
-```text
-spread_rate   = spread_bps / 10000
-slippage_rate = slippage_bps / 10000
-BUY price     = reference * (1 + spread_rate + slippage_rate)
-SELL price    = reference * (1 - spread_rate - slippage_rate)
-notional      = price * quantity
-fee           = notional * fee_rate
-```
-
-BUY débite `notional + fee`; SELL crédite `notional - fee`.
-
----
-
-## 9. Risk Engine
-
-### 9.1 Construction
-
-`RiskEngine` reçoit explicitement :
-
-- `RiskPolicy` ;
-- `PaperExecutionCostModel` ;
+- `StructuredDecisionClient` ;
+- `LLMModel` ;
 - `Clock` ;
-- factories UUID pour assessment et execution.
+- une factory UUID de décision ;
+- contrats domaine/symboles.
 
-Aucune dépendance à `Settings`, FastAPI, Kraken, LLM ou `PaperBroker`.
+Il ne dépend pas de Risk, Broker, Kraken, FastAPI, PostgreSQL ou d'un scheduler.
 
-### 9.2 RiskPolicy
+### Métadonnées contrôlées par l'application
 
-```text
-RiskPolicy
-- max_order_notional: Decimal | None
-- allowed_pairs: frozenset[str] | None
-- stale_after: timedelta | None
-- allow_quantity_reduction: bool
-```
-
-Les valeurs sont injectées par l'appelant. `None` signifie que la limite correspondante n'est pas appliquée. Une whitelist vide est refusée pour éviter une sémantique ambiguë.
-
-### 9.3 Pipeline d'évaluation
-
-Pour BUY/SELL :
-
-1. horloge Risk non antérieure à la décision ;
-2. symbole canonique ;
-3. symbole `DecisionCandidate == MarketState` ;
-4. whitelist optionnelle ;
-5. snapshots marché et portefeuille non futurs par rapport à la décision ;
-6. stale métier optionnel ;
-7. max notional optionnel ;
-8. contrôle spécifique BUY ou SELL ;
-9. construction du `RiskAssessment` ;
-10. construction de l'`ExecutionIntent` uniquement si ALLOW/MODIFY.
-
-Une violation métier normale retourne `REJECT`; les exceptions sont réservées aux états techniques invalides, par exemple une horloge d'évaluation impossible.
-
-### 9.4 BUY
-
-- l'actif base ne doit pas être un `balance` ;
-- le quote balance doit exister ;
-- le débit prévisible complet inclut prix adverse PAPER + frais ;
-- si le cash manque, REJECT ou réduction si la policy l'autorise ;
-- la quantité n'est jamais augmentée.
-
-### 9.5 SELL
-
-- le quote balance doit exister ;
-- le base ne doit pas être un `balance` ;
-- une position base doit exister ;
-- la quantité ne peut pas dépasser `available` ;
-- dépassement = REJECT ou réduction si explicitement autorisée ;
-- quantité disponible nulle = REJECT.
-
-### 9.6 HOLD
-
-HOLD retourne un `RiskAssessment` auditable mais aucun `ExecutionIntent`.
-
----
-
-## 10. Paper Broker
-
-Le broker reste la dernière frontière d'intégrité. Il revalide PAPER, BUY/SELL, symbole, temporalité de pricing et les capacités du ledger.
-
-Cette duplication est volontaire :
+Le fournisseur LLM n'émet pas `decision_id`, `cycle_id` ni `created_at`.
 
 ```text
-Risk Engine  -> décision de sécurité explicable
-Paper Broker -> intégrité finale de l'exécution
+LLM output              application envelope
+----------              --------------------
+action       ----+
+symbol       ----+----> DecisionCandidate
+quantity     ----+      decision_id <- UUID factory
+rationale    ----+      cycle_id    <- AgentInput
+                       created_at   <- Clock
 ```
 
-Le broker ne récupère jamais de prix réseau caché.
+Cette frontière évite de faire confiance au LLM pour la corrélation technique ou la chronologie.
 
 ---
 
-## 11. Chronologie
+## 6. Contrat structuré fournisseur
 
-Relations canoniques du Batch 06 :
+Le JSON Schema envoyé à OpenAI impose :
 
 ```text
-MarketState.as_of <= DecisionCandidate.created_at
-PortfolioState.as_of <= DecisionCandidate.created_at
-DecisionCandidate.created_at <= RiskAssessment.assessed_at
-RiskAssessment.assessed_at = ExecutionIntent.created_at
-MarketState.as_of <= ExecutionIntent.created_at <= Fill.filled_at
+object
+  action: BUY | SELL | HOLD
+  symbol: string non vide
+  proposed_quantity: number | null
+  rationale: string | null
+required: les 4 champs
+additionalProperties: false
 ```
 
-Le Risk Engine utilise l'âge marché calculé à `assessed_at` lorsqu'un seuil métier `stale_after` est injecté. La frontière est stricte : âge égal au seuil = encore autorisable ; âge supérieur = stale.
+Toutes les clés sont requises pour respecter le mode Structured Outputs strict ; `null` représente l'absence métier de quantité/rationale.
+
+La sortie texte structurée est reparsée par l'application avec conservation exacte des nombres via `Decimal`, puis validée par un modèle Pydantic interne strict. Ce modèle n'est pas un second contrat métier : le seul objet exposé au reste du moteur reste `DecisionCandidate`.
+
+Aucune réparation silencieuse n'est admise. Une quantité JSON fournie comme chaîne, un champ inconnu ou une incohérence BUY/SELL/HOLD provoque une erreur explicite.
 
 ---
 
-## 12. Orchestration asynchrone
+## 7. Adapter OpenAI Responses API
 
-Les composants déterministes (`MarketStateBuilder`, ledger, Risk Engine, estimateur PAPER) sont synchrones. Les I/O externes restent asynchrones. `PaperBroker.execute()` reste asynchrone et sérialisé avec `asyncio.Lock`.
+`OpenAIResponsesClient` est un adapter HTTP minimal autour de :
 
-Le Batch 06 ne crée aucune boucle, tâche de fond ou scheduler. L'orchestration complète reste au Batch 08.
+```text
+POST /v1/responses
+model = gpt-5.6-luna | gpt-5.6-sol
+text.format.type = json_schema
+text.format.strict = true
+store = false
+```
+
+Le client recherche exactement un `output_text` non vide dans une réponse `status=completed`.
+
+Sont rejetés comme erreurs fournisseur :
+
+- statut incomplet ;
+- absence de liste `output` ;
+- refus fournisseur ;
+- zéro ou plusieurs fragments `output_text` ;
+- réponse HTTP non JSON ou enveloppe non objet.
+
+Les erreurs réseau/HTTP sont distinguées des erreurs d'enveloppe. Leur message n'inclut jamais le body distant ni la clé API.
+
+Aucun retry n'est implémenté au Batch 07. Une policy de retry pourra être ajoutée ultérieurement uniquement si un besoin réel est démontré.
 
 ---
 
-## 13. Configuration
+## 8. Prompt versionné
 
-`Settings` et `.env.example` ne reçoivent aucune limite Risk au Batch 06. Aucune valeur globale de max order, stale, whitelist, capital ou réserve cash n'est imposée.
+`agent/prompt.py` expose :
 
-Les valeurs produit seront décidées plus tard et pourront être injectées via une couche de configuration appropriée sans modifier la logique Risk.
+```text
+AGENT_PROMPT_VERSION = agent-luna-v1
+AGENT_SYSTEM_PROMPT
+```
 
----
+Le prompt contient uniquement des règles stratégiques et de sécurité stables ; aucun secret, aucune clé, aucune instruction d'ordre Kraken et aucun tool-calling.
 
-## 14. Persistance, API et frontend
-
-Aucune persistance, migration, route FastAPI ou modification frontend n'est introduite au Batch 06. PostgreSQL reste la cible future.
-
----
-
-## 15. Dépendances externes
-
-Aucune dépendance runtime supplémentaire. NumPy, Pandas, TA-Lib et SDK LLM/broker ne sont pas ajoutés.
+Le `AgentInput` complet est transmis comme JSON au champ `input`. Aucune donnée de marché supplémentaire n'est récupérée par l'agent.
 
 ---
 
-## 16. Limites non calculables honnêtement au Batch 06
+## 9. Limitation au symbole du MarketState
 
-Sont volontairement laissés à des batches ultérieurs :
+Avant de construire un `DecisionCandidate`, le provider vérifie :
 
-- max drawdown ;
-- max daily loss ;
-- P&L journalier ;
-- VaR/corrélations/bêta ;
-- exposition portefeuille avancée ;
-- cooldown/turnover ;
-- allocation optimale ;
-- précision et minimums Kraken ;
-- mapping agressivité 1–10.
+```text
+LLM.symbol == AgentInput.market_state.symbol
+```
+
+Le `MarketState.symbol` doit également respecter la forme canonique `BASE/QUOTE` avant l'appel LLM. Une divergence est une violation de frontière Agent et non une opportunité de normalisation silencieuse.
+
+Le Risk Engine garde indépendamment ses contrôles de symbole, whitelist et cohérence marché.
+
+---
+
+## 10. Chronologie Agent et no look-ahead
+
+Avant l'appel LLM :
+
+```text
+MarketState.as_of    <= AgentInput.created_at
+PortfolioState.as_of <= AgentInput.created_at
+```
+
+Après l'appel :
+
+```text
+AgentInput.created_at <= DecisionCandidate.created_at
+```
+
+Ces contrôles utilisent uniquement les snapshots fournis. L'agent ne fait aucun lookup Kraken ou refresh caché.
+
+---
+
+## 11. Configuration et secrets
+
+`Settings` expose désormais :
+
+```text
+llm_model: LLMModel = gpt-5.6-luna
+openai_api_key: SecretStr | None
+openai_base_url: str = https://api.openai.com/v1
+openai_timeout_seconds: float = 30
+```
+
+La clé reste optionnelle au niveau process afin que healthcheck, tests et composants non-LLM puissent démarrer sans secret. La construction d'un `OpenAIResponsesClient` réel exige en revanche une clé non vide.
+
+`.env.example` ne contient qu'un emplacement vide. Aucun `.env` réel ne doit être versionné ou livré.
+
+---
+
+## 12. Dépendances externes
+
+Aucune nouvelle dépendance runtime au Batch 07. `httpx`, déjà utilisé dans le projet, suffit pour l'adapter REST officiel.
+
+Ce choix évite une dépendance inutile tout en gardant le client injectable. L'architecture ne dépend pas d'une classe SDK OpenAI spécifique et peut donc être testée intégralement hors réseau.
+
+---
+
+## 13. Market State, Portfolio, Risk et Broker
+
+Les composants des Batches 04 à 06 restent inchangés :
+
+- `MarketStateBuilder` : contexte déterministe ;
+- `PaperPortfolioLedger` : état PAPER ;
+- `estimate_paper_execution` : mathématique coûts partagée ;
+- `RiskEngine` : décision de sécurité ;
+- `PaperBroker` : intégrité finale d'exécution.
+
+Le Batch 07 ne les appelle jamais depuis l'agent.
+
+---
+
+## 14. Orchestration asynchrone
+
+Les I/O externes LLM sont asynchrones. Le provider `generate_decision` est donc async conformément au port existant.
+
+Le Batch 07 ne crée aucune boucle, tâche de fond ou scheduler. L'orchestration complète reste au Batch 08.
+
+---
+
+## 15. Persistance, API et frontend
+
+Aucune persistance, migration, route FastAPI de trading, WebSocket cockpit ou modification frontend n'est introduite au Batch 07.
+
+---
+
+## 16. Tests et reproductibilité
+
+Les tests injectent :
+
+- un `StructuredDecisionClient` fake ;
+- un `Clock` fixe ;
+- une factory UUID fixe ;
+- `httpx.MockTransport` pour l'adapter Responses API.
+
+Ils ne dépendent ni d'Internet, ni d'un compte OpenAI, ni d'une clé réelle. Ils vérifient aussi statiquement que le package `agent` n'importe pas Risk, Broker, Kraken ou FastAPI.
 
 ---
 

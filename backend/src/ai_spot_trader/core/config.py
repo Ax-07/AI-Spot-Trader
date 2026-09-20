@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ai_spot_trader.domain.enums import ExecutionMode, LLMModel
@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     execution_mode: ExecutionMode = ExecutionMode.PAPER
     llm_model: LLMModel = LLMModel.LUNA
     aggressiveness: int | None = Field(default=None, ge=1, le=10)
+    openai_api_key: SecretStr | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_timeout_seconds: float = Field(default=30.0, gt=0)
     kraken_rest_url: str = "https://api.kraken.com"
     kraken_ws_url: str = "wss://ws.kraken.com/v2"
     kraken_rest_timeout_seconds: float = Field(default=10.0, gt=0)

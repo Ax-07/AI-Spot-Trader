@@ -6,76 +6,82 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub audité, base du Batch 06 : `c24551d36a863abbb5fdb86b79658b235c852772`
-- Commit : `feat: add paper portfolio and broker` — 20 septembre 2026
-- Batch 05 intégré sur `main`.
+- HEAD GitHub audité le 20 septembre 2026 : `d3271d6404ea2af38a42ff09e5a1df1eed5e141e`
+- Commit : `feat: add deterministic risk engine`
+- Batch 06 intégré sur `main`.
 
-## Validation finale du Batch 05 avant intégration
+## Validation finale connue du Batch 06 avant intégration
 
-Validation locale Windows confirmée :
+Validation locale Windows confirmée par l'utilisateur :
 
-- `pytest backend` : **92 tests passés** ;
+- `pytest backend` : **131 tests passés** ;
 - Ruff : **All checks passed** ;
-- mypy : **Success: no issues found in 40 source files** ;
+- mypy : **Success: no issues found in 47 source files** ;
 - `git diff --check` : aucune erreur ;
 - uniquement les warnings habituels LF → CRLF sous Windows ;
-- 2 warnings de dépréciation FastAPI/Starlette dans les dépendances de test, sans échec ;
-- aucun test réseau requis.
+- 2 warnings de dépréciation FastAPI/Starlette sans échec.
 
-## État courant intégré
+## État intégré avant Batch 07
 
-- Projet expérimental de trading crypto SPOT piloté par un agent IA unique.
-- Kraken comme exchange initial ; premières versions exclusivement en PAPER.
-- Backend Python + `asyncio` + FastAPI + Pydantic ; frontend Next.js indépendant du moteur.
-- Adapter public Kraken Spot, Market State déterministe, Portfolio State PAPER et Paper Broker intégrés.
-- `PaperPortfolioLedger` est l'état mutable PAPER ; `PaperBroker` fait un full-fill immédiat ou rejette.
-- Frais, spread et slippage PAPER sont injectés, calculés en `Decimal` et audités dans les `Fill`.
-- Aucun secret, aucun LIVE, aucune persistance et aucun appel LLM réel à ce stade.
+- Backend Python/FastAPI/Pydantic, Kraken public, Market State et Portfolio State PAPER.
+- Paper Broker déterministe avec frais, spread et slippage en `Decimal`.
+- `DecisionCandidate.proposed_quantity` obligatoire pour BUY/SELL et interdite pour HOLD.
+- Risk Engine déterministe canonique avec `ALLOW`, `MODIFY`, `REJECT`.
+- Risk ne peut jamais augmenter une quantité ni changer action/symbole.
+- Seul un `ExecutionIntent` autorisé peut atteindre le Paper Broker.
+- Aucun LIVE, aucune API Kraken privée, aucune persistance et aucune boucle autonome.
 
-## Patch Batch 06 préparé dans cette livraison
+## Patch Batch 07 préparé dans cette livraison
 
-- `DecisionCandidate` porte une `proposed_quantity` obligatoire pour BUY/SELL et interdite pour HOLD.
-- Nouveau package `ai_spot_trader.risk` avec `RiskPolicy`, `RiskEngine` et `RiskResult`.
-- Résultats explicites `ALLOW`, `MODIFY` ou `REJECT`, avec codes `RiskReason` stables et auditables.
-- `RiskAssessment` enregistre quantité demandée, quantité autorisée et `evaluated_limits`.
-- Un `ExecutionIntent` PAPER n'est créé que pour un BUY/SELL autorisé ; HOLD reste valide mais sans intention.
-- Les réductions de quantité sont désactivées par défaut et nécessitent `allow_quantity_reduction=True`.
-- Contrôles implémentés : symbole/snapshot cohérents, whitelist optionnelle, fraîcheur métier optionnelle, max notional, cash BUY et disponibilité SELL.
-- Le cash BUY anticipe les mêmes frais/spread/slippage que le Paper Broker grâce à une estimation PAPER factorisée et sans effet de bord.
-- Max notional = notional de référence `last_price * quantity`; les coûts d'exécution restent traités séparément pour la solvabilité BUY.
-- Aucun seuil chiffré produit n'est ajouté à `Settings` ; toutes les limites restent injectées.
-- Aucun drawdown/daily loss, VaR, corrélation, exposition multi-actifs, stratégie, LLM, scheduler, Kraken ou LIVE dans Risk.
-- No look-ahead : `MarketState.as_of` et `PortfolioState.as_of` ne peuvent pas être postérieurs à `DecisionCandidate.created_at`.
+- Nouveau package `ai_spot_trader.agent` derrière le port `LLMProvider` existant.
+- Provider unique Luna/Sol : `OpenAIDecisionProvider` ; aucun agent parallèle pour Sol.
+- Prompt versionné `agent-luna-v1`, minimal et auditable.
+- OpenAI Responses API + Structured Outputs JSON Schema stricts.
+- Modèle initial exact : `gpt-5.6-luna` ; `gpt-5.6-sol` reste sélectionnable via `Settings`.
+- Schéma fournisseur limité à `action`, `symbol`, `proposed_quantity`, `rationale`.
+- `decision_id`, `cycle_id` et `created_at` restent contrôlés par l'application.
+- Le symbole LLM doit être exactement celui de `AgentInput.market_state.symbol`.
+- Aucun enrichissement marché, lookup Kraken, appel Risk/Broker ou tool-calling depuis l'agent.
+- Erreurs distinctes : transport, enveloppe fournisseur, sortie structurée invalide, invariant Agent.
+- Aucun retry automatique dans ce batch.
+- Clé OpenAI optionnelle dans `Settings` via `SecretStr` et environnement uniquement.
+- Aucun nouveau package runtime : l'adapter REST réutilise `httpx` déjà présent.
 
-## Validation effectuée dans l'environnement ChatGPT pour le Batch 06
+## Validation du Batch 07
 
-- Python `3.13.5` ;
-- suite ciblée domaine + Risk + régression Paper Broker : **77 tests passés** ;
-- `compileall` : OK ;
-- contrôle des lignes Python du patch `<= 100` : OK ;
-- aucun test réseau requis ou exécuté ;
-- Ruff et mypy non disponibles dans cet environnement : validation locale requise.
+Validation ChatGPT ciblée :
+
+- suite Agent/OpenAI/configuration : **42 tests passés** ;
+- aucun appel réseau réel ; OpenAI simulé via `httpx.MockTransport` ;
+- `compileall`, longueur des lignes et espaces de fin de ligne : OK.
+
+Validation locale Windows finale confirmée par l'utilisateur :
+
+- `pytest backend` : **168 tests passés** ;
+- Ruff : **All checks passed** ;
+- mypy : **Success: no issues found in 54 source files** ;
+- `git diff --check` : aucune erreur ;
+- uniquement les warnings habituels LF → CRLF sous Windows ;
+- 2 warnings de dépréciation FastAPI/Starlette sans échec.
 
 ## Dernier batch intégré
 
-**Batch 05 — Portfolio State + Paper Broker** : intégré sur `main` au HEAD `c24551d36a863abbb5fdb86b79658b235c852772`.
+**Batch 06 — Risk Engine** : intégré sur `main` au HEAD `d3271d6404ea2af38a42ff09e5a1df1eed5e141e`.
 
 ## Batch en cours
 
-**Batch 06 — Risk Engine** : patch préparé et tests ciblés réussis ; validation locale Windows et intégration Git restent à effectuer.
+**Batch 07 — Agent Luna** : patch préparé et validation locale finale réussie, **non encore intégré**.
 
-## Prochain batch recommandé
+## Prochaine étape après intégration
 
-**Batch 07 — Agent Luna**, uniquement après extraction, validation locale et intégration du Batch 06.
+**Batch 08 — Boucle autonome** : orchestration explicite `MarketState + PortfolioState -> Agent -> Risk -> Paper Broker`.
 
 ## Points encore à décider
 
 - Capital PAPER initial et devise de référence produit.
-- Univers d'actifs/paires Kraken initial.
+- Univers initial de paires Kraken.
 - Cadence de la boucle de décision.
-- Valeurs produit des limites Risk (`max_order_notional`, stale métier, whitelist, etc.).
-- Mapping exact de l’agressivité 1–10.
-- Exposition portefeuille globale lorsque plusieurs prix canoniques seront disponibles simultanément.
-- Max drawdown / daily loss lorsque l'historique P&L requis existera.
-- Valeurs de référence fee/spread/slippage PAPER pour les expériences.
-- Frontière journalière des statistiques et politique de rétention/persistance.
+- Valeurs produit des limites Risk.
+- Mapping exact de l'agressivité 1–10.
+- Valeurs de référence fee/spread/slippage PAPER.
+- Persistance, frontière de journée et analytics P&L/drawdown.
