@@ -2,7 +2,9 @@
 
 ## 1. Objet
 
-Ce document décrit l'architecture technique courante d'AI Spot Trader. Le Batch 15 — Chat opérateur avec l'Agent est intégré au commit fonctionnel `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6`, sur la base du Batch 14 fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`.
+Ce document décrit l'architecture technique courante d'AI Spot Trader. Depuis le Batch 16, l'architecture canonique couvre SPOT et Kraken Derivatives PAPER. Le Batch 16.3 ajoute uniquement un harness CLI de validation contrôlée ; il ne remplace ni le runner, ni le Risk Engine, ni le Paper Broker.
+
+Référence fonctionnelle actuelle : `520b016eb501f1a208bcb6d0e90eb1df947e1d0b` (`test: add controlled perpetual paper smoke harness`).
 
 ---
 
@@ -48,27 +50,7 @@ TradingCycleResult -> AuditedTradingCycleRunner -> journal durable
 
 Le frontend n'est jamais l'ordonnanceur du moteur. PostgreSQL conserve des faits ; il ne produit aucune stratégie.
 
-Le Batch 15 ajoute un chemin parallèle de **lecture + conversation** :
-
-```text
-ChatPanel
-   |
-   v
-/api/v1/chat/messages
-   |
-   v
-OperatorChatService ----> RuntimeChatContextSource
-   |                         |-> engine snapshot
-   |                         |-> portfolio snapshot
-   |                         |-> CycleAuditReader
-   |                         `-> PaperAnalyticsReader
-   v
-OpenAIChatProvider -----> OpenAIResponsesClient
-   |
-   `-> settings.llm_model (Luna ou Sol)
-```
-
-Aucune flèche ne part du chat vers `risk`, `broker`, `integrations.kraken` ou `trading`.
+Le chat opérateur reste un chemin parallèle de **lecture + conversation** et ne pointe jamais vers `risk`, `broker`, `integrations.kraken` ou `trading`.
 
 ---
 
@@ -79,15 +61,8 @@ backend/src/ai_spot_trader/
   agent/
   analytics/
   api/
-    routes/
-      chat.py              # Batch 15 intégré
   broker/
-  chat/                    # Batch 15 intégré
-    errors.py
-    models.py
-    prompt.py
-    provider.py
-    service.py
+  chat/
   core/
   domain/
   experiments/
@@ -96,6 +71,8 @@ backend/src/ai_spot_trader/
   persistence/
   portfolio/
   risk/
+  tools/                    # outils explicites de validation, hors runtime normal
+    derivatives_smoke.py    # Batch 16.3
   trading/
   main.py
 ```
@@ -109,14 +86,13 @@ Responsabilités :
 - `risk` : autorité déterministe avant exécution ;
 - `broker` : exécution PAPER uniquement après intent Risk ;
 - `trading` : orchestration et boucle séquentielle ;
-- `persistence` : écriture/lecture durable ;
+- `persistence` : écriture/lecture durable et lifecycle `paper_run_id` ;
 - `analytics` : calculs PAPER purs dérivés des faits durables ;
 - `experiments` : protocoles et comparaisons factuelles ;
 - `api` : transport HTTP sans métier de trading ;
 - `core.runtime` : dépendances process-locales et lifecycle explicite ;
-- `chat` : conversation informative, lecture seule du contexte canonique, sans contrat d'exécution.
-
-Le package `chat` n'importe pas `risk`, `broker`, `integrations.kraken` ou `trading`. Il n'importe pas non plus `AgentInput`, `DecisionCandidate`, `RiskAssessment`, `ExecutionIntent`, `RiskPolicy` ou `PaperBroker`.
+- `chat` : conversation informative, lecture seule du contexte canonique ;
+- `tools` : outils manuels de validation non invoqués par la composition normale.
 
 ---
 
@@ -154,206 +130,162 @@ PaperPortfolioLedger.snapshot() ------+--> AgentInput
                                   audit persistence
 ```
 
-Ce flux reste inchangé au Batch 15. Le chat ne construit aucun artefact de cette chaîne.
+SPOT et PERPETUAL utilisent ce même flux. Le `market_type` et le contexte dérivés modifient les contraintes de domaine/Risk, pas l'architecture générale.
+
+Le harness 16.3 utilise les mêmes composants aval mais remplace temporairement la source de décision stratégique par une séquence déterministe explicitement réservée au smoke. Aucun mécanisme de force BUY/SELL n'est exposé dans l'API ou dans la composition normale.
 
 ---
 
-## 5. Contrats expérimentaux Batches 13/14
+## 5. Contrats expérimentaux
 
-`aggressiveness-map-v1` reste discret et déterministe. `ExperimentManifest` conserve le niveau/mapping, modèle, prompt, univers, snapshot Risk, coûts PAPER, version analytics, source/dataset et fenêtre.
+`aggressiveness-map-v1` reste discret et déterministe. `ExperimentManifest` conserve niveau/mapping, modèle, prompt, univers, snapshot Risk, coûts PAPER, version analytics, source/dataset et fenêtre.
 
-`paper-experiment-v1` compare l'agressivité. `paper-experiment-v2` compare Luna/Sol avec :
+`paper-experiment-v1` compare l'agressivité. `paper-experiment-v2` compare Luna/Sol avec `comparison_variable = LLM_MODEL`, `experiment_group_digest`, `replicate_index`, `replicate_count` et `source_digest`.
 
-```text
-comparison_variable = LLM_MODEL
-experiment_group_digest
-replicate_index
-replicate_count
-```
-
-`source_digest` reste obligatoire en v2. Le chat ne modifie aucun de ces contrats et ne participe à aucun digest expérimental.
+Le `paper_run_id` reste une frontière d'audit/exécution et ne devient pas une instruction stratégique.
 
 ---
 
 ## 6. Agent et transport OpenAI
 
-Le prompt stratégique reste `agent-strategy-v2` et `OpenAIDecisionProvider` reste le seul provider produisant un `DecisionCandidate`.
+Le prompt stratégique courant est **`agent-strategy-v3`**. `OpenAIDecisionProvider` reste le provider normal produisant un `DecisionCandidate`.
 
-`OpenAIResponsesClient` garde son appel Structured Outputs existant pour la stratégie et ajoute au Batch 15 une méthode `generate_text_response(...)` :
+Le v3 explicite les sémantiques SPOT/PERPETUAL sans donner au LLM le contrôle du levier, du `reduce_only` ou de la validation finale.
 
-- même endpoint Responses API ;
-- même `LLMModel` typé ;
-- `store = false` ;
-- aucun `tools` ;
-- aucun schéma `DecisionCandidate` ;
-- même sanitization des erreurs transport/enveloppe.
+`OpenAIResponsesClient` reste le transport partagé. Le chat utilise `OpenAIChatProvider` et `operator-chat-v1` sans tools d'exécution.
 
-`OpenAIChatProvider` utilise uniquement cette méthode texte et le prompt `operator-chat-v1`.
+Le harness 16.3 n'appelle pas OpenAI : il sert uniquement à vérifier le chemin aval avec des décisions techniques reproductibles.
 
 ---
 
-## 7. ChatContextSnapshot et no-look-ahead
+## 7. Kraken Spot / Derivatives
 
-`RuntimeChatContextSource` agrège uniquement des surfaces déjà canoniques :
+Kraken Spot et Kraken Derivatives ont des intégrations publiques séparées.
 
-- `AppRuntime.engine_snapshot()` ;
-- `PortfolioSnapshotSource.snapshot()` ;
-- `CycleAuditReader.latest_market_state()` ;
-- `CycleAuditReader.latest_cycle()` / `get_cycle()` / `list_cycles()` ;
-- `PaperAnalyticsReader.paper_analytics()`.
+Pour Derivatives :
 
-Aucune donnée métier n'est reconstruite avec une formule parallèle.
+- source REST publique : `https://futures.kraken.com/derivatives/api/v3` ;
+- aucune clé privée Kraken ;
+- normalisation `XBT -> BTC` ;
+- `contractValueTradePrecision` interprété comme exposant décimal signé ;
+- première exécution PAPER : perpetual linéaire uniquement, marge `ISOLATED`.
 
-Le snapshot distingue :
+Le market source dérivés met à jour le mark/funding du ledger avant la construction de l'`AgentInput`.
+
+---
+
+## 8. Risk Engine
+
+`RiskEngine` reste synchrone et déterministe.
+
+SPOT conserve ses contrôles historiques. Pour PERPETUAL, Risk contrôle en plus contrat supporté, taille minimale, levier, marge, caps de notionnel/exposition, buffer liquidation et sémantique de réduction.
+
+`MODIFY` ne change jamais BUY↔SELL ou le symbole. Sur une action opposée dépassant la position ouverte, Risk peut réduire la quantité autorisée à la position restante et produire `DERIVATIVE_REDUCE_ONLY_LIMIT`, ce que les smokes 16.3 LONG et SHORT ont confirmé.
+
+Seul Risk peut produire un `ExecutionIntent`.
+
+---
+
+## 9. TradingCycleRunner
+
+Le runner canonique reste unique :
 
 ```text
-historical_cycle          # faits persistés d'un cycle identifié
-historical_cycle_id
-current_market            # état durable le plus récent au moment de la question
-current_portfolio         # snapshot PAPER courant
-recent_cycles             # résumés récents, absent si cycle historique explicite
-analytics_summary         # analytics courants
+Market -> Portfolio -> Agent -> Risk -> Broker -> post-portfolio
 ```
 
-Pour un `context_cycle_id` explicite, `historical_cycle.agent_input` est le contexte réellement persisté lors de la décision. La liste de cycles récents est volontairement omise pour réduire le risque de look-ahead. L'état courant peut rester visible comme section séparée, mais le prompt interdit de l'utiliser comme justification causale de la décision passée.
+Les pannes techniques restent `FAILED` et ne deviennent jamais HOLD. Le verrou du runner empêche le chevauchement des cycles.
+
+Le harness 16.3 réutilise `TradingCycleRunner`, le même Risk Engine, le même Paper Broker et le même ledger ; il ne crée pas de moteur dérivés parallèle.
 
 ---
 
-## 8. Sessions chat V1
+## 10. Persistance durable et paper_run_id
 
-`OperatorChatService` conserve les sessions en mémoire process uniquement :
+La table `paper_runs` et `audit_cycles.paper_run_id` définissent la frontière durable d'une expérience PAPER.
 
-- `OrderedDict` borné par défaut à 32 sessions ;
-- `deque` bornée par défaut à 20 messages/session ;
-- éviction LRU des sessions les plus anciennes ;
-- UUID de session explicite ;
-- aucune table SQL ni migration ;
-- aucun message chat dans `AgentInput`, le journal ou les analytics.
+- démarrage backend/composition PAPER : nouveau run ;
+- `engine stop/start` dans le même process : même run ;
+- arrêt propre : `ended_at` persisté ;
+- redémarrage backend : nouveau run, car le ledger reste process-local ;
+- cycles legacy pré-migration : `paper_run_id = NULL`.
 
-Une erreur fournisseur ne persiste pas le message opérateur dans l'historique de session. Les formes de secrets courantes sont redigées avant stockage/envoi au provider.
-
----
-
-## 9. Risk Engine inchangé
-
-`RiskEngine` reste synchrone et déterministe. Il ne lit ni `AggressivenessContext`, ni `ExperimentManifest`, ni `LLMModel`, ni message chat.
-
-Les contrôles restent : symbole/correspondance marché, whitelist, chronologie, fraîcheur, max notional, rôles d'actifs, balance quote, solvabilité BUY avec coûts et position SELL disponible.
-
-`MODIFY` ne change jamais BUY↔SELL ou le symbole et n'augmente jamais la taille stratégique. Seul Risk peut produire un `ExecutionIntent`.
+Les analytics et readers audit peuvent être explicitement scopés par run. Les smokes 16.3 ont confirmé que deux runs PERPETUAL distincts restent séparés dans les cycles et analytics.
 
 ---
 
-## 10. TradingCycleRunner inchangé
+## 11. ChatContextSnapshot et no-look-ahead
 
-Le runner canonique reste unique. Le pipeline reste : Market -> Portfolio -> Agent -> Risk -> Broker -> post-portfolio. Le chat n'est pas injecté comme dépendance du runner et ne partage aucun verrou de cycle.
+`RuntimeChatContextSource` agrège uniquement les surfaces canoniques : état moteur, portefeuille, audit et analytics.
 
-Le moteur peut donc continuer ses cycles pendant qu'un appel chat attend la réponse du fournisseur LLM.
+Pour un cycle historique, `historical_cycle.agent_input` reste la source causale. Les états plus récents ne doivent jamais être présentés comme ayant causé une décision passée.
 
----
-
-## 11. Persistance durable
-
-Le journal Batch 09 persiste `agent_input_payload` en JSON/JSONB et le `result_digest` sur le résultat de cycle complet. Les manifestes expérimentaux y sont durables sans migration.
-
-Batch 15 choisit explicitement **mémoire seulement** pour l'historique conversationnel. Motifs :
-
-1. pas de besoin de reprise durable pour la première V1 ;
-2. séparation maximale entre conversation et faits de trading ;
-3. aucune contamination des digests/analytics/expériences ;
-4. aucune migration avant d'avoir un besoin produit réel de rétention.
-
-Si une persistance chat devient nécessaire, elle devra utiliser une table/agrégat séparé du journal de trading.
+Le chat ne construit aucun artefact d'exécution et ne modifie pas un futur `AgentInput`.
 
 ---
 
-## 12. API FastAPI
+## 12. Sessions chat
 
-Routes Batch 15 intégrées :
+`OperatorChatService` conserve les sessions en mémoire process uniquement, avec historique borné. Aucun message chat n'est ajouté au journal de trading, au manifeste expérimental ou aux analytics.
+
+---
+
+## 13. API FastAPI
+
+Les routes de chat restent :
 
 ```text
 POST /api/v1/chat/messages
 GET  /api/v1/chat/sessions/{session_id}
 ```
 
-Le POST accepte `message`, `session_id?` et `context_cycle_id?`. Un UUID de cycle peut également être détecté dans une formulation `cycle <UUID>`.
-
-Codes d'erreur :
-
-- `404` : session ou cycle historique absent ;
-- `502` : transport/provider chat indisponible, message générique sanitizé ;
-- `503` : chat non configuré.
-
-Une erreur chat ne modifie ni `last_cycle_status`, ni la journalisation du moteur.
-
-REST est suffisant pour la V1 ; aucun WebSocket/SSE n'est introduit.
-
----
-
-## 13. Frontend Batch 15
-
-Fichiers concernés :
+Les surfaces run-scoped ajoutées au Batch 16.2 incluent :
 
 ```text
-frontend/src/app/page.tsx
-frontend/src/components/cockpit/chat-panel.tsx
-frontend/src/hooks/use-chat.ts
-frontend/src/lib/api/client.ts
-frontend/src/lib/api/types.ts
+GET /api/v1/paper-runs
+GET /api/v1/paper-runs/current
+GET /api/v1/paper-runs/{paper_run_id}
+GET /api/v1/analytics?paper_run_id={paper_run_id}
 ```
 
-`useChat` :
+Les lectures audit peuvent aussi être filtrées par `paper_run_id`.
 
-- garde uniquement l'UUID de session dans `localStorage` ;
-- relit l'historique auprès du backend si la session process existe encore ;
-- recrée proprement une session si le backend a redémarré et renvoie 404 ;
-- ne possède aucune référence à `startEngine`/`stopEngine`.
-
-`ChatPanel` indique explicitement le caractère informatif du canal et permet d'ancrer une explication sur un cycle UUID.
+Le harness `python -m ai_spot_trader.tools.derivatives_smoke ...` est un outil CLI local, pas une route FastAPI.
 
 ---
 
-## 14. Reproductibilité et expérimentation
+## 14. Frontend
 
-Les identités existantes restent distinctes :
+Le frontend reste un cockpit de visualisation/contrôle. Il ne possède pas le moteur de trading et sa fermeture n'arrête pas le backend.
 
-1. `experiment_group_digest` ;
-2. `experiment_digest` ;
-3. `result_digest` ;
-4. `PaperAnalyticsReport.source_digest`.
-
-Les messages/réponses chat ne participent à aucune de ces identités. Le contenu conversationnel n'est jamais réinjecté dans `AgentInput`, même si l'opérateur y écrit une nouvelle agressivité ou un ordre BUY/SELL.
+Aucun changement frontend n'était requis pour les Batches 16.2 ou 16.3.
 
 ---
 
-## 15. Testabilité Batch 15
+## 15. Reproductibilité et validation Batch 16.3
 
-Le patch ajoute des tests pour :
+Les décisions du harness sont marquées `CONTROLLED_SMOKE_BATCH_16_3` afin de ne pas être confondues avec des décisions stratégiques Luna/Sol.
 
-- envoyer un message moteur RUNNING sans start/stop ;
-- vérifier Luna/Sol sur la même architecture provider ;
-- vérifier `store=false`, absence de `tools` et absence de Structured Output stratégique pour le chat ;
-- vérifier qu'une demande BUY/Risk n'altère pas le moteur ni une `RiskPolicy` ;
-- vérifier l'identité de `AgentInput` avant/après conversation ;
-- vérifier l'ancrage historique et la séparation du marché courant ;
-- vérifier la redaction de secrets ;
-- vérifier l'erreur chat HTTP 502 séparée du dernier cycle ;
-- analyser l'AST du package chat pour interdire les imports/symboles d'exécution ;
-- vérifier l'historique borné ;
-- vérifier l'absence de lifecycle moteur dans le frontend Chat.
+Smokes réels validés sur `BTC/USD / PF_XBTUSD` :
 
-La compatibilité complète Batches 01–14 doit être confirmée par `pytest backend`, Ruff et mypy dans le checkout local complet.
+- LONG puis réduction/fermeture ;
+- SHORT puis réduction/fermeture ;
+- funding observé ;
+- `reduce_only` confirmé ;
+- fermeture oversize bornée par Risk sans reversal ;
+- audit durable et analytics isolées par run.
+
+Validation locale du commit `520b016eb501f1a208bcb6d0e90eb1df947e1d0b` : suite `pytest` complète OK, Ruff OK, mypy OK sur 109 fichiers, `git diff --check` OK.
 
 ---
 
-## 16. Hors périmètre Batch 15
+## 16. Hors périmètre actuel
 
-- mutation de stratégie depuis le chat ;
-- configuration d'agressivité/Risk/modèle active par conversation ;
-- persistance PostgreSQL du chat ;
-- streaming SSE/WebSocket ;
-- outils/fonctions LLM ;
-- private Kraken ;
-- LIVE ;
-- recovery/reconciliation exactly-once ;
-- moteur alternatif côté frontend.
+- exécution Kraken Derivatives privée/LIVE ;
+- CROSS ;
+- contrats inverses exécutables ;
+- futures datés exécutables ;
+- recovery durable du ledger ;
+- rotation à chaud d'un `paper_run_id` ;
+- stratégie algorithmique parallèle ;
+- force BUY/SELL dans le runtime normal.

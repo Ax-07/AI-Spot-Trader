@@ -18,11 +18,11 @@ Le support intégré couvre le domaine `SPOT | PERPETUAL | FUTURE`, l'exécution
 
 ## Batch 16.1 — Smoke test PERPETUAL PAPER
 
-**État : intégré sur GitHub `main` le 21 septembre 2026 ; HEAD documentaire actuel vérifié : `08926e98dda3fe9ad7b68b4ddb5c582cbe49529c`.**
+**État : intégré.**
 
 Le correctif accepte les valeurs négatives de `contractValueTradePrecision`. Le smoke réel `BTC/USD / PF_XBTUSD` a terminé `COMPLETED`, Agent `HOLD`, Risk `ALLOW / HOLD_NO_EXECUTION`, analytics `1000 -> 1000`, `trade_count=0`, `hold_count=1`.
 
-Le smoke ne valide pas encore en réel l'ouverture LONG/SHORT, les fills dérivés, le funding accumulé sur position, le P&L de position, la réduction/fermeture ni `reduce_only`.
+Ce smoke initial ne validait pas encore les branches d'exécution LONG/SHORT.
 
 ## Batch 16.2 — Isolation durable des runs PAPER
 
@@ -37,33 +37,49 @@ Implémentation intégrée :
 - anciennes lignes conservées à `NULL` et exclues des analytics run-scoped ;
 - même mécanisme pour SPOT et PERPETUAL ;
 - analytics d'un run strictement filtrés par `paper_run_id` ;
-- filtres run-scoped disponibles pour cycles/décisions/Risk/exécutions/erreurs/market ;
-- endpoints `GET /api/v1/paper-runs`, `/paper-runs/current`, `/paper-runs/{id}` ;
-- `GET /api/v1/analytics?paper_run_id=<uuid>` pour sélection explicite ;
-- aucun changement frontend requis : la composition PAPER garde le run courant comme défaut.
-
-Sémantique du cycle de vie : `engine stop/start` conserve le run ; arrêt backend propre clôt le run ; redémarrage backend crée un nouveau run car le ledger reste en mémoire et est réinitialisé. Aucun resume automatique d'un ancien run n'est autorisé tant que la reprise durable du portefeuille n'existe pas.
-
-Validation locale confirmée avant intégration :
-
-```text
-alembic upgrade head : 0001_audit_journal -> 0002_paper_runs
-alembic current      : 0002_paper_runs (head)
-pytest               : 344 passed, 2 warnings externes
-ruff check .          : All checks passed
-mypy .                : Success: no issues found in 106 source files
-git diff --check      : aucune erreur, warnings LF -> CRLF uniquement
-```
+- filtres run-scoped disponibles pour audit ;
+- endpoints de découverte/sélection des runs ;
+- aucun changement frontend requis.
 
 ## Batch 16.3 — Smokes d'exécution Derivatives contrôlés
 
-**Proposé comme prochain batch fonctionnel après l'intégration du Batch 16.2.**
+**État : intégré sur GitHub `main` au commit fonctionnel `520b016eb501f1a208bcb6d0e90eb1df947e1d0b` (`test: add controlled perpetual paper smoke harness`).**
 
-Objectif : valider séparément un chemin PAPER réel contrôlé couvrant ouverture LONG/SHORT, fill, mark/funding, réduction/fermeture et `reduce_only`, sans mélanger les métriques entre expériences.
+Le harness de validation est séparé du runtime normal et ne force jamais l'Agent de production.
+
+Validation locale :
+
+```text
+pytest               : suite complète OK, 2 warnings externes FastAPI/Starlette
+ruff check .          : All checks passed
+mypy .                : Success: no issues found in 109 source files
+git diff --check      : aucune erreur
+```
+
+Smokes réels contrôlés `BTC/USD / PF_XBTUSD`, levier `1x`, `ISOLATED` :
+
+- LONG : ouverture, HOLD/mark, funding, réduction `reduce_only`, fermeture oversize bornée par Risk, position finale vide ;
+- SHORT : scénario symétrique validé ;
+- 4 cycles `COMPLETED` et 3 exécutions par run ;
+- aucun cycle `FAILED` ;
+- P&L, marge, frais/spread/slippage et funding valorisés ;
+- aucune inversion accidentelle ;
+- deux `paper_run_id` distincts fermés proprement ;
+- contrôle `verify-isolation` : `isolation_verified=true`.
+
+## Prochain jalon — Premier run Agent réel PERPETUAL PAPER
+
+**Proposé comme prochaine étape immédiate.**
+
+Objectif : lancer GPT-5.6 Luna dans la composition normale PERPETUAL PAPER, sans décision forcée, avec Risk conservant l'autorité finale.
+
+Le run doit mesurer honnêtement décisions `BUY/SELL/HOLD`, fills éventuels, coûts, funding, exposition, P&L et drawdown. Un `HOLD` naturel est un résultat valide et ne doit pas être modifié post-hoc.
 
 ## Batch 17 — Robustesse Derivatives
 
-**Proposé.** Validation des schémas publics Kraken sur davantage d'instruments, tiers de marge par taille, liquidation PAPER plus fidèle, cockpit dédié dérivés, reprise/réconciliation du ledger mémoire, scénarios multi-position/multi-instrument.
+**Proposé après les premiers essais Agent PERPETUAL PAPER.**
+
+Pistes : validation des schémas publics Kraken sur davantage d'instruments, tiers de marge par taille, liquidation PAPER plus fidèle, cockpit dédié dérivés, reprise/réconciliation du ledger mémoire, scénarios multi-position/multi-instrument.
 
 ## LIVE — toujours séparé
 

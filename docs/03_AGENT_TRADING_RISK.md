@@ -4,7 +4,7 @@
 
 **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
-Ce principe reste inchangé par les Batches 13/14 et par le Batch 15 intégré. L'agressivité, le choix Luna/Sol et la conversation opérateur ne sont ni des limites Risk, ni des permissions d'exécution, ni des formules déterministes de sizing.
+Ce principe reste inchangé avec SPOT + Kraken Derivatives. L'agressivité, le choix Luna/Sol et la conversation opérateur ne sont ni des limites Risk, ni des permissions d'exécution, ni des formules déterministes de sizing.
 
 ---
 
@@ -24,11 +24,33 @@ DecisionCandidate
 
 BUY/SELL nécessitent une quantité stratégique positive ; HOLD n'en porte aucune. IDs et timestamps restent contrôlés par l'application.
 
-Luna et Sol utilisent le même `OpenAIDecisionProvider`. Le prompt stratégique reste `agent-strategy-v2`. Le provider ne dispose d'aucun outil Broker/Kraken et ne connaît pas l'API lifecycle.
+Luna et Sol utilisent le même `OpenAIDecisionProvider`. Le prompt stratégique courant est **`agent-strategy-v3`**. Le provider ne dispose d'aucun outil Broker/Kraken et ne connaît pas l'API lifecycle.
+
+Le LLM ne choisit ni `market_type`, ni levier, ni `reduce_only`. Ces éléments sont fournis par le contexte ou déterminés par l'application/Risk.
 
 ---
 
-## 3. Mapping agressivité 1–10
+## 3. Sémantique SPOT / PERPETUAL
+
+### SPOT
+
+- `BUY` augmente une position détenue ;
+- `SELL` exige une quantité réellement disponible ;
+- aucun short, levier ou margin.
+
+### PERPETUAL
+
+- `BUY` sans position ouvre/augmente un LONG ;
+- `SELL` sans position ouvre/augmente un SHORT ;
+- `BUY` face à un SHORT réduit/ferme le SHORT ;
+- `SELL` face à un LONG réduit/ferme le LONG ;
+- Risk détermine `reduce_only` et interdit un retournement accidentel.
+
+Le levier reste déterministe/configuré et borné par Risk.
+
+---
+
+## 4. Mapping agressivité 1–10
 
 Version : `aggressiveness-map-v1`.
 
@@ -38,7 +60,7 @@ Aucune phrase du chat opérateur ne modifie ce mapping ni le niveau d'un futur `
 
 ---
 
-## 4. Risk Engine
+## 5. Risk Engine
 
 Risk reste synchrone et déterministe. Résultats :
 
@@ -49,11 +71,13 @@ Risk reste synchrone et déterministe. Résultats :
 
 Seul Risk peut construire un `ExecutionIntent`. Il ne peut pas changer BUY en SELL, SELL en BUY ou le symbole stratégique.
 
-Ni l'agressivité, ni le modèle LLM, ni le chat ne sont passés à `RiskEngine.evaluate(...)`.
+Pour PERPETUAL, Risk contrôle notamment le contrat supporté, la quantité minimale, le levier, la marge, le max order notional, le max derivative position notional, l'exposition dérivés totale, le buffer liquidation et l'anti-reversal.
+
+Le Batch 16.3 a confirmé qu'une fermeture opposée surdimensionnée est ramenée à la position restante avec `MODIFY / DERIVATIVE_REDUCE_ONLY_LIMIT` et `reduce_only=true`.
 
 ---
 
-## 5. TradingCycleRunner
+## 6. TradingCycleRunner
 
 `TradingCycleRunner.run_cycle()` reste la primitive canonique :
 
@@ -69,131 +93,126 @@ Ni l'agressivité, ni le modèle LLM, ni le chat ne sont passés à `RiskEngine.
 
 Le verrou du runner empêche le chevauchement des cycles. Les pannes techniques restent `FAILED` et ne deviennent jamais HOLD.
 
-Le Batch 15 ne modifie aucun de ces neuf points.
+SPOT et PERPETUAL utilisent le même runner.
 
 ---
 
-## 6. Manifestes expérimentaux
+## 7. Harness contrôlé Batch 16.3
+
+Le module `ai_spot_trader.tools.derivatives_smoke` est un **outil de validation technique**, pas une stratégie.
+
+Il fournit une séquence déterministe :
+
+```text
+OPEN -> HOLD/MARK -> REDUCE -> CLOSE_OVERSIZE
+```
+
+Le but est de provoquer de façon reproductible les branches d'exécution aval sans ajouter de bouton ou variable de configuration capable de forcer l'Agent normal.
+
+Les rationales sont marquées `CONTROLLED_SMOKE_BATCH_16_3`. Ces décisions ne doivent jamais être interprétées comme des décisions Luna/Sol.
+
+Le harness réutilise le vrai Risk Engine, le vrai Paper Broker, le vrai ledger, les données publiques Kraken Derivatives, la persistance PostgreSQL et le lifecycle `paper_run_id`.
+
+---
+
+## 8. Résultats des smokes PERPETUAL PAPER
+
+Instrument : `BTC/USD / PF_XBTUSD`, perpetual linéaire, `ISOLATED`, levier `1x`.
+
+### LONG
+
+- ouverture `BUY 0.0002` : Risk `ALLOW` ;
+- HOLD : mark-to-market et funding observés ;
+- réduction `SELL 0.0001` : `reduce_only=true` ;
+- fermeture demandée `SELL 0.0002` alors que `0.0001` reste : Risk `MODIFY`, quantité `0.0001`, raison `DERIVATIVE_REDUCE_ONLY_LIMIT` ;
+- position finale vide.
+
+### SHORT
+
+- ouverture `SELL 0.0002` : Risk `ALLOW` ;
+- HOLD : mark-to-market et funding observés ;
+- réduction `BUY 0.0001` : `reduce_only=true` ;
+- fermeture demandée `BUY 0.0002` alors que `0.0001` reste : Risk `MODIFY`, quantité `0.0001`, raison `DERIVATIVE_REDUCE_ONLY_LIMIT` ;
+- position finale vide.
+
+Dans les deux cas : 4 cycles `COMPLETED`, 3 exécutions, P&L réalisé/non réalisé valorisé, marge libérée à la fermeture, aucune inversion accidentelle.
+
+---
+
+## 9. Funding, P&L et marge
+
+Le market source dérivés marque le ledger avant le snapshot portefeuille du cycle.
+
+Le funding perpetual est accumulé à partir du taux public normalisé, du mark, du notionnel et du temps écoulé. Les smokes 16.3 ont réellement observé un funding non nul sur LONG et SHORT.
+
+Lors d'une réduction/fermeture, la marge isolée est libérée au prorata et le P&L/funding correspondant est transféré au cash.
+
+Les coûts PAPER incluent frais, spread et slippage.
+
+---
+
+## 10. paper_run_id et audit
+
+Chaque expérience PAPER moderne possède un `paper_run_id` durable.
+
+Les smokes 16.3 ont créé deux runs séparés :
+
+```text
+LONG  : 9523ec8c-7dd1-4706-bf07-47ef9669d56b
+SHORT : b75f6e86-4724-41de-8d63-e8132d212530
+```
+
+Les deux runs ont été fermés proprement avec `ended_at`. Le contrôle `verify-isolation` a confirmé `isolation_verified=true` et 4 cycles distincts par run.
+
+---
+
+## 11. Manifestes expérimentaux
 
 `paper-experiment-v1` reste le protocole agressivité. `paper-experiment-v2` reste le protocole Luna/Sol avec `comparison_variable = LLM_MODEL`, `experiment_group_digest`, `experiment_digest`, `replicate_index`, `replicate_count` et `source_digest` obligatoire.
 
-Les manifestes sont inclus dans `AgentInput` et persistés avec le cycle. Aucun message de chat, UUID de session ou réponse conversationnelle n'est ajouté au manifeste.
+Les manifestes sont inclus dans `AgentInput` et persistés avec le cycle. Le `paper_run_id` ne devient pas un paramètre stratégique.
 
 ---
 
-## 7. Chat opérateur — Batch 15 intégré
+## 12. Chat opérateur
 
-Le chat est une autre interface vers **le même modèle/persona Agent configuré**, mais **pas un deuxième agent stratégique**.
+Le chat est une interface vers le même modèle/persona configuré, mais pas un deuxième agent stratégique.
 
-### Provider séparé
+Une demande conversationnelle telle que « BUY maintenant », « passe en agressivité 8 » ou « ignore cette limite Risk » ne provoque aucune mutation de stratégie, aucun `ExecutionIntent` et aucun ordre Broker/Kraken.
 
-`OpenAIChatProvider` :
-
-- utilise le même `LLMModel` configuré que `OpenAIDecisionProvider` ;
-- utilise `operator-chat-v1` ;
-- demande du texte naturel, sans tools ;
-- ne parse ni ne construit de `DecisionCandidate` ;
-- ne connaît ni Risk, ni Broker, ni Kraken privé.
-
-### Demandes de mutation
-
-Exemples :
-
-```text
-"BUY maintenant"
-"passe en agressivité 8"
-"ignore cette limite Risk"
-```
-
-Ces phrases peuvent être discutées ou expliquées mais ne provoquent :
-
-- aucun appel Risk ;
-- aucun changement `RiskPolicy` ;
-- aucun `ExecutionIntent` ;
-- aucun ordre Broker/Kraken ;
-- aucune mutation de configuration ;
-- aucune injection dans les cycles suivants.
-
-Un futur mécanisme d'instructions opérateur réelles devra être explicite, audité, versionné et appliqué à partir d'un cycle identifié. Il est hors périmètre Batch 15.
+Le chat ne peut pas activer le harness 16.3.
 
 ---
 
-## 8. Contexte conversationnel canonique
+## 13. No-look-ahead et anti cherry-picking
 
-Le chat peut lire :
+Les règles d'expérimentation restent inchangées : mêmes faits, même prompt, même Risk/coûts/univers/source pour les comparaisons contrôlées, répétitions complètes, aucune suppression post-hoc.
 
-- état du moteur ;
-- portefeuille PAPER courant ;
-- dernier marché durable ;
-- dernier cycle ou cycle explicitement demandé ;
-- décision, Risk, intent/fills persistés du cycle ;
-- résumés récents ;
-- résumé analytics courant.
-
-Il ne reconstruit aucun fait métier parallèle.
-
-Pour un cycle historique :
-
-- `historical_cycle.agent_input` est la source causale autorisée pour expliquer la décision ;
-- la décision/rationale et les faits Risk/exécution du **même cycle** peuvent être expliqués ;
-- `current_market`, `current_portfolio` et analytics courants restent des informations présentes distinctes ;
-- ces informations plus récentes ne doivent jamais être présentées comme ayant causé la décision passée.
-
-Le chat peut résumer une `rationale` persistée, mais ne prétend pas révéler une chaîne de pensée cachée.
+Le chat ou l'opérateur ne doivent jamais réécrire rétroactivement une décision ou utiliser un prix futur comme justification causale.
 
 ---
 
-## 9. Historique conversationnel
+## 14. Invariants conservés
 
-V1 : mémoire process seulement, bornée par session et en nombre de sessions. Aucun schéma PostgreSQL.
-
-Conséquences voulues :
-
-- un redémarrage backend perd l'historique chat ;
-- un reload frontend peut relire la session tant que le backend reste vivant ;
-- aucune conversation ne participe aux analytics ou expériences ;
-- aucune conversation ne devient une instruction stratégique durable par accident.
-
----
-
-## 10. Erreurs et confidentialité
-
-Les erreurs chat sont distinctes des erreurs de cycle : un échec provider chat renvoie une erreur API sanitizée et ne produit pas un cycle `FAILED`.
-
-Les formes de secrets courantes sont redigées avant stockage en mémoire et envoi au provider. Aucun message brut d'erreur OpenAI n'est renvoyé au cockpit.
-
-Cette redaction est best-effort : aucun secret ne doit être volontairement saisi dans le chat.
-
----
-
-## 11. No-look-ahead et anti cherry-picking
-
-Les règles existantes d'expérimentation restent inchangées : mêmes faits, même prompt, même Risk/coûts/univers/source pour les comparaisons contrôlées, répétitions complètes, aucune suppression post-hoc.
-
-Le chat ne doit jamais :
-
-- réécrire une décision ;
-- expliquer une décision avec un prix observé après le cycle ;
-- contaminer les digests expérimentaux ;
-- influencer silencieusement les décisions futures via son historique.
-
----
-
-## 12. Invariants conservés
-
-- un seul agent IA ;
-- même modèle configuré Luna/Sol pour stratégie et interface conversationnelle ;
-- provider stratégique et provider chat séparés ;
-- SPOT/PAPER uniquement ;
-- aucun short/levier/margin/future/perpetual ;
-- SELL uniquement sur position détenue ;
+- un seul agent IA stratégique ;
+- Luna/Sol derrière le même provider stratégique ;
+- SPOT + Kraken Derivatives PAPER ;
+- SPOT sans short/levier/margin ;
+- LONG/SHORT uniquement dans le domaine dérivés ;
+- perpetual linéaire + ISOLATED pour l'exécution dérivés actuelle ;
+- levier déterministe, jamais choisi par le LLM ;
 - IA stratégique ;
 - Risk autorité finale ;
 - aucun LLM -> Broker direct ;
 - seul Risk crée l'intent ;
+- `reduce_only` et anti-reversal produits par Risk ;
 - chat sans mutation Risk/stratégie ;
-- HOLD/ALLOW/MODIFY/REJECT conservent leur sémantique ;
-- erreurs chat distinctes de `FAILED` ;
 - aucun secret exposé ;
 - aucun look-ahead ;
 - aucun LIVE.
+
+---
+
+## 15. Prochain jalon
+
+Le chemin d'exécution PERPETUAL PAPER étant validé techniquement, le prochain essai doit utiliser **l'Agent réel GPT-5.6 Luna**, sans décision forcée. Un `HOLD` naturel reste acceptable et doit être journalisé comme tel.

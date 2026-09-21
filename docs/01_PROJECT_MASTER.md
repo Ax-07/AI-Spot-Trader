@@ -4,7 +4,7 @@
 
 Ce document est la spécification fonctionnelle et architecturale principale d'**AI Spot Trader**. Depuis le Batch 16, le projet couvre **SPOT + Kraken Derivatives**, sans changer le principe d'un agent stratégique unique ni l'autorité finale du Risk Engine.
 
-Référence fonctionnelle intégrée Batch 16.2 : GitHub `main` au commit `003bbadd7ae2f8288ccde049433832046f066957` (`feat: add durable paper run isolation`), poussé le 21 septembre 2026 après validation locale complète.
+Référence fonctionnelle intégrée Batch 16.3 : GitHub `main` au commit `520b016eb501f1a208bcb6d0e90eb1df947e1d0b` (`test: add controlled perpetual paper smoke harness`), poussé le 21 septembre 2026 après validation locale et smokes PERPETUAL PAPER contrôlés.
 
 ## 2. Vision et invariants
 
@@ -80,7 +80,9 @@ Kraken public data
                                              FastAPI / cockpit
 ```
 
-L'ajout Derivatives puis l'isolation des runs ne créent ni second agent, ni second runner, ni voie parallèle d'exécution.
+L'ajout Derivatives, l'isolation des runs et le harness 16.3 ne créent ni second agent, ni second runner, ni voie parallèle d'exécution.
+
+Le harness 16.3 est un outil de validation explicite. Il injecte des décisions déterministes au niveau de la frontière stratégique afin de tester les composants aval. Il n'est pas appelé par la composition normale et ne constitue pas une stratégie de production.
 
 ## 4. Contrats de domaine
 
@@ -98,7 +100,7 @@ L'ajout Derivatives puis l'isolation des runs ne créent ni second agent, ni sec
 
 Une `DerivativePosition` est one-way par symbole et porte : `LONG|SHORT`, quantité, prix moyen, mark, contract size, notionnel, P&L réalisé/non réalisé, levier, marge utilisée, maintenance margin, funding cumulé, prix de liquidation estimé et mode de marge.
 
-Le ledger PAPER reste actuellement **process-local**. Ce point est déterminant pour le cycle de vie des runs : un redémarrage backend recrée le portefeuille au capital initial et ne peut donc pas reprendre honnêtement un run précédent.
+Le ledger PAPER reste actuellement **process-local**. Un redémarrage backend recrée le portefeuille au capital initial et ne peut donc pas reprendre honnêtement un run précédent.
 
 ### Agent
 
@@ -131,7 +133,7 @@ Le parser traite `contractValueTradePrecision` comme un exposant décimal entier
 min_order_quantity = 10 ^ (-contractValueTradePrecision)
 ```
 
-Une valeur `4` donne `0.0001`. Une valeur `-3`, observée sur certains contrats Kraken comme `PF_PEPEUSD`, `PF_SHIBUSD` et `PF_BONKUSD`, donne `1000`.
+Une valeur `4` donne `0.0001`. Une valeur `-3` donne `1000`.
 
 ## 6. PAPER Derivatives
 
@@ -144,6 +146,8 @@ Le market source dérivés marque le ledger avant le snapshot portefeuille du cy
 ## 7. Risk Engine
 
 Les règles SPOT existantes restent inchangées. Pour les dérivés, Risk ajoute : cohérence `market_type`, contrat exécutable `PERPETUAL + LINEAR`, quantité minimale/max instrument, `ISOLATED` uniquement, levier configuré <= plafond Risk <= limite instrument, max order notional, max derivative position notional, max total derivative exposure, marge disponible, buffer maintenance/liquidation, réduction/fermeture et interdiction du retournement accidentel.
+
+Le Batch 16.3 a confirmé en smoke réel que la fermeture opposée surdimensionnée est réduite à la quantité détenue avec `MODIFY / DERIVATIVE_REDUCE_ONLY_LIMIT`, sans retournement de position.
 
 ## 8. Persistance des runs PAPER
 
@@ -175,8 +179,6 @@ paper_runs
                     +--> audit_fills
 ```
 
-Le run des décisions, Risk, intents et fills est donc déterministe via leur cycle ; aucune duplication de `paper_run_id` n'est nécessaire dans ces tables.
-
 ### Cycle de vie
 
 - le run est créé au démarrage de la composition backend PAPER ;
@@ -184,18 +186,16 @@ Le run des décisions, Risk, intents et fills est donc déterministe via leur cy
 - `engine stop/start` dans le même processus conserve le run ;
 - arrêt backend propre : le moteur s'arrête puis `ended_at` est persisté ;
 - un run fermé refuse de nouveaux cycles ;
-- crash : `ended_at` peut rester `NULL`, ce qui signifie uniquement « fin propre non persistée » ;
-- redémarrage backend : nouveau `paper_run_id`, car le ledger mémoire est réinitialisé et l'ancien run ne peut pas être repris honnêtement.
+- crash : `ended_at` peut rester `NULL` ;
+- redémarrage backend : nouveau `paper_run_id`, car le ledger mémoire est réinitialisé.
 
-Aucune rotation de run « à chaud » n'est ajoutée au Batch 16.2. Tant que le ledger ne sait pas être reset/repris durablement, une nouvelle expérience est démarrée par un arrêt propre puis un redémarrage du backend.
+Aucune rotation à chaud n'est autorisée tant que le ledger ne sait pas être reset/repris durablement.
 
 ### Migration / legacy
 
 La migration `0002_paper_runs` crée `paper_runs` et ajoute `audit_cycles.paper_run_id` nullable.
 
-Les anciennes lignes restent **NULL**. Aucun backfill en pseudo-run historique n'est autorisé, car les frontières de runs anciennes ne sont pas prouvables déterministement.
-
-Les lignes legacy restent consultables dans l'audit global mais ne sont jamais incluses dans les analytics d'un run moderne identifié.
+Les anciennes lignes restent **NULL**. Aucun backfill en pseudo-run historique n'est autorisé.
 
 ## 9. Analytics / API
 
@@ -212,9 +212,9 @@ GET /api/v1/paper-runs/{paper_run_id}
 GET /api/v1/analytics?paper_run_id={paper_run_id}
 ```
 
-Les endpoints audit `cycles`, `decisions`, `risk-assessments`, `executions`, `errors/latest` et `market/latest` supportent une sélection explicite par run lorsque le reader durable run-scoped est utilisé.
+Les endpoints audit `cycles`, `decisions`, `risk-assessments`, `executions`, `errors/latest` et `market/latest` supportent une sélection explicite par run.
 
-Dans la composition PAPER canonique, les readers sont configurés avec le run courant comme défaut. Le cockpit existant peut donc continuer d'appeler ses endpoints sans nouveau paramètre et reste découplé du moteur.
+Le Batch 16.3 a confirmé sur deux smokes distincts que les analytics et cycles peuvent être relus séparément sans mélange.
 
 ## 10. Configuration
 
@@ -226,25 +226,40 @@ Le `paper_run_id` n'est pas un paramètre opérateur : il est généré par le b
 
 ### Batch 16.1 intégré
 
-Le HEAD GitHub vérifié avant le Batch 16.2 est `08926e98dda3fe9ad7b68b4ddb5c582cbe49529c`. Le smoke réel Batch 16.1 sur `BTC/USD / PF_XBTUSD` a terminé `COMPLETED`, Agent `HOLD`, Risk `ALLOW / HOLD_NO_EXECUTION`.
-
-Ce smoke ne valide toujours pas LONG/SHORT, fills dérivés, funding accumulé, P&L de position ni `reduce_only`.
+Le smoke réel Batch 16.1 sur `BTC/USD / PF_XBTUSD` a terminé `COMPLETED`, Agent `HOLD`, Risk `ALLOW / HOLD_NO_EXECUTION`.
 
 ### Batch 16.2 intégré
 
-L'isolation durable multi-runs est intégrée au commit `003bbadd7ae2f8288ccde049433832046f066957`. La migration PostgreSQL `0002_paper_runs` a été appliquée sur la base locale de validation et Alembic confirme `0002_paper_runs (head)`.
+L'isolation durable multi-runs est intégrée au commit `003bbadd7ae2f8288ccde049433832046f066957`. La migration PostgreSQL `0002_paper_runs` a été appliquée et Alembic confirme `0002_paper_runs (head)`.
 
-Validation locale confirmée :
+### Batch 16.3 intégré
+
+Commit fonctionnel : `520b016eb501f1a208bcb6d0e90eb1df947e1d0b`.
+
+Validation locale :
 
 ```text
-pytest          : 344 passed, 2 warnings externes
+pytest          : suite complète OK, 2 warnings externes FastAPI/Starlette
 ruff check .    : All checks passed
-mypy .          : Success: no issues found in 106 source files
-git diff --check: aucune erreur, warnings LF -> CRLF uniquement
+mypy .          : Success: no issues found in 109 source files
+git diff --check: aucune erreur
 ```
 
-Le prochain travail fonctionnel peut donc utiliser `paper_run_id` comme frontière canonique pour les smokes PAPER. Aucun test n'est considéré réussi sans exécution réelle.
+Smokes réels contrôlés :
 
-## 12. LIVE
+```text
+LONG  : 9523ec8c-7dd1-4706-bf07-47ef9669d56b
+SHORT : b75f6e86-4724-41de-8d63-e8132d212530
+```
+
+Les deux runs ont validé ouverture, mark/HOLD, funding observé, réduction `reduce_only`, fermeture complète sans reversal, P&L/marge/coûts PAPER et audit durable. `verify-isolation` a retourné `isolation_verified=true`.
+
+Ces décisions étaient déterministes et réservées au harness : elles ne valident pas encore la qualité stratégique de Luna. Elles valident le chemin d'exécution aval.
+
+## 12. Prochaine expérimentation
+
+Le prochain jalon est un premier run avec **GPT-5.6 Luna réel en PERPETUAL PAPER**, sans décision forcée. Le Risk Engine conserve l'autorité finale et un `HOLD` naturel reste un résultat valide.
+
+## 13. LIVE
 
 LIVE reste hors périmètre. Il nécessitera un batch séparé : auth/permissions, adaptateur privé Kraken, réconciliation, idempotence, recovery, garde-fous opérateur, clés sans retrait et activation explicite.

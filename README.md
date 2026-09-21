@@ -2,7 +2,7 @@
 
 AI Spot Trader est une application expérimentale de trading crypto **SPOT + Kraken Derivatives** pilotée par **un agent IA unique**. L'agent conserve la décision stratégique (`BUY`, `SELL`, `HOLD`) tandis qu'un **Risk Engine déterministe** garde l'autorité finale avant toute exécution.
 
-> **État Batch 16.2 : intégré sur GitHub `main` au commit fonctionnel `003bbadd7ae2f8288ccde049433832046f066957` (`feat: add durable paper run isolation`). Validation locale complète confirmée le 21 septembre 2026 : migration PostgreSQL `0002_paper_runs` appliquée, **344 tests passés**, Ruff OK, mypy OK sur 106 fichiers et `git diff --check` sans erreur (warnings LF→CRLF Windows uniquement).
+> **État Batch 16.3 : commit fonctionnel intégré sur GitHub `main` : `520b016eb501f1a208bcb6d0e90eb1df947e1d0b` (`test: add controlled perpetual paper smoke harness`). Validation locale et smokes réels contrôlés confirmés le 21 septembre 2026 : suite `pytest` complète OK, Ruff OK, mypy OK sur 109 fichiers, `git diff --check` OK, smoke LONG OK, smoke SHORT OK et isolation durable des deux `paper_run_id` vérifiée.**
 
 ## Principes
 
@@ -134,6 +134,30 @@ Les endpoints audit acceptent aussi une sélection explicite `paper_run_id`. Dan
 
 Aucun endpoint de rotation à chaud n'est ajouté : tant que le ledger ne dispose pas d'un reset/recovery durable, démarrer une nouvelle expérience signifie arrêter proprement puis redémarrer le backend.
 
+## Batch 16.3 — Smokes PERPETUAL PAPER contrôlés
+
+Le Batch 16.3 ajoute un outil CLI explicitement réservé à la validation technique. Il réutilise les composants canoniques (`TradingCycleRunner`, Risk Engine, Paper Broker, ledger, audit PostgreSQL et lifecycle de run) mais injecte des décisions déterministes de smoke. **Ces décisions ne sont pas des décisions Luna/Sol et ne modifient pas la stratégie normale de l'application.**
+
+Smokes réels contrôlés sur `BTC/USD / PF_XBTUSD`, levier `1x`, marge `ISOLATED` :
+
+- LONG : ouverture `BUY 0.0002`, mark/HOLD, réduction `SELL 0.0001`, fermeture oversize demandée `SELL 0.0002` ramenée par Risk à `0.0001` avec `MODIFY / DERIVATIVE_REDUCE_ONLY_LIMIT` ;
+- SHORT : ouverture `SELL 0.0002`, mark/HOLD, réduction `BUY 0.0001`, fermeture oversize demandée `BUY 0.0002` ramenée par Risk à `0.0001` avec le même garde-fou ;
+- `reduce_only=true` confirmé sur les réductions/fermetures ;
+- funding réellement observé sur position ouverte dans les deux sens ;
+- P&L réalisé/non réalisé, marge et coûts PAPER effectivement valorisés ;
+- exposition finale nulle et aucune inversion accidentelle de position ;
+- chaque smoke produit 4 cycles `COMPLETED`, 3 exécutions et 0 cycle `FAILED` ;
+- deux runs distincts, fermés proprement avec `ended_at`, ont été relus séparément avec `isolation_verified=true`.
+
+Runs de preuve locaux :
+
+```text
+LONG  : 9523ec8c-7dd1-4706-bf07-47ef9669d56b
+SHORT : b75f6e86-4724-41de-8d63-e8132d212530
+```
+
+Les fichiers JSON complets de preuve restent hors Git.
+
 ## Configuration
 
 SPOT reste le défaut. Pour activer le chemin PERPETUAL PAPER :
@@ -162,20 +186,21 @@ La migration `0002_paper_runs` crée `paper_runs` puis ajoute une FK nullable su
 
 ## Validation
 
-Validation locale confirmée le 21 septembre 2026 :
+Validation locale du commit fonctionnel Batch 16.3 confirmée le 21 septembre 2026 :
 
 ```text
-alembic upgrade head : 0001_audit_journal -> 0002_paper_runs
-alembic current      : 0002_paper_runs (head)
-pytest               : 344 passed, 2 warnings externes
+pytest               : suite complète OK, 2 warnings externes FastAPI/Starlette
 ruff check .          : All checks passed
-mypy .                : Success: no issues found in 106 source files
-git diff --check      : aucune erreur, warnings LF -> CRLF uniquement
+mypy .                : Success: no issues found in 109 source files
+git diff --check      : aucune erreur
+git status --short    : propre après commit/push fonctionnel
 ```
 
-Pendant la préparation de la livraison, ChatGPT a également exécuté `compileall`, des contrôles de métadonnées SQLAlchemy et des vérifications de structure du ZIP. La validation PostgreSQL et la suite complète ci-dessus ont été exécutées localement par l'opérateur avant intégration.
+Smokes réels contrôlés : LONG OK, SHORT OK, funding observé, `reduce_only` OK, fermeture sans reversal, analytics run-scoped cohérentes et isolation entre les deux `paper_run_id` vérifiée.
 
-Le smoke Batch 16.1 `BTC/USD / PF_XBTUSD` a validé un cycle `HOLD`, mais pas encore une exécution réelle PAPER LONG/SHORT, un fill dérivé, funding sur position, P&L de position ou `reduce_only`.
+## Prochaine étape
+
+Le chemin d'exécution PERPETUAL PAPER est maintenant validé techniquement au-delà de `HOLD`. La prochaine étape est un **premier run expérimental avec l'Agent réel GPT-5.6 Luna en PERPETUAL PAPER**, sans décision forcée. Un `HOLD` naturel restera un résultat valide.
 
 ## Sécurité / LIVE
 
