@@ -50,7 +50,29 @@ Le levier reste déterministe/configuré et borné par Risk.
 
 ---
 
-## 4. Mapping agressivité 1–10
+## 4. Contexte marché transmis à l'Agent
+
+`MarketState.context` est un contexte **descriptif et déterministe**, jamais un signal de trading. Le `MarketStateBuilder` calcule actuellement des fenêtres 5 min / 30 min avec fraîcheur, prix de début/fin, min/max, range, rendement et volatilité réalisée.
+
+Pour SPOT, ce contexte est construit à partir de l'historique OHLC public Kraken et du ticker courant.
+
+Le Batch 16.5 applique le même pipeline à PERPETUAL à partir des bougies publiques Kraken Futures Charts `mark` en `1m`. Les bougies sont normalisées en `MarketObservation` puis passées au même builder ; aucune logique statistique parallèle n'est créée.
+
+Règles causales :
+
+- le ticker mark courant fournit `last_price` et la fraîcheur ;
+- les statistiques utilisent uniquement des bougies clôturées strictement avant le timestamp du ticker ;
+- une bougie en cours ou future n'est jamais incluse ;
+- le `statistics_as_of` reste ancré sur la dernière clôture historique réellement disponible ;
+- `DerivativeMarketContext` conserve en parallèle instrument, mark, index et funding courant.
+
+Ces observations peuvent éclairer Luna, mais elles ne produisent jamais elles-mêmes BUY, SELL ou HOLD.
+
+Validation réelle Batch 16.5 : le run `8bbfe6a5-a5d5-4c32-96dc-eb9c5e4113d2` a produit le cycle `c097f3fc-4954-4985-a364-f6ffe99b24e6` en statut `COMPLETED` avec un vrai `AgentInput.market_state.context` non nul. Les fenêtres 5 min et 30 min étaient complètes, avec 6 et 31 observations, et le contexte dérivé mark/index/funding restait présent.
+
+---
+
+## 5. Mapping agressivité 1–10
 
 Version : `aggressiveness-map-v1`.
 
@@ -60,7 +82,7 @@ Aucune phrase du chat opérateur ne modifie ce mapping ni le niveau d'un futur `
 
 ---
 
-## 5. Risk Engine
+## 6. Risk Engine
 
 Risk reste synchrone et déterministe. Résultats :
 
@@ -77,7 +99,7 @@ Le Batch 16.3 a confirmé qu'une fermeture opposée surdimensionnée est ramené
 
 ---
 
-## 6. TradingCycleRunner
+## 7. TradingCycleRunner
 
 `TradingCycleRunner.run_cycle()` reste la primitive canonique :
 
@@ -97,7 +119,7 @@ SPOT et PERPETUAL utilisent le même runner.
 
 ---
 
-## 7. Harness contrôlé Batch 16.3
+## 8. Harness contrôlé Batch 16.3
 
 Le module `ai_spot_trader.tools.derivatives_smoke` est un **outil de validation technique**, pas une stratégie.
 
@@ -115,7 +137,7 @@ Le harness réutilise le vrai Risk Engine, le vrai Paper Broker, le vrai ledger,
 
 ---
 
-## 8. Résultats des smokes PERPETUAL PAPER
+## 9. Résultats des smokes PERPETUAL PAPER
 
 Instrument : `BTC/USD / PF_XBTUSD`, perpetual linéaire, `ISOLATED`, levier `1x`.
 
@@ -139,7 +161,25 @@ Dans les deux cas : 4 cycles `COMPLETED`, 3 exécutions, P&L réalisé/non réal
 
 ---
 
-## 9. Funding, P&L et marge
+## 10. Premier run Agent réel — Batch 16.4
+
+Le premier run GPT-5.6 Luna réel en PERPETUAL PAPER a été exécuté via la composition normale, sans harness et sans décision forcée.
+
+`paper_run_id = 36fe73e0-f52f-4e27-995b-c5c848f46da2`, `BTC/USD / PF_XBTUSD`, `ISOLATED`, levier `1x`, agressivité `2`, capital `1000 USD` :
+
+- 4 cycles `COMPLETED` ;
+- 4 décisions Luna `HOLD` ;
+- 0 `FAILED` ;
+- 4 Risk `ALLOW / HOLD_NO_EXECUTION` ;
+- 0 `ExecutionIntent`, fill ou trade ;
+- exposition finale `0`, P&L `0`, portefeuille final `1000 USD` ;
+- run clôturé durablement avec `ended_at`.
+
+L'audit du vrai `AgentInput` a montré `market_state.context = null`. Les rationales Luna indiquaient un manque de contexte directionnel ; avec agressivité `2`, les quatre HOLD sont cohérents et ne constituent pas un échec du pipeline.
+
+---
+
+## 11. Funding, P&L et marge
 
 Le market source dérivés marque le ledger avant le snapshot portefeuille du cycle.
 
@@ -151,7 +191,7 @@ Les coûts PAPER incluent frais, spread et slippage.
 
 ---
 
-## 10. paper_run_id et audit
+## 12. paper_run_id et audit
 
 Chaque expérience PAPER moderne possède un `paper_run_id` durable.
 
@@ -164,9 +204,11 @@ SHORT : b75f6e86-4724-41de-8d63-e8132d212530
 
 Les deux runs ont été fermés proprement avec `ended_at`. Le contrôle `verify-isolation` a confirmé `isolation_verified=true` et 4 cycles distincts par run.
 
+Le run Luna 16.4 `36fe73e0-f52f-4e27-995b-c5c848f46da2` a lui aussi été clôturé durablement.
+
 ---
 
-## 11. Manifestes expérimentaux
+## 13. Manifestes expérimentaux
 
 `paper-experiment-v1` reste le protocole agressivité. `paper-experiment-v2` reste le protocole Luna/Sol avec `comparison_variable = LLM_MODEL`, `experiment_group_digest`, `experiment_digest`, `replicate_index`, `replicate_count` et `source_digest` obligatoire.
 
@@ -174,7 +216,7 @@ Les manifestes sont inclus dans `AgentInput` et persistés avec le cycle. Le `pa
 
 ---
 
-## 12. Chat opérateur
+## 14. Chat opérateur
 
 Le chat est une interface vers le même modèle/persona configuré, mais pas un deuxième agent stratégique.
 
@@ -184,15 +226,17 @@ Le chat ne peut pas activer le harness 16.3.
 
 ---
 
-## 13. No-look-ahead et anti cherry-picking
+## 15. No-look-ahead et anti cherry-picking
 
 Les règles d'expérimentation restent inchangées : mêmes faits, même prompt, même Risk/coûts/univers/source pour les comparaisons contrôlées, répétitions complètes, aucune suppression post-hoc.
+
+Le contexte PERPETUAL du Batch 16.5 respecte la même causalité : une bougie mark n'est statistiquement visible qu'après sa clôture. Le timestamp du ticker courant borne explicitement l'historique admissible.
 
 Le chat ou l'opérateur ne doivent jamais réécrire rétroactivement une décision ou utiliser un prix futur comme justification causale.
 
 ---
 
-## 14. Invariants conservés
+## 16. Invariants conservés
 
 - un seul agent IA stratégique ;
 - Luna/Sol derrière le même provider stratégique ;
@@ -201,6 +245,7 @@ Le chat ou l'opérateur ne doivent jamais réécrire rétroactivement une décis
 - LONG/SHORT uniquement dans le domaine dérivés ;
 - perpetual linéaire + ISOLATED pour l'exécution dérivés actuelle ;
 - levier déterministe, jamais choisi par le LLM ;
+- contexte marché déterministe descriptif, jamais signal d'action ;
 - IA stratégique ;
 - Risk autorité finale ;
 - aucun LLM -> Broker direct ;
@@ -213,6 +258,6 @@ Le chat ou l'opérateur ne doivent jamais réécrire rétroactivement une décis
 
 ---
 
-## 15. Prochain jalon
+## 17. Prochain jalon
 
-Le chemin d'exécution PERPETUAL PAPER étant validé techniquement, le prochain essai doit utiliser **l'Agent réel GPT-5.6 Luna**, sans décision forcée. Un `HOLD` naturel reste acceptable et doit être journalisé comme tel.
+Le Batch 16.5 est validé localement : le vrai `AgentInput` PERPETUAL reçoit désormais un contexte causal 5 min / 30 min non nul. Après intégration sur `main`, les prochaines expérimentations peuvent mesurer les décisions naturelles de GPT-5.6 Luna avec ce contexte sans forcer BUY/SELL et sans ajouter de règle stratégique déterministe. Tout enrichissement de données doit rester un batch séparé et justifié par une mesure.

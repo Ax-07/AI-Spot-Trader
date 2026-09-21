@@ -6,61 +6,62 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- Commit fonctionnel Batch 16.3 intégré sur GitHub `main` : `520b016eb501f1a208bcb6d0e90eb1df947e1d0b` (`test: add controlled perpetual paper smoke harness`).
-- Parent documentaire Batch 16.2 : `8c03bd639736244ebc40fdeb82e770b17a6216cb` (`docs: finalize Batch 16.2 integration`).
-- Le commit fonctionnel 16.3 a été poussé sur `origin/main` le 21 septembre 2026 après validation locale et smokes réels contrôlés.
+- HEAD GitHub vérifié au démarrage du Batch 16.5 : `0b7303c9e0737f39ac81a5af2517f2f7953c133c` (`docs: finalize Batch 16.3 integration`).
+- Le Batch 16.5 est validé localement au 22 septembre 2026, mais reste non intégré tant qu'il n'a pas été commit et push sur `main`.
 
-## Batch 16.3 — Smokes PERPETUAL PAPER contrôlés
+## Batch 16.4 — Run Agent réel PERPETUAL PAPER confirmé
 
-Un harness CLI de validation a été ajouté sans modifier le comportement de la composition normale. Il réutilise le pipeline canonique Market -> décision -> Risk -> Paper Broker -> ledger -> audit, mais fournit des décisions déterministes explicitement marquées comme **smoke technique, pas stratégie Agent**.
+Premier run réel GPT-5.6 Luna via la composition normale, sans harness ni décision forcée :
 
-Smokes réels sur `BTC/USD / PF_XBTUSD`, levier `1x`, `ISOLATED` :
+- `paper_run_id = 36fe73e0-f52f-4e27-995b-c5c848f46da2` ;
+- `BTC/USD / PF_XBTUSD`, perpetual linéaire, `ISOLATED`, levier déterministe `1x` ;
+- capital `1000 USD`, agressivité `2` ;
+- 4 cycles `COMPLETED`, 0 `FAILED` ;
+- 4 décisions Luna naturelles `HOLD` ;
+- 4 Risk `ALLOW / HOLD_NO_EXECUTION` ;
+- 0 intent, fill ou trade ;
+- exposition et P&L finaux nuls ;
+- run durablement clôturé avec `ended_at`.
 
-- LONG : ouverture, mark/HOLD, réduction, fermeture oversize ramenée par Risk sans reversal ;
-- SHORT : même séquence symétrique ;
-- `reduce_only=true` confirmé ;
-- funding réellement observé dans les deux sens ;
-- P&L réalisé/non réalisé et libération de marge observés ;
-- 4 cycles `COMPLETED` et 3 exécutions par run ;
-- exposition finale nulle ;
-- deux runs distincts fermés proprement et isolation vérifiée.
+L'audit du vrai `AgentInput` a confirmé que la source Kraken Derivatives fournissait mark/index/funding/instrument mais `market_state.context = null`.
 
-Runs de preuve locaux :
+## Batch 16.5 — Contexte PERPETUAL validé localement
+
+Le contexte PERPETUAL réutilise désormais le pipeline canonique `MarketStateBuilder` :
+
+- bougies publiques Kraken Futures Charts `mark` en résolution `1m` ;
+- normalisation en `MarketObservation` ;
+- fenêtres descriptives 5 min / 30 min déjà utilisées en SPOT ;
+- rendement, range, volatilité réalisée et fraîcheur calculés sans look-ahead ;
+- seules les bougies clôturées strictement avant le ticker courant entrent dans les statistiques ;
+- mark/index/funding/instrument restent inchangés dans `DerivativeMarketContext` ;
+- aucune donnée privée Kraken et aucun LIVE ;
+- aucun indicateur ne produit directement BUY/SELL/HOLD.
+
+Validation réelle après redémarrage complet du backend :
+
+- `paper_run_id = 8bbfe6a5-a5d5-4c32-96dc-eb9c5e4113d2` ;
+- `cycle_id = c097f3fc-4954-4985-a364-f6ffe99b24e6`, statut `COMPLETED` ;
+- vrai `AgentInput` PERPETUAL avec `market_state.context != null` ;
+- fenêtre 5 min complète : 6 observations, rendement `-0.0008283458359064427`, volatilité réalisée `0.0003195517675049489` ;
+- fenêtre 30 min complète : 31 observations, rendement `0.002818639241644028`, volatilité réalisée `0.0004142619704073510` ;
+- fraîcheur observée `0.773542 s` ;
+- mark/index/funding toujours présents dans `DerivativeMarketContext`.
+
+Le critère principal du Batch 16.5 est donc satisfait. BUY, SELL ou HOLD restent tous des résultats stratégiques valides.
+
+## Invariants
+
+Un seul Agent stratégique. GPT-5.6 Luna pour les tests actuels. PAPER uniquement. Risk garde l'autorité finale. Levier `1x` et `ISOLATED` déterministes. Aucun LLM -> Broker direct. Aucun look-ahead. Aucun secret ni clé Kraken privée nécessaire.
+
+## Validation Batch 16.5 confirmée
 
 ```text
-LONG  : 9523ec8c-7dd1-4706-bf07-47ef9669d56b
-SHORT : b75f6e86-4724-41de-8d63-e8132d212530
+pytest backend                                  : 357 passed, 2 warnings externes
+ruff check backend                             : All checks passed
+mypy --config-file backend\pyproject.toml ... : Success, 107 source files
+git diff --check                               : aucune erreur ; avertissements LF -> CRLF uniquement
+smoke Luna PERPETUAL PAPER                     : COMPLETED, context 5m/30m non nul
 ```
 
-Les JSON complets de preuve restent hors Git.
-
-## Isolation durable
-
-Le modèle Batch 16.2 reste inchangé :
-
-- table PostgreSQL `paper_runs` ;
-- `audit_cycles.paper_run_id` comme FK canonique ;
-- décisions, Risk, intents et fills héritent du run via leur cycle ;
-- SPOT et PERPETUAL utilisent le même mécanisme ;
-- migration `0002_paper_runs` ;
-- legacy pré-migration conservé avec `paper_run_id = NULL`.
-
-Le contrôle `verify-isolation` du Batch 16.3 a confirmé que les deux runs LONG/SHORT restent séparés dans l'audit et les analytics.
-
-## Validation confirmée
-
-Validation locale avant commit/push fonctionnel 16.3 :
-
-```text
-pytest               : suite complète OK, 2 warnings externes FastAPI/Starlette
-ruff check .          : OK
-mypy .                : OK sur 109 fichiers
-git diff --check      : OK
-git status --short    : propre après push
-```
-
-Smokes : LONG OK, SHORT OK, funding observé, réduction/fermeture `reduce_only`, `MODIFY / DERIVATIVE_REDUCE_ONLY_LIMIT` sur fermeture oversize, aucune inversion accidentelle et isolation multi-runs validée.
-
-## Prochaine étape
-
-Lancer le premier **run expérimental Agent réel GPT-5.6 Luna en PERPETUAL PAPER**, sans forcer BUY/SELL. Un `HOLD` naturel restera un résultat valide. LIVE reste hors périmètre.
+Étape restante avant intégration : revue du diff, commit puis push explicite sur `main`.

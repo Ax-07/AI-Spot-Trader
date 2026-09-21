@@ -4,7 +4,7 @@
 
 Ce document est la spécification fonctionnelle et architecturale principale d'**AI Spot Trader**. Depuis le Batch 16, le projet couvre **SPOT + Kraken Derivatives**, sans changer le principe d'un agent stratégique unique ni l'autorité finale du Risk Engine.
 
-Référence fonctionnelle intégrée Batch 16.3 : GitHub `main` au commit `520b016eb501f1a208bcb6d0e90eb1df947e1d0b` (`test: add controlled perpetual paper smoke harness`), poussé le 21 septembre 2026 après validation locale et smokes PERPETUAL PAPER contrôlés.
+Référence GitHub vérifiée à l'ouverture et à la clôture locale du Batch 16.5 : `main` au commit `0b7303c9e0737f39ac81a5af2517f2f7953c133c` (`docs: finalize Batch 16.3 integration`). Le Batch 16.4 est un résultat réel confirmé localement ; le Batch 16.5 est désormais validé localement mais reste non intégré tant qu'il n'est pas commit et push.
 
 ## 2. Vision et invariants
 
@@ -80,7 +80,7 @@ Kraken public data
                                              FastAPI / cockpit
 ```
 
-L'ajout Derivatives, l'isolation des runs et le harness 16.3 ne créent ni second agent, ni second runner, ni voie parallèle d'exécution.
+L'ajout Derivatives, l'isolation des runs, le harness 16.3 et le contexte PERPETUAL 16.5 ne créent ni second agent, ni second runner, ni voie parallèle d'exécution.
 
 Le harness 16.3 est un outil de validation explicite. Il injecte des décisions déterministes au niveau de la frontière stratégique afin de tester les composants aval. Il n'est pas appelé par la composition normale et ne constitue pas une stratégie de production.
 
@@ -89,6 +89,8 @@ Le harness 16.3 est un outil de validation explicite. Il injecte des décisions 
 ### Marché
 
 `MarketState` porte explicitement `market_type = SPOT | PERPETUAL | FUTURE`, les champs historiques `symbol`, `last_price`, `context`, et un `DerivativeMarketContext` optionnel pour les dérivés.
+
+`MarketContext` est provider-agnostique et contient la fraîcheur et les fenêtres descriptives multi-horizon. `MarketStateBuilder` calcule les mêmes statistiques pour SPOT et, à partir du Batch 16.5, PERPETUAL : nombre d'observations, complétude, prix de début/fin, min/max, range, rendement et volatilité réalisée.
 
 `DerivativeMarketContext` contient l'instrument normalisé, mark, index optionnel, funding rate optionnel et timestamp d'observation.
 
@@ -106,7 +108,7 @@ Le ledger PAPER reste actuellement **process-local**. Un redémarrage backend re
 
 Le schéma de sortie LLM reste simple : `action = BUY | SELL | HOLD`, `symbol`, `proposed_quantity?`, `rationale?`.
 
-Le provider applicatif copie `market_type` depuis le `MarketState` dans `DecisionCandidate`. Le LLM ne choisit jamais le type de marché ni le levier. Le prompt stratégique est versionné `agent-strategy-v3`.
+Le provider applicatif copie `market_type` depuis le `MarketState` dans `DecisionCandidate`. Le LLM ne choisit jamais le type de marché ni le levier. Le prompt stratégique reste versionné `agent-strategy-v3` dans ce batch : le contrat n'est pas changé, seul le contenu réel de `MarketState.context` devient disponible sur PERPETUAL.
 
 Le `paper_run_id` est une identité d'audit/exécution et n'est pas ajouté au contrat stratégique LLM : il n'influence pas la décision de marché.
 
@@ -121,7 +123,8 @@ Le `paper_run_id` est une identité d'audit/exécution et n'est pas ajouté au c
 La séparation provider reste claire :
 
 - Spot : API publique historique `api.kraken.com` + WebSocket Spot ;
-- Derivatives : REST public `https://futures.kraken.com/derivatives/api/v3`.
+- Derivatives : REST public `https://futures.kraken.com/derivatives/api/v3` pour instruments/ticker ;
+- Derivatives Charts public : `https://futures.kraken.com/api/charts/v1` pour les bougies mark historiques.
 
 Le client Derivatives n'expose aucun endpoint privé. Les instruments sont découverts via l'API publique et normalisés en `BASE/QUOTE`, avec alias `XBT -> BTC`.
 
@@ -134,6 +137,14 @@ min_order_quantity = 10 ^ (-contractValueTradePrecision)
 ```
 
 Une valeur `4` donne `0.0001`. Une valeur `-3` donne `1000`.
+
+### Historique PERPETUAL — Batch 16.5
+
+La source Derivatives récupère des bougies publiques `mark` en résolution `1m`. Le timestamp Kraken est interprété comme début de bougie ; l'observation statistique est datée à la clôture (`started_at + 1 minute`).
+
+Le ticker courant reste la source du `last_price`, de la fraîcheur, du mark, de l'index et du funding courant. Les bougies historiques alimentent uniquement les fenêtres descriptives du `MarketStateBuilder`.
+
+Aucune bougie dont la clôture est égale ou postérieure au timestamp du ticker n'est admise dans les statistiques. Cette règle interdit le look-ahead et évite d'utiliser une bougie encore ouverte.
 
 ## 6. PAPER Derivatives
 
@@ -148,6 +159,8 @@ Le market source dérivés marque le ledger avant le snapshot portefeuille du cy
 Les règles SPOT existantes restent inchangées. Pour les dérivés, Risk ajoute : cohérence `market_type`, contrat exécutable `PERPETUAL + LINEAR`, quantité minimale/max instrument, `ISOLATED` uniquement, levier configuré <= plafond Risk <= limite instrument, max order notional, max derivative position notional, max total derivative exposure, marge disponible, buffer maintenance/liquidation, réduction/fermeture et interdiction du retournement accidentel.
 
 Le Batch 16.3 a confirmé en smoke réel que la fermeture opposée surdimensionnée est réduite à la quantité détenue avec `MODIFY / DERIVATIVE_REDUCE_ONLY_LIMIT`, sans retournement de position.
+
+Le Batch 16.5 ne modifie aucune règle Risk : les statistiques de marché restent descriptives et ne créent jamais un `ExecutionIntent`.
 
 ## 8. Persistance des runs PAPER
 
@@ -222,6 +235,8 @@ SPOT reste le défaut (`PAPER_MARKET_TYPE=SPOT`). Pour PERPETUAL : `PAPER_MARKET
 
 Le `paper_run_id` n'est pas un paramètre opérateur : il est généré par le backend afin d'éviter les collisions/reprises manuelles ambiguës.
 
+Aucun nouveau secret ou réglage d'authentification n'est nécessaire au Batch 16.5 : Kraken Futures Charts est public.
+
 ## 11. Validation et intégration
 
 ### Batch 16.1 intégré
@@ -254,11 +269,50 @@ SHORT : b75f6e86-4724-41de-8d63-e8132d212530
 
 Les deux runs ont validé ouverture, mark/HOLD, funding observé, réduction `reduce_only`, fermeture complète sans reversal, P&L/marge/coûts PAPER et audit durable. `verify-isolation` a retourné `isolation_verified=true`.
 
-Ces décisions étaient déterministes et réservées au harness : elles ne valident pas encore la qualité stratégique de Luna. Elles valident le chemin d'exécution aval.
+Ces décisions étaient déterministes et réservées au harness : elles ne valident pas la qualité stratégique de Luna. Elles valident le chemin d'exécution aval.
+
+### Batch 16.4 confirmé localement
+
+Run réel Luna : `36fe73e0-f52f-4e27-995b-c5c848f46da2`.
+
+- composition normale ;
+- GPT-5.6 Luna ;
+- 4 cycles `COMPLETED` ;
+- 4 HOLD naturels ;
+- zéro erreur, intent, fill ou trade ;
+- Risk `ALLOW / HOLD_NO_EXECUTION` ;
+- exposition finale et P&L nuls ;
+- `ended_at` renseigné.
+
+Le vrai `AgentInput` avait `market_state.context = null`, ce qui motive directement le Batch 16.5.
+
+### Batch 16.5 validé localement
+
+Le patch ajoute le contexte PERPETUAL en réutilisant le builder existant et des tests ciblés : causalité/no-look-ahead, déterminisme, fraîcheur/fail-closed, sérialisation `AgentInput`, conservation mark/index/funding et absence d'authentification privée pour l'historique public.
+
+Validation locale :
+
+```text
+pytest backend                                  : 357 passed, 2 warnings externes
+ruff check backend                             : All checks passed
+mypy --config-file backend\pyproject.toml ... : Success, 107 source files
+git diff --check                               : aucune erreur ; avertissements LF -> CRLF uniquement
+```
+
+Validation réelle via la composition normale après redémarrage backend :
+
+- `paper_run_id = 8bbfe6a5-a5d5-4c32-96dc-eb9c5e4113d2` ;
+- `cycle_id = c097f3fc-4954-4985-a364-f6ffe99b24e6`, `COMPLETED` ;
+- `AgentInput.market_state.context` non nul ;
+- fenêtres 5 min et 30 min complètes avec respectivement 6 et 31 observations ;
+- rendements observés `-0.0008283458359064427` et `0.002818639241644028` ;
+- volatilités réalisées `0.0003195517675049489` et `0.0004142619704073510` ;
+- fraîcheur du snapshot `0.773542 s` ;
+- mark/index/funding conservés.
 
 ## 12. Prochaine expérimentation
 
-Le prochain jalon est un premier run avec **GPT-5.6 Luna réel en PERPETUAL PAPER**, sans décision forcée. Le Risk Engine conserve l'autorité finale et un `HOLD` naturel reste un résultat valide.
+Après intégration du Batch 16.5, les prochains runs GPT-5.6 Luna PERPETUAL PAPER pourront mesurer la qualité stratégique avec ce contexte réellement disponible. Aucun BUY/SELL ne doit être forcé : HOLD reste valide. Tout enrichissement supplémentaire (volume, liquidité, funding historique) doit être motivé par un besoin mesuré et traité dans un batch distinct.
 
 ## 13. LIVE
 

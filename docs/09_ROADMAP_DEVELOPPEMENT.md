@@ -67,19 +67,55 @@ Smokes réels contrôlés `BTC/USD / PF_XBTUSD`, levier `1x`, `ISOLATED` :
 - deux `paper_run_id` distincts fermés proprement ;
 - contrôle `verify-isolation` : `isolation_verified=true`.
 
-## Prochain jalon — Premier run Agent réel PERPETUAL PAPER
+## Batch 16.4 — Premier run Agent réel GPT-5.6 Luna PERPETUAL PAPER
 
-**Proposé comme prochaine étape immédiate.**
+**État : résultat réel confirmé localement ; documentation à intégrer.**
 
-Objectif : lancer GPT-5.6 Luna dans la composition normale PERPETUAL PAPER, sans décision forcée, avec Risk conservant l'autorité finale.
+Run `36fe73e0-f52f-4e27-995b-c5c848f46da2` sur `BTC/USD / PF_XBTUSD`, `ISOLATED`, levier déterministe `1x`, capital `1000 USD`, agressivité `2` :
 
-Le run doit mesurer honnêtement décisions `BUY/SELL/HOLD`, fills éventuels, coûts, funding, exposition, P&L et drawdown. Un `HOLD` naturel est un résultat valide et ne doit pas être modifié post-hoc.
+- 4 cycles `COMPLETED` ;
+- 4 décisions Luna réelles `HOLD` ;
+- 0 cycle `FAILED` ;
+- 4 Risk `ALLOW / HOLD_NO_EXECUTION` ;
+- 0 `ExecutionIntent`, fill ou trade ;
+- portefeuille final `1000 USD`, exposition `0`, P&L `0` ;
+- run clôturé durablement avec `ended_at` ;
+- aucune décision forcée et aucun recours au harness 16.3.
+
+L'audit a montré que `market_state.context` était `null` pour cette source Derivatives : les HOLD ne constituent donc pas un échec stratégique.
+
+## Batch 16.5 — Contexte marché PERPETUAL pour l'Agent
+
+**État : validé localement le 22 septembre 2026 ; non intégré tant que le commit et le push sur `main` ne sont pas confirmés.**
+
+Objectif : réutiliser le `MarketStateBuilder` canonique avec les bougies publiques Kraken Futures **mark 1 minute** afin de fournir à l'Agent les mêmes statistiques descriptives causales que sur SPOT : fraîcheur, fenêtres 5 min / 30 min, rendement, range et volatilité réalisée.
+
+Principes du batch :
+
+- aucune seconde implémentation d'indicateurs ;
+- ticker Derivatives courant conservé pour mark/index/funding ;
+- historique mark public uniquement, sans clé Kraken privée ;
+- bougies non clôturées au moment du ticker exclues ;
+- aucune métrique déterministe ne produit BUY/SELL/HOLD ;
+- `AgentInput.market_state.context` devient non nul en PERPETUAL quand le snapshot est construit normalement ;
+- Risk conserve l'autorité finale et LIVE reste hors périmètre.
+
+Validation confirmée :
+
+```text
+pytest backend                                  : 357 passed, 2 warnings externes
+ruff check backend                             : All checks passed
+mypy --config-file backend\pyproject.toml ... : Success, 107 source files
+git diff --check                               : aucune erreur
+```
+
+Smoke réel : `paper_run_id = 8bbfe6a5-a5d5-4c32-96dc-eb9c5e4113d2`, cycle `c097f3fc-4954-4985-a364-f6ffe99b24e6` `COMPLETED`, `AgentInput.market_state.context` non nul, fenêtres 5m/30m complètes avec 6/31 observations, mark/index/funding conservés.
 
 ## Batch 17 — Robustesse Derivatives
 
-**Proposé après les premiers essais Agent PERPETUAL PAPER.**
+**Proposé après intégration du Batch 16.5 et nouveaux runs Agent PERPETUAL PAPER exploitant le contexte enrichi.**
 
-Pistes : validation des schémas publics Kraken sur davantage d'instruments, tiers de marge par taille, liquidation PAPER plus fidèle, cockpit dédié dérivés, reprise/réconciliation du ledger mémoire, scénarios multi-position/multi-instrument.
+Pistes : validation des schémas publics Kraken sur davantage d'instruments, tiers de marge par taille, liquidation PAPER plus fidèle, cockpit dédié dérivés, reprise/réconciliation du ledger mémoire, scénarios multi-position/multi-instrument, puis éventuel enrichissement public supplémentaire (funding historique, liquidité/volume) uniquement si son utilité est mesurée.
 
 ## LIVE — toujours séparé
 

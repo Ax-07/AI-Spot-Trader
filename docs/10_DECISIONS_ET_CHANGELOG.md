@@ -85,6 +85,20 @@ Les anciennes mentions **SPOT uniquement / aucun future-perpetual** sont supers�
 ### ADR-112 — Les preuves brutes de smoke restent hors Git
 **ACCEPTÉE.** Les JSON complets `smoke-long.json` et `smoke-short.json` sont des artefacts locaux de validation. Les résultats synthétiques et IDs de runs peuvent être documentés, mais les dumps bruts ne sont pas versionnés.
 
+## Décisions Batch 16.5
+
+### ADR-113 — Réutiliser le `MarketStateBuilder` canonique pour PERPETUAL
+**VALIDÉE LOCALEMENT DANS LE BATCH 16.5.** Le contexte multi-horizon n'est pas réimplémenté côté Derivatives. La source Kraken Derivatives normalise l'historique mark en `MarketObservation`, puis réutilise le builder provider-agnostic existant.
+
+### ADR-114 — Les fenêtres PERPETUAL utilisent les bougies publiques mark 1 minute
+**VALIDÉE LOCALEMENT DANS LE BATCH 16.5.** Kraken Futures Charts fournit publiquement des bougies `mark`. Les fenêtres 5 min / 30 min utilisent uniquement des clôtures antérieures au ticker courant. Une bougie non clôturée ou future n'entre jamais dans les statistiques.
+
+### ADR-115 — Le contexte descriptif n'est jamais un signal déterministe
+**VALIDÉE LOCALEMENT DANS LE BATCH 16.5.** Rendement, range, volatilité et fraîcheur sont transmis à Luna comme faits descriptifs. Ils ne produisent aucune action `BUY/SELL/HOLD`. L'Agent garde le choix stratégique et Risk garde l'autorité finale.
+
+### ADR-116 — Pas d'enrichissement public supplémentaire sans besoin mesuré
+**VALIDÉE LOCALEMENT DANS LE BATCH 16.5.** Le Batch 16.5 n'ajoute pas encore volume, order book, funding historique ou analytics de liquidité. Le mark/index/funding courant déjà intégré est conservé ; le batch se limite au manque confirmé : un historique causal pour `MarketState.context`.
+
 ## Changelog — 2026-09-21 — Batch 16.1 Smoke PERPETUAL PAPER
 
 Smoke réel : `BTC/USD / PF_XBTUSD`, cycle `COMPLETED`, Agent `HOLD`, Risk `ALLOW / HOLD_NO_EXECUTION`, analytics `1000 -> 1000`, `trade_count=0`, `hold_count=1`.
@@ -142,9 +156,60 @@ Le Batch 16.3 confirme donc le chemin technique complet PERPETUAL PAPER au-delà
 
 Il ne mesure pas encore la qualité stratégique de l'Agent : les décisions des smokes sont déterministes et réservées à la validation.
 
+## Changelog — 2026-09-22 — Batch 16.4 Premier run Luna réel PERPETUAL PAPER
+
+Résultat réel confirmé hors harness sur `paper_run_id = 36fe73e0-f52f-4e27-995b-c5c848f46da2` :
+
+- composition normale ;
+- `OpenAIDecisionProvider` avec GPT-5.6 Luna ;
+- 4 cycles `COMPLETED` ;
+- 4 décisions naturelles `HOLD` ;
+- 0 cycle `FAILED` ;
+- Risk `ALLOW / HOLD_NO_EXECUTION` à chaque cycle ;
+- aucun intent, fill ou trade ;
+- portefeuille final `1000 USD`, exposition `0`, P&L `0` ;
+- run fermé durablement avec `ended_at`.
+
+L'audit du vrai `AgentInput` a confirmé `market_state.context = null`. Les rationales Luna indiquaient un contexte directionnel insuffisant ; ces HOLD sont donc cohérents avec l'agressivité `2` et les informations alors disponibles.
+
+## Changelog — 2026-09-22 — Batch 16.5 Contexte marché PERPETUAL
+
+Patch validé localement à partir du HEAD GitHub `0b7303c9e0737f39ac81a5af2517f2f7953c133c` :
+
+- réutilisation de `MarketStateBuilder` pour Derivatives ;
+- récupération publique des bougies mark Kraken Futures Charts en `1m` ;
+- fenêtres statistiques causales 5 min / 30 min ;
+- exclusion stricte des bougies dont la clôture n'est pas antérieure au ticker courant ;
+- maintien intégral du mark/index/funding/instrument déjà présents ;
+- tests ciblés no-look-ahead, déterminisme, sérialisation `AgentInput`, stale/fail-closed et absence d'auth privée.
+
+Aucune décision BUY/SELL/HOLD n'est produite par les indicateurs. LIVE reste hors périmètre.
+
+Validation locale finale :
+
+```text
+pytest backend                                  : 357 passed, 2 warnings externes
+ruff check backend                             : All checks passed
+mypy --config-file backend\pyproject.toml ... : Success, 107 source files
+git diff --check                               : aucune erreur ; avertissements LF -> CRLF uniquement
+```
+
+Smoke réel via la composition normale après redémarrage complet du backend :
+
+- `paper_run_id = 8bbfe6a5-a5d5-4c32-96dc-eb9c5e4113d2` ;
+- `cycle_id = c097f3fc-4954-4985-a364-f6ffe99b24e6`, `COMPLETED` ;
+- `BTC/USD`, `PERPETUAL`, mark courant `86628.99777100343` ;
+- `AgentInput.market_state.context` non nul ;
+- fenêtre 5 min complète : 6 observations, rendement `-0.0008283458359064427`, volatilité réalisée `0.0003195517675049489` ;
+- fenêtre 30 min complète : 31 observations, rendement `0.002818639241644028`, volatilité réalisée `0.0004142619704073510` ;
+- fraîcheur `0.773542 s` ;
+- index `86622.3` et funding `0.00001373689662899510173815517115` conservés.
+
+Le premier essai effectué avant redémarrage du backend avait encore `context = null` parce que le processus FastAPI utilisait l'ancien module chargé en mémoire. Après redémarrage complet, le nouveau `paper_run_id` et le contexte non nul ont confirmé le chemin runtime 16.5.
+
 ## Prochaine étape
 
-Premier run expérimental avec **GPT-5.6 Luna réel en PERPETUAL PAPER**, sans décision forcée. Risk conserve l'autorité finale. Un `HOLD` naturel reste valide.
+Revue du diff, commit puis push explicite du Batch 16.5 sur `main`. Les expérimentations suivantes pourront mesurer les décisions naturelles de Luna avec le contexte enrichi ; HOLD reste un résultat valide.
 
 ## LIVE
 

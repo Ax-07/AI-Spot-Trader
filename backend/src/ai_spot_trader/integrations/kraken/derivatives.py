@@ -3,7 +3,6 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
-from uuid import uuid4
 
 import httpx
 
@@ -12,6 +11,7 @@ from ai_spot_trader.domain.enums import DerivativeContractKind, MarketType
 from ai_spot_trader.domain.models import (
     DerivativeInstrument,
     DerivativeMarketContext,
+    MarketObservation,
     MarketState,
 )
 from ai_spot_trader.domain.symbols import parse_canonical_symbol
@@ -21,8 +21,12 @@ from ai_spot_trader.integrations.kraken.errors import (
     StaleMarketDataError,
     UnknownKrakenSymbolError,
 )
+from ai_spot_trader.market import DEFAULT_MARKET_HORIZONS, MarketStateBuilder
 
 KRAKEN_DERIVATIVES_FUNDING_INTERVAL_SECONDS = Decimal(3600)
+KRAKEN_DERIVATIVES_HISTORY_RESOLUTION = "1m"
+_DERIVATIVES_HISTORY_INTERVAL = timedelta(minutes=1)
+_HISTORY_PADDING_INTERVALS = 2
 _ASSET_ALIASES = {"XBT": "BTC", "XDG": "DOGE"}
 _QUOTE_CANDIDATES = ("USDC", "USDT", "USD", "EUR", "GBP", "BTC", "ETH")
 
@@ -31,6 +35,25 @@ class DerivativeMarketSink(Protocol):
     """Optional PAPER portfolio hook for mark-to-market/funding before AgentInput."""
 
     def mark_derivative_market(self, market_state: MarketState) -> None: ...
+
+
+class KrakenDerivativesRestSource(Protocol):
+    async def fetch_instruments(self) -> tuple[DerivativeInstrument, ...]: ...
+
+    async def fetch_ticker(
+        self,
+        instrument: DerivativeInstrument,
+    ) -> tuple[datetime, Decimal, Decimal | None, Decimal | None]: ...
+
+    async def fetch_mark_history(
+        self,
+        instrument: DerivativeInstrument,
+        *,
+        since: datetime,
+        until: datetime,
+    ) -> tuple[MarketObservation, ...]: ...
+
+    async def aclose(self) -> None: ...
 
 
 class KrakenDerivativesPublicClient:
@@ -45,6 +68,9 @@ class KrakenDerivativesPublicClient:
     ) -> None:
         self._client = client or httpx.AsyncClient(base_url=base_url, timeout=timeout_seconds)
         self._owns_client = client is None
+        self._charts_base_url = str(
+            httpx.URL(base_url).copy_with(path="/api/charts/v1", query=None, fragment=None)
+        ).rstrip("/")
 
     async def fetch_instruments(self) -> tuple[DerivativeInstrument, ...]:
         payload = await self._get_json("/instruments", "Kraken Derivatives instruments")
@@ -60,9 +86,39 @@ class KrakenDerivativesPublicClient:
         )
         return parse_kraken_derivatives_ticker(payload, instrument=instrument)
 
-    async def _get_json(self, path: str, label: str) -> object:
+    async def fetch_mark_history(
+        self,
+        instrument: DerivativeInstrument,
+        *,
+        since: datetime,
+        until: datetime,
+    ) -> tuple[MarketObservation, ...]:
+        if since.tzinfo is None or since.utcoffset() is None:
+            raise ValueError("Kraken Derivatives chart since must be timezone-aware")
+        if until.tzinfo is None or until.utcoffset() is None:
+            raise ValueError("Kraken Derivatives chart until must be timezone-aware")
+        if since > until:
+            raise ValueError("Kraken Derivatives chart since cannot be newer than until")
+
+        payload = await self._get_json(
+            (
+                f"{self._charts_base_url}/mark/"
+                f"{instrument.venue_symbol}/{KRAKEN_DERIVATIVES_HISTORY_RESOLUTION}"
+            ),
+            "Kraken Derivatives mark candles",
+            params={"from": int(since.timestamp()), "to": int(until.timestamp())},
+        )
+        return parse_kraken_derivatives_mark_candles(payload, instrument=instrument)
+
+    async def _get_json(
+        self,
+        path: str,
+        label: str,
+        *,
+        params: Mapping[str, str | int] | None = None,
+    ) -> object:
         try:
-            response = await self._client.get(path)
+            response = await self._client.get(path, params=params)
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise KrakenConnectionError(f"{label} request failed") from exc
@@ -81,7 +137,7 @@ class KrakenDerivativesMarketDataSource:
 
     def __init__(
         self,
-        rest_client: KrakenDerivativesPublicClient,
+        rest_client: KrakenDerivativesRestSource,
         *,
         clock: Clock | None = None,
         market_sink: DerivativeMarketSink | None = None,
@@ -92,12 +148,37 @@ class KrakenDerivativesMarketDataSource:
         self._market_sink = market_sink
         self._stale_after = stale_after
         self._instruments: dict[str, DerivativeInstrument] | None = None
+        self._builders: dict[str, MarketStateBuilder] = {}
+        self._latest_current_observations: dict[str, MarketObservation] = {}
 
     async def snapshot(self, symbol: str) -> MarketState:
         canonical = _canonical_symbol(symbol)
         instrument = await self._instrument(canonical)
         observed_at, mark_price, index_price, funding_rate = await self._rest_client.fetch_ticker(
             instrument
+        )
+        current_observation = MarketObservation(
+            observed_at=observed_at,
+            symbol=canonical,
+            last_price=mark_price,
+        )
+        self._validate_current_sequence(current_observation)
+
+        builder = self._builders.get(canonical)
+        if builder is None:
+            builder = MarketStateBuilder(
+                horizons=DEFAULT_MARKET_HORIZONS,
+                stale_after=self._stale_after,
+                clock=self._clock,
+            )
+            self._builders[canonical] = builder
+
+        history = await self._rest_client.fetch_mark_history(
+            instrument,
+            since=observed_at
+            - max(DEFAULT_MARKET_HORIZONS)
+            - (_DERIVATIVES_HISTORY_INTERVAL * _HISTORY_PADDING_INTERVALS),
+            until=observed_at,
         )
         as_of = self._clock.now()
         if observed_at > as_of:
@@ -106,11 +187,26 @@ class KrakenDerivativesMarketDataSource:
             raise StaleMarketDataError(
                 f"Kraken Derivatives market data is stale for {canonical}"
             )
-        state = MarketState(
-            market_state_id=uuid4(),
-            as_of=as_of,
+
+        self._append_history(
+            builder,
             symbol=canonical,
-            last_price=mark_price,
+            history=history,
+            before=observed_at,
+        )
+        retained = builder.retained_observations
+        statistics_as_of = retained[-1].observed_at if retained else as_of
+        base_state = builder.build(
+            as_of=as_of,
+            current_observation=current_observation,
+            statistics_as_of=statistics_as_of,
+        )
+        state = MarketState(
+            market_state_id=base_state.market_state_id,
+            as_of=base_state.as_of,
+            symbol=base_state.symbol,
+            last_price=base_state.last_price,
+            context=base_state.context,
             market_type=instrument.market_type,
             derivative=DerivativeMarketContext(
                 observed_at=observed_at,
@@ -120,6 +216,7 @@ class KrakenDerivativesMarketDataSource:
                 funding_rate=funding_rate,
             ),
         )
+        self._latest_current_observations[canonical] = current_observation
         if self._market_sink is not None:
             self._market_sink.mark_derivative_market(state)
         return state
@@ -157,6 +254,71 @@ class KrakenDerivativesMarketDataSource:
                 f"no Kraken Derivatives instrument mapped to {symbol}"
             )
         return instrument
+
+    def _append_history(
+        self,
+        builder: MarketStateBuilder,
+        *,
+        symbol: str,
+        history: tuple[MarketObservation, ...],
+        before: datetime,
+    ) -> None:
+        for observation in history:
+            if observation.symbol != symbol:
+                raise KrakenPayloadError("Kraken Derivatives mark candle symbol mismatch")
+            if observation.observed_at >= before:
+                continue
+            latest = builder.retained_observations[-1] if builder.retained_observations else None
+            if latest is not None and observation.observed_at <= latest.observed_at:
+                continue
+            builder.add_observation(observation)
+
+    def _validate_current_sequence(self, observation: MarketObservation) -> None:
+        previous = self._latest_current_observations.get(observation.symbol)
+        if previous is None:
+            return
+        if observation.observed_at < previous.observed_at:
+            raise KrakenPayloadError("Kraken Derivatives ticker timestamp moved backwards")
+        if (
+            observation.observed_at == previous.observed_at
+            and observation.last_price != previous.last_price
+        ):
+            raise KrakenPayloadError(
+                "Kraken Derivatives ticker conflicts with previous current observation"
+            )
+
+
+def parse_kraken_derivatives_mark_candles(
+    payload: object,
+    *,
+    instrument: DerivativeInstrument,
+) -> tuple[MarketObservation, ...]:
+    """Normalize public one-minute mark candles into causal close observations."""
+
+    root = _mapping(payload, "Kraken Derivatives mark candles payload")
+    rows = root.get("candles")
+    if not isinstance(rows, list):
+        raise KrakenPayloadError("Kraken Derivatives mark candles must contain an array")
+
+    observations: list[MarketObservation] = []
+    previous_started_at: datetime | None = None
+    for raw in rows:
+        if not isinstance(raw, Mapping):
+            raise KrakenPayloadError("Kraken Derivatives mark candles contain an invalid entry")
+        started_at = _epoch_milliseconds(raw.get("time"), "mark candle time")
+        if previous_started_at is not None and started_at <= previous_started_at:
+            raise KrakenPayloadError(
+                "Kraken Derivatives mark candles are not strictly chronological"
+            )
+        previous_started_at = started_at
+        observations.append(
+            MarketObservation(
+                observed_at=started_at + _DERIVATIVES_HISTORY_INTERVAL,
+                symbol=instrument.symbol,
+                last_price=_positive_decimal(raw.get("close"), "mark candle close"),
+            )
+        )
+    return tuple(observations)
 
 
 def parse_kraken_derivatives_instruments(payload: object) -> tuple[DerivativeInstrument, ...]:
@@ -414,3 +576,15 @@ def _datetime(value: object, label: str) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise KrakenPayloadError(f"{label} must be timezone-aware")
     return parsed.astimezone(UTC)
+
+
+def _epoch_milliseconds(value: object, label: str) -> datetime:
+    number = _decimal(value, label)
+    if number != number.to_integral_value():
+        raise KrakenPayloadError(f"{label} must be an integer epoch millisecond value")
+    milliseconds = int(number)
+    seconds, remainder = divmod(milliseconds, 1000)
+    try:
+        return datetime.fromtimestamp(seconds, tz=UTC) + timedelta(milliseconds=remainder)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise KrakenPayloadError(f"{label} is invalid") from exc
