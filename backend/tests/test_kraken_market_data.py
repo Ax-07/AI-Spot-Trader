@@ -117,6 +117,23 @@ class SequenceTickerClient:
         return self.tickers.pop(0)
 
 
+def run_snapshots(
+    tickers: list[KrakenTicker],
+    *,
+    snapshot_times: list[datetime] | None = None,
+) -> list[MarketState]:
+    if snapshot_times is not None and len(snapshot_times) != len(tickers):
+        raise ValueError("snapshot_times must match tickers")
+    clock = SequenceClock(snapshot_times.copy()) if snapshot_times is not None else FixedClock(NOW)
+    source = KrakenMarketDataSource(
+        FakeRestClient(),
+        SequenceTickerClient(tickers.copy()),
+        clock=clock,
+        registry=REGISTRY,
+    )
+    return [asyncio.run(source.snapshot("BTC/EUR")) for _ in range(len(tickers))]
+
+
 def test_kraken_source_structurally_implements_market_ports() -> None:
     source = KrakenMarketDataSource(
         FakeRestClient(),
@@ -179,6 +196,7 @@ def test_snapshot_builds_canonical_multi_horizon_context_from_history_and_ticker
     ]
     assert [window.observation_count for window in market_state.context.windows] == [6, 31]
     assert all(window.is_complete for window in market_state.context.windows)
+    assert market_state.context.windows[0].last_price == Decimal("49999")
     assert rest.history_calls == [("BTC/EUR", 1, NOW - timedelta(minutes=32))]
 
 
@@ -192,8 +210,10 @@ def test_snapshot_with_no_committed_history_has_explicit_partial_context() -> No
 
     market_state = asyncio.run(source.snapshot("BTC/EUR"))
 
+    assert market_state.last_price == Decimal("50000.10")
     assert market_state.context is not None
-    assert [window.observation_count for window in market_state.context.windows] == [1, 1]
+    assert market_state.context.last_observed_at == NOW
+    assert [window.observation_count for window in market_state.context.windows] == [0, 0]
     assert not any(window.is_complete for window in market_state.context.windows)
     assert all(window.return_fraction is None for window in market_state.context.windows)
 
@@ -215,10 +235,11 @@ def test_snapshot_excludes_history_not_strictly_before_current_ticker() -> None:
 
     assert market_state.last_price == Decimal("50000")
     assert market_state.context is not None
+    assert market_state.context.last_observed_at == NOW
     five_minute = market_state.context.windows[0]
-    assert five_minute.observation_count == 2
-    assert five_minute.max_price == Decimal("50000")
-    assert five_minute.last_observed_at == NOW
+    assert five_minute.observation_count == 1
+    assert five_minute.max_price == Decimal("49990")
+    assert five_minute.last_observed_at == NOW - timedelta(minutes=2)
 
 
 def test_repeated_same_ticker_does_not_create_duplicate_observations() -> None:
@@ -235,8 +256,68 @@ def test_repeated_same_ticker_does_not_create_duplicate_observations() -> None:
     second = asyncio.run(source.snapshot("BTC/EUR"))
 
     assert first.context is not None and second.context is not None
+    assert first.context.windows == second.context.windows
     assert [window.observation_count for window in second.context.windows] == [6, 31]
     assert len(rest.history_calls) == 2
+
+
+def test_multiple_current_tickers_without_new_candle_do_not_change_window_statistics() -> None:
+    snapshot_times = [
+        NOW + timedelta(seconds=10),
+        NOW + timedelta(seconds=20),
+        NOW + timedelta(seconds=30),
+    ]
+    tickers = [
+        KrakenTicker("BTC/EUR", Decimal("51000"), snapshot_times[0]),
+        KrakenTicker("BTC/EUR", Decimal("52000"), snapshot_times[1]),
+        KrakenTicker("BTC/EUR", Decimal("53000"), snapshot_times[2]),
+    ]
+    states = run_snapshots(tickers, snapshot_times=snapshot_times)
+
+    contexts = [state.context for state in states]
+    assert all(context is not None for context in contexts)
+    first_context = contexts[0]
+    second_context = contexts[1]
+    third_context = contexts[2]
+    assert first_context is not None
+    assert second_context is not None
+    assert third_context is not None
+    assert first_context.windows == second_context.windows == third_context.windows
+    assert [state.last_price for state in states] == [
+        Decimal("51000"),
+        Decimal("52000"),
+        Decimal("53000"),
+    ]
+    observed_times = [
+        context.last_observed_at for context in contexts if context is not None
+    ]
+    assert observed_times == snapshot_times
+    assert third_context.windows[0].max_price == Decimal("49999")
+
+
+def test_simulated_10s_and_120s_cadences_produce_same_final_descriptive_statistics() -> None:
+    fast_times = [NOW + timedelta(seconds=offset) for offset in (0, 10, 20, 30, 40, 50)]
+    fast_tickers = [
+        KrakenTicker("BTC/EUR", Decimal(str(50100 + index * 100)), timestamp)
+        for index, timestamp in enumerate(fast_times)
+    ]
+    fast_tickers[-1] = KrakenTicker("BTC/EUR", Decimal("51000"), fast_times[-1])
+
+    slow_times = [NOW - timedelta(seconds=70), NOW + timedelta(seconds=50)]
+    slow_tickers = [
+        KrakenTicker("BTC/EUR", Decimal("49000"), slow_times[0]),
+        KrakenTicker("BTC/EUR", Decimal("51000"), slow_times[1]),
+    ]
+
+    fast_final = run_snapshots(fast_tickers, snapshot_times=fast_times)[-1]
+    slow_final = run_snapshots(slow_tickers, snapshot_times=slow_times)[-1]
+
+    assert fast_final.as_of == slow_final.as_of == NOW + timedelta(seconds=50)
+    assert fast_final.last_price == slow_final.last_price == Decimal("51000")
+    assert fast_final.context is not None and slow_final.context is not None
+    assert fast_final.context.last_observed_at == slow_final.context.last_observed_at
+    assert fast_final.context.windows == slow_final.context.windows
+    assert [window.observation_count for window in fast_final.context.windows] == [6, 31]
 
 
 def test_ticker_timestamp_cannot_move_backwards_across_snapshots() -> None:
@@ -255,6 +336,25 @@ def test_ticker_timestamp_cannot_move_backwards_across_snapshots() -> None:
 
     asyncio.run(source.snapshot("BTC/EUR"))
     with pytest.raises(KrakenPayloadError, match="moved backwards"):
+        asyncio.run(source.snapshot("BTC/EUR"))
+
+
+def test_same_ticker_timestamp_cannot_change_price_across_snapshots() -> None:
+    ticker_client = SequenceTickerClient(
+        [
+            KrakenTicker("BTC/EUR", Decimal("50000"), NOW),
+            KrakenTicker("BTC/EUR", Decimal("50001"), NOW),
+        ]
+    )
+    source = KrakenMarketDataSource(
+        FakeRestClient(),
+        ticker_client,
+        clock=FixedClock(NOW),
+        registry=REGISTRY,
+    )
+
+    asyncio.run(source.snapshot("BTC/EUR"))
+    with pytest.raises(KrakenPayloadError, match="conflicts"):
         asyncio.run(source.snapshot("BTC/EUR"))
 
 

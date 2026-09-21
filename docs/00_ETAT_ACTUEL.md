@@ -2,54 +2,52 @@
 
 > Mémoire courte de reprise. Ce fichier doit rester synthétique et être mis à jour après chaque batch important.
 
-## Référence auditée au démarrage du batch contexte marché
+## Référence auditée au démarrage du Batch 15.3
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub intégré : `97d529647179c6769a6bdc528b9d9f5e7c85c119` (`feat: add multi-horizon market context`).
-- Le document précédent référençait encore `59e3bc26c7b4d6acca25bc7d21c85c3c14eeb336` ; `4b9701f` a intégré la composition PAPER exécutable du Batch 15.1.
+- HEAD GitHub intégré audité : `bb1aa047157deb1b62d27de952fa53ec14992f09` (`docs: finalize Batch 15.2 state`).
+- Le parent fonctionnel `97d529647179c6769a6bdc528b9d9f5e7c85c119` intègre le Batch 15.2 (`feat: add multi-horizon market context`).
+- Le document précédent référençait encore `97d529647179c6769a6bdc528b9d9f5e7c85c119` comme HEAD intégré ; `bb1aa047` ne modifie que la documentation de clôture du Batch 15.2.
 
-## État confirmé avant ce patch
+## État confirmé avant le patch
 
-Le premier essai PAPER réel sur `BTC/USDC` a validé PostgreSQL, Alembic, FastAPI, audit/analytics, chat Luna, Kraken public, un cycle manuel et un smoke run autonome. Le cycle restait toutefois limité à un prix instantané : `market_state.context = null`.
+Le Batch 15.2 est intégré et validé. Les essais PAPER réels ont confirmé le contexte 5 min / 30 min, mais ont aussi montré que les tickers successifs du moteur étaient conservés dans le même `MarketStateBuilder` que les clôtures OHLC 1 minute.
 
-Cause racine confirmée : `KrakenMarketDataSource.snapshot()` construisait directement un `MarketState` minimal à partir du ticker WebSocket et contournait le `MarketStateBuilder` déjà canonique.
+Conséquence confirmée : le nombre d'observations et les statistiques descriptives pouvaient dépendre de `trading_cadence_seconds`, alors que la cadence moteur ne doit pas modifier l'échantillonnage du contexte marché.
 
-## Batch — contexte marché multi-horizon PAPER
+## Batch 15.3 — contexte marché indépendant de la cadence
 
-Patch livré pour rendre le contexte marché exploitable sans architecture parallèle :
+Patch livré sans moteur Market parallèle :
 
-- `MarketStateBuilder` devient la voie canonique de construction du snapshot Kraken PAPER ;
-- les horizons existants **5 min / 30 min** restent inchangés ;
-- bootstrap historique via l'endpoint public Kraken OHLC en granularité technique **1 minute** ;
-- la dernière bougie OHLC Kraken, non clôturée par contrat fournisseur, est toujours exclue ;
-- chaque clôture historique est horodatée à `started_at + interval`, c'est-à-dire à son instant causal de disponibilité ;
-- le ticker WebSocket courant reste la source du `last_price` courant ;
-- les observations strictement futures ou postérieures au ticker courant ne sont jamais injectées ;
-- la fraîcheur est contrôlée avant puis après la récupération historique afin qu'un appel OHLC lent ne masque pas une donnée devenue stale ;
-- erreurs/timeout Market restent des erreurs techniques du cycle, jamais des HOLD synthétiques ;
-- aucun signal, score ou décision déterministe BUY/SELL/HOLD n'est ajouté à la couche marché ;
-- aucun changement frontend, aucune API Kraken privée et aucun LIVE.
+- `MarketStateBuilder` reste l'unique calculateur des fenêtres descriptives ;
+- les observations retenues dans le builder constituent uniquement la série statistique déterministe ;
+- le ticker courant devient une observation de snapshot non persistée dans cette série ;
+- `MarketState.last_price`, `MarketContext.last_observed_at` et la fraîcheur restent basés sur le ticker courant ;
+- un `statistics_as_of` distinct ancre les fenêtres sur la dernière observation statistique causale disponible ;
+- le runtime Kraken utilise la dernière clôture OHLC 1 minute retenue comme ancre statistique ;
+- sans nouvelle clôture OHLC, des cycles supplémentaires ne changent donc pas artificiellement compte, min/max/range, rendement ou volatilité réalisée ;
+- quand une nouvelle clôture devient disponible, elle est ajoutée une seule fois et l'ancre statistique avance naturellement ;
+- les clôtures à ou après le ticker courant restent exclues ;
+- les fenêtres vides/partielles restent explicites et honnêtes ;
+- l'ordre temporel strict des tickers successifs reste contrôlé ;
+- aucun indicateur stratégique, score BUY/SELL/HOLD, changement Agent/Risk, Kraken privé ou LIVE.
 
-## Validation
+Le chemin d'exécution reste strictement :
 
-Exécuté par ChatGPT sur les fichiers livrés :
+```text
+Market -> Agent -> DecisionCandidate -> Risk -> ExecutionIntent -> Paper Broker
+```
 
-- `py_compile` des fichiers Python ajoutés/modifiés : réussi ;
-- tests isolés REST Kraken : 7/7 ;
-- tests isolés source marché Kraken : 15/15.
+## Validation exécutée par ChatGPT
 
-Validation locale confirmée le 21 septembre 2026 :
+Dans un harness ciblé reconstruit depuis le HEAD GitHub audité :
 
-- tests ciblés Market State/Kraken/cycle : **71 passés** ;
-- suite complète : **306 passés**, 2 warnings externes ;
-- Ruff : **All checks passed** ;
-- mypy : **94 fichiers sans erreur** ;
-- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- cycle PAPER réel `BTC/USDC` : **COMPLETED**, `market_state.context` non nul, fenêtres 300 s / 1800 s complètes, respect du no-look-ahead, HOLD Agent fondé explicitement sur les horizons 5 min / 30 min.
-- contrôle des chemins ZIP et absence de secrets/caches avant livraison.
+- `pytest` Market State + Kraken Market Data : **38 tests passés** ;
+- `compileall` des 4 fichiers Python créés/modifiés : **réussi** ;
+- contrôles déterministes ajoutés pour snapshots répétés sans nouvelle bougie, simulation cadence 10 s vs 120 s, ticker courant, fraîcheur, no-look-ahead, fenêtres partielles, ordre strict et snapshots successifs.
 
-La validation locale complète est terminée : `pytest`, Ruff, mypy et `git diff --check` sont tous validés.
+Validation locale confirmée le 21 septembre 2026 : **315 tests passés**, 2 warnings externes ; Ruff **All checks passed** ; mypy **94 fichiers sans erreur** ; `git diff --check` sans erreur, avec uniquement les warnings Windows LF -> CRLF.
 
 ## Limites conservées
 
@@ -57,8 +55,8 @@ La validation locale complète est terminée : `pytest`, Ruff, mypy et `git diff
 - Chat opérateur strictement conversationnel et non mutant.
 - Ledger PAPER toujours mémoire ; recovery/réconciliation après crash différés.
 - Aucun exactly-once global ledger/PostgreSQL.
-- La granularité OHLC 1 minute est un mécanisme de bootstrap descriptif ; les horizons stratégiques/descriptifs canoniques restent ceux du `MarketStateBuilder`.
+- La granularité OHLC 1 minute reste un mécanisme descriptif de bootstrap et d'échantillonnage fixe, pas une stratégie de trading.
 
 ## Prochaine étape
 
-Le Batch 15.2 est intégré sur `main` et validé localement. La suite consiste à poursuivre les essais PAPER contrôlés avec le contexte multi-horizon désormais présent. Le LIVE reste séparé et hors périmètre.
+Le Batch 15.3 est validé localement et prêt à être commit/push sur `main`. Après intégration, poursuivre les essais PAPER contrôlés en conservant la comparaison de cadences comme contrôle expérimental. Le LIVE reste séparé et hors périmètre.

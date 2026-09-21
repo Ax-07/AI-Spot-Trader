@@ -4,7 +4,7 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut :** le runtime PAPER exécutable est intégré sur GitHub `main` au commit `4b9701f07854a943cf47a14287aadfdf4aa48232` (`feat: compose executable PAPER runtime`). Le Batch 15.2 — contexte marché multi-horizon — est validé localement, y compris par un cycle PAPER réel `BTC/USDC`, et reste à commit/push sur `main`.
+> **Statut :** le runtime PAPER exécutable et le Batch 15.2 — contexte marché multi-horizon — sont intégrés sur GitHub `main`. Le HEAD audité au démarrage du Batch 15.3 est `bb1aa047157deb1b62d27de952fa53ec14992f09` (`docs: finalize Batch 15.2 state`). Le présent patch Batch 15.3 sépare l'observation ticker courante de la série statistique OHLC afin que les fenêtres descriptives ne dépendent plus de la cadence du moteur ; il est désormais validé localement et reste à intégrer sur `main`.
 
 ## Principes
 
@@ -43,7 +43,9 @@ Stack :
 Kraken public AssetPairs + OHLC 1 min clôturées + ticker courant
         |
         v
- MarketStateBuilder (horizons descriptifs 5 min / 30 min)
+ MarketStateBuilder
+  | série statistique OHLC -> fenêtres descriptives 5 min / 30 min
+  ` ticker courant        -> last_price + fraîcheur du snapshot
         |
         v
    MarketState --------+
@@ -85,7 +87,7 @@ Kraken public AssetPairs + OHLC 1 min clôturées + ticker courant
                                           Next.js cockpit
 ```
 
-Le dernier élément OHLC renvoyé par Kraken correspond à la fenêtre courante non clôturée : il est exclu du bootstrap historique. Les clôtures conservées sont horodatées à leur disponibilité causale (`started_at + interval`) puis le ticker courant complète le snapshot. Le `MarketStateBuilder` reste l'unique calculateur des statistiques descriptives ; aucune logique BUY/SELL/HOLD n'est ajoutée à la couche marché.
+Le dernier élément OHLC renvoyé par Kraken correspond à la fenêtre courante non clôturée : il est exclu du bootstrap historique. Les clôtures conservées sont horodatées à leur disponibilité causale (`started_at + interval`). Depuis le Batch 15.3, elles constituent seules la série statistique retenue par le `MarketStateBuilder`; les fenêtres sont ancrées sur la dernière clôture causale disponible. Le ticker courant reste séparé et fournit uniquement le prix courant du snapshot et ses métadonnées de fraîcheur. Des cycles supplémentaires sans nouvelle bougie OHLC ne modifient donc pas artificiellement les statistiques descriptives. Aucune logique BUY/SELL/HOLD n'est ajoutée à la couche marché.
 
 Le Batch 15 ajoute un chemin conversationnel **latéral et en lecture seule** :
 
@@ -144,7 +146,7 @@ L'historique chat n'est pas persisté en PostgreSQL dans cette V1. Cette décisi
 
 `TradingCycleRunner.run_cycle()` exécute exactement un cycle et `TradingEngine` répète cette primitive séquentiellement. Un seul `MarketState` est partagé entre Agent, Risk et Broker pour le cycle, et un seul `PortfolioState` pré-cycle est partagé entre Agent et Risk.
 
-Pour le runtime Kraken PAPER, `MarketDataSource.snapshot(symbol)` construit maintenant le snapshot via le `MarketStateBuilder` existant : historique public OHLC 1 minute **clôturé uniquement**, ticker WebSocket courant, contexte de fraîcheur et fenêtres descriptives canoniques 5/30 minutes. Le runner ne calcule aucun indicateur et continue à consommer exactement un snapshot par cycle.
+Pour le runtime Kraken PAPER, `MarketDataSource.snapshot(symbol)` construit le snapshot via le `MarketStateBuilder` existant : historique public OHLC 1 minute **clôturé uniquement**, ticker WebSocket courant, contexte de fraîcheur et fenêtres descriptives canoniques 5/30 minutes. Le ticker n'est plus ajouté à l'historique statistique : il reste la source de `MarketState.last_price` et de la fraîcheur, tandis que les fenêtres sont calculées sur les clôtures OHLC à cadence fixe et ancrées sur la dernière clôture retenue. Le runner ne calcule aucun indicateur et continue à consommer exactement un snapshot par cycle.
 
 - HOLD traverse Risk et produit un résultat complet sans intent.
 - REJECT est une issue métier normale sans Broker.
@@ -161,7 +163,7 @@ Le schéma `0001_audit_journal` conserve `audit_cycles`, `audit_decisions`, `aud
 
 Le graphe est transactionnel et idempotent par `cycle_id`. La persistance ne garantit pas encore un exactly-once global entre la mutation du ledger PAPER mémoire et le commit PostgreSQL ; la reconstruction/réconciliation après crash reste différée.
 
-Les Batches 13/14 n'ajoutent pas de table ni de migration. Le Batch 15 n'ajoute également **aucune migration** : les messages chat restent en mémoire et ne participent ni au `result_digest`, ni aux digests expérimentaux, ni aux analytics historiques. Le contexte marché enrichi est sérialisé dans l'`AgentInput` déjà durable ; aucune migration n'est nécessaire.
+Les Batches 13/14 n'ajoutent pas de table ni de migration. Le Batch 15 n'ajoute également **aucune migration** : les messages chat restent en mémoire et ne participent ni au `result_digest`, ni aux digests expérimentaux, ni aux analytics historiques. Le contexte marché enrichi est sérialisé dans l'`AgentInput` déjà durable ; les Batches 15.2/15.3 ne nécessitent aucune migration.
 
 ## API FastAPI
 
@@ -218,9 +220,11 @@ commit/push fonctionnel                 : 1c182b829c141c20be5cc8e62a3f8afa6f71b4
 
 ### Runtime PAPER intégré
 
-Le commit `4b9701f07854a943cf47a14287aadfdf4aa48232` compose le runtime PAPER exécutable. Le premier essai réel a ensuite confirmé PostgreSQL, FastAPI, Kraken public, Luna, le journal, un cycle manuel et un smoke run autonome ; l'absence de contexte historique (`market_state.context = null`) a motivé le présent batch.
+Le commit `4b9701f07854a943cf47a14287aadfdf4aa48232` compose le runtime PAPER exécutable. Le premier essai réel a ensuite confirmé PostgreSQL, FastAPI, Kraken public, Luna, le journal, un cycle manuel et un smoke run autonome ; l'absence de contexte historique (`market_state.context = null`) a motivé le Batch 15.2.
 
-### Batch 15.2 validé localement
+### Batch 15.2 intégré et validé
+
+Le commit fonctionnel `97d529647179c6769a6bdc528b9d9f5e7c85c119` intègre le contexte marché multi-horizon. Le commit documentaire `bb1aa047157deb1b62d27de952fa53ec14992f09` clôt son état.
 
 Validation locale du 21 septembre 2026 :
 
@@ -232,7 +236,22 @@ mypy .                                   : 94 fichiers sans erreur
 git diff --check                         : aucune erreur, warnings LF -> CRLF uniquement
 ```
 
-Un cycle PAPER réel `BTC/USDC` a terminé `COMPLETED` avec `market_state.context` non nul, fenêtres canoniques 5 min / 30 min complètes, respect du no-look-ahead et rationale Agent exploitant explicitement les deux horizons.
+Un cycle PAPER réel `BTC/USDC` a terminé `COMPLETED` avec `market_state.context` non nul, fenêtres canoniques 5 min / 30 min complètes, respect du no-look-ahead et rationale Agent exploitant explicitement les deux horizons. Les essais autonomes ultérieurs ont révélé la contamination des fenêtres par les tickers moteur, corrigée par le Batch 15.3.
+
+### Batch 15.3 — validation locale complète, intégration à confirmer
+
+Validation exécutée par ChatGPT dans un harness ciblé reconstruit depuis le HEAD audité :
+
+```text
+pytest Market State + Kraken Market Data : 38 passés
+compileall fichiers Python modifiés       : réussi
+validation locale pytest                  : 315 passés, 2 warnings externes
+validation locale ruff check .             : All checks passed
+validation locale mypy .                   : 94 fichiers sans erreur
+validation locale git diff --check         : aucune erreur, warnings LF -> CRLF uniquement
+```
+
+Les tests ajoutés couvrent explicitement l'absence de variation statistique sans nouvelle clôture OHLC, une simulation de cadences 10 s et 120 s aboutissant aux mêmes statistiques finales, le ticker courant comme `last_price`, la fraîcheur, le no-look-ahead, les fenêtres partielles et l'ordre temporel. La validation locale complète du repository est confirmée : 315 tests passés, Ruff OK, mypy OK et `git diff --check` sans erreur.
 
 ## Sécurité
 

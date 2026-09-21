@@ -19,7 +19,7 @@ Invariants principaux :
 - actions stratégiques `BUY`, `SELL`, `HOLD` ;
 - aucune vente d'un actif non détenu ;
 - GPT-5.6 Luna pour les premiers essais, Sol sélectionnable par configuration ;
-- Luna et Sol utilisent le **même provider canonique** ;
+- Luna et Sol utilisent le même provider canonique ;
 - Risk Engine déterministe avec autorité finale ;
 - aucune sortie LLM ne déclenche directement une exécution ;
 - premières versions exclusivement en PAPER ;
@@ -32,6 +32,7 @@ Invariants principaux :
 - un seul cycle de trading à la fois ;
 - la persistance observe les faits métier, elle ne crée aucune stratégie ;
 - le contexte marché est descriptif et déterministe, jamais un moteur BUY/SELL/HOLD parallèle ;
+- la cadence du moteur ne doit pas modifier artificiellement l'échantillonnage statistique du contexte marché ;
 - le chat opérateur reste conversationnel et ne devient pas un chemin d'exécution ni une mutation silencieuse de stratégie.
 
 La cible expérimentale de **+4 %/jour** reste une métrique de recherche très agressive, jamais une garantie, une hypothèse de rendement attendu ou une obligation de forcer des trades.
@@ -56,13 +57,13 @@ V0 est atteinte lorsque le backend peut, sans frontend obligatoire :
 10. journaliser durablement les cycles ;
 11. exposer suffisamment d'état via FastAPI.
 
-Le runtime PAPER exécutable est intégré sur `main` au commit `4b9701f07854a943cf47a14287aadfdf4aa48232`. Le premier essai PAPER réel a confirmé le chemin canonique complet et a révélé l'absence de contexte historique dans le snapshot Kraken, corrigée par le patch Batch 15.2.
+Le runtime PAPER exécutable est intégré sur `main` au commit `4b9701f07854a943cf47a14287aadfdf4aa48232`. Le Batch 15.2 est intégré au commit fonctionnel `97d529647179c6769a6bdc528b9d9f5e7c85c119`, puis son état documentaire a été finalisé par `bb1aa047157deb1b62d27de952fa53ec14992f09`.
 
 ### V1 — cockpit et expérimentation instrumentée
 
 V1 ajoute le cockpit Next.js/shadcn, historique, analytics P&L/drawdown/coûts/exposition, replay reproductible, expérimentations d'agressivité, comparaison Luna/Sol et une interface conversationnelle opérateur informative. Le LIVE n'est pas une condition de V1.
 
-Batches déjà intégrés : cockpit (11), analytics (12), agressivité (13), comparaison Luna/Sol (14), chat opérateur (15), composition PAPER exécutable (15.1). Le Batch 15.2 enrichit le contexte marché ; il est validé localement, y compris sur un cycle PAPER réel, et reste à intégrer sur `main`.
+Batches déjà intégrés : cockpit (11), analytics (12), agressivité (13), comparaison Luna/Sol (14), chat opérateur (15), composition PAPER exécutable (15.1) et contexte marché multi-horizon (15.2). Le Batch 15.3 corrige l'indépendance du contexte descriptif vis-à-vis de la cadence moteur ; son patch est livré et validé localement, mais reste à intégrer sur `main`.
 
 ---
 
@@ -75,6 +76,9 @@ Kraken public AssetPairs / OHLC / ticker
               |
               v
        MarketStateBuilder
+       |             |
+       |             ` ticker courant -> prix/fraîcheur du snapshot
+       ` OHLC 1 min clôturées -> fenêtres descriptives 5/30 min
               |
               v
         MarketState -----+
@@ -155,7 +159,9 @@ Les frontières critiques utilisent des modèles Pydantic stricts avec champs su
 - `AssetBalance` : actif de règlement disponible ;
 - `AssetPosition` : quantité détenue et quantité disponible à la vente.
 
-`MarketState.context` reste optionnel dans le contrat de domaine pour compatibilité et tests, mais le runtime Kraken PAPER canonique doit maintenant le renseigner lorsqu'un snapshot est construit avec succès.
+`MarketState.context` reste optionnel dans le contrat de domaine pour compatibilité et tests, mais le runtime Kraken PAPER canonique le renseigne lorsqu'un snapshot est construit avec succès.
+
+Le Batch 15.3 n'ajoute aucun nouveau modèle de domaine : il fait évoluer la construction canonique afin de distinguer l'observation courante du snapshot et les observations retenues pour les fenêtres statistiques.
 
 ### Agent, Risk et exécution
 
@@ -226,24 +232,43 @@ Les horizons canoniques existants restent :
 30 minutes
 ```
 
-Pour un snapshot à `T`, seules les observations `observed_at <= T` sont utilisables. Les statistiques exposées restent descriptives : compte, complétude, extrêmes, amplitude, rendement de fenêtre et volatilité réalisée lorsque le nombre d'observations le permet.
+Les statistiques exposées restent descriptives : compte, complétude, extrêmes, amplitude, rendement de fenêtre et volatilité réalisée lorsque le nombre d'observations le permet. Elles ne constituent aucun signal de trading déterministe.
 
-### Runtime Kraken PAPER — Batch 15.2
+### Séparation entre observation statistique et observation courante — Batch 15.3
 
-Le runtime Kraken ne construit plus directement un `MarketState` minimal. `KrakenMarketDataSource.snapshot(symbol)` :
+Les observations ajoutées par `MarketStateBuilder.add_observation(...)` forment la **série statistique retenue**. Elles seules servent aux calculs des fenêtres. `MarketStateBuilder.build(...)` accepte désormais une `current_observation` optionnelle : cette observation est utilisée pour le prix courant du snapshot et sa fraîcheur, mais n'est pas insérée dans l'historique statistique.
+
+`build(...)` accepte également un `statistics_as_of` optionnel. Cette ancre doit être inférieure ou égale à `MarketState.as_of` et fixe le temps causal auquel les fenêtres statistiques sont évaluées. Lorsque ce paramètre n'est pas fourni, le comportement générique historique reste inchangé : les fenêtres sont ancrées sur `as_of`.
+
+Cette séparation garantit qu'une fréquence plus élevée d'appels à `build(...)` ne crée pas de nouveaux points statistiques par elle-même.
+
+### Runtime Kraken PAPER — Batches 15.2 / 15.3
+
+`KrakenMarketDataSource.snapshot(symbol)` :
 
 1. normalise la paire via le registry public Kraken ;
 2. lit un ticker WebSocket courant ;
-3. demande un bootstrap OHLC public 1 minute couvrant au moins le plus grand horizon, avec marge technique ;
-4. exclut systématiquement la dernière entrée OHLC, que Kraken documente comme la fenêtre courante non clôturée ;
-5. transforme chaque clôture historique en `MarketObservation` horodatée à `started_at + interval` ;
-6. n'ajoute que les clôtures strictement antérieures au ticker courant ;
-7. ajoute le ticker courant comme observation la plus récente ;
-8. construit le `MarketState` final via `MarketStateBuilder.build(as_of=snapshot_at)`.
+3. vérifie l'ordre temporel des tickers courants successifs ;
+4. demande un bootstrap OHLC public 1 minute couvrant au moins le plus grand horizon, avec marge technique ;
+5. exclut systématiquement la dernière entrée OHLC, que Kraken documente comme la fenêtre courante non clôturée ;
+6. transforme chaque clôture historique en `MarketObservation` horodatée à `started_at + interval` ;
+7. n'ajoute que les clôtures strictement antérieures au ticker courant ;
+8. conserve les clôtures OHLC comme seule série statistique persistée dans le builder ;
+9. choisit la dernière clôture OHLC retenue comme `statistics_as_of` causal ;
+10. transmet le ticker courant à `build(...)` comme `current_observation` non persistée ;
+11. construit le `MarketState` final avec `as_of=snapshot_at`.
 
-La granularité **1 minute** est un choix technique de bootstrap suffisamment fin pour les horizons existants 5/30 min ; elle n'ajoute aucun horizon stratégique et ne produit aucun signal directionnel.
+La granularité **1 minute** est un choix technique d'échantillonnage descriptif suffisamment fin pour les horizons existants 5/30 min ; elle n'ajoute aucun horizon stratégique et ne produit aucun signal directionnel.
 
-Une fenêtre vide ou partielle reste explicitement représentée comme telle. Aucune observation ou statistique n'est fabriquée. Une erreur Kraken ou une impossibilité de construire le snapshot est une erreur Market explicite.
+Conséquences :
+
+- `MarketState.last_price` reste toujours le prix ticker courant ;
+- `MarketContext.last_observed_at`, `data_age_seconds` et `is_stale` restent basés sur l'observation courante ;
+- `observation_count`, min/max/range, rendement et volatilité sont calculés uniquement sur la série OHLC fixe ;
+- sans nouvelle clôture OHLC, plusieurs snapshots successifs conservent les mêmes fenêtres statistiques même si `MarketState.as_of`, le ticker ou la cadence moteur changent ;
+- quand une nouvelle clôture OHLC devient causalement disponible, elle est ajoutée une seule fois et les fenêtres avancent naturellement ;
+- une fenêtre vide ou partielle reste explicitement représentée comme telle ;
+- une erreur Kraken ou une impossibilité de construire le snapshot reste une erreur Market explicite.
 
 La fraîcheur technique est vérifiée sur le ticker puis réévaluée après la récupération historique afin qu'un appel REST lent ne puisse pas faire passer silencieusement une observation devenue stale.
 
@@ -273,6 +298,8 @@ Le package canonique est `ai_spot_trader.risk`. Le moteur est synchrone, déterm
 
 Ni l'agressivité, ni les statistiques marché, ni le modèle LLM ne deviennent des règles déterministes de décision stratégique dans Risk. Le contexte permet seulement les contrôles techniques déjà définis et fournit des faits à l'Agent.
 
+Le Batch 15.3 ne modifie ni `RiskEngine`, ni `RiskPolicy`, ni les limites de risque.
+
 ---
 
 ## 9. Agent IA
@@ -286,6 +313,8 @@ LLMProvider.generate_decision(AgentInput) -> DecisionCandidate
 Le modèle fournisseur ne produit que `action`, `symbol`, `proposed_quantity`, `rationale`. Le prompt stratégique courant reste `agent-strategy-v2`. Luna et Sol utilisent exactement `OpenAIDecisionProvider`; le modèle est un paramètre de configuration.
 
 Le contexte multi-horizon est transmis comme partie du `MarketState` canonique de l'`AgentInput`. L'Agent peut l'interpréter stratégiquement, mais aucun calcul de contexte ne lui impose BUY, SELL ou HOLD.
+
+Le Batch 15.3 ne change ni le prompt Agent, ni l'agressivité, ni la logique stratégique Luna/Sol.
 
 ---
 
@@ -304,7 +333,18 @@ MarketState.as_of <= Fill.filled_at                       # si fill
 
 Le même `MarketState` imbriqué dans `AgentInput` est réutilisé pour Risk puis, si autorisé, pour le Broker. La persistance enregistre les timestamps produits ; elle ne les recalcule pas.
 
-Pour les OHLC Kraken, le timestamp fournisseur de la bougie correspond à son début. Le runtime attribue donc la clôture historique à `started_at + interval` et ignore l'entrée courante non clôturée. Une clôture à ou après le ticker courant n'est pas injectée. Ces règles empêchent d'exposer à l'Agent une valeur qui n'était pas causalement disponible à l'instant considéré.
+Pour les OHLC Kraken, le timestamp fournisseur de la bougie correspond à son début. Le runtime attribue donc la clôture historique à `started_at + interval` et ignore l'entrée courante non clôturée. Une clôture à ou après le ticker courant n'est pas injectée.
+
+Pour le Batch 15.3 :
+
+```text
+statistics_as_of <= MarketState.as_of
+chaque observation statistique utilisée <= statistics_as_of
+ticker courant utilisé <= MarketState.as_of
+clôture OHLC retenue < ticker courant
+```
+
+Le ticker courant ne devient jamais une observation statistique. Ces règles empêchent à la fois le look-ahead et la contamination des fenêtres par la cadence moteur.
 
 Pour le chat, une explication d'un cycle historique reçoit le `CycleAuditDetail` durable correspondant et son `agent_input` exact. L'état courant est séparé et ne peut pas devenir une cause rétroactive.
 
@@ -315,6 +355,8 @@ Pour le chat, une explication d'un cycle historique reçoit le `CycleAuditDetail
 `TradingCycleRunner.run_cycle()` exécute exactement un cycle PAPER. `TradingEngine` répète le même runner séquentiellement ; aucun orchestrateur expérimental, conversationnel ou marché parallèle n'est ajouté.
 
 Market, Agent et Broker sont entourés de timeouts ; Risk reste synchrone et déterministe. Le verrou du runner couvre l'intégralité du cycle. L'appel REST OHLC et l'appel WebSocket ticker font tous deux partie du stage Market et restent donc sous le timeout Market global du cycle, en plus de leurs bornes fournisseur propres.
+
+La cadence `TradingEngine` détermine uniquement **quand** un nouveau cycle est demandé. Elle ne définit plus l'échantillonnage des statistiques du `MarketContext`.
 
 Le chat est servi par FastAPI de manière indépendante. Il ne stoppe ni ne redémarre le moteur, et le moteur ne dépend pas de la présence du frontend.
 
@@ -335,7 +377,7 @@ Le commit `4b9701f07854a943cf47a14287aadfdf4aa48232` intègre le composition roo
 - audit préflight + latch fail-closed après panne d'audit ;
 - fermeture ordonnée moteur, ressources Kraken, DB.
 
-Le Batch 15.2 ne modifie pas cette composition : `build_kraken_market_data_source(...)` conserve la même frontière `MarketDataSource`, mais son `snapshot()` devient riche grâce au builder existant.
+Les Batches 15.2 et 15.3 ne modifient pas cette composition : `build_kraken_market_data_source(...)` conserve la même frontière `MarketDataSource`; seule la construction interne du snapshot est enrichie/corrigée via le builder canonique.
 
 ---
 
@@ -344,6 +386,8 @@ Le Batch 15.2 ne modifie pas cette composition : `build_kraken_market_data_sourc
 Le journal PostgreSQL/Alembic conserve le graphe immuable par cycle et l'`AgentInput` complet. Les champs expérimentaux et le `MarketContext` imbriqué sont persistés via les contrats existants sans migration additionnelle.
 
 Les conversations restent process-locales et bornées pour la V1 ; elles ne participent ni au journal de trading, ni aux digests expérimentaux, ni aux analytics.
+
+Les Batches 15.2/15.3 n'ajoutent aucune migration : ils modifient uniquement la construction des valeurs déjà sérialisées dans le `MarketState`.
 
 La limite exactly-once globale entre mutation du ledger mémoire et commit PostgreSQL reste explicitement non résolue.
 
@@ -361,13 +405,15 @@ POST /api/v1/engine/start
 POST /api/v1/engine/stop
 ```
 
-Aucune route ne reçoit directement une action stratégique ou un `ExecutionIntent`.
+Aucune route ne reçoit directement une action stratégique ou un `ExecutionIntent`. Le Batch 15.3 n'ajoute aucune route.
 
 ---
 
 ## 15. Frontend cockpit
 
-Le cockpit reste strictement client des interfaces FastAPI, utilise un polling présentatif borné et n'est jamais propriétaire du moteur. Aucun changement frontend n'est nécessaire pour le Batch 15.2 : le contexte marché enrichi est d'abord destiné au runtime Agent et à l'audit canonique.
+Le cockpit reste strictement client des interfaces FastAPI, utilise un polling présentatif borné et n'est jamais propriétaire du moteur. Aucun changement frontend n'est nécessaire pour le Batch 15.3.
+
+La cadence de polling frontend n'est pas la cadence moteur et aucune des deux ne définit l'échantillonnage OHLC statistique.
 
 ---
 
@@ -375,7 +421,7 @@ Le cockpit reste strictement client des interfaces FastAPI, utilise un polling p
 
 Les analytics observent le journal immuable. `build_paper_analytics_report` est déterministe, sans I/O/horloge courante. Equity, P&L brut/net, coûts, drawdown, exposition, trades et compteurs HOLD/REJECT/MODIFY/FAILED restent définis par `paper-analytics-v1`.
 
-Le Batch 15.2 n'introduit aucun nouvel indicateur de performance ni scoring du contexte marché.
+Le Batch 15.3 n'introduit aucun nouvel indicateur de performance ni scoring du contexte marché.
 
 ---
 
@@ -384,6 +430,8 @@ Le Batch 15.2 n'introduit aucun nouvel indicateur de performance ni scoring du c
 `aggressiveness-map-v1` est discret. `paper-experiment-v1` identifie niveau, modèle, prompt, univers, Risk, coûts, source et version analytics. `compare_aggressiveness_runs(...)` refuse une comparaison si un champ contrôlé hors agressivité diffère.
 
 Aucun message chat ni calcul de contexte marché ne modifie le mapping d'agressivité ou `RiskPolicy`.
+
+L'indépendance statistique vis-à-vis de la cadence moteur du Batch 15.3 améliore la comparabilité expérimentale : changer `trading_cadence_seconds` ne rajoute plus artificiellement des observations dans les fenêtres descriptives.
 
 ---
 
@@ -405,7 +453,7 @@ Pour un cycle historique, `historical_cycle.agent_input` représente ce que l'Ag
 
 ## 20. Sécurité et séparation PAPER / LIVE
 
-`ExecutionMode` ne contient que `PAPER`. Le LIVE reste non représentable et nécessitera une décision dédiée. Aucune clé Kraken privée n'est requise par le runtime actuel ou par le Batch 15.2.
+`ExecutionMode` ne contient que `PAPER`. Le LIVE reste non représentable et nécessitera une décision dédiée. Aucune clé Kraken privée n'est requise par le runtime actuel ni par les Batches 15.2/15.3.
 
 Le provider OpenAI stratégique ne dispose d'aucun outil d'exécution. Le provider conversationnel n'a également aucun outil ni port d'exécution.
 
@@ -417,31 +465,29 @@ Le bind API par défaut reste local. Toute exposition distante du cockpit/chat/l
 
 Le socle déjà intégré dispose de tests pour contrats domaine, Market State, Kraken public, portfolio/broker, Risk, Agent, boucle, persistance, API, analytics, expériences, chat et composition PAPER.
 
-Le Batch 15.2 ajoute ou adapte des tests ciblés pour :
+Le Batch 15.2 avait ajouté les tests de parsing/normalisation OHLC, exclusion de bougie non clôturée, construction multi-horizon, fraîcheur et propagation jusqu'à l'`AgentInput`.
 
-- parsing/normalisation OHLC Kraken ;
-- exclusion systématique de la bougie non clôturée ;
-- construction du `MarketContext` ;
-- fenêtres vides, partielles et complètes ;
-- ordre temporel strict et doublons ;
+Le Batch 15.3 ajoute des tests déterministes pour :
+
+- séparation entre série statistique retenue et observation courante ;
+- ticker courant comme `MarketState.last_price` ;
+- fraîcheur basée sur le ticker courant ;
+- absence de modification artificielle des fenêtres lors de snapshots répétés sans nouvelle bougie OHLC ;
+- comparaison de simulations de cadence 10 s et 120 s avec statistiques descriptives finales identiques pour la même série sous-jacente ;
+- ancrage des fenêtres sur la dernière observation statistique causale ;
 - absence de look-ahead ;
-- ticker courant comme dernier prix ;
-- fraîcheur avant/après récupération historique ;
-- erreurs fournisseur ;
-- propagation inchangée du contexte jusque dans l'`AgentInput` du cycle canonique ;
-- timeout Market existant conservé au niveau du runner.
+- fenêtres vides/partielles honnêtes ;
+- ordre temporel strict des observations statistiques et des tickers courants ;
+- comportement après plusieurs snapshots successifs.
 
-Validation locale Batch 15.2 confirmée le 21 septembre 2026 :
+Validation exécutée par ChatGPT dans l'environnement de génération :
 
 ```text
-tests ciblés contexte marché : 71 passés
-pytest                       : 306 passés, 2 warnings externes
-ruff check .                 : All checks passed
-mypy .                       : 94 fichiers sans erreur
-git diff --check             : aucune erreur
+pytest tests/test_market_state.py tests/test_kraken_market_data.py : 38 passés
+compileall fichiers Python modifiés                           : réussi
 ```
 
-Le cycle PAPER réel `BTC/USDC` de validation a produit un `MarketContext` non nul avec fenêtres complètes 300 s / 1800 s, observations causales antérieures au snapshot et rationale Agent exploitant explicitement les deux horizons.
+Validation locale complète confirmée le 21 septembre 2026 : `pytest` **315 passés** avec 2 warnings externes, `ruff check .` **All checks passed**, `mypy .` **94 fichiers sans erreur**, et `git diff --check` sans erreur avec uniquement des warnings LF -> CRLF sous Windows.
 
 ---
 
@@ -456,4 +502,4 @@ Le cycle PAPER réel `BTC/USDC` de validation a produit un `MarketContext` non n
 - source d'événements et protocole d'un futur WebSocket cockpit ;
 - conditions futures d'un éventuel LIVE.
 
-Les valeurs concrètes du premier essai PAPER restent des paramètres explicites de run. Les horizons descriptifs 5/30 minutes et la granularité technique OHLC 1 minute du bootstrap sont désormais documentés ; ils ne constituent aucune stratégie algorithmique déterministe.
+Les valeurs concrètes du premier essai PAPER restent des paramètres explicites de run. Les horizons descriptifs 5/30 minutes et la granularité technique OHLC 1 minute sont des mécanismes descriptifs ; ils ne constituent aucune stratégie algorithmique déterministe. Le Batch 15.3 fixe explicitement que l'échantillonnage statistique dépend de la série marché et non de la cadence du moteur.

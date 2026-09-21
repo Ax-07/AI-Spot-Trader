@@ -79,6 +79,23 @@ def test_no_look_ahead_excludes_observations_after_snapshot_cutoff() -> None:
     assert window.last_observed_at == NOW
 
 
+def test_future_current_observation_is_excluded_without_look_ahead() -> None:
+    builder = MarketStateBuilder(horizons=(timedelta(minutes=5),))
+    builder.add_observation(observation(-1, "100"))
+    future_current = MarketObservation(
+        observed_at=NOW + timedelta(seconds=1),
+        symbol="BTC/EUR",
+        last_price=Decimal("999"),
+    )
+
+    state = builder.build(as_of=NOW, current_observation=future_current)
+
+    assert state.last_price == Decimal("100")
+    assert state.context is not None
+    assert state.context.last_observed_at == NOW - timedelta(minutes=1)
+    assert state.context.windows[0].max_price == Decimal("100")
+
+
 def test_empty_history_and_future_only_history_are_explicit_errors() -> None:
     builder = MarketStateBuilder(horizons=(timedelta(minutes=5),))
     with pytest.raises(EmptyMarketHistoryError):
@@ -87,6 +104,143 @@ def test_empty_history_and_future_only_history_are_explicit_errors() -> None:
     builder.add_observation(observation(1, "100"))
     with pytest.raises(EmptyMarketHistoryError):
         builder.build(as_of=NOW)
+
+
+def test_current_observation_can_build_snapshot_without_statistical_history() -> None:
+    builder = MarketStateBuilder(
+        horizons=(timedelta(minutes=5),),
+        stale_after=timedelta(seconds=10),
+    )
+    current = MarketObservation(
+        observed_at=NOW - timedelta(seconds=2),
+        symbol="BTC/EUR",
+        last_price=Decimal("100"),
+    )
+
+    state = builder.build(as_of=NOW, current_observation=current)
+
+    assert state.last_price == Decimal("100")
+    assert state.context is not None
+    assert state.context.last_observed_at == NOW - timedelta(seconds=2)
+    assert state.context.data_age_seconds == Decimal("2")
+    assert state.context.is_stale is False
+    window = state.context.windows[0]
+    assert window.observation_count == 0
+    assert not window.is_complete
+    assert window.return_fraction is None
+    assert builder.retained_observations == ()
+
+
+def test_current_observation_drives_price_and_freshness_but_not_window_statistics() -> None:
+    builder = MarketStateBuilder(
+        horizons=(timedelta(minutes=5),),
+        stale_after=timedelta(seconds=10),
+    )
+    builder.extend(
+        [
+            observation(-6, "95"),
+            observation(-3, "100"),
+            observation(-2, "110"),
+            observation(-1, "99"),
+        ]
+    )
+    current = MarketObservation(
+        observed_at=NOW - timedelta(seconds=2),
+        symbol="BTC/EUR",
+        last_price=Decimal("150"),
+    )
+
+    state = builder.build(as_of=NOW, current_observation=current)
+
+    assert state.last_price == Decimal("150")
+    assert state.context is not None
+    assert state.context.last_observed_at == NOW - timedelta(seconds=2)
+    assert state.context.data_age_seconds == Decimal("2")
+    window = state.context.windows[0]
+    assert window.observation_count == 3
+    assert window.min_price == Decimal("99")
+    assert window.max_price == Decimal("110")
+    assert window.return_fraction == Decimal("-0.01")
+    assert window.realized_volatility == Decimal("0.1")
+    assert window.last_observed_at == NOW - timedelta(minutes=1)
+    assert builder.retained_observations[-1].last_price == Decimal("99")
+
+
+def test_statistics_anchor_keeps_windows_stable_until_statistical_series_advances() -> None:
+    builder = MarketStateBuilder(horizons=(timedelta(minutes=5),))
+    builder.extend(
+        [
+            observation(-6, "94"),
+            observation(-5, "95"),
+            observation(-4, "96"),
+            observation(-3, "97"),
+            observation(-2, "98"),
+            observation(-1, "99"),
+        ]
+    )
+    statistics_as_of = NOW - timedelta(minutes=1)
+    first_current = MarketObservation(
+        observed_at=NOW + timedelta(seconds=10),
+        symbol="BTC/EUR",
+        last_price=Decimal("120"),
+    )
+    second_current = MarketObservation(
+        observed_at=NOW + timedelta(seconds=50),
+        symbol="BTC/EUR",
+        last_price=Decimal("130"),
+    )
+
+    first = builder.build(
+        as_of=NOW + timedelta(seconds=10),
+        current_observation=first_current,
+        statistics_as_of=statistics_as_of,
+    )
+    second = builder.build(
+        as_of=NOW + timedelta(seconds=50),
+        current_observation=second_current,
+        statistics_as_of=statistics_as_of,
+    )
+
+    assert first.context is not None and second.context is not None
+    assert first.context.windows == second.context.windows
+    window = second.context.windows[0]
+    assert window.window_start == NOW - timedelta(minutes=6)
+    assert window.observation_count == 6
+    assert window.first_price == Decimal("94")
+    assert window.last_price == Decimal("99")
+    assert second.last_price == Decimal("130")
+
+
+def test_statistics_anchor_cannot_be_newer_than_snapshot() -> None:
+    builder = MarketStateBuilder(horizons=(timedelta(minutes=5),))
+    builder.add_observation(observation(-1, "100"))
+
+    with pytest.raises(ValueError, match="statistics_as_of"):
+        builder.build(
+            as_of=NOW,
+            statistics_as_of=NOW + timedelta(seconds=1),
+        )
+
+
+def test_current_observation_must_follow_statistical_history_strictly() -> None:
+    builder = MarketStateBuilder(horizons=(timedelta(minutes=5),))
+    builder.add_observation(observation(-1, "100"))
+
+    duplicate_time = MarketObservation(
+        observed_at=NOW - timedelta(minutes=1),
+        symbol="BTC/EUR",
+        last_price=Decimal("101"),
+    )
+    with pytest.raises(DuplicateObservationError):
+        builder.build(as_of=NOW, current_observation=duplicate_time)
+
+    older = MarketObservation(
+        observed_at=NOW - timedelta(minutes=2),
+        symbol="BTC/EUR",
+        last_price=Decimal("99"),
+    )
+    with pytest.raises(OutOfOrderObservationError):
+        builder.build(as_of=NOW, current_observation=older)
 
 
 def test_one_observation_creates_partial_window_without_fake_derived_values() -> None:
@@ -217,6 +371,14 @@ def test_symbol_mismatch_is_rejected() -> None:
 
     with pytest.raises(SymbolMismatchError):
         builder.add_observation(observation(0, "200", symbol="ETH/EUR"))
+
+    current = MarketObservation(
+        observed_at=NOW,
+        symbol="ETH/EUR",
+        last_price=Decimal("200"),
+    )
+    with pytest.raises(SymbolMismatchError):
+        builder.build(as_of=NOW, current_observation=current)
 
 
 def test_snapshot_cutoff_must_be_timezone_aware_and_is_normalized_to_utc() -> None:

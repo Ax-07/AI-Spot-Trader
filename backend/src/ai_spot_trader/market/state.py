@@ -60,12 +60,12 @@ class MarketStateBuilder:
 
     @property
     def retained_observations(self) -> tuple[MarketObservation, ...]:
-        """Return the bounded retained history for diagnostics and deterministic tests."""
+        """Return statistical history retained for deterministic window calculations."""
 
         return tuple(self._observations)
 
     def add_observation(self, observation: MarketObservation) -> None:
-        """Append one normalized observation in strictly increasing timestamp order."""
+        """Append one statistical observation in strictly increasing timestamp order."""
 
         if self._symbol is None:
             self._symbol = observation.symbol
@@ -91,24 +91,54 @@ class MarketStateBuilder:
             del self._observations[:overflow]
 
     def extend(self, observations: Iterable[MarketObservation]) -> None:
-        """Append several observations using the same ordering checks as single inserts."""
+        """Append several statistical observations using the same ordering checks."""
 
         for observation in observations:
             self.add_observation(observation)
 
-    def build(self, *, as_of: datetime | None = None) -> MarketState:
-        """Build a snapshot using observations at or before the requested cutoff only."""
+    def build(
+        self,
+        *,
+        as_of: datetime | None = None,
+        current_observation: MarketObservation | None = None,
+        statistics_as_of: datetime | None = None,
+    ) -> MarketState:
+        """Build one snapshot while keeping current price and statistics independent.
+
+        Retained observations are the deterministic statistical series used by every
+        descriptive window. ``current_observation`` is snapshot-only: when eligible it
+        supplies the current ``last_price`` and freshness metadata, but it never changes
+        observation counts, returns, ranges or realized volatility. ``statistics_as_of``
+        can anchor those windows to the causal time of the fixed-granularity statistical
+        series instead of the engine invocation time.
+        """
 
         cutoff = _normalize_utc(as_of if as_of is not None else self._clock.now())
-        eligible = [
+        statistics_cutoff = (
+            _normalize_utc(statistics_as_of) if statistics_as_of is not None else cutoff
+        )
+        if statistics_cutoff > cutoff:
+            raise ValueError("statistics_as_of cannot be newer than the snapshot time")
+
+        snapshot_eligible = [
             observation
             for observation in self._observations
             if observation.observed_at <= cutoff
         ]
-        if not eligible:
+        statistical_eligible = [
+            observation
+            for observation in snapshot_eligible
+            if observation.observed_at <= statistics_cutoff
+        ]
+        current = self._eligible_current_observation(
+            current_observation,
+            cutoff=cutoff,
+            retained_eligible=snapshot_eligible,
+        )
+        if current is None and not snapshot_eligible:
             raise EmptyMarketHistoryError("no observation exists at or before the snapshot time")
 
-        latest = eligible[-1]
+        latest = current if current is not None else snapshot_eligible[-1]
         age = cutoff - latest.observed_at
         age_seconds = _timedelta_seconds(age)
         stale_after_seconds = (
@@ -120,7 +150,11 @@ class MarketStateBuilder:
             else None
         )
         windows = tuple(
-            self._build_window(cutoff=cutoff, horizon=horizon, eligible=eligible)
+            self._build_window(
+                cutoff=statistics_cutoff,
+                horizon=horizon,
+                eligible=statistical_eligible,
+            )
             for horizon in self._horizons
         )
 
@@ -138,6 +172,33 @@ class MarketStateBuilder:
             ),
         )
 
+    def _eligible_current_observation(
+        self,
+        observation: MarketObservation | None,
+        *,
+        cutoff: datetime,
+        retained_eligible: list[MarketObservation],
+    ) -> MarketObservation | None:
+        if observation is None or observation.observed_at > cutoff:
+            return None
+        if self._symbol is not None and observation.symbol != self._symbol:
+            raise SymbolMismatchError(
+                f"expected observation for {self._symbol}, received {observation.symbol}"
+            )
+        if not retained_eligible:
+            return observation
+
+        latest_history = retained_eligible[-1]
+        if observation.observed_at == latest_history.observed_at:
+            raise DuplicateObservationError(
+                "current observation must be strictly newer than statistical history"
+            )
+        if observation.observed_at < latest_history.observed_at:
+            raise OutOfOrderObservationError(
+                "current observation must be newer than statistical history"
+            )
+        return observation
+
     def _build_window(
         self,
         *,
@@ -151,7 +212,7 @@ class MarketStateBuilder:
             for observation in eligible
             if observation.observed_at >= window_start
         ]
-        history_spans_window = eligible[0].observed_at <= window_start
+        history_spans_window = bool(eligible) and eligible[0].observed_at <= window_start
         horizon_seconds = _timedelta_seconds(horizon)
 
         if not observations:

@@ -153,16 +153,6 @@ Market -> Agent -> DecisionCandidate -> Risk -> ExecutionIntent -> Paper Broker
 
 reste le seul chemin d'exécution.
 
-Le chat :
-
-- ne construit pas `DecisionCandidate` pour le moteur ;
-- ne construit pas `RiskAssessment`/`ExecutionIntent` ;
-- n'importe pas Risk/Broker/Kraken/trading ;
-- ne modifie pas `RiskPolicy` ;
-- n'injecte pas son historique dans `AgentInput` ;
-- ne déclenche pas un BUY/SELL à partir d'un message ;
-- ne modifie pas les digests expérimentaux Luna/Sol ou agressivité.
-
 ### Validation confirmée
 
 Validation locale finale du 21 septembre 2026 :
@@ -189,32 +179,32 @@ Assembler les composants déjà intégrés dans un composition root exécutable,
 ### Périmètre intégré
 
 - `main:app` compose au lifespan le runtime PAPER complet mais laisse le moteur arrêté ;
-- configuration explicite et fail-closed des valeurs du premier run : paire, capital, devise, cadence, agressivité, timeouts, Risk et coûts ;
+- configuration explicite et fail-closed des valeurs du premier run ;
 - Kraken public uniquement ;
 - même modèle Luna/Sol pour Agent et Chat ;
 - même `PaperExecutionCostModel` pour Risk et Broker ;
 - même `PaperPortfolioLedger` pour moteur/API/Chat ;
 - même PostgreSQL pour writer d'audit, lecteurs et analytics ;
 - runner canonique enveloppé par `AuditedTradingCycleRunner` ;
-- `POST /api/v1/engine/run-cycle` appelle seulement `TradingEngine.run_cycle()` et refuse si la boucle autonome est active ;
-- fermeture du moteur, des ressources Kraken possédées et de la DB au shutdown ;
-- préflight PostgreSQL avant chaque cycle et latch fail-closed après toute erreur d'audit.
+- `POST /api/v1/engine/run-cycle` appelle seulement `TradingEngine.run_cycle()` ;
+- fermeture ordonnée des ressources ;
+- audit fail-closed après erreur durable.
 
 ### Validation réelle post-intégration
 
-Le premier essai PAPER réel a confirmé un cycle manuel puis un smoke run autonome propres. Il a également révélé que le snapshot Kraken intégré restait minimal (`market_state.context = null`), ce qui motive le batch suivant.
+Le premier essai PAPER réel a confirmé un cycle manuel puis un smoke run autonome propres. Il a également révélé que le snapshot Kraken intégré restait minimal (`market_state.context = null`), ce qui a motivé le Batch 15.2.
 
 ---
 
 ## Batch 15.2 — Contexte marché multi-horizon pour les essais PAPER
 
-**État : validé localement, commit/push sur `main` à confirmer.**
+**État : intégré sur `main`. Commit fonctionnel `97d529647179c6769a6bdc528b9d9f5e7c85c119` (`feat: add multi-horizon market context`), état documentaire finalisé par `bb1aa047157deb1b62d27de952fa53ec14992f09`.**
 
 ### Objectif
 
 Rendre le `MarketState.context` du runtime PAPER canonique exploitable dès le premier cycle sans introduire de deuxième moteur de contexte.
 
-### Périmètre du patch
+### Périmètre intégré
 
 - `MarketStateBuilder` existant devient la voie canonique de construction du snapshot Kraken ;
 - horizons existants conservés : **5 min / 30 min** ;
@@ -227,7 +217,7 @@ Rendre le `MarketState.context` du runtime PAPER canonique exploitable dès le p
 - erreurs fournisseur/timeout propagées par le stage Market ;
 - aucune stratégie déterministe, aucun signal BUY/SELL/HOLD, aucun frontend, aucun LIVE.
 
-### Validation locale confirmée
+### Validation confirmée
 
 - tests ciblés Market State/Kraken/cycle canonique : **71 passés** ;
 - suite complète : **306 passés**, 2 warnings externes ;
@@ -236,7 +226,38 @@ Rendre le `MarketState.context` du runtime PAPER canonique exploitable dès le p
 - `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
 - cycle PAPER réel `BTC/USDC` : `COMPLETED`, contexte non nul, fenêtres 5 min / 30 min complètes et rationale Agent exploitant effectivement ces horizons.
 
-L'intégration sur `main` reste à confirmer par commit/push.
+Les runs autonomes post-intégration ont toutefois montré que les tickers de chaque cycle étaient retenus avec les OHLC, ce qui faisait varier l'échantillonnage selon `trading_cadence_seconds`. Ce défaut est le périmètre du Batch 15.3.
+
+---
+
+## Batch 15.3 — Contexte marché indépendant de la cadence du moteur
+
+**État : patch livré et validation locale complète confirmée ; intégration sur `main` à confirmer. Référence GitHub auditée au démarrage : `bb1aa047157deb1b62d27de952fa53ec14992f09`.**
+
+### Objectif
+
+Faire dépendre les statistiques descriptives du `MarketState.context` uniquement de la série marché à granularité fixe, et non du nombre de cycles exécutés.
+
+### Architecture retenue
+
+- `MarketStateBuilder` reste l'unique calculateur canonique ;
+- son historique retenu devient explicitement la **série statistique** ;
+- le ticker courant est transmis au build comme observation de snapshot non persistée ;
+- `MarketState.last_price` et la fraîcheur restent basés sur le ticker courant ;
+- les fenêtres sont ancrées par un `statistics_as_of` causal ;
+- pour Kraken, `statistics_as_of` est la dernière clôture OHLC 1 minute retenue ;
+- sans nouvelle bougie OHLC, les statistiques ne bougent pas artificiellement lors de snapshots supplémentaires ;
+- quand une nouvelle bougie clôturée devient disponible, la série et son ancre avancent naturellement ;
+- ordre temporel des tickers successifs contrôlé séparément ;
+- aucun changement du runner, de l'Agent, du Risk Engine, du Broker, des ports, du REST Kraken privé ou du frontend.
+
+### Validation exécutée par ChatGPT
+
+- tests ciblés `test_market_state.py` + `test_kraken_market_data.py` : **38 passés** ;
+- `compileall` des fichiers Python modifiés : **réussi** ;
+- tests ajoutés pour snapshots répétés sans nouvelle OHLC, simulations 10 s / 120 s, ticker courant, fraîcheur, no-look-ahead, fenêtres partielles et ordre strict.
+
+Validation locale complète confirmée : **315 tests passés**, 2 warnings externes ; Ruff **All checks passed** ; mypy **94 fichiers sans erreur** ; `git diff --check` sans erreur, warnings LF -> CRLF uniquement.
 
 ---
 
@@ -246,7 +267,7 @@ L'intégration sur `main` reste à confirmer par commit/push.
 
 Readiness, adaptateur privé Kraken, réconciliation, permissions minimales sans retrait, garde-fous LIVE et activation volontaire séparée.
 
-Le LIVE demeure postérieur au chat, au runtime PAPER réel et à la validation du contexte marché.
+Le LIVE demeure postérieur au chat, au runtime PAPER réel et à la validation complète des Batches 15.2/15.3.
 
 ---
 
@@ -289,6 +310,8 @@ Le LIVE demeure postérieur au chat, au runtime PAPER réel et à la validation 
   |
 15.2 Canonical multi-horizon market context
   |
+15.3 Fixed-sampling market context independent of engine cadence
+  |
 16 Optional LIVE readiness
 ```
 
@@ -307,4 +330,4 @@ Le LIVE demeure postérieur au chat, au runtime PAPER réel et à la validation 
 - auth/déploiement pour exposition non locale ;
 - éventuel LIVE.
 
-Les valeurs du premier essai PAPER (capital, paire, cadence, limites Risk, coûts) restent des **paramètres explicites de run**, pas des defaults produit. La granularité OHLC 1 min du Batch 15.2 est un choix technique de bootstrap et non un horizon stratégique supplémentaire.
+Les valeurs du premier essai PAPER (capital, paire, cadence, limites Risk, coûts) restent des **paramètres explicites de run**, pas des defaults produit. La granularité OHLC 1 min est un choix technique de bootstrap et d'échantillonnage descriptif, pas un horizon stratégique supplémentaire. La cadence du moteur ne doit pas définir l'échantillonnage statistique.

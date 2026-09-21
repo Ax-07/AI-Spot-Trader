@@ -52,6 +52,7 @@ class KrakenMarketDataSource:
         self._stale_after = stale_after
         self._registry = registry
         self._builders: dict[str, MarketStateBuilder] = {}
+        self._latest_current_observations: dict[str, MarketObservation] = {}
 
     async def observation(self, symbol: str) -> MarketObservation:
         registry = await self._pair_registry()
@@ -71,6 +72,7 @@ class KrakenMarketDataSource:
 
     async def snapshot(self, symbol: str) -> MarketState:
         observation = await self.observation(symbol)
+        self._validate_current_sequence(observation)
 
         builder = self._builders.get(observation.symbol)
         if builder is None:
@@ -108,8 +110,15 @@ class KrakenMarketDataSource:
             history=history,
             before=observation.observed_at,
         )
-        self._append_current(builder, observation)
-        return builder.build(as_of=snapshot_at)
+        retained = builder.retained_observations
+        statistics_as_of = retained[-1].observed_at if retained else snapshot_at
+        market_state = builder.build(
+            as_of=snapshot_at,
+            current_observation=observation,
+            statistics_as_of=statistics_as_of,
+        )
+        self._latest_current_observations[observation.symbol] = observation
+        return market_state
 
     def is_stale(self, as_of: datetime) -> bool:
         if self._stale_after is None:
@@ -150,24 +159,17 @@ class KrakenMarketDataSource:
                 )
             )
 
-    @staticmethod
-    def _append_current(
-        builder: MarketStateBuilder,
-        observation: MarketObservation,
-    ) -> None:
-        retained = builder.retained_observations
-        if not retained:
-            builder.add_observation(observation)
+    def _validate_current_sequence(self, observation: MarketObservation) -> None:
+        previous = self._latest_current_observations.get(observation.symbol)
+        if previous is None:
             return
-
-        latest = retained[-1]
-        if observation.observed_at < latest.observed_at:
+        if observation.observed_at < previous.observed_at:
             raise KrakenPayloadError("Kraken ticker timestamp moved backwards")
-        if observation.observed_at == latest.observed_at:
-            if observation.last_price != latest.last_price:
-                raise KrakenPayloadError("Kraken ticker conflicts with retained market history")
-            return
-        builder.add_observation(observation)
+        if (
+            observation.observed_at == previous.observed_at
+            and observation.last_price != previous.last_price
+        ):
+            raise KrakenPayloadError("Kraken ticker conflicts with previous current observation")
 
 
 def build_kraken_market_data_source(
