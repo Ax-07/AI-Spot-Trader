@@ -46,7 +46,7 @@ Les anciennes mentions **SPOT uniquement / aucun future-perpetual** sont supers�
 ## Décisions / constats Batch 16.1
 
 ### ADR-101 — `contractValueTradePrecision` est un exposant décimal entier signé
-**ACCEPTÉE localement dans le Batch 16.1.** Le parser Kraken Derivatives ne doit pas rejeter une valeur uniquement parce qu'elle est négative. La quantité minimale est dérivée par `10^-precision`. Ainsi `-3 -> 1000` et `4 -> 0.0001`.
+**ACCEPTÉE ET INTÉGRÉE dans le Batch 16.1.** Le parser Kraken Derivatives ne doit pas rejeter une valeur uniquement parce qu'elle est négative. La quantité minimale est dérivée par `10^-precision`. Ainsi `-3 -> 1000` et `4 -> 0.0001`.
 
 Le changement reste circonscrit au parseur et ne modifie ni le domaine, ni Risk, ni Broker, ni les règles d'exécution.
 
@@ -63,7 +63,7 @@ Changements principaux : contrats dérivés, client public Kraken Derivatives, l
 
 ## Changelog — 2026-09-21 — Batch 16.1 Smoke PERPETUAL PAPER
 
-**État : validé localement, non encore intégré à GitHub au moment de cette clôture. HEAD GitHub de référence : `f0eac4ce90ff4bddf0355d026a5152db8f94f981`.**
+**État : intégré sur GitHub `main` au commit `74c168180716e484ea2ec76f461620f595cb1b91` (`fix: finalize Batch 16.1 perpetual paper smoke`).**
 
 Changements :
 

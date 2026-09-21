@@ -4,7 +4,7 @@
 
 Ce document est la spécification fonctionnelle et architecturale principale d'**AI Spot Trader**. Depuis le Batch 16, le projet couvre **SPOT + Kraken Derivatives**, sans changer le principe d'un agent stratégique unique ni l'autorité finale du Risk Engine.
 
-Référence GitHub intégrée vérifiée avant clôture du Batch 16.1 : `main` au commit `f0eac4ce90ff4bddf0355d026a5152db8f94f981` (`docs: finalize Batch 16 integration`). Le Batch 16.1 décrit ci-dessous un état local validé tant qu'il n'est pas commité/poussé par l'utilisateur.
+Référence GitHub intégrée actuelle : `main` au commit `74c168180716e484ea2ec76f461620f595cb1b91` (`fix: finalize Batch 16.1 perpetual paper smoke`).
 
 ## 2. Vision et invariants
 
@@ -167,9 +167,11 @@ SPOT reste le défaut (`PAPER_MARKET_TYPE=SPOT`). Pour PERPETUAL : `PAPER_MARKET
 
 ### Batch 16 intégré
 
-Batch 16 est intégré sur `main` depuis le commit fonctionnel `06e3185c8a8c638263427842ab6591a2397810e0`. Le HEAD GitHub vérifié avant Batch 16.1 est `f0eac4ce90ff4bddf0355d026a5152db8f94f981`.
+Batch 16 est intégré sur `main` depuis le commit fonctionnel `06e3185c8a8c638263427842ab6591a2397810e0`.
 
-### Batch 16.1 local validé
+### Batch 16.1 intégré et validé
+
+Batch 16.1 est intégré sur `main` au commit `74c168180716e484ea2ec76f461620f595cb1b91` (`fix: finalize Batch 16.1 perpetual paper smoke`).
 
 Validation locale confirmée le 21 septembre 2026 :
 

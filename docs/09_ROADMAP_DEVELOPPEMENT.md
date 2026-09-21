@@ -18,7 +18,7 @@ Le support intégré couvre le domaine `SPOT | PERPETUAL | FUTURE`, l'exécution
 
 ## Batch 16.1 — Smoke test PERPETUAL PAPER
 
-**État : validé localement le 21 septembre 2026 ; non intégré à GitHub tant que le commit/push utilisateur n'est pas effectué.**
+**État : intégré sur GitHub `main` le 21 septembre 2026 au commit `74c168180716e484ea2ec76f461620f595cb1b91` (`fix: finalize Batch 16.1 perpetual paper smoke`).**
 
 ### Correctif inclus
 

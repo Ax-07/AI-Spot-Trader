@@ -6,9 +6,9 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub vérifié avant clôture du Batch 16.1 : `f0eac4ce90ff4bddf0355d026a5152db8f94f981` (`docs: finalize Batch 16 integration`).
+- HEAD GitHub intégré : `74c168180716e484ea2ec76f461620f595cb1b91` (`fix: finalize Batch 16.1 perpetual paper smoke`).
 - Commit fonctionnel Batch 16 : `06e3185c8a8c638263427842ab6591a2397810e0` (`feat: add Kraken derivatives paper trading`).
-- Batch 16.1 : modifications locales validées le 21 septembre 2026, **non intégrées à GitHub tant que l'utilisateur ne les a pas commitées/poussées**.
+- Batch 16.1 intégré sur GitHub `main` le 21 septembre 2026 au commit `74c168180716e484ea2ec76f461620f595cb1b91`.
 
 ## Batch 16.1 — Smoke Kraken PERPETUAL PAPER
 
@@ -69,4 +69,4 @@ Le smoke Batch 16.1 a utilisé une base PostgreSQL isolée pour éviter ce méla
 
 ## Prochaine étape proposée
 
-Après intégration du Batch 16.1, traiter dans un batch séparé l'isolation durable des runs PAPER (`paper_run_id` ou mécanisme équivalent), puis seulement ensuite poursuivre les smokes d'exécution dérivés contrôlés avec ouverture/réduction/fermeture.
+Traiter dans un batch séparé l'isolation durable des runs PAPER (`paper_run_id` ou mécanisme équivalent), puis seulement ensuite poursuivre les smokes d'exécution dérivés contrôlés avec ouverture/réduction/fermeture.
