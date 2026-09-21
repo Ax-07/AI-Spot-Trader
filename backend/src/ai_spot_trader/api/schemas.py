@@ -22,6 +22,7 @@ class CycleFailureResponse(ApiModel):
 
 class CycleSummaryResponse(ApiModel):
     cycle_id: UUID
+    paper_run_id: UUID | None = None
     status: str
     recorded_at: datetime
     decision_action: str | None = None
@@ -42,6 +43,7 @@ class FillResponse(ApiModel):
 
 class CycleDetailResponse(ApiModel):
     cycle_id: UUID
+    paper_run_id: UUID | None = None
     status: str
     recorded_at: datetime
     failure: CycleFailureResponse | None = None
@@ -119,6 +121,7 @@ class ExecutionPageResponse(ApiModel):
 
 class LatestErrorResponse(ApiModel):
     cycle_id: UUID
+    paper_run_id: UUID | None = None
     recorded_at: datetime
     failure: CycleFailureResponse
 
@@ -181,6 +184,22 @@ class EngineStatusResponse(ApiModel):
     last_cycle_status: str | None = None
     last_cycle_failure: CycleFailureResponse | None = None
     last_unexpected_error_type: str | None = None
+
+
+class PaperRunResponse(ApiModel):
+    paper_run_id: UUID
+    started_at: datetime
+    ended_at: datetime | None = None
+    market_type: Literal["SPOT", "PERPETUAL", "FUTURE"]
+    symbol: str
+    is_current: bool = False
+
+
+class PaperRunPageResponse(ApiModel):
+    items: tuple[PaperRunResponse, ...]
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    offset: int = Field(ge=0)
 
 
 class PaperAnalyticsPointResponse(ApiModel):
@@ -251,6 +270,7 @@ class PaperAnalyticsSummaryResponse(ApiModel):
 
 
 class PaperAnalyticsResponse(ApiModel):
+    paper_run_id: UUID | None = None
     calculation_version: str
     timezone: Literal["UTC"]
     source_digest: str = Field(min_length=64, max_length=64)

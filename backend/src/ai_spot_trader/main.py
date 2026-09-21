@@ -10,6 +10,7 @@ from ai_spot_trader.api.routes.audit import router as audit_router
 from ai_spot_trader.api.routes.chat import router as chat_router
 from ai_spot_trader.api.routes.engine import router as engine_router
 from ai_spot_trader.api.routes.health import router as health_router
+from ai_spot_trader.api.routes.paper_runs import router as paper_runs_router
 from ai_spot_trader.api.routes.portfolio import router as portfolio_router
 from ai_spot_trader.chat.provider import OpenAIChatProvider
 from ai_spot_trader.chat.service import OperatorChatService, RuntimeChatContextSource
@@ -29,6 +30,10 @@ from ai_spot_trader.persistence.query import (
     CycleAuditReader,
     SqlAlchemyCycleAuditQueryService,
 )
+from ai_spot_trader.persistence.runs import (
+    PaperRunReader,
+    SqlAlchemyPaperRunQueryService,
+)
 
 
 def create_app(
@@ -38,6 +43,7 @@ def create_app(
     portfolio: PortfolioSnapshotSource | None = None,
     audit_reader: CycleAuditReader | None = None,
     analytics_reader: PaperAnalyticsReader | None = None,
+    paper_run_reader: PaperRunReader | None = None,
     chat_service: OperatorChatService | None = None,
     compose_paper: bool = False,
 ) -> FastAPI:
@@ -49,6 +55,7 @@ def create_app(
         portfolio,
         audit_reader,
         analytics_reader,
+        paper_run_reader,
         chat_service,
     )
     if compose_paper and any(value is not None for value in injected_dependencies):
@@ -65,9 +72,14 @@ def create_app(
             owned_database: Database | None = None
             resolved_audit_reader = audit_reader
             resolved_analytics_reader = analytics_reader
+            resolved_paper_run_reader = paper_run_reader
             database_secret = resolved_settings.database_url
             if (
-                (resolved_audit_reader is None or resolved_analytics_reader is None)
+                (
+                    resolved_audit_reader is None
+                    or resolved_analytics_reader is None
+                    or resolved_paper_run_reader is None
+                )
                 and database_secret is not None
             ):
                 database_url = database_secret.get_secret_value().strip()
@@ -81,12 +93,17 @@ def create_app(
                         resolved_analytics_reader = SqlAlchemyPaperAnalyticsQueryService(
                             owned_database.sessions
                         )
+                    if resolved_paper_run_reader is None:
+                        resolved_paper_run_reader = SqlAlchemyPaperRunQueryService(
+                            owned_database.sessions
+                        )
 
             runtime = AppRuntime(
                 trading_engine=trading_engine,
                 portfolio=portfolio,
                 audit_reader=resolved_audit_reader,
                 analytics_reader=resolved_analytics_reader,
+                paper_run_reader=resolved_paper_run_reader,
                 owned_database=owned_database,
             )
             resolved_chat_service = chat_service
@@ -109,6 +126,7 @@ def create_app(
         app.state.runtime = runtime
         app.state.chat_service = resolved_chat_service
         try:
+            await runtime.initialize()
             yield
         finally:
             await runtime.close()
@@ -124,6 +142,7 @@ def create_app(
     app.include_router(portfolio_router)
     app.include_router(audit_router)
     app.include_router(analytics_router)
+    app.include_router(paper_runs_router)
     app.include_router(chat_router)
     return app
 

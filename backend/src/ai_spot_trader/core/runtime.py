@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from ai_spot_trader.persistence.analytics import PaperAnalyticsReader
 from ai_spot_trader.persistence.query import CycleAuditReader
+from ai_spot_trader.persistence.runs import PaperRunLifecycle, PaperRunReader
 
 
 class EngineCycleFailureLike(Protocol):
@@ -114,9 +115,22 @@ class AppRuntime:
     portfolio: PortfolioSnapshotSource | None = None
     audit_reader: CycleAuditReader | None = None
     analytics_reader: PaperAnalyticsReader | None = None
+    paper_run_lifecycle: PaperRunLifecycle | None = None
+    paper_run_reader: PaperRunReader | None = None
     owned_database: AsyncCloseable | None = None
     owned_resources: tuple[AsyncAcloseable, ...] = ()
     _engine_command_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    async def initialize(self) -> None:
+        """Create a fresh durable run for the fresh in-memory PAPER ledger."""
+
+        if self.paper_run_lifecycle is not None:
+            await self.paper_run_lifecycle.initialize()
+
+    @property
+    def current_paper_run_id(self) -> UUID | None:
+        lifecycle = self.paper_run_lifecycle
+        return None if lifecycle is None else lifecycle.current_run_id
 
     def engine_snapshot(self) -> EngineRuntimeSnapshot:
         engine = self._controllable_engine()
@@ -198,7 +212,7 @@ class AppRuntime:
         return engine
 
     async def close(self) -> None:
-        """Stop owned runtime activity and close network/database resources."""
+        """Stop trading, close the run, then release network/database resources."""
 
         self.shutdown_requested.set()
         try:
@@ -206,12 +220,16 @@ class AppRuntime:
                 await self.trading_engine.stop()
         finally:
             try:
-                for resource in reversed(self.owned_resources):
-                    await resource.aclose()
+                if self.paper_run_lifecycle is not None:
+                    await self.paper_run_lifecycle.close()
             finally:
-                if self.owned_database is not None:
-                    await self.owned_database.close()
-                await asyncio.sleep(0)
+                try:
+                    for resource in reversed(self.owned_resources):
+                        await resource.aclose()
+                finally:
+                    if self.owned_database is not None:
+                        await self.owned_database.close()
+                    await asyncio.sleep(0)
 
 
 def _enum_text(value: object) -> str:

@@ -22,10 +22,14 @@ from ai_spot_trader.integrations.kraken.derivatives import (
 )
 from ai_spot_trader.integrations.kraken.market_data import build_kraken_market_data_source
 from ai_spot_trader.persistence.analytics import SqlAlchemyPaperAnalyticsQueryService
-from ai_spot_trader.persistence.audit import AuditedTradingCycleRunner
+from ai_spot_trader.persistence.audit import AuditedTradingCycleRunner, RunBoundCycleAuditWriter
 from ai_spot_trader.persistence.db import Database
 from ai_spot_trader.persistence.query import SqlAlchemyCycleAuditQueryService
 from ai_spot_trader.persistence.repository import SqlAlchemyCycleAuditRepository
+from ai_spot_trader.persistence.runs import (
+    SqlAlchemyPaperRunLifecycle,
+    SqlAlchemyPaperRunQueryService,
+)
 from ai_spot_trader.portfolio.ledger import PaperPortfolioLedger
 from ai_spot_trader.risk.engine import RiskEngine
 from ai_spot_trader.risk.policy import RiskPolicy
@@ -57,6 +61,8 @@ class PaperRuntimeComposition:
     cycle_runner: TradingCycleRunner
     audited_runner: AuditedTradingCycleRunner
     trading_engine: TradingEngine
+    paper_run_lifecycle: SqlAlchemyPaperRunLifecycle
+    paper_run_reader: SqlAlchemyPaperRunQueryService
 
 
 def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
@@ -69,6 +75,13 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
     audit_repository = SqlAlchemyCycleAuditRepository(database.sessions)
     audit_reader = SqlAlchemyCycleAuditQueryService(database.sessions)
     analytics_reader = SqlAlchemyPaperAnalyticsQueryService(database.sessions)
+    paper_run_lifecycle = SqlAlchemyPaperRunLifecycle(
+        database.sessions,
+        market_type=run.market_type.value,
+        symbol=run.symbol,
+        clock=clock,
+    )
+    paper_run_reader = SqlAlchemyPaperRunQueryService(database.sessions)
 
     openai_client = OpenAIResponsesClient(
         api_key=run.openai_api_key,
@@ -154,9 +167,13 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         ),
         clock=clock,
     )
+    run_bound_writer = RunBoundCycleAuditWriter(
+        delegate=audit_repository,
+        run_provider=paper_run_lifecycle,
+    )
     audited_runner = AuditedTradingCycleRunner(
         delegate=cycle_runner,
-        audit_writer=audit_repository,
+        audit_writer=run_bound_writer,
     )
     trading_engine = TradingEngine(
         runner=cast(TradingCycleRunner, audited_runner),
@@ -168,6 +185,8 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         portfolio=portfolio,
         audit_reader=audit_reader,
         analytics_reader=analytics_reader,
+        paper_run_lifecycle=paper_run_lifecycle,
+        paper_run_reader=paper_run_reader,
         owned_database=database,
         owned_resources=(market_data,),
     )
@@ -188,4 +207,6 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         cycle_runner=cycle_runner,
         audited_runner=audited_runner,
         trading_engine=trading_engine,
+        paper_run_lifecycle=paper_run_lifecycle,
+        paper_run_reader=paper_run_reader,
     )

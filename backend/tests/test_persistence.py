@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
+import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,13 +19,21 @@ from ai_spot_trader.domain.models import (
     RiskAssessment,
 )
 from ai_spot_trader.persistence import Database, SqlAlchemyCycleAuditRepository
-from ai_spot_trader.persistence.audit import AuditedTradingCycleRunner
+from ai_spot_trader.persistence.audit import (
+    AuditedTradingCycleRunner,
+    RunBoundCycleAuditWriter,
+)
 from ai_spot_trader.persistence.models import (
     CycleRecord,
     DecisionRecord,
     ExecutionIntentRecord,
     FillRecord,
     RiskAssessmentRecord,
+)
+from ai_spot_trader.persistence.runs import (
+    PaperRunClosedError,
+    PaperRunDefinition,
+    SqlAlchemyPaperRunLifecycle,
 )
 from ai_spot_trader.trading.engine import (
     TradingCycleFailure,
@@ -34,6 +43,7 @@ from ai_spot_trader.trading.engine import (
 )
 
 NOW = datetime(2026, 9, 20, 16, 0, tzinfo=UTC)
+PAPER_RUN_ID = UUID("00000000-0000-0000-0000-000000000016")
 CYCLE_ID = UUID("10000000-0000-0000-0000-000000000001")
 DECISION_ID = UUID("20000000-0000-0000-0000-000000000002")
 MARKET_ID = UUID("30000000-0000-0000-0000-000000000003")
@@ -167,10 +177,24 @@ def completed_result(
     )
 
 
-async def make_repo() -> tuple[Database, SqlAlchemyCycleAuditRepository]:
+async def make_repo() -> tuple[
+    Database,
+    SqlAlchemyCycleAuditRepository,
+    SqlAlchemyPaperRunLifecycle,
+]:
     database = Database("sqlite+aiosqlite:///:memory:")
     await database.create_schema_for_tests()
-    return database, SqlAlchemyCycleAuditRepository(database.sessions)
+    lifecycle = SqlAlchemyPaperRunLifecycle(
+        database.sessions,
+        definition=PaperRunDefinition(
+            paper_run_id=PAPER_RUN_ID,
+            started_at=NOW,
+            market_type="SPOT",
+            symbol="BTC/EUR",
+        ),
+    )
+    await lifecycle.initialize()
+    return database, SqlAlchemyCycleAuditRepository(database.sessions), lifecycle
 
 
 async def counts(database: Database) -> tuple[int, int, int, int, int]:
@@ -194,9 +218,9 @@ def test_hold_and_reject_have_no_intent_or_fill() -> None:
             completed_result(action=TradingAction.HOLD, risk_status=RiskDecision.ALLOW),
             completed_result(action=TradingAction.BUY, risk_status=RiskDecision.REJECT),
         ):
-            database, repo = await make_repo()
+            database, repo, _lifecycle = await make_repo()
             try:
-                assert await repo.record(result) is True
+                assert await repo.record_for_run(PAPER_RUN_ID, result) is True
                 assert await counts(database) == (1, 1, 1, 0, 0)
             finally:
                 await database.close()
@@ -207,14 +231,15 @@ def test_hold_and_reject_have_no_intent_or_fill() -> None:
 def test_allow_and_modify_persist_full_relation_graph() -> None:
     async def scenario() -> None:
         for status in (RiskDecision.ALLOW, RiskDecision.MODIFY):
-            database, repo = await make_repo()
+            database, repo, _lifecycle = await make_repo()
             try:
                 result = completed_result(action=TradingAction.BUY, risk_status=status)
-                assert await repo.record(result) is True
+                assert await repo.record_for_run(PAPER_RUN_ID, result) is True
                 assert await counts(database) == (1, 1, 1, 1, 1)
                 async with database.sessions() as session:
                     cycle = await session.get(CycleRecord, CYCLE_ID)
                     assert cycle is not None
+                    assert cycle.paper_run_id == PAPER_RUN_ID
                     assert cycle.market_state_id == MARKET_ID
                     assert cycle.portfolio_state_before_id == PORTFOLIO_ID
                     assert cycle.portfolio_state_after_id == PORTFOLIO_AFTER_ID
@@ -228,7 +253,7 @@ def test_allow_and_modify_persist_full_relation_graph() -> None:
 
 def test_failed_cycle_preserves_sanitized_technical_error() -> None:
     async def scenario() -> None:
-        database, repo = await make_repo()
+        database, repo, _lifecycle = await make_repo()
         try:
             result = TradingCycleResult(
                 cycle_id=CYCLE_ID,
@@ -240,10 +265,11 @@ def test_failed_cycle_preserves_sanitized_technical_error() -> None:
                 ),
                 agent_input=agent_input(),
             )
-            await repo.record(result)
+            await repo.record_for_run(PAPER_RUN_ID, result)
             async with database.sessions() as session:
                 cycle = await session.get(CycleRecord, CYCLE_ID)
                 assert cycle is not None
+                assert cycle.paper_run_id == PAPER_RUN_ID
                 assert cycle.failure_stage == TradingCycleStage.AGENT.value
                 assert cycle.failure_error_type == "TimeoutError"
                 assert cycle.failure_timed_out is True
@@ -256,11 +282,11 @@ def test_failed_cycle_preserves_sanitized_technical_error() -> None:
 
 def test_exact_replay_is_idempotent() -> None:
     async def scenario() -> None:
-        database, repo = await make_repo()
+        database, repo, _lifecycle = await make_repo()
         try:
             result = completed_result(action=TradingAction.HOLD, risk_status=RiskDecision.ALLOW)
-            assert await repo.record(result) is True
-            assert await repo.record(result) is False
+            assert await repo.record_for_run(PAPER_RUN_ID, result) is True
+            assert await repo.record_for_run(PAPER_RUN_ID, result) is False
             assert await counts(database) == (1, 1, 1, 0, 0)
         finally:
             await database.close()
@@ -274,9 +300,15 @@ def test_audited_runner_persists_returned_result() -> None:
             return completed_result(action=TradingAction.HOLD, risk_status=RiskDecision.ALLOW)
 
     async def scenario() -> None:
-        database, repo = await make_repo()
+        database, repo, lifecycle = await make_repo()
         try:
-            runner = AuditedTradingCycleRunner(delegate=FixedRunner(), audit_writer=repo)
+            runner = AuditedTradingCycleRunner(
+                delegate=FixedRunner(),
+                audit_writer=RunBoundCycleAuditWriter(
+                    delegate=repo,
+                    run_provider=lifecycle,
+                ),
+            )
             result = await runner.run_cycle()
             assert result.cycle_id == CYCLE_ID
             assert await counts(database) == (1, 1, 1, 0, 0)
@@ -292,24 +324,47 @@ def test_transaction_rolls_back_the_whole_graph_on_write_failure() -> None:
             self,
             session: AsyncSession,
             *,
+            paper_run_id: UUID | None = None,
             result: TradingCycleResult,
             digest: str,
         ) -> None:
-            super()._add_graph(session, result=result, digest=digest)
+            super()._add_graph(
+                session,
+                paper_run_id=paper_run_id,
+                result=result,
+                digest=digest,
+            )
             raise RuntimeError("forced write failure")
 
     async def scenario() -> None:
-        database, _ = await make_repo()
+        database, _, _lifecycle = await make_repo()
         repo = FailingRepository(database.sessions)
         try:
             result = completed_result(action=TradingAction.BUY, risk_status=RiskDecision.ALLOW)
             try:
-                await repo.record(result)
+                await repo.record_for_run(PAPER_RUN_ID, result)
             except RuntimeError as exc:
                 assert str(exc) == "forced write failure"
             else:
                 raise AssertionError("forced failure was not propagated")
             assert await counts(database) == (0, 0, 0, 0, 0)
+        finally:
+            await database.close()
+
+    asyncio.run(scenario())
+
+
+def test_closed_run_rejects_new_cycles() -> None:
+    async def scenario() -> None:
+        database, repo, lifecycle = await make_repo()
+        try:
+            await lifecycle.close()
+            result = completed_result(
+                action=TradingAction.HOLD,
+                risk_status=RiskDecision.ALLOW,
+            )
+            with pytest.raises(PaperRunClosedError):
+                await repo.record_for_run(PAPER_RUN_ID, result)
         finally:
             await database.close()
 

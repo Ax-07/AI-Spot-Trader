@@ -12,10 +12,30 @@ class Base(DeclarativeBase):
     """SQLAlchemy metadata root for the durable audit journal."""
 
 
+class PaperRunRecord(Base):
+    __tablename__ = "paper_runs"
+
+    paper_run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    market_type: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    symbol: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
+    cycles: Mapped[list["CycleRecord"]] = relationship(back_populates="paper_run")
+
+
 class CycleRecord(Base):
     __tablename__ = "audit_cycles"
 
     cycle_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    paper_run_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("paper_runs.paper_run_id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
@@ -33,6 +53,7 @@ class CycleRecord(Base):
     agent_input_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
     portfolio_after_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
 
+    paper_run: Mapped[PaperRunRecord | None] = relationship(back_populates="cycles")
     decision: Mapped["DecisionRecord | None"] = relationship(
         back_populates="cycle",
         cascade="all, delete-orphan",

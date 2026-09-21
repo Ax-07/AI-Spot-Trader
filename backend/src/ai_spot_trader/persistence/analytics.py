@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -13,11 +14,16 @@ from ai_spot_trader.analytics.paper import (
     PaperAnalyticsReport,
     build_paper_analytics_report,
 )
-from ai_spot_trader.persistence.models import CycleRecord, ExecutionIntentRecord
+from ai_spot_trader.persistence.models import (
+    CycleRecord,
+    ExecutionIntentRecord,
+    PaperRunRecord,
+)
 from ai_spot_trader.persistence.query import (
     AuditDataIntegrityError,
     AuditStoreUnavailableError,
 )
+from ai_spot_trader.persistence.runs import PaperRunNotFoundError
 
 
 class PaperAnalyticsReader(Protocol):
@@ -26,17 +32,54 @@ class PaperAnalyticsReader(Protocol):
     async def paper_analytics(self) -> PaperAnalyticsReport: ...
 
 
-class SqlAlchemyPaperAnalyticsQueryService:
-    """Load immutable audit facts and deterministically replay PAPER analytics."""
+@runtime_checkable
+class RunScopedPaperAnalyticsReader(PaperAnalyticsReader, Protocol):
+    async def paper_analytics_for_run(self, paper_run_id: UUID) -> PaperAnalyticsReport: ...
 
-    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+
+class SqlAlchemyPaperAnalyticsQueryService:
+    """Replay analytics for one durable PAPER run at a time."""
+
+    def __init__(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        *,
+        default_paper_run_id: UUID | None = None,
+    ) -> None:
         self._sessions = sessions
+        self._default_paper_run_id = default_paper_run_id
 
     async def paper_analytics(self) -> PaperAnalyticsReport:
+        """Use the current run when configured, otherwise the latest durable run."""
+
+        try:
+            run_id = self._default_paper_run_id
+            if run_id is None:
+                async with self._sessions() as session:
+                    run_id = await session.scalar(
+                        select(PaperRunRecord.paper_run_id)
+                        .order_by(
+                            PaperRunRecord.started_at.desc(),
+                            PaperRunRecord.paper_run_id.desc(),
+                        )
+                        .limit(1)
+                    )
+            if run_id is None:
+                return build_paper_analytics_report(())
+            return await self.paper_analytics_for_run(run_id)
+        except (SQLAlchemyError, OSError, TimeoutError) as exc:
+            raise AuditStoreUnavailableError("audit store unavailable") from exc
+
+    async def paper_analytics_for_run(self, paper_run_id: UUID) -> PaperAnalyticsReport:
         try:
             async with self._sessions() as session:
+                if await session.get(PaperRunRecord, paper_run_id) is None:
+                    raise PaperRunNotFoundError(
+                        f"paper run {paper_run_id} does not exist"
+                    )
                 statement = (
                     select(CycleRecord)
+                    .where(CycleRecord.paper_run_id == paper_run_id)
                     .options(
                         selectinload(CycleRecord.decision),
                         selectinload(CycleRecord.risk_assessment),

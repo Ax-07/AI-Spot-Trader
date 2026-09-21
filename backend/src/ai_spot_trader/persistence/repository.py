@@ -2,6 +2,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -11,8 +12,10 @@ from ai_spot_trader.persistence.models import (
     DecisionRecord,
     ExecutionIntentRecord,
     FillRecord,
+    PaperRunRecord,
     RiskAssessmentRecord,
 )
+from ai_spot_trader.persistence.runs import PaperRunClosedError, PaperRunNotFoundError
 from ai_spot_trader.trading.engine import TradingCycleResult
 
 
@@ -32,20 +35,69 @@ class SqlAlchemyCycleAuditRepository:
         async with self._sessions() as session:
             await session.execute(select(CycleRecord.cycle_id).limit(1))
 
-    async def record(self, result: TradingCycleResult) -> bool:
-        """Persist a cycle once; return False for an exact idempotent replay."""
+    async def ensure_run_available(self, paper_run_id: UUID) -> None:
+        """Fail before trading when the durable run boundary is not writable."""
 
-        digest = _result_digest(result)
+        async with self._sessions() as session:
+            run = await session.get(PaperRunRecord, paper_run_id)
+            if run is None:
+                raise PaperRunNotFoundError(f"paper run {paper_run_id} does not exist")
+            if run.ended_at is not None:
+                raise PaperRunClosedError(f"paper run {paper_run_id} is closed")
+            await session.execute(select(CycleRecord.cycle_id).limit(1))
+
+    async def ensure_available_for_run(self, paper_run_id: UUID) -> None:
+        """Run-scoped writer adapter used by the canonical audited runner."""
+
+        await self.ensure_run_available(paper_run_id)
+
+    async def record(
+        self,
+        result: TradingCycleResult,
+        *,
+        paper_run_id: UUID | None = None,
+    ) -> bool:
+        """Persist a cycle once; legacy callers may intentionally leave the run unset."""
+
+        digest = _result_digest(result, paper_run_id=paper_run_id)
         async with self._sessions() as session, session.begin():
+            if paper_run_id is not None:
+                run = await session.get(PaperRunRecord, paper_run_id)
+                if run is None:
+                    raise PaperRunNotFoundError(
+                        f"paper run {paper_run_id} does not exist"
+                    )
+                if run.ended_at is not None:
+                    raise PaperRunClosedError(f"paper run {paper_run_id} is closed")
             existing = await session.get(CycleRecord, result.cycle_id)
             if existing is not None:
-                if existing.result_digest == digest:
+                if (
+                    existing.paper_run_id == paper_run_id
+                    and existing.result_digest == digest
+                ):
                     return False
                 raise CycleAuditConflictError(
                     f"cycle_id {result.cycle_id} already exists with different content"
                 )
-            self._add_graph(session, result=result, digest=digest)
+            if paper_run_id is None:
+                self._add_graph(session, result=result, digest=digest)
+            else:
+                self._add_graph(
+                    session,
+                    result=result,
+                    digest=digest,
+                    paper_run_id=paper_run_id,
+                )
         return True
+
+    async def record_for_run(
+        self,
+        paper_run_id: UUID,
+        result: TradingCycleResult,
+    ) -> bool:
+        """Run-scoped writer adapter used by the canonical audited runner."""
+
+        return await self.record(result, paper_run_id=paper_run_id)
 
     def _add_graph(
         self,
@@ -53,12 +105,14 @@ class SqlAlchemyCycleAuditRepository:
         *,
         result: TradingCycleResult,
         digest: str,
+        paper_run_id: UUID | None = None,
     ) -> None:
         agent_input = result.agent_input
         portfolio_after = result.portfolio_state_after
         session.add(
             CycleRecord(
                 cycle_id=result.cycle_id,
+                paper_run_id=paper_run_id,
                 status=result.status.value,
                 recorded_at=datetime.now(UTC),
                 result_digest=digest,
@@ -149,7 +203,11 @@ def _model_payload(model: Any | None) -> dict[str, object] | None:
     return dict(model.model_dump(mode="json"))
 
 
-def _result_digest(result: TradingCycleResult) -> str:
+def _result_digest(
+    result: TradingCycleResult,
+    *,
+    paper_run_id: UUID | None,
+) -> str:
     payload = {
         "cycle_id": str(result.cycle_id),
         "status": result.status.value,
@@ -169,5 +227,7 @@ def _result_digest(result: TradingCycleResult) -> str:
         "fills": [_model_payload(fill) for fill in result.fills],
         "portfolio_state_after": _model_payload(result.portfolio_state_after),
     }
+    if paper_run_id is not None:
+        payload["paper_run_id"] = str(paper_run_id)
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

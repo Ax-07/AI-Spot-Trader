@@ -2,7 +2,7 @@ import asyncio
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -127,7 +127,7 @@ def test_complete_paper_composition_shares_canonical_runtime_objects() -> None:
         assert composition.risk_engine._cost_model is composition.cost_model
         assert composition.broker._cost_model is composition.cost_model
         assert composition.audited_runner._delegate is composition.cycle_runner
-        assert composition.trading_engine._runner is composition.audited_runner
+        assert cast(object, composition.trading_engine._runner) is composition.audited_runner
 
         assert composition.agent._model is LLMModel.SOL
         assert composition.chat_service.model is LLMModel.SOL

@@ -7,6 +7,7 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from ai_spot_trader.core.config import Settings
 from ai_spot_trader.persistence.models import Base
 
 config = context.config
@@ -18,9 +19,15 @@ target_metadata = Base.metadata
 
 def _database_url() -> str:
     value = os.getenv("AI_SPOT_TRADER_DATABASE_URL")
-    if not value:
-        raise RuntimeError("AI_SPOT_TRADER_DATABASE_URL is required for Alembic migrations")
-    return value
+    if value is not None and value.strip():
+        return value.strip()
+
+    database_url = Settings().database_url
+    if database_url is None or not database_url.get_secret_value().strip():
+        raise RuntimeError(
+            "AI_SPOT_TRADER_DATABASE_URL is required in the environment or backend/.env"
+        )
+    return database_url.get_secret_value().strip()
 
 
 def run_migrations_offline() -> None:

@@ -11,10 +11,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel
 
-from ai_spot_trader.chat.errors import (
-    ChatContextNotFoundError,
-    ChatSessionNotFoundError,
-)
+from ai_spot_trader.chat.errors import ChatContextNotFoundError, ChatSessionNotFoundError
 from ai_spot_trader.chat.models import (
     ChatContextSnapshot,
     ChatExchangeResponse,
@@ -25,20 +22,21 @@ from ai_spot_trader.chat.models import (
 from ai_spot_trader.core.clock import Clock, SystemClock
 from ai_spot_trader.core.runtime import AppRuntime
 from ai_spot_trader.domain.enums import LLMModel
+from ai_spot_trader.persistence.analytics import RunScopedPaperAnalyticsReader
 from ai_spot_trader.persistence.query import (
     AuditDataIntegrityError,
     AuditSortOrder,
     AuditStoreUnavailableError,
+    RunScopedCycleAuditReader,
 )
+from ai_spot_trader.persistence.runs import PaperRunNotFoundError
 
 _SECRET_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b"),
     re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
     re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    re.compile(
-        r"(?i)\b(api[_ -]?key|token|secret|password)\s*[:=]\s*([^\s,;]{6,})"
-    ),
+    re.compile(r"(?i)\b(api[_ -]?key|token|secret|password)\s*[:=]\s*([^\s,;]{6,})"),
 )
 _CYCLE_ID_PATTERN = re.compile(
     r"(?i)\bcycle(?:_id)?\s*(?:[:=#-]\s*)?"
@@ -68,7 +66,6 @@ class RuntimeChatContextSource:
     async def load(self, *, context_cycle_id: UUID | None) -> ChatContextSnapshot:
         engine = _json_object(self._runtime.engine_snapshot())
         portfolio = _portfolio_snapshot(self._runtime)
-
         current_market: dict[str, object] | None = None
         recent_cycles: tuple[dict[str, object], ...] = ()
         historical_cycle: dict[str, object] | None = None
@@ -77,19 +74,38 @@ class RuntimeChatContextSource:
             "UNCONFIGURED"
         )
         reader = self._runtime.audit_reader
+        current_run_id = self._runtime.current_paper_run_id
         if reader is not None:
             try:
-                market_payload = await reader.latest_market_state()
+                if current_run_id is not None and isinstance(
+                    reader, RunScopedCycleAuditReader
+                ):
+                    market_payload = await reader.latest_market_state_for_run(
+                        current_run_id
+                    )
+                else:
+                    market_payload = await reader.latest_market_state()
                 current_market = (
                     None if market_payload is None else _json_object(market_payload)
                 )
                 if context_cycle_id is None:
-                    detail = await reader.latest_cycle()
-                    page = await reader.list_cycles(
-                        limit=8,
-                        offset=0,
-                        order=AuditSortOrder.DESC,
-                    )
+                    if current_run_id is not None and isinstance(
+                        reader, RunScopedCycleAuditReader
+                    ):
+                        detail = await reader.latest_cycle_for_run(current_run_id)
+                        page = await reader.list_cycles_for_run(
+                            current_run_id,
+                            limit=8,
+                            offset=0,
+                            order=AuditSortOrder.DESC,
+                        )
+                    else:
+                        detail = await reader.latest_cycle()
+                        page = await reader.list_cycles(
+                            limit=8,
+                            offset=0,
+                            order=AuditSortOrder.DESC,
+                        )
                     recent_cycles = tuple(_json_object(item) for item in page.items)
                 else:
                     detail = await reader.get_cycle(context_cycle_id)
@@ -111,12 +127,19 @@ class RuntimeChatContextSource:
         analytics_reader = self._runtime.analytics_reader
         if analytics_reader is not None:
             try:
-                report = await analytics_reader.paper_analytics()
+                if current_run_id is not None and isinstance(
+                    analytics_reader, RunScopedPaperAnalyticsReader
+                ):
+                    report = await analytics_reader.paper_analytics_for_run(
+                        current_run_id
+                    )
+                else:
+                    report = await analytics_reader.paper_analytics()
                 analytics_summary = _json_object(report.summary)
                 analytics_status = "AVAILABLE"
             except AuditStoreUnavailableError:
                 analytics_status = "UNAVAILABLE"
-            except AuditDataIntegrityError:
+            except (AuditDataIntegrityError, PaperRunNotFoundError):
                 analytics_status = "INVALID"
 
         return ChatContextSnapshot(

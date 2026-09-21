@@ -33,6 +33,7 @@ from ai_spot_trader.persistence.query import (
     FillAuditItem,
     LatestErrorView,
     RiskAssessmentAuditItem,
+    RunScopedCycleAuditReader,
 )
 
 router = APIRouter(prefix="/api/v1", tags=["audit"])
@@ -48,6 +49,24 @@ def _reader(request: Request) -> CycleAuditReader:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="audit store is not configured",
+        )
+    return reader
+
+
+
+
+def _resolved_run_id(request: Request, paper_run_id: UUID | None) -> UUID | None:
+    if paper_run_id is not None:
+        return paper_run_id
+    runtime = cast(AppRuntime, request.app.state.runtime)
+    return runtime.current_paper_run_id
+
+def _scoped_reader(request: Request) -> RunScopedCycleAuditReader:
+    reader = _reader(request)
+    if not isinstance(reader, RunScopedCycleAuditReader):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="audit reader does not support PAPER run selection",
         )
     return reader
 
@@ -90,6 +109,7 @@ def _fill(value: FillAuditItem) -> FillResponse:
 def _cycle_summary(value: CycleAuditSummary) -> CycleSummaryResponse:
     return CycleSummaryResponse(
         cycle_id=value.cycle_id,
+        paper_run_id=value.paper_run_id,
         status=value.status,
         recorded_at=value.recorded_at,
         decision_action=value.decision_action,
@@ -104,6 +124,7 @@ def _cycle_summary(value: CycleAuditSummary) -> CycleSummaryResponse:
 def _cycle_detail(value: CycleAuditDetail) -> CycleDetailResponse:
     return CycleDetailResponse(
         cycle_id=value.cycle_id,
+        paper_run_id=value.paper_run_id,
         status=value.status,
         recorded_at=value.recorded_at,
         failure=_failure(value.failure),
@@ -163,6 +184,7 @@ def _latest_error(value: LatestErrorView) -> LatestErrorResponse:
     assert failure is not None
     return LatestErrorResponse(
         cycle_id=value.cycle_id,
+        paper_run_id=value.paper_run_id,
         recorded_at=value.recorded_at,
         failure=failure,
     )
@@ -177,9 +199,11 @@ async def list_cycles(
     status_filter: Annotated[CycleStatusFilter | None, Query(alias="status")] = None,
     action: ActionFilter | None = None,
     risk_status: RiskStatusFilter | None = None,
+    paper_run_id: UUID | None = None,
 ) -> CyclePageResponse:
-    page = await _audit_call(
-        _reader(request).list_cycles(
+    resolved_run_id = _resolved_run_id(request, paper_run_id)
+    if resolved_run_id is None:
+        operation = _reader(request).list_cycles(
             limit=limit,
             offset=offset,
             order=order,
@@ -187,7 +211,17 @@ async def list_cycles(
             action=action,
             risk_status=risk_status,
         )
-    )
+    else:
+        operation = _scoped_reader(request).list_cycles_for_run(
+            resolved_run_id,
+            limit=limit,
+            offset=offset,
+            order=order,
+            status=status_filter,
+            action=action,
+            risk_status=risk_status,
+        )
+    page = await _audit_call(operation)
     return CyclePageResponse(
         items=tuple(_cycle_summary(item) for item in page.items),
         total=page.total,
@@ -197,8 +231,17 @@ async def list_cycles(
 
 
 @router.get("/cycles/latest", response_model=CycleDetailResponse)
-async def latest_cycle(request: Request) -> CycleDetailResponse:
-    item = await _audit_call(_reader(request).latest_cycle())
+async def latest_cycle(
+    request: Request,
+    paper_run_id: UUID | None = None,
+) -> CycleDetailResponse:
+    resolved_run_id = _resolved_run_id(request, paper_run_id)
+    operation = (
+        _reader(request).latest_cycle()
+        if resolved_run_id is None
+        else _scoped_reader(request).latest_cycle_for_run(resolved_run_id)
+    )
+    item = await _audit_call(operation)
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="cycle not found")
     return _cycle_detail(item)
@@ -220,16 +263,23 @@ async def list_decisions(
     order: AuditSortOrder = AuditSortOrder.DESC,
     action: ActionFilter | None = None,
     symbol: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
+    paper_run_id: UUID | None = None,
 ) -> DecisionPageResponse:
-    page = await _audit_call(
-        _reader(request).list_decisions(
+    resolved_run_id = _resolved_run_id(request, paper_run_id)
+    if resolved_run_id is None:
+        operation = _reader(request).list_decisions(
+            limit=limit, offset=offset, order=order, action=action, symbol=symbol
+        )
+    else:
+        operation = _scoped_reader(request).list_decisions_for_run(
+            resolved_run_id,
             limit=limit,
             offset=offset,
             order=order,
             action=action,
             symbol=symbol,
         )
-    )
+    page = await _audit_call(operation)
     return DecisionPageResponse(
         items=tuple(_decision(item) for item in page.items),
         total=page.total,
@@ -245,15 +295,22 @@ async def list_risk_assessments(
     offset: Annotated[int, Query(ge=0)] = 0,
     order: AuditSortOrder = AuditSortOrder.DESC,
     status_filter: Annotated[RiskStatusFilter | None, Query(alias="status")] = None,
+    paper_run_id: UUID | None = None,
 ) -> RiskAssessmentPageResponse:
-    page = await _audit_call(
-        _reader(request).list_risk_assessments(
+    resolved_run_id = _resolved_run_id(request, paper_run_id)
+    if resolved_run_id is None:
+        operation = _reader(request).list_risk_assessments(
+            limit=limit, offset=offset, order=order, status=status_filter
+        )
+    else:
+        operation = _scoped_reader(request).list_risk_assessments_for_run(
+            resolved_run_id,
             limit=limit,
             offset=offset,
             order=order,
             status=status_filter,
         )
-    )
+    page = await _audit_call(operation)
     return RiskAssessmentPageResponse(
         items=tuple(_risk(item) for item in page.items),
         total=page.total,
@@ -270,16 +327,23 @@ async def list_executions(
     order: AuditSortOrder = AuditSortOrder.DESC,
     action: Annotated[Literal["BUY", "SELL"] | None, Query()] = None,
     symbol: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
+    paper_run_id: UUID | None = None,
 ) -> ExecutionPageResponse:
-    page = await _audit_call(
-        _reader(request).list_executions(
+    resolved_run_id = _resolved_run_id(request, paper_run_id)
+    if resolved_run_id is None:
+        operation = _reader(request).list_executions(
+            limit=limit, offset=offset, order=order, action=action, symbol=symbol
+        )
+    else:
+        operation = _scoped_reader(request).list_executions_for_run(
+            resolved_run_id,
             limit=limit,
             offset=offset,
             order=order,
             action=action,
             symbol=symbol,
         )
-    )
+    page = await _audit_call(operation)
     return ExecutionPageResponse(
         items=tuple(_execution(item) for item in page.items),
         total=page.total,
@@ -289,16 +353,34 @@ async def list_executions(
 
 
 @router.get("/errors/latest", response_model=LatestErrorResponse)
-async def latest_error(request: Request) -> LatestErrorResponse:
-    item = await _audit_call(_reader(request).latest_error())
+async def latest_error(
+    request: Request,
+    paper_run_id: UUID | None = None,
+) -> LatestErrorResponse:
+    resolved_run_id = _resolved_run_id(request, paper_run_id)
+    operation = (
+        _reader(request).latest_error()
+        if resolved_run_id is None
+        else _scoped_reader(request).latest_error_for_run(resolved_run_id)
+    )
+    item = await _audit_call(operation)
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="error not found")
     return _latest_error(item)
 
 
 @router.get("/market/latest", response_model=MarketStateResponse)
-async def latest_market_state(request: Request) -> MarketStateResponse:
-    payload = await _audit_call(_reader(request).latest_market_state())
+async def latest_market_state(
+    request: Request,
+    paper_run_id: UUID | None = None,
+) -> MarketStateResponse:
+    resolved_run_id = _resolved_run_id(request, paper_run_id)
+    operation = (
+        _reader(request).latest_market_state()
+        if resolved_run_id is None
+        else _scoped_reader(request).latest_market_state_for_run(resolved_run_id)
+    )
+    payload = await _audit_call(operation)
     if payload is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

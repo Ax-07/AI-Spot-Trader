@@ -202,7 +202,7 @@ def _validate_model_experiment_metadata(
 
 def _jsonable(value: object) -> object:
     if hasattr(value, "model_dump"):
-        return _jsonable(value.model_dump(mode="json"))  # type: ignore[union-attr]
+        return _jsonable(value.model_dump(mode="json"))
     if isinstance(value, dict):
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):
