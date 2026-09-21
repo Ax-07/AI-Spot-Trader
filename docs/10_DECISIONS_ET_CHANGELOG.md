@@ -37,28 +37,54 @@ Les anciennes mentions **SPOT uniquement / aucun future-perpetual** sont supers�
 ### ADR-098 — Kraken Derivatives public séparé de Kraken Spot
 **ACCEPTÉE.** Intégration publique dédiée via `https://futures.kraken.com/derivatives/api/v3`. Aucun endpoint privé d'ordre, aucune clé Kraken et aucun LIVE.
 
-### ADR-099 — Analytics combinés SPOT + Derivatives sans migration
+### ADR-099 — Analytics combinés SPOT + Derivatives sans migration Batch 16
 **ACCEPTÉE.** Les positions dérivés sont persistées dans les payloads JSON existants ; les analytics ajoutent marge/unrealized/funding/exposition dérivés.
 
 ### ADR-100 — Prompt Agent `agent-strategy-v3`
 **ACCEPTÉE.** Le prompt explique explicitement les sémantiques SPOT/PERPETUAL, LONG/SHORT, marge et levier tout en conservant `BUY/SELL/HOLD`.
 
+## Décisions / constats Batch 16.1
+
+### ADR-101 — `contractValueTradePrecision` est un exposant décimal entier signé
+**ACCEPTÉE localement dans le Batch 16.1.** Le parser Kraken Derivatives ne doit pas rejeter une valeur uniquement parce qu'elle est négative. La quantité minimale est dérivée par `10^-precision`. Ainsi `-3 -> 1000` et `4 -> 0.0001`.
+
+Le changement reste circonscrit au parseur et ne modifie ni le domaine, ni Risk, ni Broker, ni les règles d'exécution.
+
+### ADR-102 — Isolation durable des runs PAPER
+**OUVERTE / À TRAITER DANS UN BATCH SÉPARÉ.** Les analytics actuels peuvent agréger plusieurs expériences PAPER indépendantes lorsqu'elles partagent la même base PostgreSQL. Le Batch 16.1 documente cette limite mais ne choisit ni n'implémente silencieusement un schéma `paper_run_id`.
+
+Le futur batch devra auditer propagation, migration, compatibilité historique, API/analytics et tests d'isolation avant décision finale.
+
 ## Changelog — 2026-09-21 — Batch 16 Kraken Derivatives PAPER
 
-**État : intégré sur GitHub `main` au commit `06e3185c8a8c638263427842ab6591a2397810e0` (`feat: add Kraken derivatives paper trading`).**
+**État : intégré sur GitHub `main` au commit fonctionnel `06e3185c8a8c638263427842ab6591a2397810e0` (`feat: add Kraken derivatives paper trading`).**
 
-Changements principaux : nouveaux enums/contrats dérivés, client public Kraken Derivatives, PaperPortfolioLedger LONG/SHORT, PaperBroker perpetual linéaire/reduce-only, Risk Engine levier/marge/notionnel/exposition/liquidation/anti-reversal, composition runtime SPOT/PERPETUAL, configuration étendue, prompt `agent-strategy-v3`, API/analytics étendus et tests dérivés.
+Changements principaux : contrats dérivés, client public Kraken Derivatives, ledger LONG/SHORT, PaperBroker perpetual linéaire/reduce-only, Risk Engine levier/marge/notionnel/exposition/liquidation/anti-reversal, composition runtime SPOT/PERPETUAL, configuration étendue, prompt `agent-strategy-v3`, API/analytics étendus et tests dérivés.
 
-Validation locale finale confirmée le 21 septembre 2026 :
+## Changelog — 2026-09-21 — Batch 16.1 Smoke PERPETUAL PAPER
+
+**État : validé localement, non encore intégré à GitHub au moment de cette clôture. HEAD GitHub de référence : `f0eac4ce90ff4bddf0355d026a5152db8f94f981`.**
+
+Changements :
+
+- correction du rejet des `contractValueTradePrecision` négatifs ;
+- test de non-régression pour précision négative, avec maintien du cas `PF_XBTUSD` à précision `4` ;
+- premier smoke réel PERPETUAL PAPER sur `BTC/USD` / `PF_XBTUSD` ;
+- validation des analytics sur base PostgreSQL isolée ;
+- documentation explicite de la dette d'isolation multi-runs.
+
+Validation locale fournie :
 
 ```text
-pytest            : 338 passés, 2 warnings externes
-ruff check .       : All checks passed
-mypy .             : Success: no issues found in 101 source files
+pytest            : 339 passés
+ruff check .       : OK
+mypy .             : OK
 git diff --check   : aucune erreur, warnings LF -> CRLF uniquement
 ```
 
-Tests ciblés exécutés par ChatGPT : **23 passés** ; `compileall` : **réussi**.
+Smoke : cycle `COMPLETED`, Agent `HOLD`, Risk `ALLOW` / `HOLD_NO_EXECUTION`, `initial_equity=1000`, `ending_equity=1000`, `trade_count=0`, `hold_count=1`.
+
+**Non validé par ce smoke :** LONG/SHORT réel PAPER, fills dérivés, funding accumulé sur position, P&L de position et `reduce_only`.
 
 ## LIVE
 

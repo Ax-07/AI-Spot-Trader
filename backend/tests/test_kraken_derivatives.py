@@ -79,6 +79,34 @@ def test_parse_kraken_derivative_metadata_and_conservative_margin() -> None:
     assert future.expires_at == datetime(2026, 12, 25, 15, 0, tzinfo=UTC)
 
 
+def test_parse_negative_contract_value_trade_precision() -> None:
+    payload = instruments_payload()
+    instruments = payload["instruments"]
+    assert isinstance(instruments, list)
+    instruments.append(
+        {
+            "symbol": "PF_PEPEUSD",
+            "base": "PEPE",
+            "quote": "USD",
+            "type": "flexible_futures",
+            "tickSize": "0.0000001",
+            "contractSize": 1,
+            "tradeable": True,
+            "contractValueTradePrecision": -3,
+            "marginLevels": [
+                {"numNonContractUnits": 0, "initialMargin": 0.10, "maintenanceMargin": 0.05}
+            ],
+        }
+    )
+
+    parsed = parse_kraken_derivatives_instruments(payload)
+    pepe = next(item for item in parsed if item.venue_symbol == "PF_PEPEUSD")
+    bitcoin = next(item for item in parsed if item.venue_symbol == "PF_XBTUSD")
+
+    assert pepe.min_order_quantity == Decimal("1000")
+    assert bitcoin.min_order_quantity == Decimal("0.0001")
+
+
 def test_ticker_normalizes_mark_index_and_per_contract_funding() -> None:
     instrument = next(
         item

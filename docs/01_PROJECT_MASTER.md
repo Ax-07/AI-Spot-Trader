@@ -4,7 +4,7 @@
 
 Ce document est la spécification fonctionnelle et architecturale principale d'**AI Spot Trader**. Depuis le Batch 16, le projet couvre **SPOT + Kraken Derivatives**, sans changer le principe d'un agent stratégique unique ni l'autorité finale du Risk Engine.
 
-Référence intégrée : GitHub `main` au commit `06e3185c8a8c638263427842ab6591a2397810e0` (`feat: add Kraken derivatives paper trading`).
+Référence GitHub intégrée vérifiée avant clôture du Batch 16.1 : `main` au commit `f0eac4ce90ff4bddf0355d026a5152db8f94f981` (`docs: finalize Batch 16 integration`). Le Batch 16.1 décrit ci-dessous un état local validé tant qu'il n'est pas commité/poussé par l'utilisateur.
 
 ## 2. Vision et invariants
 
@@ -94,7 +94,7 @@ L'ajout Derivatives ne crée ni second agent, ni second runner, ni voie parallè
 
 ### Portefeuille
 
-`PortfolioState` conserve `balances`, `positions` SPOT et `derivative_positions` séparées.
+`PortfolioState` conserve `balances`, positions SPOT et `derivative_positions` séparées.
 
 Une `DerivativePosition` est one-way par symbole et porte : `LONG|SHORT`, quantité, prix moyen, mark, contract size, notionnel, P&L réalisé/non réalisé, levier, marge utilisée, maintenance margin, funding cumulé, prix de liquidation estimé et mode de marge.
 
@@ -119,6 +119,18 @@ La séparation provider reste claire :
 
 Le client Derivatives n'expose aucun endpoint privé. Les instruments sont découverts via l'API publique et normalisés en `BASE/QUOTE`, avec alias `XBT -> BTC`.
 
+### `contractValueTradePrecision`
+
+Le parser traite `contractValueTradePrecision` comme un exposant décimal entier signé pour dériver la quantité minimale :
+
+```text
+min_order_quantity = 10 ^ (-contractValueTradePrecision)
+```
+
+Une valeur `4` donne `0.0001`. Une valeur `-3`, observée sur certains contrats Kraken comme `PF_PEPEUSD`, `PF_SHIBUSD` et `PF_BONKUSD`, donne `1000`.
+
+Le Batch 16.1 corrige le rejet incorrect des valeurs négatives sans modifier le reste du chemin Derivatives.
+
 ## 6. PAPER Derivatives
 
 Les ouvertures/augmentations passent par Risk, calculent notionnel et marge initiale, bloquent marge + frais puis recalculent prix moyen, mark, unrealized P&L, maintenance margin et liquidation price.
@@ -135,9 +147,17 @@ Les règles SPOT existantes restent inchangées. Pour les dérivés, Risk ajoute
 
 ## 8. Analytics / API
 
-Les réponses API portfolio et market restent rétrocompatibles en ajoutant des champs dérivés. Le journal durable existant stocke déjà les payloads JSON ; aucune migration n'est nécessaire pour Batch 16.
+Les réponses API portfolio et market restent rétrocompatibles en ajoutant des champs dérivés. Le journal durable existant stocke les payloads JSON sans migration spécifique Batch 16.
 
 Les analytics PAPER valorisent exposition SPOT, exposition dérivés notionnelle, marge isolée, unrealized/realized P&L, funding, equity et drawdown combinés.
+
+### Limite connue — isolation des runs PAPER
+
+Les analytics calculent actuellement leurs métriques sur les cycles présents dans la base interrogée. Plusieurs expériences PAPER indépendantes écrites dans une même base peuvent donc être agrégées ensemble.
+
+Il n'existe pas encore de `paper_run_id` durable propagé de la création d'un run jusqu'aux cycles, décisions, fills et requêtes analytics. Le smoke Batch 16.1 a utilisé une base PostgreSQL isolée pour garantir un jeu de données propre.
+
+Cette dette est volontairement hors périmètre du Batch 16.1 et doit faire l'objet d'un batch séparé avant de considérer les analytics multi-runs comme correctement isolés.
 
 ## 9. Configuration
 
@@ -145,18 +165,26 @@ SPOT reste le défaut (`PAPER_MARKET_TYPE=SPOT`). Pour PERPETUAL : `PAPER_MARKET
 
 ## 10. Validation et intégration
 
-Batch 16 intégré sur `main` au commit `06e3185c8a8c638263427842ab6591a2397810e0`.
+### Batch 16 intégré
 
-Validation locale finale :
+Batch 16 est intégré sur `main` depuis le commit fonctionnel `06e3185c8a8c638263427842ab6591a2397810e0`. Le HEAD GitHub vérifié avant Batch 16.1 est `f0eac4ce90ff4bddf0355d026a5152db8f94f981`.
+
+### Batch 16.1 local validé
+
+Validation locale confirmée le 21 septembre 2026 :
 
 ```text
-pytest            : 338 passés, 2 warnings externes
-ruff check .       : All checks passed
-mypy .             : Success: no issues found in 101 source files
+pytest            : 339 passés
+ruff check .       : OK
+mypy .             : OK
 git diff --check   : aucune erreur, warnings LF -> CRLF uniquement
 ```
 
-Tests ciblés ChatGPT : **23 passés** ; `compileall` : **réussi**.
+Smoke réel Kraken PERPETUAL PAPER : `BTC/USD` / `PF_XBTUSD`, cycle `COMPLETED`, Agent `HOLD`, Risk `ALLOW` / `HOLD_NO_EXECUTION`.
+
+Analytics `paper-analytics-v2` sur base PostgreSQL isolée : `initial_equity=1000`, `ending_equity=1000`, `trade_count=0`, `hold_count=1`.
+
+Le smoke réel ne valide pas encore LONG/SHORT, fills dérivés, funding accumulé sur position, P&L de position ni `reduce_only`, puisque aucune exécution n'a eu lieu.
 
 ## 11. LIVE
 

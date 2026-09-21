@@ -291,7 +291,7 @@ def _minimum_order_quantity(value: object) -> Decimal:
     if value is None:
         return Decimal(1)
     precision = _decimal(value, "contractValueTradePrecision")
-    if precision != precision.to_integral_value() or precision < 0 or precision > 18:
+    if precision != precision.to_integral_value() or precision < -18 or precision > 18:
         raise KrakenPayloadError("contractValueTradePrecision is invalid")
     return Decimal(1).scaleb(-int(precision))
 
