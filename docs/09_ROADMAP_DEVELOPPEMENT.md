@@ -232,7 +232,7 @@ Les runs autonomes post-intégration ont toutefois montré que les tickers de ch
 
 ## Batch 15.3 — Contexte marché indépendant de la cadence du moteur
 
-**État : patch livré et validation locale complète confirmée ; intégration sur `main` à confirmer. Référence GitHub auditée au démarrage : `bb1aa047157deb1b62d27de952fa53ec14992f09`.**
+**État : intégré sur `main` au commit fonctionnel `d0f6d46b9adb37117051a7a497a8d55075c41d32` (`fix: decouple market context from engine cadence`). Validation locale complète confirmée avant le push.**
 
 ### Objectif
 
@@ -257,7 +257,7 @@ Faire dépendre les statistiques descriptives du `MarketState.context` uniquemen
 - `compileall` des fichiers Python modifiés : **réussi** ;
 - tests ajoutés pour snapshots répétés sans nouvelle OHLC, simulations 10 s / 120 s, ticker courant, fraîcheur, no-look-ahead, fenêtres partielles et ordre strict.
 
-Validation locale complète confirmée : **315 tests passés**, 2 warnings externes ; Ruff **All checks passed** ; mypy **94 fichiers sans erreur** ; `git diff --check` sans erreur, warnings LF -> CRLF uniquement.
+Validation complète exécutée localement par l'utilisateur avant le push : **315 tests passés**, 2 warnings externes ; Ruff **All checks passed** ; mypy **94 fichiers sans erreur** ; `git diff --check` sans erreur, warnings LF -> CRLF uniquement.
 
 ---
 

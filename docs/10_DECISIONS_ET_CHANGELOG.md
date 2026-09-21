@@ -6,7 +6,7 @@ Ce document conserve les décisions architecturales durables et un changelog syn
 
 Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 
-Le Batch 15 reste intégré au commit fonctionnel `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6`. Le Batch 15.1 est intégré sur `main` au commit `4b9701f07854a943cf47a14287aadfdf4aa48232`. Le Batch 15.2 est intégré au commit fonctionnel `97d529647179c6769a6bdc528b9d9f5e7c85c119` et son état documentaire est finalisé par `bb1aa047157deb1b62d27de952fa53ec14992f09`. Le Batch 15.3 est un patch livré et validé localement, non encore intégré.
+Le Batch 15 reste intégré au commit fonctionnel `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6`. Le Batch 15.1 est intégré sur `main` au commit `4b9701f07854a943cf47a14287aadfdf4aa48232`. Le Batch 15.2 est intégré au commit fonctionnel `97d529647179c6769a6bdc528b9d9f5e7c85c119` et son état documentaire est finalisé par `bb1aa047157deb1b62d27de952fa53ec14992f09`. Le Batch 15.3 est intégré sur `main` au commit fonctionnel `d0f6d46b9adb37117051a7a497a8d55075c41d32` (`fix: decouple market context from engine cadence`).
 
 ---
 
@@ -309,7 +309,7 @@ Le patch Batch 15.1 est **intégré sur `main`** au commit `4b9701f07854a943cf47
 ## 5 septies. Décisions Batch 15.3 — contexte indépendant de la cadence moteur
 
 ### ADR-087 — Séparer la série statistique de l'observation courante dans le builder canonique
-**ACCEPTÉE pour le patch.** Les observations ajoutées à `MarketStateBuilder` sont la série statistique retenue. `build(...)` accepte une `current_observation` snapshot-only qui fournit `MarketState.last_price` et la fraîcheur sans modifier les fenêtres statistiques.
+**ACCEPTÉE.** Les observations ajoutées à `MarketStateBuilder` sont la série statistique retenue. `build(...)` accepte une `current_observation` snapshot-only qui fournit `MarketState.last_price` et la fraîcheur sans modifier les fenêtres statistiques.
 
 Raisons :
 
@@ -319,7 +319,7 @@ Raisons :
 - conserver le contrat de domaine et les ports existants.
 
 ### ADR-088 — Ancrer les fenêtres sur une horloge statistique causale distincte
-**ACCEPTÉE pour le patch.** `MarketStateBuilder.build(...)` accepte `statistics_as_of`, toujours inférieur ou égal à `MarketState.as_of`. Pour Kraken, cette valeur est la dernière clôture OHLC 1 minute retenue.
+**ACCEPTÉE.** `MarketStateBuilder.build(...)` accepte `statistics_as_of`, toujours inférieur ou égal à `MarketState.as_of`. Pour Kraken, cette valeur est la dernière clôture OHLC 1 minute retenue.
 
 Conséquences :
 
@@ -330,7 +330,7 @@ Conséquences :
 - aucun look-ahead n'est introduit.
 
 ### ADR-089 — Contrôler séparément la chronologie des tickers courants Kraken
-**ACCEPTÉE pour le patch.** `KrakenMarketDataSource` mémorise uniquement le dernier ticker courant réussi par symbole afin de rejeter un timestamp qui recule ou une valeur conflictuelle au même timestamp. Cette mémoire n'est jamais injectée dans les calculs statistiques.
+**ACCEPTÉE.** `KrakenMarketDataSource` mémorise uniquement le dernier ticker courant réussi par symbole afin de rejeter un timestamp qui recule ou une valeur conflictuelle au même timestamp. Cette mémoire n'est jamais injectée dans les calculs statistiques.
 
 Aucun changement n'est requis dans `KrakenPublicRestClient`, les ports domaine, `TradingCycleRunner`, `TradingEngine`, l'Agent, le Risk Engine, le Broker ou le frontend.
 
@@ -375,7 +375,7 @@ Les valeurs concrètes du premier essai PAPER restent des paramètres explicites
 
 ### 2026-09-21 — Batch 15.3 Contexte marché indépendant de la cadence du moteur
 
-**État : patch livré et validation locale complète confirmée, non intégré. Référence GitHub auditée au démarrage : `bb1aa047157deb1b62d27de952fa53ec14992f09` (`docs: finalize Batch 15.2 state`).**
+**État : intégré sur `main` au commit fonctionnel `d0f6d46b9adb37117051a7a497a8d55075c41d32` (`fix: decouple market context from engine cadence`). Validation locale complète confirmée avant le push.**
 
 - Cause racine confirmée : le ticker de chaque cycle était ajouté au même historique `MarketStateBuilder` que les clôtures OHLC 1 minute.
 - Un deuxième effet a été traité : des fenêtres ancrées directement sur l'heure de chaque cycle pouvaient glisser entre deux clôtures OHLC même sans nouveau point statistique.
@@ -393,7 +393,9 @@ Validation exécutée par ChatGPT :
 - `compileall` des fichiers Python modifiés : **réussi** ;
 - cas déterministes couvrant snapshots supplémentaires sans nouvelle OHLC, cadence simulée 10 s vs 120 s, ticker courant, fraîcheur, no-look-ahead, fenêtres partielles, ordre strict et snapshots successifs.
 
-Validation locale complète confirmée le 21 septembre 2026 : `pytest` **315 passés** avec 2 warnings externes ; Ruff **All checks passed** ; mypy **94 fichiers sans erreur** ; `git diff --check` sans erreur avec uniquement des warnings LF -> CRLF sous Windows.
+Validation complète exécutée localement par l'utilisateur le 21 septembre 2026 : `pytest` **315 passés** avec 2 warnings externes ; Ruff **All checks passed** ; mypy **94 fichiers sans erreur** ; `git diff --check` sans erreur avec uniquement des warnings LF -> CRLF sous Windows.
+
+La présente clôture documentaire aligne les documents avec cet état intégré et ne modifie aucun comportement fonctionnel.
 
 ### 2026-09-21 — Batch 15.2 Contexte marché multi-horizon PAPER
 

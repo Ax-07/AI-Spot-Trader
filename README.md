@@ -4,7 +4,7 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut :** le runtime PAPER exécutable et le Batch 15.2 — contexte marché multi-horizon — sont intégrés sur GitHub `main`. Le HEAD audité au démarrage du Batch 15.3 est `bb1aa047157deb1b62d27de952fa53ec14992f09` (`docs: finalize Batch 15.2 state`). Le présent patch Batch 15.3 sépare l'observation ticker courante de la série statistique OHLC afin que les fenêtres descriptives ne dépendent plus de la cadence du moteur ; il est désormais validé localement et reste à intégrer sur `main`.
+> **Statut :** le runtime PAPER exécutable, le Batch 15.2 — contexte marché multi-horizon — et le Batch 15.3 — contexte marché indépendant de la cadence du moteur — sont intégrés sur GitHub `main`. Le Batch 15.3 est intégré au commit fonctionnel `d0f6d46b9adb37117051a7a497a8d55075c41d32` (`fix: decouple market context from engine cadence`). Il sépare l'observation ticker courante de la série statistique OHLC afin que les fenêtres descriptives ne dépendent plus de la cadence du moteur.
 
 ## Principes
 
@@ -238,20 +238,27 @@ git diff --check                         : aucune erreur, warnings LF -> CRLF un
 
 Un cycle PAPER réel `BTC/USDC` a terminé `COMPLETED` avec `market_state.context` non nul, fenêtres canoniques 5 min / 30 min complètes, respect du no-look-ahead et rationale Agent exploitant explicitement les deux horizons. Les essais autonomes ultérieurs ont révélé la contamination des fenêtres par les tickers moteur, corrigée par le Batch 15.3.
 
-### Batch 15.3 — validation locale complète, intégration à confirmer
+### Batch 15.3 — intégré sur `main`
 
-Validation exécutée par ChatGPT dans un harness ciblé reconstruit depuis le HEAD audité :
+Commit fonctionnel : `d0f6d46b9adb37117051a7a497a8d55075c41d32` (`fix: decouple market context from engine cadence`).
+
+Validation ciblée exécutée par ChatGPT pendant le développement :
 
 ```text
 pytest Market State + Kraken Market Data : 38 passés
 compileall fichiers Python modifiés       : réussi
-validation locale pytest                  : 315 passés, 2 warnings externes
-validation locale ruff check .             : All checks passed
-validation locale mypy .                   : 94 fichiers sans erreur
-validation locale git diff --check         : aucune erreur, warnings LF -> CRLF uniquement
 ```
 
-Les tests ajoutés couvrent explicitement l'absence de variation statistique sans nouvelle clôture OHLC, une simulation de cadences 10 s et 120 s aboutissant aux mêmes statistiques finales, le ticker courant comme `last_price`, la fraîcheur, le no-look-ahead, les fenêtres partielles et l'ordre temporel. La validation locale complète du repository est confirmée : 315 tests passés, Ruff OK, mypy OK et `git diff --check` sans erreur.
+Validation complète exécutée localement par l'utilisateur avant le push :
+
+```text
+pytest                                   : 315 passés, 2 warnings externes
+ruff check .                             : All checks passed
+mypy .                                   : 94 fichiers sans erreur
+git diff --check                         : aucune erreur, warnings LF -> CRLF uniquement
+```
+
+Les tests ajoutés couvrent explicitement l'absence de variation statistique sans nouvelle clôture OHLC, une simulation de cadences 10 s et 120 s aboutissant aux mêmes statistiques finales, le ticker courant comme `last_price`, la fraîcheur, le no-look-ahead, les fenêtres partielles et l'ordre temporel. La présente clôture documentaire ne modifie aucun comportement fonctionnel.
 
 ## Sécurité
 

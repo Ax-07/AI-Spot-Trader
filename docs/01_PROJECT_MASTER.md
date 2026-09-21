@@ -57,13 +57,13 @@ V0 est atteinte lorsque le backend peut, sans frontend obligatoire :
 10. journaliser durablement les cycles ;
 11. exposer suffisamment d'état via FastAPI.
 
-Le runtime PAPER exécutable est intégré sur `main` au commit `4b9701f07854a943cf47a14287aadfdf4aa48232`. Le Batch 15.2 est intégré au commit fonctionnel `97d529647179c6769a6bdc528b9d9f5e7c85c119`, puis son état documentaire a été finalisé par `bb1aa047157deb1b62d27de952fa53ec14992f09`.
+Le runtime PAPER exécutable est intégré sur `main` au commit `4b9701f07854a943cf47a14287aadfdf4aa48232`. Le Batch 15.2 est intégré au commit fonctionnel `97d529647179c6769a6bdc528b9d9f5e7c85c119`, puis son état documentaire a été finalisé par `bb1aa047157deb1b62d27de952fa53ec14992f09`. Le Batch 15.3 est intégré sur `main` au commit fonctionnel `d0f6d46b9adb37117051a7a497a8d55075c41d32` (`fix: decouple market context from engine cadence`).
 
 ### V1 — cockpit et expérimentation instrumentée
 
 V1 ajoute le cockpit Next.js/shadcn, historique, analytics P&L/drawdown/coûts/exposition, replay reproductible, expérimentations d'agressivité, comparaison Luna/Sol et une interface conversationnelle opérateur informative. Le LIVE n'est pas une condition de V1.
 
-Batches déjà intégrés : cockpit (11), analytics (12), agressivité (13), comparaison Luna/Sol (14), chat opérateur (15), composition PAPER exécutable (15.1) et contexte marché multi-horizon (15.2). Le Batch 15.3 corrige l'indépendance du contexte descriptif vis-à-vis de la cadence moteur ; son patch est livré et validé localement, mais reste à intégrer sur `main`.
+Batches déjà intégrés : cockpit (11), analytics (12), agressivité (13), comparaison Luna/Sol (14), chat opérateur (15), composition PAPER exécutable (15.1), contexte marché multi-horizon (15.2) et indépendance du contexte descriptif vis-à-vis de la cadence moteur (15.3).
 
 ---
 
@@ -487,7 +487,7 @@ pytest tests/test_market_state.py tests/test_kraken_market_data.py : 38 passés
 compileall fichiers Python modifiés                           : réussi
 ```
 
-Validation locale complète confirmée le 21 septembre 2026 : `pytest` **315 passés** avec 2 warnings externes, `ruff check .` **All checks passed**, `mypy .` **94 fichiers sans erreur**, et `git diff --check` sans erreur avec uniquement des warnings LF -> CRLF sous Windows.
+Validation complète exécutée localement par l'utilisateur le 21 septembre 2026 : `pytest` **315 passés** avec 2 warnings externes, `ruff check .` **All checks passed**, `mypy .` **94 fichiers sans erreur**, et `git diff --check` sans erreur avec uniquement des warnings LF -> CRLF sous Windows.
 
 ---
 
