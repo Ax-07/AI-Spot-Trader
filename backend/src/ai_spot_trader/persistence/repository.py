@@ -3,6 +3,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ai_spot_trader.persistence.models import (
@@ -24,6 +25,12 @@ class SqlAlchemyCycleAuditRepository:
 
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
+
+    async def ensure_available(self) -> None:
+        """Fail before trading when the durable audit table cannot be queried."""
+
+        async with self._sessions() as session:
+            await session.execute(select(CycleRecord.cycle_id).limit(1))
 
     async def record(self, result: TradingCycleResult) -> bool:
         """Persist a cycle once; return False for an exact idempotent replay."""

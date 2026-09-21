@@ -55,6 +55,13 @@ class ControllableTradingEngine(StoppableTradingEngine, Protocol):
     async def start(self) -> None: ...
 
 
+@runtime_checkable
+class SingleCycleTradingEngine(ControllableTradingEngine, Protocol):
+    """Canonical engine surface required to request exactly one serialized cycle."""
+
+    async def run_cycle(self) -> EngineCycleResultLike: ...
+
+
 class PortfolioSnapshotSource(Protocol):
     """Read-only surface needed to expose the current in-memory PAPER portfolio."""
 
@@ -65,12 +72,20 @@ class AsyncCloseable(Protocol):
     async def close(self) -> None: ...
 
 
+class AsyncAcloseable(Protocol):
+    async def aclose(self) -> None: ...
+
+
 class TradingEngineUnavailableError(RuntimeError):
     """Raised when lifecycle control is requested without an injected engine."""
 
 
 class TradingEngineAlreadyRunningError(RuntimeError):
-    """Raised when the API receives a duplicate start request."""
+    """Raised when the API receives a duplicate or conflicting cycle command."""
+
+
+class TradingEngineCycleFailedError(RuntimeError):
+    """Raised when a requested single cycle does not finish through its canonical runner."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +115,7 @@ class AppRuntime:
     audit_reader: CycleAuditReader | None = None
     analytics_reader: PaperAnalyticsReader | None = None
     owned_database: AsyncCloseable | None = None
+    owned_resources: tuple[AsyncAcloseable, ...] = ()
     _engine_command_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def engine_snapshot(self) -> EngineRuntimeSnapshot:
@@ -144,6 +160,23 @@ class AppRuntime:
             await engine.stop()
             return self.engine_snapshot()
 
+    async def run_engine_cycle_once(self) -> EngineRuntimeSnapshot:
+        """Run exactly one canonical cycle while excluding conflicting lifecycle commands."""
+
+        async with self._engine_command_lock:
+            engine = self._require_single_cycle_engine()
+            if engine.is_running:
+                raise TradingEngineAlreadyRunningError(
+                    "cannot run one cycle while the autonomous engine is running"
+                )
+            try:
+                await engine.run_cycle()
+            except Exception as exc:
+                raise TradingEngineCycleFailedError(
+                    "trading cycle failed before canonical completion"
+                ) from exc
+            return self.engine_snapshot()
+
     def _controllable_engine(self) -> ControllableTradingEngine | None:
         engine = self.trading_engine
         if engine is None or not isinstance(engine, ControllableTradingEngine):
@@ -156,17 +189,29 @@ class AppRuntime:
             raise TradingEngineUnavailableError("trading engine is not configured")
         return engine
 
+    def _require_single_cycle_engine(self) -> SingleCycleTradingEngine:
+        engine = self.trading_engine
+        if engine is None or not isinstance(engine, SingleCycleTradingEngine):
+            raise TradingEngineUnavailableError(
+                "trading engine does not expose the canonical single-cycle primitive"
+            )
+        return engine
+
     async def close(self) -> None:
-        """Stop owned runtime activity and dispose an internally created database."""
+        """Stop owned runtime activity and close network/database resources."""
 
         self.shutdown_requested.set()
         try:
             if self.trading_engine is not None:
                 await self.trading_engine.stop()
         finally:
-            if self.owned_database is not None:
-                await self.owned_database.close()
-            await asyncio.sleep(0)
+            try:
+                for resource in reversed(self.owned_resources):
+                    await resource.aclose()
+            finally:
+                if self.owned_database is not None:
+                    await self.owned_database.close()
+                await asyncio.sleep(0)
 
 
 def _enum_text(value: object) -> str:

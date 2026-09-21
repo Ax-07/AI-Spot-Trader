@@ -2,48 +2,53 @@
 
 > Mémoire courte de reprise. Ce fichier doit rester synthétique et être mis à jour après chaque batch important.
 
-## Référence intégrée auditée
+## Référence auditée au démarrage du Batch 15.1
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD fonctionnel Batch 15 : `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6` (`feat: add operator agent chat`).
-- Référence précédente : Batch 14 fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`, documentation Batch 14 `b2c74672744639f86c38e873f25d56c77f899c76`.
-- Le commit fonctionnel Batch 15 a été poussé sur `origin/main` le 21 septembre 2026.
+- HEAD GitHub audité : `59e3bc26c7b4d6acca25bc7d21c85c3c14eeb336` (`fix(docs): restore Batch 15 state encoding`).
+- HEAD fonctionnel Batch 15 sous-jacent : `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6` (`feat: add operator agent chat`).
+- Les trois commits entre ces deux références sont documentaires ; le code fonctionnel Batch 15 reste celui de `1c182b8`.
 
-## État intégré confirmé
+## Batch 15.1 — composition runtime PAPER
 
-- Backend PAPER autonome : Kraken public -> Agent Luna/Sol -> Risk déterministe -> Paper Broker.
-- Seul Risk produit `ExecutionIntent`; HOLD/REJECT restent audités; erreurs techniques distinctes.
-- Journal PostgreSQL, API REST, cockpit Next.js et analytics `paper-analytics-v1` intégrés.
-- `aggressiveness-map-v1`, prompt `agent-strategy-v2`, `paper-experiment-v1/v2` et comparaison Luna/Sol appariée intégrés.
-- Chat opérateur V1 intégré : même `LLMModel` Luna/Sol, provider conversationnel séparé, REST, historique mémoire borné, contexte canonique en lecture seule.
-- Le chat ne rejoint jamais `AgentInput`, Risk, Broker, Kraken privé ou `ExecutionIntent`; aucune instruction conversationnelle ne modifie la stratégie future.
-- Pour un cycle historique, le chat s'ancre sur l'`AgentInput` persisté exact et sépare explicitement l'état courant afin d'éviter le look-ahead.
-- Le panneau Chat reste indépendant du lifecycle moteur ; fermer ou recharger le frontend ne stoppe pas le moteur backend.
+Patch livré pour rendre le premier essai PAPER réellement exécutable sans ajouter de voie parallèle :
 
-## Validation Batch 15
+- composition canonique `Kraken public -> TradingCycleRunner -> Agent Luna/Sol -> Risk -> PaperBroker -> PaperPortfolioLedger -> audit PostgreSQL` ;
+- même `PaperExecutionCostModel` injecté à Risk et au Paper Broker ;
+- même ledger PAPER exposé au moteur, à FastAPI et au Chat en lecture seule ;
+- même PostgreSQL utilisé par le writer d'audit et les lecteurs/analytics ;
+- même `LLMModel` configuré transmis à l'Agent stratégique et au Chat opérateur ;
+- configuration du premier run explicitement requise, sans defaults produit pour capital, paire, cadence, agressivité, Risk ou coûts ;
+- `main:app` compose le runtime PAPER au lifespan mais ne démarre jamais automatiquement le moteur ;
+- `POST /api/v1/engine/run-cycle` demande exactement un `TradingEngine.run_cycle()` et refuse si la boucle autonome tourne ;
+- fermeture backend : moteur, ressources Kraken possédées, puis DB ;
+- préflight PostgreSQL du writer avant chaque cycle ; une DB indisponible bloque le cycle avant Market/Agent/Risk/Broker ;
+- aucune API Kraken privée et aucun LIVE.
 
-Validation locale confirmée le 21 septembre 2026 :
+## Fail-safe audit
 
-- `pytest backend` : **277 tests passés**, 2 warnings de dépréciation externes ;
-- Ruff : **All checks passed** ;
-- mypy : **89 fichiers sans erreur** ;
-- `pnpm lint` : **réussi** ;
-- `pnpm typecheck` : **réussi** ;
-- `pnpm build` : **réussi** ;
-- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- commit/push fonctionnel confirmé : `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6`.
+La limite connue reste inchangée : il n'existe pas d'exactly-once global entre mutation du ledger mémoire et commit PostgreSQL.
 
-Le premier passage de `pnpm lint` a détecté une unique erreur `react-hooks/set-state-in-effect` dans `use-chat.ts`; le correctif a été appliqué puis lint, typecheck et build ont tous réussi avant le commit fonctionnel.
+Pour le premier essai, `AuditedTradingCycleRunner` vérifie d’abord la disponibilité du writer PostgreSQL avant d’appeler le runner canonique. Une erreur de préflight ou d’écriture est propagée et verrouille ensuite le wrapper en état **fail-closed** : tout cycle ultérieur est refusé avant Market/Agent/Risk/Broker jusqu’au redémarrage. Ce verrou ne constitue ni recovery ni réconciliation.
+
+## Validation du patch
+
+Exécuté par ChatGPT sur le patch isolé :
+
+- compilation Python des fichiers ajoutés/modifiés ;
+- validations dynamiques ciblées de la configuration fail-closed, du verrou mono-cycle/lifecycle et du latch d'audit ;
+- contrôles statiques du composition root : Kraken public uniquement, absence de chemin BUY/SELL direct et partage explicite du cost model/ledger/runtime.
+
+La suite backend complète, Ruff et mypy restent à exécuter localement après extraction du ZIP dans le repository, car l'environnement de génération ne dispose pas du clone Git local complet.
 
 ## Limites conservées
 
-- Historique chat non durable : un redémarrage backend perd les sessions V1.
-- Redaction de secrets best-effort : le chat ne doit jamais servir à transmettre des secrets.
-- Pas de mutation de stratégie via conversation ; un futur mécanisme opérateur devra être explicite, audité, versionné et appliqué à partir d'un cycle identifié.
-- Pas d'exactly-once global entre ledger PAPER mémoire et commit PostgreSQL ; recovery/réconciliation restent différés.
-- Aucun LIVE, aucune API Kraken privée, aucune modification du protocole expérimental.
+- PAPER/SPOT uniquement ; aucun LIVE, aucune API Kraken privée.
+- Chat opérateur strictement conversationnel et non mutant.
+- Ledger PAPER toujours mémoire ; recovery/reconciliation après crash différés.
+- Aucun exactly-once global ledger/PostgreSQL.
 
 ## Prochaine étape
 
-Lancer les premiers essais PAPER réels avec le Batch 15 intégré. La préparation LIVE reste séparée et correspond au Batch 16 éventuel.
+Valider localement le Batch 15.1, puis reprendre le protocole du premier essai PAPER : migrations PostgreSQL, backend démarré et moteur arrêté, inspection des surfaces, un cycle manuel, inspection complète, puis seulement un petit run autonome contrôlé. Le futur LIVE reste séparé au Batch 16 éventuel.

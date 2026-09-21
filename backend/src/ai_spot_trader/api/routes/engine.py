@@ -10,6 +10,7 @@ from ai_spot_trader.core.runtime import (
     AppRuntime,
     EngineRuntimeSnapshot,
     TradingEngineAlreadyRunningError,
+    TradingEngineCycleFailedError,
     TradingEngineUnavailableError,
 )
 
@@ -70,5 +71,29 @@ async def stop_engine(request: Request) -> EngineStatusResponse:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="trading engine is not configured",
+        ) from exc
+    return _response(snapshot)
+
+
+@router.post("/run-cycle", response_model=EngineStatusResponse)
+async def run_cycle_once(request: Request) -> EngineStatusResponse:
+    """Request exactly one cycle from the configured canonical TradingEngine."""
+
+    try:
+        snapshot = await _runtime(request).run_engine_cycle_once()
+    except TradingEngineUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="trading engine is not configured for single-cycle execution",
+        ) from exc
+    except TradingEngineAlreadyRunningError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="autonomous trading is already running",
+        ) from exc
+    except TradingEngineCycleFailedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="trading cycle failed before durable canonical completion",
         ) from exc
     return _response(snapshot)

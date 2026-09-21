@@ -1,20 +1,177 @@
+from dataclasses import dataclass
+from decimal import Decimal
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ai_spot_trader.domain.enums import ExecutionMode, LLMModel
+from ai_spot_trader.domain.symbols import parse_canonical_symbol
 
 Environment = Literal["development", "test", "production"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+_BACKEND_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
+
+
+class PaperRuntimeConfigurationError(ValueError):
+    """Raised when the executable PAPER composition is incomplete or inconsistent."""
+
+
+@dataclass(frozen=True, slots=True)
+class PaperRunConfiguration:
+    """Validated values required to compose one executable PAPER runtime."""
+
+    symbol: str
+    initial_capital: Decimal
+    settlement_asset: str
+    cadence_seconds: float
+    aggressiveness: int
+    market_timeout_seconds: float
+    agent_timeout_seconds: float
+    broker_timeout_seconds: float
+    max_order_notional: Decimal
+    allowed_pairs: frozenset[str]
+    allow_quantity_reduction: bool
+    fee_rate: Decimal
+    spread_bps: Decimal
+    slippage_bps: Decimal
+    database_url: SecretStr
+    openai_api_key: SecretStr
+    llm_model: LLMModel
+
+    @classmethod
+    def from_settings(cls, settings: "Settings") -> "PaperRunConfiguration":
+        """Fail closed unless every first-run PAPER value was explicitly supplied."""
+
+        if settings.execution_mode is not ExecutionMode.PAPER:
+            raise PaperRuntimeConfigurationError("the executable runtime only supports PAPER")
+
+        required = {
+            "paper_symbol": settings.paper_symbol,
+            "paper_initial_capital": settings.paper_initial_capital,
+            "paper_settlement_asset": settings.paper_settlement_asset,
+            "trading_cadence_seconds": settings.trading_cadence_seconds,
+            "aggressiveness": settings.aggressiveness,
+            "cycle_market_timeout_seconds": settings.cycle_market_timeout_seconds,
+            "cycle_agent_timeout_seconds": settings.cycle_agent_timeout_seconds,
+            "cycle_broker_timeout_seconds": settings.cycle_broker_timeout_seconds,
+            "risk_max_order_notional": settings.risk_max_order_notional,
+            "risk_allowed_pairs": settings.risk_allowed_pairs,
+            "risk_allow_quantity_reduction": settings.risk_allow_quantity_reduction,
+            "paper_fee_rate": settings.paper_fee_rate,
+            "paper_spread_bps": settings.paper_spread_bps,
+            "paper_slippage_bps": settings.paper_slippage_bps,
+            "database_url": settings.database_url,
+            "openai_api_key": settings.openai_api_key,
+        }
+        missing = sorted(name for name, value in required.items() if value is None)
+        if missing:
+            raise PaperRuntimeConfigurationError(
+                "missing required PAPER runtime settings: " + ", ".join(missing)
+            )
+
+        symbol = settings.paper_symbol
+        initial_capital = settings.paper_initial_capital
+        settlement_asset = settings.paper_settlement_asset
+        cadence_seconds = settings.trading_cadence_seconds
+        aggressiveness = settings.aggressiveness
+        market_timeout_seconds = settings.cycle_market_timeout_seconds
+        agent_timeout_seconds = settings.cycle_agent_timeout_seconds
+        broker_timeout_seconds = settings.cycle_broker_timeout_seconds
+        max_order_notional = settings.risk_max_order_notional
+        allowed_pairs = settings.risk_allowed_pairs
+        allow_quantity_reduction = settings.risk_allow_quantity_reduction
+        fee_rate = settings.paper_fee_rate
+        spread_bps = settings.paper_spread_bps
+        slippage_bps = settings.paper_slippage_bps
+        database_url = settings.database_url
+        openai_api_key = settings.openai_api_key
+
+        assert symbol is not None
+        assert initial_capital is not None
+        assert settlement_asset is not None
+        assert cadence_seconds is not None
+        assert aggressiveness is not None
+        assert market_timeout_seconds is not None
+        assert agent_timeout_seconds is not None
+        assert broker_timeout_seconds is not None
+        assert max_order_notional is not None
+        assert allowed_pairs is not None
+        assert allow_quantity_reduction is not None
+        assert fee_rate is not None
+        assert spread_bps is not None
+        assert slippage_bps is not None
+        assert database_url is not None
+        assert openai_api_key is not None
+
+        try:
+            _, quote_asset = parse_canonical_symbol(symbol)
+        except ValueError as exc:
+            raise PaperRuntimeConfigurationError(
+                "paper_symbol must use canonical BASE/QUOTE"
+            ) from exc
+        if not settlement_asset.strip():
+            raise PaperRuntimeConfigurationError("paper_settlement_asset cannot be empty")
+        if settlement_asset != quote_asset:
+            raise PaperRuntimeConfigurationError(
+                "paper_settlement_asset must equal the quote asset of paper_symbol"
+            )
+        if not allowed_pairs:
+            raise PaperRuntimeConfigurationError("risk_allowed_pairs cannot be empty")
+        for pair in allowed_pairs:
+            try:
+                parse_canonical_symbol(pair)
+            except ValueError as exc:
+                raise PaperRuntimeConfigurationError(
+                    "risk_allowed_pairs must contain canonical BASE/QUOTE symbols"
+                ) from exc
+        if symbol not in allowed_pairs:
+            raise PaperRuntimeConfigurationError(
+                "paper_symbol must be present in risk_allowed_pairs"
+            )
+
+        database_value = database_url.get_secret_value().strip()
+        if not database_value:
+            raise PaperRuntimeConfigurationError("database_url cannot be empty")
+        if not database_value.startswith("postgresql+asyncpg://"):
+            raise PaperRuntimeConfigurationError(
+                "the executable PAPER runtime requires PostgreSQL via postgresql+asyncpg"
+            )
+        if not openai_api_key.get_secret_value().strip():
+            raise PaperRuntimeConfigurationError("openai_api_key cannot be empty")
+        if spread_bps + slippage_bps >= Decimal(10_000):
+            raise PaperRuntimeConfigurationError(
+                "combined paper_spread_bps and paper_slippage_bps must be below 10000"
+            )
+
+        return cls(
+            symbol=symbol,
+            initial_capital=initial_capital,
+            settlement_asset=settlement_asset,
+            cadence_seconds=cadence_seconds,
+            aggressiveness=aggressiveness,
+            market_timeout_seconds=market_timeout_seconds,
+            agent_timeout_seconds=agent_timeout_seconds,
+            broker_timeout_seconds=broker_timeout_seconds,
+            max_order_notional=max_order_notional,
+            allowed_pairs=allowed_pairs,
+            allow_quantity_reduction=allow_quantity_reduction,
+            fee_rate=fee_rate,
+            spread_bps=spread_bps,
+            slippage_bps=slippage_bps,
+            database_url=database_url,
+            openai_api_key=openai_api_key,
+            llm_model=settings.llm_model,
+        )
 
 
 class Settings(BaseSettings):
     """Typed process configuration loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_BACKEND_ENV_FILE,
         env_file_encoding="utf-8",
         env_prefix="AI_SPOT_TRADER_",
         extra="ignore",
@@ -28,6 +185,21 @@ class Settings(BaseSettings):
     execution_mode: ExecutionMode = ExecutionMode.PAPER
     llm_model: LLMModel = LLMModel.LUNA
     aggressiveness: int | None = Field(default=None, ge=1, le=10)
+
+    paper_symbol: str | None = None
+    paper_initial_capital: Decimal | None = Field(default=None, gt=0)
+    paper_settlement_asset: str | None = None
+    trading_cadence_seconds: float | None = Field(default=None, gt=0)
+    cycle_market_timeout_seconds: float | None = Field(default=None, gt=0)
+    cycle_agent_timeout_seconds: float | None = Field(default=None, gt=0)
+    cycle_broker_timeout_seconds: float | None = Field(default=None, gt=0)
+    risk_max_order_notional: Decimal | None = Field(default=None, gt=0)
+    risk_allowed_pairs: frozenset[str] | None = None
+    risk_allow_quantity_reduction: bool | None = None
+    paper_fee_rate: Decimal | None = Field(default=None, ge=0, lt=1)
+    paper_spread_bps: Decimal | None = Field(default=None, ge=0)
+    paper_slippage_bps: Decimal | None = Field(default=None, ge=0)
+
     openai_api_key: SecretStr | None = None
     openai_base_url: str = "https://api.openai.com/v1"
     openai_timeout_seconds: float = Field(default=30.0, gt=0)

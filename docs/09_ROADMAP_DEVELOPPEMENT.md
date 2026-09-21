@@ -168,13 +168,45 @@ Le chat :
 Validation locale finale du 21 septembre 2026 :
 
 - `pytest backend` : **277 tests passés**, 2 warnings externes ;
-- `ruff check backend` : **All checks passed** ;
-- `mypy backend/src backend/tests` : **89 fichiers sans erreur** ;
+- Ruff : **All checks passed** ;
+- mypy : **89 fichiers sans erreur** ;
 - `pnpm lint` : **réussi** ;
 - `pnpm typecheck` : **réussi** ;
 - `pnpm build` : **réussi** ;
 - `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
 - commit/push fonctionnel : `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6`.
+
+---
+
+## Batch 15.1 — Composition runtime du premier essai PAPER réel
+
+**État : patch livré, validation/intégration locale à confirmer.**
+
+### Objectif
+
+Assembler les composants déjà intégrés dans un composition root exécutable, sans créer de second orchestrateur et sans ouvrir de voie LIVE.
+
+### Périmètre du patch
+
+- `main:app` compose au lifespan le runtime PAPER complet mais laisse le moteur arrêté ;
+- configuration explicite et fail-closed des valeurs du premier run : paire, capital, devise, cadence, agressivité, timeouts, Risk et coûts ;
+- Kraken public uniquement ;
+- même modèle Luna/Sol pour Agent et Chat ;
+- même `PaperExecutionCostModel` pour Risk et Broker ;
+- même `PaperPortfolioLedger` pour moteur/API/Chat ;
+- même PostgreSQL pour writer d'audit, lecteurs et analytics ;
+- runner canonique enveloppé par `AuditedTradingCycleRunner` ;
+- `POST /api/v1/engine/run-cycle` appelle seulement `TradingEngine.run_cycle()` et refuse si la boucle autonome est active ;
+- fermeture du moteur, des ressources Kraken possédées et de la DB au shutdown ;
+- préflight PostgreSQL avant chaque cycle et latch fail-closed après toute erreur d'audit.
+
+### Limite explicitement conservée
+
+Le préflight bloque un cycle si PostgreSQL est déjà indisponible avant Market/Agent/Risk/Broker, et le latch empêche de **continuer** à trader après une panne d’audit. Cela ne fournit toutefois aucune atomicité globale si PostgreSQL devient indisponible après le préflight et après une mutation du ledger mémoire mais avant le commit. Recovery/réconciliation restent hors périmètre.
+
+### Validation
+
+Le patch contient des tests ciblés de composition/configuration, identité des dépendances, mono-cycle HTTP, concurrence lifecycle, fermeture des ressources et fail-closed audit. La suite backend complète, Ruff et mypy doivent être exécutés localement avant intégration.
 
 ---
 
@@ -184,7 +216,7 @@ Validation locale finale du 21 septembre 2026 :
 
 Readiness, adaptateur privé Kraken, réconciliation, permissions minimales sans retrait, garde-fous LIVE et activation volontaire séparée.
 
-Le changement de numéro est volontaire : la préparation LIVE qui était historiquement notée « Batch 15 » est repoussée après le chat opérateur afin de conserver PAPER comme seul mode pendant les premiers tests réels.
+Le changement de numéro reste volontaire : le LIVE demeure postérieur au chat et au premier run PAPER réel.
 
 ---
 
@@ -223,6 +255,8 @@ Le changement de numéro est volontaire : la préparation LIVE qui était histor
   |
 15 Operator Agent chat
   |
+15.1 Executable PAPER composition
+  |
 16 Optional LIVE readiness
 ```
 
@@ -230,12 +264,7 @@ Le changement de numéro est volontaire : la préparation LIVE qui était histor
 
 ## Décisions encore ouvertes
 
-- capital PAPER et devise de référence produit ;
-- univers initial de paires ;
-- valeur produit de cadence ;
-- valeurs produit des limites Risk ;
 - limites avancées d'exposition/drawdown comme contraintes Risk ;
-- valeurs de référence fee/spread/slippage ;
 - politique de rétention ;
 - reconstruction du ledger et réconciliation après crash ;
 - dataset/replay canonique pour comparaisons strictement appariées ;
@@ -245,3 +274,5 @@ Le changement de numéro est volontaire : la préparation LIVE qui était histor
 - source d'événements/protocole d'un futur WebSocket ;
 - auth/déploiement pour exposition non locale ;
 - éventuel LIVE.
+
+Les valeurs du premier essai PAPER (capital, paire, cadence, limites Risk, coûts) restent des **paramètres explicites de run**, pas des defaults produit.

@@ -6,7 +6,7 @@ Ce document conserve les décisions architecturales durables et un changelog syn
 
 Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 
-Le Batch 15 ci-dessous est **intégré et validé** au commit fonctionnel `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6` sur `main`.
+Le Batch 15 reste **intégré et validé** au commit fonctionnel `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6` sur `main`. Le Batch 15.1 ci-dessous est livré sous forme de patch et doit encore être validé/intégré localement.
 
 ---
 
@@ -310,6 +310,45 @@ Ces décisions sont acceptées après validation locale complète et intégratio
 
 ---
 
+## 5 quinquies. Décisions Batch 15.1
+
+Ces décisions correspondent au patch de composition du premier essai PAPER. Leur intégration sur `main` reste à confirmer après validation locale.
+
+### ADR-080 — Un composition root PAPER canonique pour l'application exécutable
+- **Statut : ACCEPTÉE pour le patch**
+- La composition assemble uniquement les composants canoniques existants.
+- `main:app` construit ce graphe au lifespan FastAPI mais ne démarre pas automatiquement le moteur.
+- Aucun second runner, broker, ledger, agent stratégique ou chemin d'exécution n'est créé.
+
+### ADR-081 — Les valeurs produit du premier run restent explicites et fail-closed
+- **Statut : ACCEPTÉE pour le patch**
+- Paire, capital, devise, cadence, agressivité, timeouts, limites Risk et coûts PAPER doivent être fournis explicitement.
+- PostgreSQL et OpenAI sont obligatoires pour le runtime exécutable.
+- Une configuration incomplète refuse le démarrage du runtime réel.
+- `ExecutionMode` reste PAPER uniquement ; aucune notion LIVE n'est ajoutée.
+
+### ADR-082 — Identité des dépendances partagées dans le runtime PAPER
+- **Statut : ACCEPTÉE pour le patch**
+- Un même `PaperExecutionCostModel` est injecté à Risk et au Paper Broker.
+- Un même `PaperPortfolioLedger` est utilisé par le runner et exposé par FastAPI/Chat.
+- Un même `Database`/session factory PostgreSQL alimente writer d'audit, lecteurs et analytics.
+- Le même `LLMModel` Luna/Sol est transmis à l'Agent et au Chat.
+
+### ADR-083 — Le contrôle mono-cycle appelle uniquement `TradingEngine.run_cycle()`
+- **Statut : ACCEPTÉE pour le patch**
+- `POST /api/v1/engine/run-cycle` ne reçoit aucune action ni quantité de trading.
+- La commande est sérialisée avec start/stop et refusée pendant une boucle autonome active.
+- Elle conserve le chemin Market -> Agent -> Risk -> Paper Broker -> audit.
+
+### ADR-084 — Après une erreur d'audit, le runner se verrouille fail-closed
+- **Statut : ACCEPTÉE pour le patch**
+- Le writer PostgreSQL est préflighté avant chaque cycle ; une indisponibilité déjà présente bloque le delegate avant Market/Agent/Risk/Broker.
+- La première erreur de préflight ou de persistance est propagée, jamais convertie en HOLD ou masquée.
+- Tout appel ultérieur au runner audité est refusé avant son delegate jusqu’au redémarrage.
+- Cette mesure empêche de continuer à trader sans audit mais ne crée aucune garantie exactly-once ni mécanisme de recovery/réconciliation.
+
+---
+
 ## 6. Propositions historiques
 
 ### ADR-P001 — Contrats Pydantic versionnés entre composants
@@ -328,14 +367,8 @@ Ces décisions sont acceptées après validation locale complète et intégratio
 
 ## 7. Décisions encore ouvertes
 
-- capital PAPER initial produit ;
-- devise de référence produit ;
-- univers initial de paires ;
-- valeur produit de cadence ;
 - données marché supplémentaires ;
-- valeurs chiffrées des limites Risk ;
 - limites d'exposition/drawdown ;
-- valeurs expérimentales fee/spread/slippage ;
 - dataset/replay canonique pour comparaisons appariées ;
 - statistiques descriptives de dispersion LLM ;
 - politique de rétention PostgreSQL ;
@@ -347,9 +380,31 @@ Ces décisions sont acceptées après validation locale complète et intégratio
 - source d'événements/protocole futur WebSocket ;
 - éventuel LIVE.
 
+Les valeurs concrètes du premier essai PAPER sont désormais des paramètres explicites de run, pas des defaults produit.
+
 ---
 
 ## 8. Changelog
+
+### 2026-09-21 — Batch 15.1 Composition runtime du premier essai PAPER réel
+
+**État : patch livré ; validation/intégration locale à confirmer. Référence GitHub auditée au démarrage : `59e3bc26c7b4d6acca25bc7d21c85c3c14eeb336`.**
+
+- Ajout d'un composition root PAPER réutilisant Kraken public, Agent, Risk, Broker, ledger, audit, analytics et Chat existants.
+- Configuration explicite obligatoire pour les valeurs du premier run ; aucun nouveau default produit chiffré.
+- PostgreSQL unique partagé entre writer d'audit et surfaces de lecture/analytics.
+- `PaperExecutionCostModel` unique partagé entre Risk et Paper Broker.
+- `PaperPortfolioLedger` unique partagé entre moteur, API et contexte Chat.
+- Même modèle Luna/Sol transmis à l'Agent et au Chat.
+- `main:app` compose au startup mais garde le moteur arrêté.
+- Ajout de `POST /api/v1/engine/run-cycle`, sans entrée stratégique, appelant uniquement `TradingEngine.run_cycle()`.
+- Sérialisation des commandes moteur et refus du mono-cycle pendant l'autonome.
+- Fermeture explicite des ressources réseau possédées en plus du moteur et de la DB.
+- Préflight PostgreSQL avant le delegate puis latch fail-closed après la première erreur d’audit ; aucune fausse garantie exactly-once.
+- Aucun changement frontend et aucun LIVE/Kraken privé.
+- Tests ciblés ajoutés pour configuration, composition, partage des dépendances, modèle Agent/Chat, portefeuille initial, mono-cycle/concurrence, sanitization, lifecycle et fail-closed audit.
+
+Validation exécutée par ChatGPT sur le patch isolé : compilation Python et contrôles/dynamiques ciblés documentés dans `docs/00_ETAT_ACTUEL.md`. La suite backend complète, Ruff et mypy restent à exécuter localement avant intégration.
 
 ### 2026-09-21 — Batch 15 Chat opérateur avec l'Agent
 
