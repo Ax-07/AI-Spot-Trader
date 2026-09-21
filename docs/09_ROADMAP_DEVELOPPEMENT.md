@@ -18,60 +18,52 @@ Le support intégré couvre le domaine `SPOT | PERPETUAL | FUTURE`, l'exécution
 
 ## Batch 16.1 — Smoke test PERPETUAL PAPER
 
-**État : intégré sur GitHub `main` le 21 septembre 2026 au commit `74c168180716e484ea2ec76f461620f595cb1b91` (`fix: finalize Batch 16.1 perpetual paper smoke`).**
+**État : intégré sur GitHub `main` le 21 septembre 2026 ; HEAD documentaire actuel vérifié : `08926e98dda3fe9ad7b68b4ddb5c582cbe49529c`.**
 
-### Correctif inclus
+Le correctif accepte les valeurs négatives de `contractValueTradePrecision`. Le smoke réel `BTC/USD / PF_XBTUSD` a terminé `COMPLETED`, Agent `HOLD`, Risk `ALLOW / HOLD_NO_EXECUTION`, analytics `1000 -> 1000`, `trade_count=0`, `hold_count=1`.
 
-- accepter les valeurs entières négatives de `contractValueTradePrecision` dans le parser Kraken Derivatives ;
-- exemples réels observés : `PF_PEPEUSD`, `PF_SHIBUSD`, `PF_BONKUSD` à `-3` ;
-- non-régression conservée pour `PF_XBTUSD` à `4` ;
-- test dédié ajouté.
-
-### Validation locale
-
-```text
-pytest            : 339 passés
-ruff check .       : OK
-mypy .             : OK
-git diff --check   : aucune erreur, warnings LF -> CRLF uniquement
-```
-
-### Smoke réel validé
-
-- `BTC/USD` / `PF_XBTUSD` ;
-- cycle `COMPLETED` ;
-- Agent `HOLD` ;
-- Risk `ALLOW` / `HOLD_NO_EXECUTION` ;
-- analytics `paper-analytics-v2` validés sur base PostgreSQL isolée ;
-- equity `1000 -> 1000` ;
-- `trade_count=0`, `hold_count=1`.
-
-### Non validé en réel
-
-Le smoke n'ayant produit aucun ordre, il ne valide pas encore : ouverture LONG/SHORT, fills dérivés, funding accumulé, P&L de position, réduction/fermeture ni `reduce_only`.
+Le smoke ne valide pas encore en réel l'ouverture LONG/SHORT, les fills dérivés, le funding accumulé sur position, le P&L de position, la réduction/fermeture ni `reduce_only`.
 
 ## Batch 16.2 — Isolation durable des runs PAPER
 
-**Proposé — sujet séparé découvert pendant le Batch 16.1.**
+**État : intégré sur GitHub `main` au commit fonctionnel `003bbadd7ae2f8288ccde049433832046f066957` (`feat: add durable paper run isolation`).**
 
-Objectif : empêcher les analytics de mélanger plusieurs expériences PAPER indépendantes stockées dans la même base.
+Implémentation intégrée :
 
-Périmètre à auditer avant implémentation :
+- table durable `paper_runs` ;
+- FK nullable `audit_cycles.paper_run_id` ;
+- décisions, Risk, intents et fills rattachés indirectement par leur cycle ;
+- migration PostgreSQL `0002_paper_runs` sans backfill trompeur ;
+- anciennes lignes conservées à `NULL` et exclues des analytics run-scoped ;
+- même mécanisme pour SPOT et PERPETUAL ;
+- analytics d'un run strictement filtrés par `paper_run_id` ;
+- filtres run-scoped disponibles pour cycles/décisions/Risk/exécutions/erreurs/market ;
+- endpoints `GET /api/v1/paper-runs`, `/paper-runs/current`, `/paper-runs/{id}` ;
+- `GET /api/v1/analytics?paper_run_id=<uuid>` pour sélection explicite ;
+- aucun changement frontend requis : la composition PAPER garde le run courant comme défaut.
 
-- notion durable de run (`paper_run_id` ou mécanisme équivalent) ;
-- création et reprise d'un run ;
-- propagation vers cycles, décisions, risk results, fills et snapshots utiles ;
-- filtrage des endpoints analytics ;
-- compatibilité avec les données historiques sans identifiant de run ;
-- stratégie de migration PostgreSQL ;
-- comportement cockpit/API ;
-- tests d'isolation de deux runs dans une même base.
+Sémantique du cycle de vie : `engine stop/start` conserve le run ; arrêt backend propre clôt le run ; redémarrage backend crée un nouveau run car le ledger reste en mémoire et est réinitialisé. Aucun resume automatique d'un ancien run n'est autorisé tant que la reprise durable du portefeuille n'existe pas.
 
-Aucune solution n'est considérée comme intégrée avant audit et décision explicite.
+Validation locale confirmée avant intégration :
+
+```text
+alembic upgrade head : 0001_audit_journal -> 0002_paper_runs
+alembic current      : 0002_paper_runs (head)
+pytest               : 344 passed, 2 warnings externes
+ruff check .          : All checks passed
+mypy .                : Success: no issues found in 106 source files
+git diff --check      : aucune erreur, warnings LF -> CRLF uniquement
+```
+
+## Batch 16.3 — Smokes d'exécution Derivatives contrôlés
+
+**Proposé comme prochain batch fonctionnel après l'intégration du Batch 16.2.**
+
+Objectif : valider séparément un chemin PAPER réel contrôlé couvrant ouverture LONG/SHORT, fill, mark/funding, réduction/fermeture et `reduce_only`, sans mélanger les métriques entre expériences.
 
 ## Batch 17 — Robustesse Derivatives
 
-**Proposé.** Validation live des schémas publics Kraken sur davantage d'instruments, tiers de marge par taille, liquidation PAPER plus fidèle, cockpit dédié dérivés, reprise/reconciliation du ledger mémoire, scénarios multi-position/multi-instrument et smokes contrôlés d'ouverture/réduction/fermeture.
+**Proposé.** Validation des schémas publics Kraken sur davantage d'instruments, tiers de marge par taille, liquidation PAPER plus fidèle, cockpit dédié dérivés, reprise/réconciliation du ledger mémoire, scénarios multi-position/multi-instrument.
 
 ## LIVE — toujours séparé
 

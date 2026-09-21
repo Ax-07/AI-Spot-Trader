@@ -6,67 +6,55 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub intégré : `74c168180716e484ea2ec76f461620f595cb1b91` (`fix: finalize Batch 16.1 perpetual paper smoke`).
-- Commit fonctionnel Batch 16 : `06e3185c8a8c638263427842ab6591a2397810e0` (`feat: add Kraken derivatives paper trading`).
-- Batch 16.1 intégré sur GitHub `main` le 21 septembre 2026 au commit `74c168180716e484ea2ec76f461620f595cb1b91`.
+- Commit fonctionnel Batch 16.2 intégré sur GitHub `main` : `003bbadd7ae2f8288ccde049433832046f066957` (`feat: add durable paper run isolation`).
+- Parent documentaire Batch 16.1 : `08926e98dda3fe9ad7b68b4ddb5c582cbe49529c` (`docs: finalize Batch 16.1 integration`).
+- Le commit Batch 16.2 a été poussé sur `origin/main` le 21 septembre 2026 après validation locale complète.
 
-## Batch 16.1 — Smoke Kraken PERPETUAL PAPER
+## Batch 16.2 — Isolation durable des runs PAPER
 
-Le Batch 16.1 corrige le parsing Kraken Derivatives de `contractValueTradePrecision` afin d'accepter les précisions entières négatives réellement renvoyées par l'API publique.
+Le modèle retenu introduit un `paper_run_id` durable :
 
-Exemples observés sur Kraken :
+- table PostgreSQL `paper_runs` ;
+- `audit_cycles.paper_run_id` comme FK canonique ;
+- décisions, Risk, intents et fills héritent du run via leur cycle, sans dupliquer le même identifiant dans chaque table ;
+- SPOT et PERPETUAL utilisent exactement le même mécanisme ;
+- migration `0002_paper_runs` ;
+- les anciennes lignes restent volontairement `paper_run_id = NULL` : aucun run legacy artificiel n'est reconstruit.
 
-- `PF_PEPEUSD`, `PF_SHIBUSD`, `PF_BONKUSD` : `contractValueTradePrecision = -3` ;
-- `PF_XBTUSD` : `contractValueTradePrecision = 4`.
+Les analytics et les lectures audit peuvent sélectionner explicitement un run. Dans la composition PAPER normale, le run courant est le défaut. `GET /api/v1/paper-runs` expose les runs durables ; `GET /api/v1/analytics?paper_run_id=<uuid>` permet une sélection explicite.
 
-La conversion reste `min_order_quantity = 10^-precision` : une précision `-3` donne donc une quantité minimale de `1000`, tandis que `4` donne `0.0001`.
+## Cycle de vie retenu
 
-Le correctif reste local au parseur Kraken Derivatives et un test de non-régression couvre simultanément une précision négative et le cas historique positif.
+Un run correspond à une expérience PAPER utilisant une même initialisation du ledger mémoire.
 
-## Validation locale confirmée
+- création : au démarrage du backend/composition PAPER, avant d'accepter les cycles ;
+- `engine stop/start` dans le même processus : **même run** ;
+- arrêt backend propre : `ended_at` est renseigné après arrêt du moteur ;
+- crash : `ended_at` peut rester `NULL`, sans prétendre que le run est encore actif ;
+- redémarrage backend : **nouveau run**, car le ledger PAPER actuel est recréé au capital initial et n'est pas encore récupéré durablement ;
+- un run fermé refuse de nouveaux cycles.
 
-Validation fournie depuis le dépôt local utilisateur :
+Tant que la reprise durable du ledger n'existe pas, démarrer explicitement une nouvelle expérience signifie arrêter proprement le moteur/backend puis redémarrer le backend. Aucun endpoint de rotation à chaud n'est ajouté dans ce batch afin de ne pas séparer artificiellement l'identité du run de l'état portefeuille réellement utilisé.
+
+## Compatibilité historique
+
+La migration ajoute une FK nullable. Les cycles antérieurs au Batch 16.2 restent consultables dans l'historique global mais ne sont jamais intégrés dans les analytics d'un run moderne. Il n'existe pas de pseudo-run « legacy ».
+
+## Validation confirmée
+
+Validation locale avant intégration :
 
 ```text
-pytest            : 339 passés
-ruff check .       : OK
-mypy .             : OK
-git diff --check   : aucune erreur, warnings LF -> CRLF uniquement
+alembic upgrade head : 0001_audit_journal -> 0002_paper_runs
+alembic current      : 0002_paper_runs (head)
+pytest               : 344 passed, 2 warnings externes
+ruff check .          : OK
+mypy .                : OK sur 106 fichiers
+git diff --check      : aucune erreur, warnings LF -> CRLF uniquement
 ```
 
-Smoke réel Kraken PERPETUAL PAPER :
+Le Batch 16.2 est donc intégré. Les données legacy pré-migration restent volontairement hors des analytics run-scoped.
 
-- paire canonique : `BTC/USD` ;
-- instrument Kraken : `PF_XBTUSD` ;
-- cycle : `COMPLETED` ;
-- Agent : `HOLD` ;
-- Risk : `ALLOW` / `HOLD_NO_EXECUTION` ;
-- analytics `paper-analytics-v2` validés sur une base PostgreSQL isolée ;
-- `initial_equity = 1000` ;
-- `ending_equity = 1000` ;
-- `trade_count = 0` ;
-- `hold_count = 1`.
+## Prochaine étape
 
-## Ce que le smoke ne valide pas
-
-Le smoke s'est terminé en `HOLD`. Il **ne valide donc pas en réel** :
-
-- l'ouverture `LONG` ou `SHORT` ;
-- les fills dérivés ;
-- l'accumulation effective du funding sur une position ouverte ;
-- le P&L de position réalisé/non réalisé après exécution ;
-- `reduce_only`, réduction et fermeture de position.
-
-Ces chemins restent couverts par les tests existants, mais pas encore par un smoke Kraken réel avec exécution PAPER.
-
-## Dette découverte — isolation des runs PAPER
-
-Les analytics PAPER actuels agrègent les cycles présents dans une même base PostgreSQL. Plusieurs essais PAPER indépendants utilisant la même base peuvent donc être mélangés dans les métriques.
-
-Il n'existe pas encore de `paper_run_id` durable permettant d'isoler explicitement un run expérimental de bout en bout.
-
-Le smoke Batch 16.1 a utilisé une base PostgreSQL isolée pour éviter ce mélange. Cette limite est documentée mais **n'est pas corrigée dans le Batch 16.1**.
-
-## Prochaine étape proposée
-
-Traiter dans un batch séparé l'isolation durable des runs PAPER (`paper_run_id` ou mécanisme équivalent), puis seulement ensuite poursuivre les smokes d'exécution dérivés contrôlés avec ouverture/réduction/fermeture.
+Le smoke Batch 16.1 était `HOLD` : LONG/SHORT réels PAPER, fills dérivés, funding accumulé, P&L de position et `reduce_only` ne sont toujours pas validés par un smoke réel. Le prochain batch proposé est donc le Batch 16.3, dédié à des smokes Derivatives contrôlés et séparés par `paper_run_id`.
