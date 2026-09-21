@@ -10,17 +10,11 @@ Les étapes historiques suivantes sont intégrées : documentation/bootstrap, co
 
 Référence fonctionnelle Batch 15.3 : `d0f6d46b9adb37117051a7a497a8d55075c41d32`.
 
-HEAD GitHub vérifié avant Batch 16 : `c2e21f9b5b47086ea8dad336cc80ff15afa27ba0`.
-
 ## Batch 16 — Kraken Derivatives PAPER
 
-**État : patch local proposé, non intégré tant que la validation utilisateur n'est pas terminée.**
+**État : intégré sur `main` au commit `06e3185c8a8c638263427842ab6591a2397810e0` (`feat: add Kraken derivatives paper trading`).**
 
-### Objectif
-
-Étendre l'architecture canonique existante de SPOT-only vers **SPOT + Kraken Derivatives** sans créer de second moteur ou second agent.
-
-### Périmètre
+### Périmètre intégré
 
 - `MarketType`: SPOT / PERPETUAL / FUTURE ;
 - métadonnées instruments Kraken Derivatives publiques ;
@@ -40,21 +34,20 @@ HEAD GitHub vérifié avant Batch 16 : `c2e21f9b5b47086ea8dad336cc80ff15afa27ba0
 - aucune API Kraken privée ;
 - aucun LIVE.
 
-### Validation minimale attendue
+### Validation confirmée
 
-```powershell
-git diff --check
-pytest
-ruff check .
-mypy .
-git status --short
+```text
+pytest            : 338 passés, 2 warnings externes
+ruff check .       : All checks passed
+mypy .             : Success: no issues found in 101 source files
+git diff --check   : aucune erreur, warnings LF -> CRLF uniquement
 ```
 
-Tests ciblés exécutés par ChatGPT sur le patch reconstruit : **23 passés**. `compileall` : **réussi**. Ruff/mypy et suite complète restent à exécuter localement.
+Tests ciblés ChatGPT : **23 passés** ; `compileall` : **réussi**.
 
 ## Batch 16.1 — Smoke test PERPETUAL PAPER
 
-**À faire après intégration du Batch 16.**
+**Prochaine étape, à lancer dans une nouvelle discussion.**
 
 - sélectionner une paire Kraken Derivatives réellement disponible ;
 - démarrer avec levier `1x` ;
@@ -65,26 +58,8 @@ Tests ciblés exécutés par ChatGPT sur le patch reconstruit : **23 passés**. 
 
 ## Batch 17 — Robustesse Derivatives
 
-**Proposé.**
-
-- validation live des schémas publics Kraken sur davantage d'instruments ;
-- tiers de marge par taille plutôt qu'un taux conservateur unique ;
-- liquidation PAPER plus fidèle/simulée explicitement ;
-- affichage cockpit dédié positions dérivés/exposition/funding ;
-- reprise/reconciliation du ledger mémoire après crash ;
-- scénarios multi-position/multi-instrument si décidés.
+**Proposé.** Validation live des schémas publics Kraken sur davantage d'instruments, tiers de marge par taille, liquidation PAPER plus fidèle, cockpit dédié dérivés, reprise/reconciliation du ledger mémoire, scénarios multi-position/multi-instrument si décidés.
 
 ## LIVE — toujours séparé
 
 Le LIVE n'est pas une suite automatique du Batch 16. Il nécessitera une décision explicite et un batch séparé couvrant : adaptateur privé Kraken, permissions minimales sans retrait, idempotence, réconciliation, recovery, limites renforcées, activation opérateur et observabilité.
-
-## Décisions encore ouvertes
-
-- politique exacte CROSS margin ;
-- support des contrats inverses ;
-- exécution des futures datés ;
-- liquidation PAPER détaillée ;
-- exposition combinée multi-symboles plus avancée ;
-- reconstruction durable du ledger ;
-- auth/déploiement ;
-- éventuel LIVE.

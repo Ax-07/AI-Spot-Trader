@@ -6,17 +6,17 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub vérifié au démarrage du Batch 16 : `c2e21f9b5b47086ea8dad336cc80ff15afa27ba0` (`docs: finalize Batch 15.3 integration`).
+- HEAD GitHub intégré : `06e3185c8a8c638263427842ab6591a2397810e0` (`feat: add Kraken derivatives paper trading`).
 - Référence fonctionnelle précédente : `d0f6d46b9adb37117051a7a497a8d55075c41d32` (`fix: decouple market context from engine cadence`).
-- Le présent Batch 16 est un **patch local proposé**, non intégré à GitHub tant qu'il n'a pas été validé et commité par l'utilisateur.
+- Batch 16 intégré et validé localement le 21 septembre 2026.
 
 ## Batch 16 — SPOT + Kraken Derivatives en PAPER
 
-Le projet n'est plus conceptuellement limité au SPOT. Le même backend et le même agent stratégique peuvent traiter :
+Le projet supporte désormais dans le même backend et avec le même agent stratégique :
 
 - `SPOT` : règles historiques inchangées, aucun short ni levier ; `SELL` exige une position détenue ;
 - `PERPETUAL` Kraken Derivatives : positions `LONG`/`SHORT`, marge isolée, levier déterministe, P&L réalisé/non réalisé, funding, exposition et risque de liquidation ;
-- `FUTURE` daté : métadonnées de domaine prévues et découverte possible, mais exécution PAPER volontairement refusée dans ce batch ;
+- `FUTURE` daté : métadonnées de domaine et découverte possibles, mais exécution PAPER refusée dans ce batch ;
 - contrats inverses : découverts mais refusés à l'exécution PAPER ; seuls les perpetuals linéaires sont exécutables dans ce premier lot.
 
 Le chemin canonique reste unique :
@@ -44,19 +44,19 @@ L'Agent conserve `BUY / SELL / HOLD`. En dérivés, `SELL` peut ouvrir/augmenter
 
 La couche Derivatives publique utilise la base `https://futures.kraken.com/derivatives/api/v3` avec découverte des instruments et tickers publics. Aucun secret Kraken n'est requis pour le Batch 16.
 
-## Validation disponible dans le livrable
+## Validation Batch 16
 
-Exécuté par ChatGPT sur la copie de reconstruction du patch :
+Validation locale finale confirmée :
 
 ```text
-pytest ciblé Batch 16 : 23 passés
-python -m compileall   : réussi
+pytest            : 338 passés, 2 warnings externes
+ruff check .       : All checks passed
+mypy .             : Success: no issues found in 101 source files
+git diff --check   : aucune erreur, warnings LF -> CRLF uniquement
 ```
 
-Non exécuté dans l'environnement ChatGPT faute d'outils installés : `ruff` et `mypy`.
-
-La validation complète doit être exécutée sur le dépôt local utilisateur après extraction : suite `pytest`, Ruff, mypy, `git diff --check` et `git status --short`.
+Tests ciblés exécutés par ChatGPT pendant le développement : **23 passés** ; `compileall` : **réussi**.
 
 ## Prochaine étape
 
-Valider le ZIP Batch 16 dans `E:\AI-Spot-Trader`. Si la suite complète passe, commiter/pousser le batch puis lancer un premier smoke test PERPETUAL PAPER avec paramètres conservateurs (`1x`, faible notionnel, limites d'exposition strictes).
+Lancer dans une nouvelle discussion le Batch 16.1 : premier smoke test Kraken PERPETUAL PAPER avec paramètres conservateurs (`1x`, faible notionnel, limites d'exposition strictes), sans LIVE ni API privée.

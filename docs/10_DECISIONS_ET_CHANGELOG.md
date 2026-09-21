@@ -11,76 +11,54 @@ Les anciennes mentions **SPOT uniquement / aucun future-perpetual** sont supers�
 ## Décisions Batch 16
 
 ### ADR-090 — Le projet devient SPOT + Kraken Derivatives
-
-**ACCEPTÉE dans le patch Batch 16.** Le backend canonique peut représenter `SPOT`, `PERPETUAL` et `FUTURE`. SPOT conserve ses invariants historiques ; LONG/SHORT/levier/marge n'existent que dans le domaine dérivés.
+**ACCEPTÉE.** Le backend canonique peut représenter `SPOT`, `PERPETUAL` et `FUTURE`. SPOT conserve ses invariants historiques ; LONG/SHORT/levier/marge n'existent que dans le domaine dérivés.
 
 ### ADR-091 — Un seul pipeline et un seul agent
-
-**ACCEPTÉE.** Aucun moteur dérivés parallèle. Le flux reste `Market -> Agent -> DecisionCandidate -> Risk -> ExecutionIntent -> Paper Broker`. L'agent garde `BUY/SELL/HOLD` et reçoit le type de marché dans `AgentInput`.
+**ACCEPTÉE.** Aucun moteur dérivés parallèle. Le flux reste `Market -> Agent -> DecisionCandidate -> Risk -> ExecutionIntent -> Paper Broker`.
 
 ### ADR-092 — Perpetual linéaire uniquement pour la première exécution PAPER
-
-**ACCEPTÉE.** Les contrats `PERPETUAL + LINEAR` sont exécutables. Les contracts `INVERSE` et les futures datés sont découverts/représentés mais refusés à l'exécution afin d'éviter d'utiliser des formules P&L/marge incorrectes.
+**ACCEPTÉE.** Les contrats `PERPETUAL + LINEAR` sont exécutables. Les contrats `INVERSE` et futures datés sont découverts/représentés mais refusés à l'exécution.
 
 ### ADR-093 — Marge ISOLATED d'abord ; CROSS représenté mais fail-closed
-
-**ACCEPTÉE.** La marge isolée permet un modèle déterministe et borné par position. `CROSS` existe dans le domaine pour éviter un cul-de-sac architectural mais la composition Batch 16 le refuse.
+**ACCEPTÉE.** `CROSS` existe dans le domaine mais la composition Batch 16 le refuse.
 
 ### ADR-094 — Levier déterministe, jamais choisi par le LLM
-
-**ACCEPTÉE.** Le levier PAPER est un paramètre de configuration/Risk, par défaut `1x`. Risk applique son plafond interne et la limite dérivée des métadonnées instrument. L'agent ne peut ni demander ni augmenter le levier.
+**ACCEPTÉE.** Le levier PAPER est un paramètre de configuration/Risk, par défaut `1x`.
 
 ### ADR-095 — Anti-retournement et reduce-only produits par Risk
-
-**ACCEPTÉE.** Une action opposée à une position existante devient une réduction/fermeture. Un ordre plus grand que la position ne peut pas la retourner silencieusement. Risk peut réduire la quantité si la politique le permet ; sinon il rejette.
+**ACCEPTÉE.** Une action opposée réduit/ferme la position ; un dépassement ne peut pas la retourner silencieusement.
 
 ### ADR-096 — Funding et mark-to-market avant AgentInput
-
-**ACCEPTÉE.** Le market source Derivatives marque la position et accumule le funding dans le ledger avant que `TradingCycleRunner` ne prenne le snapshot portefeuille. HOLD peut donc refléter mark/funding sans créer d'exécution.
+**ACCEPTÉE.** Le market source Derivatives marque la position et accumule le funding dans le ledger avant le snapshot portefeuille.
 
 ### ADR-097 — Modèle de liquidation conservateur
-
-**ACCEPTÉE.** Le ledger calcule un prix de liquidation isolée estimé et Risk impose un buffer par rapport à la maintenance margin. Batch 16 ne prétend pas reproduire l'intégralité du moteur privé Kraken.
+**ACCEPTÉE.** Le ledger calcule un prix de liquidation isolée estimé et Risk impose un buffer par rapport à la maintenance margin.
 
 ### ADR-098 — Kraken Derivatives public séparé de Kraken Spot
-
-**ACCEPTÉE.** Une intégration publique dédiée utilise `https://futures.kraken.com/derivatives/api/v3`. Aucun endpoint privé d'ordre, aucune clé Kraken et aucun LIVE ne sont introduits.
+**ACCEPTÉE.** Intégration publique dédiée via `https://futures.kraken.com/derivatives/api/v3`. Aucun endpoint privé d'ordre, aucune clé Kraken et aucun LIVE.
 
 ### ADR-099 — Analytics combinés SPOT + Derivatives sans migration
-
-**ACCEPTÉE.** Les positions dérivés sont persistées dans les payloads JSON existants. Les analytics ajoutent marge/unrealized/funding/exposition dérivés. Les fills SPOT historiques gardent leurs defaults et leur replay existant.
+**ACCEPTÉE.** Les positions dérivés sont persistées dans les payloads JSON existants ; les analytics ajoutent marge/unrealized/funding/exposition dérivés.
 
 ### ADR-100 — Prompt Agent `agent-strategy-v3`
-
-**ACCEPTÉE.** Le prompt explique explicitement les sémantiques SPOT/PERPETUAL, LONG/SHORT, marge et levier tout en conservant la sortie structurée `BUY/SELL/HOLD`. Le LLM n'émet ni `reduce_only` ni levier.
+**ACCEPTÉE.** Le prompt explique explicitement les sémantiques SPOT/PERPETUAL, LONG/SHORT, marge et levier tout en conservant `BUY/SELL/HOLD`.
 
 ## Changelog — 2026-09-21 — Batch 16 Kraken Derivatives PAPER
 
-**État : patch local proposé depuis le HEAD GitHub `c2e21f9b5b47086ea8dad336cc80ff15afa27ba0`; non intégré tant que la validation locale utilisateur n'est pas terminée.**
+**État : intégré sur GitHub `main` au commit `06e3185c8a8c638263427842ab6591a2397810e0` (`feat: add Kraken derivatives paper trading`).**
 
-Changements principaux :
+Changements principaux : nouveaux enums/contrats dérivés, client public Kraken Derivatives, PaperPortfolioLedger LONG/SHORT, PaperBroker perpetual linéaire/reduce-only, Risk Engine levier/marge/notionnel/exposition/liquidation/anti-reversal, composition runtime SPOT/PERPETUAL, configuration étendue, prompt `agent-strategy-v3`, API/analytics étendus et tests dérivés.
 
-- nouveaux enums `MarketType`, `DerivativeContractKind`, `PositionSide`, `MarginMode` ;
-- nouveaux contrats `DerivativeInstrument`, `DerivativeMarketContext`, `DerivativePosition` ;
-- enrichissement rétrocompatible de `MarketState`, `PortfolioState`, `DecisionCandidate`, `ExecutionIntent`, `Fill` ;
-- client public Kraken Derivatives, parsing instruments/tickers et normalisation XBT/BTC ;
-- PaperPortfolioLedger : LONG/SHORT, prix moyen, P&L, marge, funding, liquidation estimée ;
-- PaperBroker : perpetual linéaire et reduce-only ;
-- Risk Engine : levier, marge, notionnel position, exposition totale, buffer liquidation, anti-reversal ;
-- composition runtime sélectionnable SPOT/PERPETUAL ;
-- configuration et `.env.example` étendus ;
-- prompt stratégique `agent-strategy-v3` ;
-- API schemas et analytics PAPER étendus ;
-- tests ciblés dérivés ajoutés.
-
-Validation exécutée par ChatGPT :
+Validation locale finale confirmée le 21 septembre 2026 :
 
 ```text
-pytest ciblé Batch 16 : 23 passed
-python -m compileall   : réussi
+pytest            : 338 passés, 2 warnings externes
+ruff check .       : All checks passed
+mypy .             : Success: no issues found in 101 source files
+git diff --check   : aucune erreur, warnings LF -> CRLF uniquement
 ```
 
-Non exécuté dans l'environnement de reconstruction : Ruff, mypy, suite backend complète, frontend lint/typecheck/build. Ces validations doivent être réalisées localement avant intégration.
+Tests ciblés exécutés par ChatGPT : **23 passés** ; `compileall` : **réussi**.
 
 ## LIVE
 

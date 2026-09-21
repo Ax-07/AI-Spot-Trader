@@ -2,7 +2,7 @@
 
 AI Spot Trader est une application expérimentale de trading crypto **SPOT + Kraken Derivatives** pilotée par **un agent IA unique**. L'agent conserve la décision stratégique (`BUY`, `SELL`, `HOLD`) tandis qu'un **Risk Engine déterministe** garde l'autorité finale avant toute exécution.
 
-> **État Batch 16 :** le support Kraken Derivatives est ajouté en **PAPER uniquement** sous forme de patch local proposé. Le HEAD GitHub vérifié avant le batch est `c2e21f9b5b47086ea8dad336cc80ff15afa27ba0`. Aucun ordre LIVE/private Kraken Derivatives n'est implémenté.
+> **État Batch 16 :** intégré sur GitHub `main` au commit `06e3185c8a8c638263427842ab6591a2397810e0` (`feat: add Kraken derivatives paper trading`). Validation locale complète confirmée : **338 tests passés**, Ruff OK, mypy OK sur 101 fichiers et `git diff --check` sans erreur (warnings LF→CRLF Windows uniquement). Aucun ordre LIVE/private Kraken Derivatives n'est implémenté.
 
 ## Principes
 
@@ -135,14 +135,16 @@ Les contrats API ajoutent `market_type`, le contexte dérivés et `derivative_po
 
 ## Validation Batch 16
 
-Exécuté par ChatGPT sur la reconstruction locale du patch :
+Validation locale finale confirmée le 21 septembre 2026 :
 
 ```text
-pytest ciblé Batch 16 : 23 passed
-python -m compileall   : OK
+pytest            : 338 passed, 2 warnings externes
+ruff check .       : All checks passed
+mypy .             : Success: no issues found in 101 source files
+git diff --check   : aucune erreur, warnings LF -> CRLF uniquement
 ```
 
-`ruff` et `mypy` ne sont pas installés dans l'environnement de reconstruction ChatGPT et doivent être exécutés dans le dépôt local utilisateur. La suite complète du repo doit également être rejouée localement avant intégration.
+Tests ciblés exécutés par ChatGPT pendant le développement : **23 passés** ; `compileall` : **réussi**.
 
 ## Sécurité / LIVE
 

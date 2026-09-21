@@ -2,9 +2,9 @@
 
 ## 1. Rôle
 
-Ce document est la spécification fonctionnelle et architecturale principale d'**AI Spot Trader**. Le Batch 16 fait évoluer le projet de SPOT-only vers **SPOT + Kraken Derivatives**, sans changer le principe d'un agent stratégique unique ni l'autorité finale du Risk Engine.
+Ce document est la spécification fonctionnelle et architecturale principale d'**AI Spot Trader**. Depuis le Batch 16, le projet couvre **SPOT + Kraken Derivatives**, sans changer le principe d'un agent stratégique unique ni l'autorité finale du Risk Engine.
 
-Référence intégrée au démarrage du Batch 16 : GitHub `main` au commit `c2e21f9b5b47086ea8dad336cc80ff15afa27ba0`. Le Batch 16 décrit ici un patch local proposé tant qu'il n'est pas validé/commité.
+Référence intégrée : GitHub `main` au commit `06e3185c8a8c638263427842ab6591a2397810e0` (`feat: add Kraken derivatives paper trading`).
 
 ## 2. Vision et invariants
 
@@ -86,11 +86,7 @@ L'ajout Derivatives ne crée ni second agent, ni second runner, ni voie parallè
 
 ### Marché
 
-`MarketState` porte désormais explicitement :
-
-- `market_type = SPOT | PERPETUAL | FUTURE` ;
-- les champs historiques `symbol`, `last_price`, `context` ;
-- un `DerivativeMarketContext` optionnel pour les dérivés.
+`MarketState` porte explicitement `market_type = SPOT | PERPETUAL | FUTURE`, les champs historiques `symbol`, `last_price`, `context`, et un `DerivativeMarketContext` optionnel pour les dérivés.
 
 `DerivativeMarketContext` contient l'instrument normalisé, mark, index optionnel, funding rate optionnel et timestamp d'observation.
 
@@ -98,28 +94,15 @@ L'ajout Derivatives ne crée ni second agent, ni second runner, ni voie parallè
 
 ### Portefeuille
 
-`PortfolioState` conserve :
-
-- `balances` ;
-- `positions` SPOT ;
-- `derivative_positions` séparées.
+`PortfolioState` conserve `balances`, `positions` SPOT et `derivative_positions` séparées.
 
 Une `DerivativePosition` est one-way par symbole et porte : `LONG|SHORT`, quantité, prix moyen, mark, contract size, notionnel, P&L réalisé/non réalisé, levier, marge utilisée, maintenance margin, funding cumulé, prix de liquidation estimé et mode de marge.
 
 ### Agent
 
-Le schéma de sortie LLM reste volontairement simple :
+Le schéma de sortie LLM reste simple : `action = BUY | SELL | HOLD`, `symbol`, `proposed_quantity?`, `rationale?`.
 
-```text
-action = BUY | SELL | HOLD
-symbol
-proposed_quantity?
-rationale?
-```
-
-Le provider applicatif copie `market_type` depuis le `MarketState` dans `DecisionCandidate`. Le LLM ne choisit jamais le type de marché ni le levier.
-
-Le prompt stratégique est versionné `agent-strategy-v3` et explique explicitement les différences SPOT/PERPETUAL.
+Le provider applicatif copie `market_type` depuis le `MarketState` dans `DecisionCandidate`. Le LLM ne choisit jamais le type de marché ni le levier. Le prompt stratégique est versionné `agent-strategy-v3`.
 
 ### Risk / execution
 
@@ -136,87 +119,44 @@ La séparation provider reste claire :
 
 Le client Derivatives n'expose aucun endpoint privé. Les instruments sont découverts via l'API publique et normalisés en `BASE/QUOTE`, avec alias `XBT -> BTC`.
 
-Lorsqu'un symbole canonique correspond à plusieurs instruments, le premier choix exécutable préféré est un perpetual linéaire. Les autres familles restent visibles au domaine mais non exécutables dans Batch 16.
-
 ## 6. PAPER Derivatives
 
-### Ouverture / augmentation
-
-Une ouverture LONG/SHORT :
-
-1. passe par Risk ;
-2. calcule notionnel et marge initiale ;
-3. bloque la marge + frais depuis le balance quote ;
-4. crée ou augmente la position ;
-5. recalcule prix moyen, mark, unrealized P&L, maintenance margin et liquidation price.
-
-### Réduction / fermeture
+Les ouvertures/augmentations passent par Risk, calculent notionnel et marge initiale, bloquent marge + frais puis recalculent prix moyen, mark, unrealized P&L, maintenance margin et liquidation price.
 
 Une action opposée devient `reduce_only`. La quantité autorisée ne peut pas dépasser la position existante. La marge est libérée au prorata, le P&L est réalisé et le funding correspondant est transféré au cash.
 
-### Funding
-
 Le market source dérivés marque le ledger avant le snapshot portefeuille du cycle. Le funding perpetual est accumulé en fonction du notional marqué et du temps écoulé. Un funding positif débite un LONG et crédite un SHORT dans le modèle PAPER.
 
-### Liquidation
-
-Batch 16 modèle un prix de liquidation estimé et impose un buffer déterministe dans Risk. Le modèle ne prétend pas reproduire tous les mécanismes privés Kraken ; son objectif est d'éviter un PAPER optimiste et de refuser les prises de risque trop proches du seuil de maintenance.
+Batch 16 modèle un prix de liquidation estimé et impose un buffer déterministe dans Risk sans prétendre reproduire l'intégralité du moteur privé Kraken.
 
 ## 7. Risk Engine
 
-Les règles SPOT existantes restent inchangées. Pour les dérivés, Risk ajoute :
-
-- cohérence `market_type` ;
-- contrat exécutable (PERPETUAL LINEAR) ;
-- quantité minimale/max instrument ;
-- `ISOLATED` uniquement ;
-- levier configuré <= plafond Risk <= limite instrument ;
-- max order notional ;
-- max derivative position notional ;
-- max total derivative exposure ;
-- marge disponible incluant coûts ;
-- buffer de maintenance/liquidation ;
-- réduction/fermeture autorisée même quand une nouvelle prise de risque serait refusée ;
-- interdiction du retournement accidentel.
+Les règles SPOT existantes restent inchangées. Pour les dérivés, Risk ajoute : cohérence `market_type`, contrat exécutable `PERPETUAL + LINEAR`, quantité minimale/max instrument, `ISOLATED` uniquement, levier configuré <= plafond Risk <= limite instrument, max order notional, max derivative position notional, max total derivative exposure, marge disponible, buffer maintenance/liquidation, réduction/fermeture et interdiction du retournement accidentel.
 
 ## 8. Analytics / API
 
 Les réponses API portfolio et market restent rétrocompatibles en ajoutant des champs dérivés. Le journal durable existant stocke déjà les payloads JSON ; aucune migration n'est nécessaire pour Batch 16.
 
-Les analytics PAPER valorisent maintenant :
-
-- exposition SPOT ;
-- exposition dérivés notionnelle ;
-- marge isolée ;
-- unrealized/realized P&L ;
-- funding ;
-- equity et drawdown combinés.
-
-Le replay SPOT historique reste inchangé. Les fills dérivés exigent l'état portefeuille post-trade durable plutôt qu'une reconstruction SPOT incorrecte.
+Les analytics PAPER valorisent exposition SPOT, exposition dérivés notionnelle, marge isolée, unrealized/realized P&L, funding, equity et drawdown combinés.
 
 ## 9. Configuration
 
-SPOT reste le défaut (`PAPER_MARKET_TYPE=SPOT`). Pour PERPETUAL :
-
-- `PAPER_MARKET_TYPE=PERPETUAL` ;
-- `PAPER_DERIVATIVE_LEVERAGE` (défaut sécurité 1) ;
-- `PAPER_DERIVATIVE_MARGIN_MODE=ISOLATED` ;
-- `RISK_MAX_DERIVATIVE_LEVERAGE` (défaut 1) ;
-- caps explicites de position et exposition totale ;
-- buffer liquidation configurable.
-
-`FUTURE` est rejeté par la composition du Batch 16.
+SPOT reste le défaut (`PAPER_MARKET_TYPE=SPOT`). Pour PERPETUAL : `PAPER_MARKET_TYPE=PERPETUAL`, `PAPER_DERIVATIVE_LEVERAGE` (défaut sécurité 1), `PAPER_DERIVATIVE_MARGIN_MODE=ISOLATED`, `RISK_MAX_DERIVATIVE_LEVERAGE` (défaut 1), caps explicites de position/exposition et buffer liquidation configurable. `FUTURE` est rejeté par la composition du Batch 16.
 
 ## 10. Validation et intégration
 
-Exécuté par ChatGPT sur la reconstruction du patch :
+Batch 16 intégré sur `main` au commit `06e3185c8a8c638263427842ab6591a2397810e0`.
+
+Validation locale finale :
 
 ```text
-23 tests ciblés Batch 16 passés
-compileall réussi
+pytest            : 338 passés, 2 warnings externes
+ruff check .       : All checks passed
+mypy .             : Success: no issues found in 101 source files
+git diff --check   : aucune erreur, warnings LF -> CRLF uniquement
 ```
 
-Ruff/mypy et la suite complète doivent être exécutés localement avant commit. Aucun test non exécuté ne doit être présenté comme réussi.
+Tests ciblés ChatGPT : **23 passés** ; `compileall` : **réussi**.
 
 ## 11. LIVE
 
