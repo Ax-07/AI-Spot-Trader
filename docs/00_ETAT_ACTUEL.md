@@ -2,53 +2,63 @@
 
 > Mémoire courte de reprise. Ce fichier doit rester synthétique et être mis à jour après chaque batch important.
 
-## Référence auditée au démarrage du Batch 15.1
+## Référence auditée au démarrage du batch contexte marché
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub audité : `59e3bc26c7b4d6acca25bc7d21c85c3c14eeb336` (`fix(docs): restore Batch 15 state encoding`).
-- HEAD fonctionnel Batch 15 sous-jacent : `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6` (`feat: add operator agent chat`).
-- Les trois commits entre ces deux références sont documentaires ; le code fonctionnel Batch 15 reste celui de `1c182b8`.
+- HEAD GitHub audité : `4b9701f07854a943cf47a14287aadfdf4aa48232` (`feat: compose executable PAPER runtime`).
+- Le document précédent référençait encore `59e3bc26c7b4d6acca25bc7d21c85c3c14eeb336` ; `4b9701f` a intégré la composition PAPER exécutable du Batch 15.1.
 
-## Batch 15.1 — composition runtime PAPER
+## État confirmé avant ce patch
 
-Patch livré pour rendre le premier essai PAPER réellement exécutable sans ajouter de voie parallèle :
+Le premier essai PAPER réel sur `BTC/USDC` a validé PostgreSQL, Alembic, FastAPI, audit/analytics, chat Luna, Kraken public, un cycle manuel et un smoke run autonome. Le cycle restait toutefois limité à un prix instantané : `market_state.context = null`.
 
-- composition canonique `Kraken public -> TradingCycleRunner -> Agent Luna/Sol -> Risk -> PaperBroker -> PaperPortfolioLedger -> audit PostgreSQL` ;
-- même `PaperExecutionCostModel` injecté à Risk et au Paper Broker ;
-- même ledger PAPER exposé au moteur, à FastAPI et au Chat en lecture seule ;
-- même PostgreSQL utilisé par le writer d'audit et les lecteurs/analytics ;
-- même `LLMModel` configuré transmis à l'Agent stratégique et au Chat opérateur ;
-- configuration du premier run explicitement requise, sans defaults produit pour capital, paire, cadence, agressivité, Risk ou coûts ;
-- `main:app` compose le runtime PAPER au lifespan mais ne démarre jamais automatiquement le moteur ;
-- `POST /api/v1/engine/run-cycle` demande exactement un `TradingEngine.run_cycle()` et refuse si la boucle autonome tourne ;
-- fermeture backend : moteur, ressources Kraken possédées, puis DB ;
-- préflight PostgreSQL du writer avant chaque cycle ; une DB indisponible bloque le cycle avant Market/Agent/Risk/Broker ;
-- aucune API Kraken privée et aucun LIVE.
+Cause racine confirmée : `KrakenMarketDataSource.snapshot()` construisait directement un `MarketState` minimal à partir du ticker WebSocket et contournait le `MarketStateBuilder` déjà canonique.
 
-## Fail-safe audit
+## Batch — contexte marché multi-horizon PAPER
 
-La limite connue reste inchangée : il n'existe pas d'exactly-once global entre mutation du ledger mémoire et commit PostgreSQL.
+Patch livré pour rendre le contexte marché exploitable sans architecture parallèle :
 
-Pour le premier essai, `AuditedTradingCycleRunner` vérifie d’abord la disponibilité du writer PostgreSQL avant d’appeler le runner canonique. Une erreur de préflight ou d’écriture est propagée et verrouille ensuite le wrapper en état **fail-closed** : tout cycle ultérieur est refusé avant Market/Agent/Risk/Broker jusqu’au redémarrage. Ce verrou ne constitue ni recovery ni réconciliation.
+- `MarketStateBuilder` devient la voie canonique de construction du snapshot Kraken PAPER ;
+- les horizons existants **5 min / 30 min** restent inchangés ;
+- bootstrap historique via l'endpoint public Kraken OHLC en granularité technique **1 minute** ;
+- la dernière bougie OHLC Kraken, non clôturée par contrat fournisseur, est toujours exclue ;
+- chaque clôture historique est horodatée à `started_at + interval`, c'est-à-dire à son instant causal de disponibilité ;
+- le ticker WebSocket courant reste la source du `last_price` courant ;
+- les observations strictement futures ou postérieures au ticker courant ne sont jamais injectées ;
+- la fraîcheur est contrôlée avant puis après la récupération historique afin qu'un appel OHLC lent ne masque pas une donnée devenue stale ;
+- erreurs/timeout Market restent des erreurs techniques du cycle, jamais des HOLD synthétiques ;
+- aucun signal, score ou décision déterministe BUY/SELL/HOLD n'est ajouté à la couche marché ;
+- aucun changement frontend, aucune API Kraken privée et aucun LIVE.
 
-## Validation du patch
+## Validation
 
-Exécuté par ChatGPT sur le patch isolé :
+Exécuté par ChatGPT sur les fichiers livrés :
 
-- compilation Python des fichiers ajoutés/modifiés ;
-- validations dynamiques ciblées de la configuration fail-closed, du verrou mono-cycle/lifecycle et du latch d'audit ;
-- contrôles statiques du composition root : Kraken public uniquement, absence de chemin BUY/SELL direct et partage explicite du cost model/ledger/runtime.
+- `py_compile` des fichiers Python ajoutés/modifiés : réussi ;
+- tests isolés REST Kraken : 7/7 ;
+- tests isolés source marché Kraken : 15/15.
 
-La suite backend complète, Ruff et mypy restent à exécuter localement après extraction du ZIP dans le repository, car l'environnement de génération ne dispose pas du clone Git local complet.
+Validation locale confirmée le 21 septembre 2026 :
+
+- tests ciblés Market State/Kraken/cycle : **71 passés** ;
+- suite complète : **306 passés**, 2 warnings externes ;
+- Ruff : **All checks passed** ;
+- mypy : **94 fichiers sans erreur** ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- cycle PAPER réel `BTC/USDC` : **COMPLETED**, `market_state.context` non nul, fenêtres 300 s / 1800 s complètes, respect du no-look-ahead, HOLD Agent fondé explicitement sur les horizons 5 min / 30 min.
+- contrôle des chemins ZIP et absence de secrets/caches avant livraison.
+
+La suite repository complète `pytest`, Ruff, mypy et le vrai `git diff --check` restent à exécuter localement après extraction, car l'environnement de génération ne dispose pas du clone Git complet ni de Ruff/mypy.
 
 ## Limites conservées
 
 - PAPER/SPOT uniquement ; aucun LIVE, aucune API Kraken privée.
 - Chat opérateur strictement conversationnel et non mutant.
-- Ledger PAPER toujours mémoire ; recovery/reconciliation après crash différés.
+- Ledger PAPER toujours mémoire ; recovery/réconciliation après crash différés.
 - Aucun exactly-once global ledger/PostgreSQL.
+- La granularité OHLC 1 minute est un mécanisme de bootstrap descriptif ; les horizons stratégiques/descriptifs canoniques restent ceux du `MarketStateBuilder`.
 
 ## Prochaine étape
 
-Valider localement le Batch 15.1, puis reprendre le protocole du premier essai PAPER : migrations PostgreSQL, backend démarré et moteur arrêté, inspection des surfaces, un cycle manuel, inspection complète, puis seulement un petit run autonome contrôlé. Le futur LIVE reste séparé au Batch 16 éventuel.
+Le Batch 15.2 est validé localement. Il reste à commit/push sur `main`, puis à poursuivre les essais PAPER contrôlés avec le contexte multi-horizon désormais présent. Le LIVE reste séparé et hors périmètre.

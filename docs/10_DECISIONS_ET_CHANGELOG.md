@@ -6,7 +6,7 @@ Ce document conserve les décisions architecturales durables et un changelog syn
 
 Statuts : **ACCEPTÉE**, **PROPOSÉE**, **SUPERSEDÉE**, **ABANDONNÉE**.
 
-Le Batch 15 reste **intégré et validé** au commit fonctionnel `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6` sur `main`. Le Batch 15.1 ci-dessous est livré sous forme de patch et doit encore être validé/intégré localement.
+Le Batch 15 reste intégré au commit fonctionnel `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6`. Le Batch 15.1 est intégré sur `main` au commit `4b9701f07854a943cf47a14287aadfdf4aa48232`. Le Batch 15.2 est validé localement et par cycle PAPER réel ; son commit/push sur `main` reste à confirmer.
 
 ---
 
@@ -176,8 +176,6 @@ Le Batch 15 reste **intégré et validé** au commit fonctionnel `1c182b829c141c
 
 ## 4. Décisions acceptées au Batch 11
 
-Batch 11 intégré au commit fonctionnel `d3f41a3b9df6a69018508a4dc5c8a7286cbbced7`.
-
 ### ADR-053 — Rewrite Next.js same-origin vers FastAPI
 **ACCEPTÉE.** Le navigateur appelle `/backend/*`; Next.js réécrit vers l'URL backend non publique.
 
@@ -193,8 +191,6 @@ Batch 11 intégré au commit fonctionnel `d3f41a3b9df6a69018508a4dc5c8a7286cbbce
 ---
 
 ## 5. Décisions acceptées au Batch 12
-
-Batch 12 intégré au commit `3f39999736b6fc3800ecfd36ddee0253c734d25d`.
 
 ### ADR-057 — Journal durable comme source canonique des analytics
 **ACCEPTÉE.** Les analytics dérivent uniquement des faits persistés.
@@ -214,8 +210,6 @@ Batch 12 intégré au commit `3f39999736b6fc3800ecfd36ddee0253c734d25d`.
 ---
 
 ## 5 bis. Décisions acceptées au Batch 13
-
-Batch 13 intégré au commit `1747beb5efd1fe9763bc9b2d23f3a115575daaec`.
 
 ### ADR-062 — Mapping discret d'agressivité versionné
 **ACCEPTÉE.** `aggressiveness-map-v1`, sans seuil Risk ni formule déterministe de sizing.
@@ -239,8 +233,6 @@ Batch 13 intégré au commit `1747beb5efd1fe9763bc9b2d23f3a115575daaec`.
 
 ## 5 ter. Décisions acceptées au Batch 14
 
-Batch 14 intégré au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`.
-
 ### ADR-068 — Versionner la comparaison modèle en `paper-experiment-v2`
 **ACCEPTÉE.** `comparison_variable = LLM_MODEL`, compatibilité v1 préservée.
 
@@ -260,92 +252,71 @@ Batch 14 intégré au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc
 
 ## 5 quater. Décisions acceptées au Batch 15
 
-Ces décisions sont acceptées après validation locale complète et intégration du commit fonctionnel sur `main`.
-
-### ADR-073 — Chat opérateur comme interface conversationnelle séparée du provider stratégique
-- **Statut : ACCEPTÉE**
-- `OpenAIChatProvider` est distinct de `OpenAIDecisionProvider`.
-- Les deux utilisent le même `LLMModel` configuré afin de conserver Luna/Sol comme identité de modèle Agent.
-- Le provider chat ne retourne que du texte conversationnel et n'utilise aucun schéma stratégique ni tool-calling.
-- Aucun deuxième agent stratégique n'est créé.
+### ADR-073 — Chat opérateur séparé du provider stratégique
+**ACCEPTÉE.** `OpenAIChatProvider` est distinct de `OpenAIDecisionProvider`, les deux utilisant le même `LLMModel` configuré sans créer un deuxième agent stratégique.
 
 ### ADR-074 — Le chat n'est jamais un chemin d'exécution ou de mutation implicite
-- **Statut : ACCEPTÉE**
-- Le package `chat` n'importe ni Risk, ni Broker, ni Kraken, ni trading.
-- Il ne construit pas `DecisionCandidate`, `RiskAssessment`, `ExecutionIntent` ou `RiskPolicy`.
-- « BUY maintenant », « agressivité 8 » et « ignore Risk » restent non exécutables depuis le chat.
-- Toute future instruction opérateur réellement mutante nécessitera un mécanisme explicite, audité, versionné et rattaché à un cycle d'application.
+**ACCEPTÉE.** Le chat ne construit aucun artefact Risk/Broker/exécution et une demande conversationnelle ne déclenche jamais un trade.
 
 ### ADR-075 — Historique chat mémoire seulement et borné pour la V1
-- **Statut : ACCEPTÉE**
-- Par défaut : 20 messages par session, 32 sessions process-locales, éviction des plus anciennes.
-- Aucun schéma PostgreSQL ni migration.
-- Les messages chat ne participent ni au journal de trading, ni aux digests expérimentaux, ni aux analytics.
-- Un redémarrage backend perd les sessions, comportement assumé pour cette V1.
+**ACCEPTÉE.** Aucun schéma PostgreSQL ni migration ; messages exclus des digests et analytics.
 
-### ADR-076 — Contexte chat construit uniquement depuis les surfaces canoniques de lecture
-- **Statut : ACCEPTÉE**
-- Le contexte lit `AppRuntime`, le portefeuille, `CycleAuditReader` et `PaperAnalyticsReader`.
-- Un cycle historique expose son `agent_input` persisté exact.
-- L'état courant est séparé du cycle historique et ne peut pas être invoqué comme cause rétroactive.
-- Pour un cycle historique explicite, la liste `recent_cycles` est omise afin de réduire le risque de mélange temporel.
+### ADR-076 — Contexte chat uniquement depuis les surfaces canoniques de lecture
+**ACCEPTÉE.** Cycle historique ancré sur son `agent_input` persisté exact ; présent séparé.
 
 ### ADR-077 — REST sans streaming pour le Chat V1
-- **Statut : ACCEPTÉE**
-- `POST /api/v1/chat/messages` et `GET /api/v1/chat/sessions/{session_id}` suffisent.
-- Aucun WebSocket/SSE n'est introduit sans besoin mesuré.
-- Les erreurs fournisseur chat sont sanitizées et séparées des cycles `FAILED`.
+**ACCEPTÉE.** Aucun WebSocket/SSE sans besoin mesuré ; erreurs fournisseur sanitizées.
 
-### ADR-078 — Le frontend Chat reste indépendant du lifecycle moteur
-- **Statut : ACCEPTÉE**
-- Le hook/panneau Chat n'appelle ni `startEngine` ni `stopEngine`.
-- Recharger ou fermer le frontend ne stoppe pas le backend.
-- Le navigateur ne conserve que l'UUID de session ; l'historique reste côté service backend mémoire.
+### ADR-078 — Frontend Chat indépendant du lifecycle moteur
+**ACCEPTÉE.** Aucun start/stop via le code Chat.
 
 ### ADR-079 — Redaction best-effort avant conservation conversationnelle
-- **Statut : ACCEPTÉE**
-- Les formes courantes de clés/tokens/secrets sont redigées avant historique et provider.
-- Les messages bruts d'erreur LLM ne sont jamais renvoyés à l'API.
-- Cette défense ne remplace pas la règle « aucun secret dans le chat ».
+**ACCEPTÉE.** Défense additionnelle ; aucun secret ne doit être fourni au chat.
 
 ---
 
-## 5 quinquies. Décisions Batch 15.1
+## 5 quinquies. Décisions Batch 15.1 — runtime PAPER exécutable
 
-Ces décisions correspondent au patch de composition du premier essai PAPER. Leur intégration sur `main` reste à confirmer après validation locale.
+Le patch Batch 15.1 est désormais **intégré sur `main`** au commit `4b9701f07854a943cf47a14287aadfdf4aa48232`.
 
 ### ADR-080 — Un composition root PAPER canonique pour l'application exécutable
-- **Statut : ACCEPTÉE pour le patch**
-- La composition assemble uniquement les composants canoniques existants.
-- `main:app` construit ce graphe au lifespan FastAPI mais ne démarre pas automatiquement le moteur.
-- Aucun second runner, broker, ledger, agent stratégique ou chemin d'exécution n'est créé.
+**ACCEPTÉE.** La composition assemble uniquement les composants canoniques existants ; `main:app` ne démarre jamais automatiquement le moteur.
 
-### ADR-081 — Les valeurs produit du premier run restent explicites et fail-closed
-- **Statut : ACCEPTÉE pour le patch**
-- Paire, capital, devise, cadence, agressivité, timeouts, limites Risk et coûts PAPER doivent être fournis explicitement.
-- PostgreSQL et OpenAI sont obligatoires pour le runtime exécutable.
-- Une configuration incomplète refuse le démarrage du runtime réel.
-- `ExecutionMode` reste PAPER uniquement ; aucune notion LIVE n'est ajoutée.
+### ADR-081 — Valeurs produit du premier run explicites et fail-closed
+**ACCEPTÉE.** Paire, capital, devise, cadence, agressivité, timeouts, Risk et coûts sont fournis explicitement ; PostgreSQL/OpenAI obligatoires pour le runtime exécutable ; PAPER uniquement.
 
 ### ADR-082 — Identité des dépendances partagées dans le runtime PAPER
-- **Statut : ACCEPTÉE pour le patch**
-- Un même `PaperExecutionCostModel` est injecté à Risk et au Paper Broker.
-- Un même `PaperPortfolioLedger` est utilisé par le runner et exposé par FastAPI/Chat.
-- Un même `Database`/session factory PostgreSQL alimente writer d'audit, lecteurs et analytics.
-- Le même `LLMModel` Luna/Sol est transmis à l'Agent et au Chat.
+**ACCEPTÉE.** Cost model, ledger, DB/session factory et modèle Luna/Sol sont partagés par les composants qui doivent l'être.
 
 ### ADR-083 — Le contrôle mono-cycle appelle uniquement `TradingEngine.run_cycle()`
-- **Statut : ACCEPTÉE pour le patch**
-- `POST /api/v1/engine/run-cycle` ne reçoit aucune action ni quantité de trading.
-- La commande est sérialisée avec start/stop et refusée pendant une boucle autonome active.
-- Elle conserve le chemin Market -> Agent -> Risk -> Paper Broker -> audit.
+**ACCEPTÉE.** `POST /api/v1/engine/run-cycle` ne reçoit aucune action/quantité et conserve le chemin Market -> Agent -> Risk -> Paper Broker -> audit.
 
 ### ADR-084 — Après une erreur d'audit, le runner se verrouille fail-closed
+**ACCEPTÉE.** Préflight avant cycle, propagation de la première panne et refus des cycles ultérieurs jusqu'au redémarrage ; aucune garantie exactly-once n'est revendiquée.
+
+---
+
+## 5 sexies. Décisions Batch 15.2 — contexte marché multi-horizon PAPER
+
+### ADR-085 — `MarketStateBuilder` est la voie canonique du snapshot Kraken enrichi
 - **Statut : ACCEPTÉE pour le patch**
-- Le writer PostgreSQL est préflighté avant chaque cycle ; une indisponibilité déjà présente bloque le delegate avant Market/Agent/Risk/Broker.
-- La première erreur de préflight ou de persistance est propagée, jamais convertie en HOLD ou masquée.
-- Tout appel ultérieur au runner audité est refusé avant son delegate jusqu’au redémarrage.
-- Cette mesure empêche de continuer à trader sans audit mais ne crée aucune garantie exactly-once ni mécanisme de recovery/réconciliation.
+- `KrakenMarketDataSource.snapshot()` ne construit plus un `MarketState` parallèle/minimal.
+- Les observations normalisées Kraken sont injectées dans le `MarketStateBuilder` provider-agnostique existant.
+- Les horizons existants 5 min / 30 min restent inchangés.
+- `TradingCycleRunner` reste inchangé : il consomme toujours exactement un `MarketDataSource.snapshot(symbol)` et transmet le même objet à Agent/Risk/Broker.
+- Aucune stratégie déterministe n'est ajoutée à la couche Market.
+
+### ADR-086 — Bootstrap historique Kraken par OHLC public 1 minute clôturé uniquement
+- **Statut : ACCEPTÉE pour le patch**
+- Le repository définissait déjà les horizons 5/30 min mais aucune granularité de bootstrap historique.
+- Trois options ont été auditées : accumulation WebSocket seule, trades bruts, OHLC public.
+- L'OHLC public 1 min est retenu comme granularité technique minimale pour remplir les horizons existants dès un cold start sans créer une nouvelle stratégie.
+- La dernière entrée OHLC Kraken est exclue car elle représente la fenêtre courante non clôturée.
+- Une clôture historique est horodatée à `started_at + interval`, son instant causal de disponibilité.
+- Seules les clôtures strictement antérieures au ticker courant sont injectées ; aucune donnée future ou égale/postérieure au ticker ne peut influencer le snapshot.
+- Le ticker WebSocket courant reste la source du dernier prix.
+- La fraîcheur est recontrôlée après la récupération OHLC afin qu'un appel historique lent ne masque pas une donnée devenue stale.
+- Les erreurs OHLC sont propagées comme erreurs Market ; aucun fallback silencieux vers `context=None` n'est autorisé.
 
 ---
 
@@ -367,7 +338,7 @@ Ces décisions correspondent au patch de composition du premier essai PAPER. Leu
 
 ## 7. Décisions encore ouvertes
 
-- données marché supplémentaires ;
+- données marché supplémentaires au-delà du contexte 5/30 min actuel ;
 - limites d'exposition/drawdown ;
 - dataset/replay canonique pour comparaisons appariées ;
 - statistiques descriptives de dispersion LLM ;
@@ -380,81 +351,64 @@ Ces décisions correspondent au patch de composition du premier essai PAPER. Leu
 - source d'événements/protocole futur WebSocket ;
 - éventuel LIVE.
 
-Les valeurs concrètes du premier essai PAPER sont désormais des paramètres explicites de run, pas des defaults produit.
+Les valeurs concrètes du premier essai PAPER restent des paramètres explicites de run, pas des defaults produit. L'OHLC 1 minute est une granularité technique de bootstrap, pas une politique stratégique.
 
 ---
 
 ## 8. Changelog
 
+### 2026-09-21 — Batch 15.2 Contexte marché multi-horizon PAPER
+
+**État : validé localement ; commit/push sur `main` à confirmer. Référence GitHub auditée au démarrage : `4b9701f07854a943cf47a14287aadfdf4aa48232`.**
+
+- Cause racine de `market_state.context = null` confirmée : `KrakenMarketDataSource.snapshot()` contournait `MarketStateBuilder` et construisait directement un snapshot minimal.
+- Réutilisation du `MarketStateBuilder` existant ; aucune architecture de contexte parallèle.
+- Horizons canoniques 5 min / 30 min conservés.
+- Ajout de la récupération Kraken public OHLC 1 minute avec normalisation/sanitization dédiées.
+- Exclusion de la bougie finale non clôturée et horodatage causal des clôtures.
+- Ticker WebSocket courant conservé comme dernier prix.
+- Gestion explicite des fenêtres partielles, ordre strict, doublons et absence de look-ahead.
+- Freshness recheck après récupération historique.
+- Propagation des erreurs fournisseur ; aucun fallback silencieux vers un contexte nul.
+- Test d'intégration ajouté pour confirmer que le contexte multi-horizon atteint l'`AgentInput` du cycle canonique inchangé.
+- Aucun changement frontend, aucun LIVE, aucune API Kraken privée, aucune migration DB.
+
+Validation :
+
+- ChatGPT : `py_compile`, 7/7 tests REST Kraken isolés et 15/15 tests source Kraken isolés ;
+- local : **71 tests ciblés passés** ;
+- local : **306 tests passés**, 2 warnings externes ;
+- local : Ruff **All checks passed** ;
+- local : mypy **94 fichiers sans erreur** ;
+- local : `git diff --check` sans erreur, warnings LF -> CRLF uniquement ;
+- cycle PAPER réel `BTC/USDC` `d2ea6e10-a64c-4bb1-abab-c80068b96da4` : **COMPLETED**, contexte non nul, fenêtres 300 s / 1800 s complètes (6 et 31 observations), âge de donnée ~0,63 s, no-look-ahead respecté et rationale Luna exploitant explicitement la baisse 5 min / hausse 30 min.
+
 ### 2026-09-21 — Batch 15.1 Composition runtime du premier essai PAPER réel
 
-**État : patch livré ; validation/intégration locale à confirmer. Référence GitHub auditée au démarrage : `59e3bc26c7b4d6acca25bc7d21c85c3c14eeb336`.**
+**État : intégré sur `main` au commit `4b9701f07854a943cf47a14287aadfdf4aa48232` (`feat: compose executable PAPER runtime`).**
 
-- Ajout d'un composition root PAPER réutilisant Kraken public, Agent, Risk, Broker, ledger, audit, analytics et Chat existants.
-- Configuration explicite obligatoire pour les valeurs du premier run ; aucun nouveau default produit chiffré.
-- PostgreSQL unique partagé entre writer d'audit et surfaces de lecture/analytics.
-- `PaperExecutionCostModel` unique partagé entre Risk et Paper Broker.
-- `PaperPortfolioLedger` unique partagé entre moteur, API et contexte Chat.
-- Même modèle Luna/Sol transmis à l'Agent et au Chat.
-- `main:app` compose au startup mais garde le moteur arrêté.
-- Ajout de `POST /api/v1/engine/run-cycle`, sans entrée stratégique, appelant uniquement `TradingEngine.run_cycle()`.
-- Sérialisation des commandes moteur et refus du mono-cycle pendant l'autonome.
-- Fermeture explicite des ressources réseau possédées en plus du moteur et de la DB.
-- Préflight PostgreSQL avant le delegate puis latch fail-closed après la première erreur d’audit ; aucune fausse garantie exactly-once.
-- Aucun changement frontend et aucun LIVE/Kraken privé.
-- Tests ciblés ajoutés pour configuration, composition, partage des dépendances, modèle Agent/Chat, portefeuille initial, mono-cycle/concurrence, sanitization, lifecycle et fail-closed audit.
-
-Validation exécutée par ChatGPT sur le patch isolé : compilation Python et contrôles/dynamiques ciblés documentés dans `docs/00_ETAT_ACTUEL.md`. La suite backend complète, Ruff et mypy restent à exécuter localement avant intégration.
+- Composition canonique Kraken public -> Agent -> Risk -> Paper Broker -> audit PostgreSQL.
+- Configuration de run explicite, mono-cycle HTTP, partage des dépendances, shutdown ordonné et audit fail-closed.
+- Le premier essai PAPER réel post-intégration a confirmé le chemin exécutable puis révélé l'absence de contexte historique traitée par le Batch 15.2.
 
 ### 2026-09-21 — Batch 15 Chat opérateur avec l'Agent
 
-**État : intégré et validé. Commit fonctionnel : `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6` (`feat: add operator agent chat`).**
+**État : intégré et validé. Commit fonctionnel : `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6`.**
 
-- Resynchronisation initiale confirmée sur le commit documentaire Batch 14 `b2c74672744639f86c38e873f25d56c77f899c76`, puis intégration fonctionnelle Batch 15 sur `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6`.
-- Ajout d'un package conversationnel séparé du provider stratégique.
-- Même `settings.llm_model` Luna/Sol utilisé par le chat ; aucune duplication d'agent stratégique.
-- Extension du client Responses API avec un appel texte `store=false`, sans tools ni schéma de décision.
-- Prompt `operator-chat-v1` avec séparation explicite conversation/exécution et règles no-look-ahead.
-- Contexte canonique en lecture seule depuis moteur, portefeuille, audit et analytics.
-- Cycle historique explicite ancré sur son `AgentInput` durable exact ; présent séparé.
-- Sessions mémoire bornées, aucune migration PostgreSQL, aucune contamination des digests/analytics.
-- Redaction best-effort des secrets et erreurs fournisseur chat sanitizées.
-- Routes REST Chat ajoutées ; aucun WebSocket/SSE.
-- Panneau Chat cockpit ajouté ; aucun chemin frontend Chat vers start/stop moteur.
-- Tests Batch 15 ajoutés pour les invariants conversation/exécution, Luna/Sol, no-look-ahead, non-contamination d'`AgentInput`, Risk immuable, erreurs distinctes et bornage historique.
-- La préparation LIVE auparavant nommée Batch 15 est déplacée au Batch 16 et reste hors périmètre.
-
-Validation exécutée par ChatGPT sur le patch isolé :
-
-- `py_compile` des fichiers Python modifiés/ajoutés : **réussi** ;
-- contrôle AST du package `chat` contre imports/symboles d'exécution interdits : **réussi** ;
-- contrôle statique frontend Chat contre `startEngine`/`stopEngine` : **réussi**.
-
-Validation locale finale confirmée avant le commit fonctionnel :
-
-- `pytest backend` : **277 tests passés**, 2 warnings externes ;
-- Ruff : **All checks passed** ;
-- mypy : **89 fichiers sans erreur** ;
-- `pnpm lint` : **réussi** après correction de l'unique erreur initiale `react-hooks/set-state-in-effect` dans `use-chat.ts` ;
-- `pnpm typecheck` : **réussi** ;
-- `pnpm build` : **réussi** ;
-- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
-- commit/push fonctionnel : `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6`.
+- Package conversationnel séparé du provider stratégique, même modèle Luna/Sol, contexte en lecture seule, no-look-ahead historique, sessions mémoire bornées, API/panneau Chat sans chemin d'exécution.
+- Validation locale : **277 tests backend**, Ruff OK, mypy 89 fichiers, pnpm lint/typecheck/build OK.
 
 ### 2026-09-21 — Batch 14 Comparaison contrôlée GPT-5.6 Luna / GPT-5.6 Sol
 
-**État : intégré sur `main` au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`, suivi du commit documentaire `b2c74672744639f86c38e873f25d56c77f899c76`.**
+**État : intégré au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`.**
 
-- `paper-experiment-v2`, groupe/répétitions, `source_digest` obligatoire et comparaison appariée Luna/Sol.
-- Aucun score composite/ranking, aucune migration/API/frontend, aucun LIVE.
-- Validation finale : **266 tests backend**, Ruff OK, mypy 81 fichiers, `git diff --check` OK.
+`paper-experiment-v2`, groupe/répétitions, `source_digest` obligatoire, comparaison appariée sans score/ranking automatique.
 
 ### 2026-09-21 — Batch 13 Expérimentation agressivité 1–10
 
-**État : intégré sur `main` au commit `1747beb5efd1fe9763bc9b2d23f3a115575daaec`.**
+**État : intégré au commit `1747beb5efd1fe9763bc9b2d23f3a115575daaec`.**
 
-- `aggressiveness-map-v1`, `AggressivenessContext`, `paper-experiment-v1`, prompt `agent-strategy-v2`.
-- Validation finale : **249 tests backend**, Ruff OK, mypy 81 fichiers.
+`aggressiveness-map-v1`, `AggressivenessContext`, `paper-experiment-v1`, prompt `agent-strategy-v2`.
 
 ### 2026-09-20 — Batch 12 Analytics et expérimentation reproductible
 

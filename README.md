@@ -4,7 +4,7 @@ AI Spot Trader est une application expérimentale de **trading crypto SPOT pilot
 
 Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
 
-> **Statut :** le **Batch 15 — Chat opérateur avec l'Agent est intégré** sur GitHub `main` au commit fonctionnel `1c182b829c141c20be5cc8e62a3f8afa6f71b4d6` (`feat: add operator agent chat`), après validation locale complète. Le Batch 14 reste la référence précédente au commit fonctionnel `dc60033f60bf5d98a68e6131a9320e575d46cc8d`, suivi du commit documentaire `b2c74672744639f86c38e873f25d56c77f899c76`.
+> **Statut :** le runtime PAPER exécutable est intégré sur GitHub `main` au commit `4b9701f07854a943cf47a14287aadfdf4aa48232` (`feat: compose executable PAPER runtime`). Le Batch 15.2 — contexte marché multi-horizon — est validé localement, y compris par un cycle PAPER réel `BTC/USDC`, et reste à commit/push sur `main`.
 
 ## Principes
 
@@ -40,7 +40,10 @@ Stack :
 - Kraken et le fournisseur LLM restent derrière des interfaces dédiées.
 
 ```text
-Kraken public data
+Kraken public AssetPairs + OHLC 1 min clôturées + ticker courant
+        |
+        v
+ MarketStateBuilder (horizons descriptifs 5 min / 30 min)
         |
         v
    MarketState --------+
@@ -81,6 +84,8 @@ Kraken public data
                                                       v
                                           Next.js cockpit
 ```
+
+Le dernier élément OHLC renvoyé par Kraken correspond à la fenêtre courante non clôturée : il est exclu du bootstrap historique. Les clôtures conservées sont horodatées à leur disponibilité causale (`started_at + interval`) puis le ticker courant complète le snapshot. Le `MarketStateBuilder` reste l'unique calculateur des statistiques descriptives ; aucune logique BUY/SELL/HOLD n'est ajoutée à la couche marché.
 
 Le Batch 15 ajoute un chemin conversationnel **latéral et en lecture seule** :
 
@@ -139,6 +144,8 @@ L'historique chat n'est pas persisté en PostgreSQL dans cette V1. Cette décisi
 
 `TradingCycleRunner.run_cycle()` exécute exactement un cycle et `TradingEngine` répète cette primitive séquentiellement. Un seul `MarketState` est partagé entre Agent, Risk et Broker pour le cycle, et un seul `PortfolioState` pré-cycle est partagé entre Agent et Risk.
 
+Pour le runtime Kraken PAPER, `MarketDataSource.snapshot(symbol)` construit maintenant le snapshot via le `MarketStateBuilder` existant : historique public OHLC 1 minute **clôturé uniquement**, ticker WebSocket courant, contexte de fraîcheur et fenêtres descriptives canoniques 5/30 minutes. Le runner ne calcule aucun indicateur et continue à consommer exactement un snapshot par cycle.
+
 - HOLD traverse Risk et produit un résultat complet sans intent.
 - REJECT est une issue métier normale sans Broker.
 - MODIFY utilise exactement la quantité autorisée par Risk.
@@ -154,7 +161,7 @@ Le schéma `0001_audit_journal` conserve `audit_cycles`, `audit_decisions`, `aud
 
 Le graphe est transactionnel et idempotent par `cycle_id`. La persistance ne garantit pas encore un exactly-once global entre la mutation du ledger PAPER mémoire et le commit PostgreSQL ; la reconstruction/réconciliation après crash reste différée.
 
-Les Batches 13/14 n'ajoutent pas de table ni de migration. Le Batch 15 n'ajoute également **aucune migration** : les messages chat restent en mémoire et ne participent ni au `result_digest`, ni aux digests expérimentaux, ni aux analytics historiques.
+Les Batches 13/14 n'ajoutent pas de table ni de migration. Le Batch 15 n'ajoute également **aucune migration** : les messages chat restent en mémoire et ne participent ni au `result_digest`, ni aux digests expérimentaux, ni aux analytics historiques. Le contexte marché enrichi est sérialisé dans l'`AgentInput` déjà durable ; aucune migration n'est nécessaire.
 
 ## API FastAPI
 
@@ -162,6 +169,9 @@ La façade REST versionnée `/api/v1` expose notamment :
 
 - `GET /health`
 - `GET /api/v1/engine`
+- `POST /api/v1/engine/run-cycle`
+- `POST /api/v1/engine/start`
+- `POST /api/v1/engine/stop`
 - `GET /api/v1/portfolio`
 - `GET /api/v1/cycles`
 - `GET /api/v1/cycles/latest`
@@ -172,8 +182,8 @@ La façade REST versionnée `/api/v1` expose notamment :
 - `GET /api/v1/errors/latest`
 - `GET /api/v1/market/latest`
 - `GET /api/v1/analytics`
-- `POST /api/v1/chat/messages` — Batch 15 intégré
-- `GET /api/v1/chat/sessions/{session_id}` — Batch 15 intégré
+- `POST /api/v1/chat/messages`
+- `GET /api/v1/chat/sessions/{session_id}`
 
 Les routes chat n'exposent aucune méthode de mutation Risk/Broker/stratégie et leurs erreurs fournisseur sont sanitizées (`502`) sans fuite du message brut.
 
@@ -191,20 +201,7 @@ Le chat peut lire un résumé analytics courant, mais ce résumé n'est jamais u
 
 ## Validation
 
-### Batch 14 intégré
-
-```text
-pytest backend                          : 266 tests passés, 2 warnings externes
-ruff check backend                      : All checks passed
-mypy backend/src backend/tests          : 81 fichiers sans erreur
-git diff --check                        : aucune erreur, warnings LF -> CRLF uniquement
-commit/push                             : dc60033f60bf5d98a68e6131a9320e575d46cc8d
-working tree après push                 : propre
-```
-
 ### Batch 15 intégré
-
-Le Batch 15 ajoute des tests dédiés couvrant l'activité moteur pendant le chat, Luna/Sol, absence de chemin Risk/Broker/Kraken/`ExecutionIntent`, non-contamination de `AgentInput`, requêtes BUY/Risk non exécutables, no-look-ahead historique, erreurs chat séparées, historique borné et absence de lifecycle moteur dans le frontend Chat.
 
 Validation locale finale confirmée le 21 septembre 2026 :
 
@@ -219,7 +216,23 @@ git diff --check                        : aucune erreur, warnings LF -> CRLF uni
 commit/push fonctionnel                 : 1c182b829c141c20be5cc8e62a3f8afa6f71b4d6
 ```
 
-Le correctif frontend final a supprimé l'unique erreur ESLint `react-hooks/set-state-in-effect` dans `use-chat.ts` avant le commit fonctionnel.
+### Runtime PAPER intégré
+
+Le commit `4b9701f07854a943cf47a14287aadfdf4aa48232` compose le runtime PAPER exécutable. Le premier essai réel a ensuite confirmé PostgreSQL, FastAPI, Kraken public, Luna, le journal, un cycle manuel et un smoke run autonome ; l'absence de contexte historique (`market_state.context = null`) a motivé le présent batch.
+
+### Batch 15.2 validé localement
+
+Validation locale du 21 septembre 2026 :
+
+```text
+tests ciblés contexte marché             : 71 passés
+pytest                                   : 306 passés, 2 warnings externes
+ruff check .                             : All checks passed
+mypy .                                   : 94 fichiers sans erreur
+git diff --check                         : aucune erreur, warnings LF -> CRLF uniquement
+```
+
+Un cycle PAPER réel `BTC/USDC` a terminé `COMPLETED` avec `market_state.context` non nul, fenêtres canoniques 5 min / 30 min complètes, respect du no-look-ahead et rationale Agent exploitant explicitement les deux horizons.
 
 ## Sécurité
 

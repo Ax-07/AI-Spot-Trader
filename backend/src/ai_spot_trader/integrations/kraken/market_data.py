@@ -1,19 +1,31 @@
 from datetime import datetime, timedelta
 from typing import Protocol
-from uuid import uuid4
 
 from ai_spot_trader.core.clock import Clock, SystemClock
 from ai_spot_trader.core.config import Settings
 from ai_spot_trader.domain.models import MarketObservation, MarketState
 from ai_spot_trader.integrations.kraken.errors import KrakenPayloadError, StaleMarketDataError
-from ai_spot_trader.integrations.kraken.models import KrakenTicker
+from ai_spot_trader.integrations.kraken.models import KrakenOhlcCandle, KrakenTicker
 from ai_spot_trader.integrations.kraken.rest import KrakenPublicRestClient
 from ai_spot_trader.integrations.kraken.symbols import KrakenPairRegistry
 from ai_spot_trader.integrations.kraken.websocket import KrakenTickerWebSocketClient
+from ai_spot_trader.market import DEFAULT_MARKET_HORIZONS, MarketStateBuilder
+
+KRAKEN_HISTORY_INTERVAL_MINUTES = 1
+_HISTORY_INTERVAL = timedelta(minutes=KRAKEN_HISTORY_INTERVAL_MINUTES)
+_HISTORY_PADDING_INTERVALS = 2
 
 
-class PairRegistrySource(Protocol):
+class KrakenRestSource(Protocol):
     async def fetch_pair_registry(self) -> KrakenPairRegistry: ...
+
+    async def fetch_ohlc_history(
+        self,
+        symbol: str,
+        *,
+        interval_minutes: int,
+        since: datetime,
+    ) -> tuple[KrakenOhlcCandle, ...]: ...
 
     async def aclose(self) -> None: ...
 
@@ -23,11 +35,11 @@ class TickerSource(Protocol):
 
 
 class KrakenMarketDataSource:
-    """Kraken public Spot source exposing normalized observations and snapshots."""
+    """Kraken public Spot source exposing normalized observations and rich snapshots."""
 
     def __init__(
         self,
-        rest_client: PairRegistrySource,
+        rest_client: KrakenRestSource,
         websocket_client: TickerSource,
         *,
         clock: Clock | None = None,
@@ -39,6 +51,7 @@ class KrakenMarketDataSource:
         self._clock = clock or SystemClock()
         self._stale_after = stale_after
         self._registry = registry
+        self._builders: dict[str, MarketStateBuilder] = {}
 
     async def observation(self, symbol: str) -> MarketObservation:
         registry = await self._pair_registry()
@@ -58,12 +71,45 @@ class KrakenMarketDataSource:
 
     async def snapshot(self, symbol: str) -> MarketState:
         observation = await self.observation(symbol)
-        return MarketState(
-            market_state_id=uuid4(),
-            as_of=observation.observed_at,
-            symbol=observation.symbol,
-            last_price=observation.last_price,
+
+        builder = self._builders.get(observation.symbol)
+        if builder is None:
+            builder = MarketStateBuilder(
+                horizons=DEFAULT_MARKET_HORIZONS,
+                stale_after=self._stale_after,
+                clock=self._clock,
+            )
+            self._builders[observation.symbol] = builder
+
+        history = await self._rest_client.fetch_ohlc_history(
+            observation.symbol,
+            interval_minutes=KRAKEN_HISTORY_INTERVAL_MINUTES,
+            since=observation.observed_at
+            - max(DEFAULT_MARKET_HORIZONS)
+            - (_HISTORY_INTERVAL * _HISTORY_PADDING_INTERVALS),
         )
+
+        snapshot_at = self._clock.now()
+        if observation.observed_at > snapshot_at:
+            raise KrakenPayloadError(
+                "Kraken ticker timestamp is newer than the local snapshot clock"
+            )
+        if (
+            self._stale_after is not None
+            and snapshot_at - observation.observed_at > self._stale_after
+        ):
+            raise StaleMarketDataError(
+                f"Kraken market data is stale for {observation.symbol}"
+            )
+
+        self._append_history(
+            builder,
+            symbol=observation.symbol,
+            history=history,
+            before=observation.observed_at,
+        )
+        self._append_current(builder, observation)
+        return builder.build(as_of=snapshot_at)
 
     def is_stale(self, as_of: datetime) -> bool:
         if self._stale_after is None:
@@ -81,6 +127,47 @@ class KrakenMarketDataSource:
         if self._registry is None:
             return await self.refresh_pairs()
         return self._registry
+
+    def _append_history(
+        self,
+        builder: MarketStateBuilder,
+        *,
+        symbol: str,
+        history: tuple[KrakenOhlcCandle, ...],
+        before: datetime,
+    ) -> None:
+        for candle in history:
+            if candle.closed_at >= before:
+                continue
+            latest = builder.retained_observations[-1] if builder.retained_observations else None
+            if latest is not None and candle.closed_at <= latest.observed_at:
+                continue
+            builder.add_observation(
+                MarketObservation(
+                    observed_at=candle.closed_at,
+                    symbol=symbol,
+                    last_price=candle.close_price,
+                )
+            )
+
+    @staticmethod
+    def _append_current(
+        builder: MarketStateBuilder,
+        observation: MarketObservation,
+    ) -> None:
+        retained = builder.retained_observations
+        if not retained:
+            builder.add_observation(observation)
+            return
+
+        latest = retained[-1]
+        if observation.observed_at < latest.observed_at:
+            raise KrakenPayloadError("Kraken ticker timestamp moved backwards")
+        if observation.observed_at == latest.observed_at:
+            if observation.last_price != latest.last_price:
+                raise KrakenPayloadError("Kraken ticker conflicts with retained market history")
+            return
+        builder.add_observation(observation)
 
 
 def build_kraken_market_data_source(

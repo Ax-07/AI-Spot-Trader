@@ -20,3 +20,12 @@ class KrakenTicker:
     symbol: str
     last_price: Decimal
     timestamp: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class KrakenOhlcCandle:
+    """Committed Kraken Spot OHLC close with explicit causal availability time."""
+
+    started_at: datetime
+    closed_at: datetime
+    close_price: Decimal

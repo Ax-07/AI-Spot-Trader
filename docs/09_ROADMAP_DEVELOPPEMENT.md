@@ -180,13 +180,13 @@ Validation locale finale du 21 septembre 2026 :
 
 ## Batch 15.1 — Composition runtime du premier essai PAPER réel
 
-**État : patch livré, validation/intégration locale à confirmer.**
+**État : intégré sur `main` au commit `4b9701f07854a943cf47a14287aadfdf4aa48232`.**
 
 ### Objectif
 
 Assembler les composants déjà intégrés dans un composition root exécutable, sans créer de second orchestrateur et sans ouvrir de voie LIVE.
 
-### Périmètre du patch
+### Périmètre intégré
 
 - `main:app` compose au lifespan le runtime PAPER complet mais laisse le moteur arrêté ;
 - configuration explicite et fail-closed des valeurs du premier run : paire, capital, devise, cadence, agressivité, timeouts, Risk et coûts ;
@@ -200,13 +200,43 @@ Assembler les composants déjà intégrés dans un composition root exécutable,
 - fermeture du moteur, des ressources Kraken possédées et de la DB au shutdown ;
 - préflight PostgreSQL avant chaque cycle et latch fail-closed après toute erreur d'audit.
 
-### Limite explicitement conservée
+### Validation réelle post-intégration
 
-Le préflight bloque un cycle si PostgreSQL est déjà indisponible avant Market/Agent/Risk/Broker, et le latch empêche de **continuer** à trader après une panne d’audit. Cela ne fournit toutefois aucune atomicité globale si PostgreSQL devient indisponible après le préflight et après une mutation du ledger mémoire mais avant le commit. Recovery/réconciliation restent hors périmètre.
+Le premier essai PAPER réel a confirmé un cycle manuel puis un smoke run autonome propres. Il a également révélé que le snapshot Kraken intégré restait minimal (`market_state.context = null`), ce qui motive le batch suivant.
 
-### Validation
+---
 
-Le patch contient des tests ciblés de composition/configuration, identité des dépendances, mono-cycle HTTP, concurrence lifecycle, fermeture des ressources et fail-closed audit. La suite backend complète, Ruff et mypy doivent être exécutés localement avant intégration.
+## Batch 15.2 — Contexte marché multi-horizon pour les essais PAPER
+
+**État : validé localement, commit/push sur `main` à confirmer.**
+
+### Objectif
+
+Rendre le `MarketState.context` du runtime PAPER canonique exploitable dès le premier cycle sans introduire de deuxième moteur de contexte.
+
+### Périmètre du patch
+
+- `MarketStateBuilder` existant devient la voie canonique de construction du snapshot Kraken ;
+- horizons existants conservés : **5 min / 30 min** ;
+- bootstrap descriptif via Kraken public OHLC **1 min** ;
+- suppression systématique de la dernière bougie OHLC non clôturée ;
+- clôtures historiques horodatées à leur disponibilité causale ;
+- ticker WebSocket courant conservé comme dernier prix ;
+- ordre strict, pas de look-ahead, fenêtres partielles explicites si historique insuffisant ;
+- fraîcheur recontrôlée après la récupération historique ;
+- erreurs fournisseur/timeout propagées par le stage Market ;
+- aucune stratégie déterministe, aucun signal BUY/SELL/HOLD, aucun frontend, aucun LIVE.
+
+### Validation locale confirmée
+
+- tests ciblés Market State/Kraken/cycle canonique : **71 passés** ;
+- suite complète : **306 passés**, 2 warnings externes ;
+- Ruff : **All checks passed** ;
+- mypy : **94 fichiers sans erreur** ;
+- `git diff --check` : aucune erreur, warnings LF -> CRLF uniquement ;
+- cycle PAPER réel `BTC/USDC` : `COMPLETED`, contexte non nul, fenêtres 5 min / 30 min complètes et rationale Agent exploitant effectivement ces horizons.
+
+L'intégration sur `main` reste à confirmer par commit/push.
 
 ---
 
@@ -216,7 +246,7 @@ Le patch contient des tests ciblés de composition/configuration, identité des 
 
 Readiness, adaptateur privé Kraken, réconciliation, permissions minimales sans retrait, garde-fous LIVE et activation volontaire séparée.
 
-Le changement de numéro reste volontaire : le LIVE demeure postérieur au chat et au premier run PAPER réel.
+Le LIVE demeure postérieur au chat, au runtime PAPER réel et à la validation du contexte marché.
 
 ---
 
@@ -257,6 +287,8 @@ Le changement de numéro reste volontaire : le LIVE demeure postérieur au chat 
   |
 15.1 Executable PAPER composition
   |
+15.2 Canonical multi-horizon market context
+  |
 16 Optional LIVE readiness
 ```
 
@@ -275,4 +307,4 @@ Le changement de numéro reste volontaire : le LIVE demeure postérieur au chat 
 - auth/déploiement pour exposition non locale ;
 - éventuel LIVE.
 
-Les valeurs du premier essai PAPER (capital, paire, cadence, limites Risk, coûts) restent des **paramètres explicites de run**, pas des defaults produit.
+Les valeurs du premier essai PAPER (capital, paire, cadence, limites Risk, coûts) restent des **paramètres explicites de run**, pas des defaults produit. La granularité OHLC 1 min du Batch 15.2 est un choix technique de bootstrap et non un horizon stratégique supplémentaire.
