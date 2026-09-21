@@ -6,7 +6,7 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub audité : `4b9701f07854a943cf47a14287aadfdf4aa48232` (`feat: compose executable PAPER runtime`).
+- HEAD GitHub intégré : `97d529647179c6769a6bdc528b9d9f5e7c85c119` (`feat: add multi-horizon market context`).
 - Le document précédent référençait encore `59e3bc26c7b4d6acca25bc7d21c85c3c14eeb336` ; `4b9701f` a intégré la composition PAPER exécutable du Batch 15.1.
 
 ## État confirmé avant ce patch
@@ -49,7 +49,7 @@ Validation locale confirmée le 21 septembre 2026 :
 - cycle PAPER réel `BTC/USDC` : **COMPLETED**, `market_state.context` non nul, fenêtres 300 s / 1800 s complètes, respect du no-look-ahead, HOLD Agent fondé explicitement sur les horizons 5 min / 30 min.
 - contrôle des chemins ZIP et absence de secrets/caches avant livraison.
 
-La suite repository complète `pytest`, Ruff, mypy et le vrai `git diff --check` restent à exécuter localement après extraction, car l'environnement de génération ne dispose pas du clone Git complet ni de Ruff/mypy.
+La validation locale complète est terminée : `pytest`, Ruff, mypy et `git diff --check` sont tous validés.
 
 ## Limites conservées
 
@@ -61,4 +61,4 @@ La suite repository complète `pytest`, Ruff, mypy et le vrai `git diff --check`
 
 ## Prochaine étape
 
-Le Batch 15.2 est validé localement. Il reste à commit/push sur `main`, puis à poursuivre les essais PAPER contrôlés avec le contexte multi-horizon désormais présent. Le LIVE reste séparé et hors périmètre.
+Le Batch 15.2 est intégré sur `main` et validé localement. La suite consiste à poursuivre les essais PAPER contrôlés avec le contexte multi-horizon désormais présent. Le LIVE reste séparé et hors périmètre.
