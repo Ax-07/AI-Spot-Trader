@@ -69,7 +69,7 @@ Smokes réels contrôlés `BTC/USD / PF_XBTUSD`, levier `1x`, `ISOLATED` :
 
 ## Batch 16.4 — Premier run Agent réel GPT-5.6 Luna PERPETUAL PAPER
 
-**État : résultat réel confirmé localement ; documentation à intégrer.**
+**État : résultat réel confirmé et documenté sur `main` via le commit `595bd2c8b4311ac255db927515207f10875b1505` du Batch 16.5.**
 
 Run `36fe73e0-f52f-4e27-995b-c5c848f46da2` sur `BTC/USD / PF_XBTUSD`, `ISOLATED`, levier déterministe `1x`, capital `1000 USD`, agressivité `2` :
 
@@ -86,7 +86,7 @@ L'audit a montré que `market_state.context` était `null` pour cette source Der
 
 ## Batch 16.5 — Contexte marché PERPETUAL pour l'Agent
 
-**État : validé localement le 22 septembre 2026 ; non intégré tant que le commit et le push sur `main` ne sont pas confirmés.**
+**État : intégré sur GitHub `main` au commit `595bd2c8b4311ac255db927515207f10875b1505` (`feat: enrich perpetual paper market context`).**
 
 Objectif : réutiliser le `MarketStateBuilder` canonique avec les bougies publiques Kraken Futures **mark 1 minute** afin de fournir à l'Agent les mêmes statistiques descriptives causales que sur SPOT : fraîcheur, fenêtres 5 min / 30 min, rendement, range et volatilité réalisée.
 
@@ -113,7 +113,7 @@ Smoke réel : `paper_run_id = 8bbfe6a5-a5d5-4c32-96dc-eb9c5e4113d2`, cycle `c097
 
 ## Batch 17 — Robustesse Derivatives
 
-**Proposé après intégration du Batch 16.5 et nouveaux runs Agent PERPETUAL PAPER exploitant le contexte enrichi.**
+**Proposé après le Batch 16.5 intégré, à partir de nouveaux runs Agent PERPETUAL PAPER exploitant le contexte enrichi.**
 
 Pistes : validation des schémas publics Kraken sur davantage d'instruments, tiers de marge par taille, liquidation PAPER plus fidèle, cockpit dédié dérivés, reprise/réconciliation du ledger mémoire, scénarios multi-position/multi-instrument, puis éventuel enrichissement public supplémentaire (funding historique, liquidité/volume) uniquement si son utilité est mesurée.
 

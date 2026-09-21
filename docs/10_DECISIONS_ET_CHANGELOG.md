@@ -88,16 +88,16 @@ Les anciennes mentions **SPOT uniquement / aucun future-perpetual** sont supers�
 ## Décisions Batch 16.5
 
 ### ADR-113 — Réutiliser le `MarketStateBuilder` canonique pour PERPETUAL
-**VALIDÉE LOCALEMENT DANS LE BATCH 16.5.** Le contexte multi-horizon n'est pas réimplémenté côté Derivatives. La source Kraken Derivatives normalise l'historique mark en `MarketObservation`, puis réutilise le builder provider-agnostic existant.
+**ACCEPTÉE ET INTÉGRÉE au commit `595bd2c8b4311ac255db927515207f10875b1505`.** Le contexte multi-horizon n'est pas réimplémenté côté Derivatives. La source Kraken Derivatives normalise l'historique mark en `MarketObservation`, puis réutilise le builder provider-agnostic existant.
 
 ### ADR-114 — Les fenêtres PERPETUAL utilisent les bougies publiques mark 1 minute
-**VALIDÉE LOCALEMENT DANS LE BATCH 16.5.** Kraken Futures Charts fournit publiquement des bougies `mark`. Les fenêtres 5 min / 30 min utilisent uniquement des clôtures antérieures au ticker courant. Une bougie non clôturée ou future n'entre jamais dans les statistiques.
+**ACCEPTÉE ET INTÉGRÉE au commit `595bd2c8b4311ac255db927515207f10875b1505`.** Kraken Futures Charts fournit publiquement des bougies `mark`. Les fenêtres 5 min / 30 min utilisent uniquement des clôtures antérieures au ticker courant. Une bougie non clôturée ou future n'entre jamais dans les statistiques.
 
 ### ADR-115 — Le contexte descriptif n'est jamais un signal déterministe
-**VALIDÉE LOCALEMENT DANS LE BATCH 16.5.** Rendement, range, volatilité et fraîcheur sont transmis à Luna comme faits descriptifs. Ils ne produisent aucune action `BUY/SELL/HOLD`. L'Agent garde le choix stratégique et Risk garde l'autorité finale.
+**ACCEPTÉE ET INTÉGRÉE au commit `595bd2c8b4311ac255db927515207f10875b1505`.** Rendement, range, volatilité et fraîcheur sont transmis à Luna comme faits descriptifs. Ils ne produisent aucune action `BUY/SELL/HOLD`. L'Agent garde le choix stratégique et Risk garde l'autorité finale.
 
 ### ADR-116 — Pas d'enrichissement public supplémentaire sans besoin mesuré
-**VALIDÉE LOCALEMENT DANS LE BATCH 16.5.** Le Batch 16.5 n'ajoute pas encore volume, order book, funding historique ou analytics de liquidité. Le mark/index/funding courant déjà intégré est conservé ; le batch se limite au manque confirmé : un historique causal pour `MarketState.context`.
+**ACCEPTÉE ET INTÉGRÉE au commit `595bd2c8b4311ac255db927515207f10875b1505`.** Le Batch 16.5 n'ajoute pas encore volume, order book, funding historique ou analytics de liquidité. Le mark/index/funding courant déjà intégré est conservé ; le batch se limite au manque confirmé : un historique causal pour `MarketState.context`.
 
 ## Changelog — 2026-09-21 — Batch 16.1 Smoke PERPETUAL PAPER
 
@@ -174,7 +174,7 @@ L'audit du vrai `AgentInput` a confirmé `market_state.context = null`. Les rati
 
 ## Changelog — 2026-09-22 — Batch 16.5 Contexte marché PERPETUAL
 
-Patch validé localement à partir du HEAD GitHub `0b7303c9e0737f39ac81a5af2517f2f7953c133c` :
+Patch développé à partir du HEAD GitHub `0b7303c9e0737f39ac81a5af2517f2f7953c133c`, validé localement puis intégré sur `main` au commit `595bd2c8b4311ac255db927515207f10875b1505` :
 
 - réutilisation de `MarketStateBuilder` pour Derivatives ;
 - récupération publique des bougies mark Kraken Futures Charts en `1m` ;
@@ -209,7 +209,7 @@ Le premier essai effectué avant redémarrage du backend avait encore `context =
 
 ## Prochaine étape
 
-Revue du diff, commit puis push explicite du Batch 16.5 sur `main`. Les expérimentations suivantes pourront mesurer les décisions naturelles de Luna avec le contexte enrichi ; HOLD reste un résultat valide.
+Le Batch 16.5 est intégré sur `main`. Les expérimentations suivantes peuvent mesurer les décisions naturelles de Luna avec le contexte enrichi ; HOLD reste un résultat valide. Le prochain travail doit être lancé dans un batch distinct.
 
 ## LIVE
 

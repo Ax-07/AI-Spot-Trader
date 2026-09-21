@@ -260,4 +260,4 @@ Le chat ou l'opérateur ne doivent jamais réécrire rétroactivement une décis
 
 ## 17. Prochain jalon
 
-Le Batch 16.5 est validé localement : le vrai `AgentInput` PERPETUAL reçoit désormais un contexte causal 5 min / 30 min non nul. Après intégration sur `main`, les prochaines expérimentations peuvent mesurer les décisions naturelles de GPT-5.6 Luna avec ce contexte sans forcer BUY/SELL et sans ajouter de règle stratégique déterministe. Tout enrichissement de données doit rester un batch séparé et justifié par une mesure.
+Le Batch 16.5 est intégré sur `main` au commit `595bd2c8b4311ac255db927515207f10875b1505` : le vrai `AgentInput` PERPETUAL reçoit désormais un contexte causal 5 min / 30 min non nul. Les prochaines expérimentations peuvent mesurer les décisions naturelles de GPT-5.6 Luna avec ce contexte sans forcer BUY/SELL et sans ajouter de règle stratégique déterministe. Tout enrichissement de données doit rester un batch séparé et justifié par une mesure.

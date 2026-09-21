@@ -4,7 +4,7 @@
 
 Ce document est la spécification fonctionnelle et architecturale principale d'**AI Spot Trader**. Depuis le Batch 16, le projet couvre **SPOT + Kraken Derivatives**, sans changer le principe d'un agent stratégique unique ni l'autorité finale du Risk Engine.
 
-Référence GitHub vérifiée à l'ouverture et à la clôture locale du Batch 16.5 : `main` au commit `0b7303c9e0737f39ac81a5af2517f2f7953c133c` (`docs: finalize Batch 16.3 integration`). Le Batch 16.4 est un résultat réel confirmé localement ; le Batch 16.5 est désormais validé localement mais reste non intégré tant qu'il n'est pas commit et push.
+Référence GitHub actuelle après intégration du Batch 16.5 : `main` au commit `595bd2c8b4311ac255db927515207f10875b1505` (`feat: enrich perpetual paper market context`). Le Batch 16.4 est un résultat réel confirmé et documenté ; le Batch 16.5 est intégré.
 
 ## 2. Vision et invariants
 
@@ -286,7 +286,7 @@ Run réel Luna : `36fe73e0-f52f-4e27-995b-c5c848f46da2`.
 
 Le vrai `AgentInput` avait `market_state.context = null`, ce qui motive directement le Batch 16.5.
 
-### Batch 16.5 validé localement
+### Batch 16.5 intégré
 
 Le patch ajoute le contexte PERPETUAL en réutilisant le builder existant et des tests ciblés : causalité/no-look-ahead, déterminisme, fraîcheur/fail-closed, sérialisation `AgentInput`, conservation mark/index/funding et absence d'authentification privée pour l'historique public.
 
@@ -312,7 +312,7 @@ Validation réelle via la composition normale après redémarrage backend :
 
 ## 12. Prochaine expérimentation
 
-Après intégration du Batch 16.5, les prochains runs GPT-5.6 Luna PERPETUAL PAPER pourront mesurer la qualité stratégique avec ce contexte réellement disponible. Aucun BUY/SELL ne doit être forcé : HOLD reste valide. Tout enrichissement supplémentaire (volume, liquidité, funding historique) doit être motivé par un besoin mesuré et traité dans un batch distinct.
+Le Batch 16.5 étant intégré, les prochains runs GPT-5.6 Luna PERPETUAL PAPER peuvent mesurer la qualité stratégique avec ce contexte réellement disponible. Aucun BUY/SELL ne doit être forcé : HOLD reste valide. Tout enrichissement supplémentaire (volume, liquidité, funding historique) doit être motivé par un besoin mesuré et traité dans un batch distinct.
 
 ## 13. LIVE
 

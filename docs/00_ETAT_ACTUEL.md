@@ -6,8 +6,8 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub vérifié au démarrage du Batch 16.5 : `0b7303c9e0737f39ac81a5af2517f2f7953c133c` (`docs: finalize Batch 16.3 integration`).
-- Le Batch 16.5 est validé localement au 22 septembre 2026, mais reste non intégré tant qu'il n'a pas été commit et push sur `main`.
+- HEAD GitHub actuel : `595bd2c8b4311ac255db927515207f10875b1505` (`feat: enrich perpetual paper market context`).
+- Le Batch 16.5 est intégré sur `main` depuis le 22 septembre 2026.
 
 ## Batch 16.4 — Run Agent réel PERPETUAL PAPER confirmé
 
@@ -25,7 +25,7 @@ Premier run réel GPT-5.6 Luna via la composition normale, sans harness ni déci
 
 L'audit du vrai `AgentInput` a confirmé que la source Kraken Derivatives fournissait mark/index/funding/instrument mais `market_state.context = null`.
 
-## Batch 16.5 — Contexte PERPETUAL validé localement
+## Batch 16.5 — Contexte PERPETUAL intégré
 
 Le contexte PERPETUAL réutilise désormais le pipeline canonique `MarketStateBuilder` :
 
@@ -64,4 +64,4 @@ git diff --check                               : aucune erreur ; avertissements 
 smoke Luna PERPETUAL PAPER                     : COMPLETED, context 5m/30m non nul
 ```
 
-Étape restante avant intégration : revue du diff, commit puis push explicite sur `main`.
+Le Batch 16.5 est intégré. Prochaine étape : nouveaux runs GPT-5.6 Luna PERPETUAL PAPER exploitant le contexte enrichi, sans décision forcée.

@@ -4,7 +4,7 @@
 
 Ce document décrit l'architecture technique courante d'AI Spot Trader. Depuis le Batch 16, l'architecture canonique couvre SPOT et Kraken Derivatives PAPER sans créer de moteur parallèle.
 
-Référence GitHub `main` vérifiée à l'ouverture et à la clôture locale du Batch 16.5 : `0b7303c9e0737f39ac81a5af2517f2f7953c133c` (`docs: finalize Batch 16.3 integration`).
+Référence GitHub actuelle après intégration du Batch 16.5 : `main` au commit `595bd2c8b4311ac255db927515207f10875b1505` (`feat: enrich perpetual paper market context`).
 
 Le Batch 16.4 est un résultat d'exécution local confirmé : premier run réel GPT-5.6 Luna en PERPETUAL PAPER, 4 cycles `COMPLETED`, 4 HOLD naturels, aucune erreur et aucun trade.
 
@@ -173,7 +173,7 @@ Le ticker courant pilote `last_price` et la fraîcheur, mais ne modifie pas les 
 
 ### PERPETUAL — Batch 16.5
 
-Le pipeline validé localement réutilise exactement le même builder :
+Le pipeline intégré réutilise exactement le même builder :
 
 ```text
 Kraken Futures Charts
@@ -360,7 +360,7 @@ Aucun changement frontend n'est requis pour le Batch 16.5.
 
 ## 17. Validation Batch 16.5
 
-La validation ciblée et la suite complète sont confirmées localement :
+La validation ciblée et la suite complète ont été confirmées localement avant intégration sur `main` au commit `595bd2c8b4311ac255db927515207f10875b1505` :
 
 - `pytest backend` : 357 tests passés, 2 warnings externes FastAPI/Starlette ;
 - Ruff : `All checks passed!` ;
