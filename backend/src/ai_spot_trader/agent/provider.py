@@ -119,6 +119,7 @@ class OpenAIDecisionProvider:
             symbol=payload.symbol,
             proposed_quantity=payload.proposed_quantity,
             rationale=payload.rationale,
+            market_type=normalized_input.market_state.market_type,
         )
 
 

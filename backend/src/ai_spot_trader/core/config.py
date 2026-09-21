@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from ai_spot_trader.domain.enums import ExecutionMode, LLMModel
+from ai_spot_trader.domain.enums import ExecutionMode, LLMModel, MarginMode, MarketType
 from ai_spot_trader.domain.symbols import parse_canonical_symbol
 
 Environment = Literal["development", "test", "production"]
@@ -24,6 +24,7 @@ class PaperRunConfiguration:
     """Validated values required to compose one executable PAPER runtime."""
 
     symbol: str
+    market_type: MarketType
     initial_capital: Decimal
     settlement_asset: str
     cadence_seconds: float
@@ -40,10 +41,16 @@ class PaperRunConfiguration:
     database_url: SecretStr
     openai_api_key: SecretStr
     llm_model: LLMModel
+    derivative_leverage: Decimal | None = None
+    max_derivative_leverage: Decimal | None = None
+    max_derivative_position_notional: Decimal | None = None
+    max_total_derivative_exposure: Decimal | None = None
+    derivative_liquidation_buffer_ratio: Decimal | None = None
+    derivative_margin_mode: MarginMode = MarginMode.ISOLATED
 
     @classmethod
     def from_settings(cls, settings: "Settings") -> "PaperRunConfiguration":
-        """Fail closed unless every first-run PAPER value was explicitly supplied."""
+        """Fail closed unless every required PAPER value was explicitly supplied."""
 
         if settings.execution_mode is not ExecutionMode.PAPER:
             raise PaperRuntimeConfigurationError("the executable runtime only supports PAPER")
@@ -66,6 +73,22 @@ class PaperRunConfiguration:
             "database_url": settings.database_url,
             "openai_api_key": settings.openai_api_key,
         }
+        if settings.paper_market_type is not MarketType.SPOT:
+            required.update(
+                {
+                    "paper_derivative_leverage": settings.paper_derivative_leverage,
+                    "risk_max_derivative_leverage": settings.risk_max_derivative_leverage,
+                    "risk_max_derivative_position_notional": (
+                        settings.risk_max_derivative_position_notional
+                    ),
+                    "risk_max_total_derivative_exposure": (
+                        settings.risk_max_total_derivative_exposure
+                    ),
+                    "risk_derivative_liquidation_buffer_ratio": (
+                        settings.risk_derivative_liquidation_buffer_ratio
+                    ),
+                }
+            )
         missing = sorted(name for name, value in required.items() if value is None)
         if missing:
             raise PaperRuntimeConfigurationError(
@@ -132,6 +155,25 @@ class PaperRunConfiguration:
                 "paper_symbol must be present in risk_allowed_pairs"
             )
 
+        if settings.paper_market_type is MarketType.FUTURE:
+            raise PaperRuntimeConfigurationError(
+                "Batch 16 discovers dated futures metadata but executes PERPETUAL only"
+            )
+        if (
+            settings.paper_market_type is MarketType.PERPETUAL
+            and settings.paper_derivative_margin_mode is not MarginMode.ISOLATED
+        ):
+            raise PaperRuntimeConfigurationError(
+                "Batch 16 PAPER execution supports ISOLATED margin only"
+            )
+        if settings.paper_market_type is MarketType.PERPETUAL:
+            assert settings.paper_derivative_leverage is not None
+            assert settings.risk_max_derivative_leverage is not None
+            if settings.paper_derivative_leverage > settings.risk_max_derivative_leverage:
+                raise PaperRuntimeConfigurationError(
+                    "paper_derivative_leverage cannot exceed risk_max_derivative_leverage"
+                )
+
         database_value = database_url.get_secret_value().strip()
         if not database_value:
             raise PaperRuntimeConfigurationError("database_url cannot be empty")
@@ -148,6 +190,7 @@ class PaperRunConfiguration:
 
         return cls(
             symbol=symbol,
+            market_type=settings.paper_market_type,
             initial_capital=initial_capital,
             settlement_asset=settlement_asset,
             cadence_seconds=cadence_seconds,
@@ -164,6 +207,14 @@ class PaperRunConfiguration:
             database_url=database_url,
             openai_api_key=openai_api_key,
             llm_model=settings.llm_model,
+            derivative_leverage=settings.paper_derivative_leverage,
+            max_derivative_leverage=settings.risk_max_derivative_leverage,
+            max_derivative_position_notional=settings.risk_max_derivative_position_notional,
+            max_total_derivative_exposure=settings.risk_max_total_derivative_exposure,
+            derivative_liquidation_buffer_ratio=(
+                settings.risk_derivative_liquidation_buffer_ratio
+            ),
+            derivative_margin_mode=settings.paper_derivative_margin_mode,
         )
 
 
@@ -187,8 +238,11 @@ class Settings(BaseSettings):
     aggressiveness: int | None = Field(default=None, ge=1, le=10)
 
     paper_symbol: str | None = None
+    paper_market_type: MarketType = MarketType.SPOT
     paper_initial_capital: Decimal | None = Field(default=None, gt=0)
     paper_settlement_asset: str | None = None
+    paper_derivative_leverage: Decimal | None = Field(default=Decimal(1), ge=1)
+    paper_derivative_margin_mode: MarginMode = MarginMode.ISOLATED
     trading_cadence_seconds: float | None = Field(default=None, gt=0)
     cycle_market_timeout_seconds: float | None = Field(default=None, gt=0)
     cycle_agent_timeout_seconds: float | None = Field(default=None, gt=0)
@@ -196,6 +250,13 @@ class Settings(BaseSettings):
     risk_max_order_notional: Decimal | None = Field(default=None, gt=0)
     risk_allowed_pairs: frozenset[str] | None = None
     risk_allow_quantity_reduction: bool | None = None
+    risk_max_derivative_leverage: Decimal | None = Field(default=Decimal(1), ge=1)
+    risk_max_derivative_position_notional: Decimal | None = Field(default=None, gt=0)
+    risk_max_total_derivative_exposure: Decimal | None = Field(default=None, gt=0)
+    risk_derivative_liquidation_buffer_ratio: Decimal | None = Field(
+        default=Decimal("1.10"),
+        ge=1,
+    )
     paper_fee_rate: Decimal | None = Field(default=None, ge=0, lt=1)
     paper_spread_bps: Decimal | None = Field(default=None, ge=0)
     paper_slippage_bps: Decimal | None = Field(default=None, ge=0)
@@ -205,6 +266,7 @@ class Settings(BaseSettings):
     openai_timeout_seconds: float = Field(default=30.0, gt=0)
     kraken_rest_url: str = "https://api.kraken.com"
     kraken_ws_url: str = "wss://ws.kraken.com/v2"
+    kraken_derivatives_rest_url: str = "https://futures.kraken.com/derivatives/api/v3"
     kraken_rest_timeout_seconds: float = Field(default=10.0, gt=0)
     kraken_ws_receive_timeout_seconds: float = Field(default=15.0, gt=0)
     kraken_ws_max_reconnect_attempts: int = Field(default=2, ge=0, le=10)

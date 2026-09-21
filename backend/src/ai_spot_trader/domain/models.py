@@ -14,9 +14,13 @@ from pydantic import (
 )
 
 from ai_spot_trader.domain.enums import (
+    DerivativeContractKind,
     ExecutionMode,
     ExperimentVariable,
     LLMModel,
+    MarginMode,
+    MarketType,
+    PositionSide,
     RiskDecision,
     RiskLimit,
     RiskReason,
@@ -53,7 +57,7 @@ class AssetBalance(DomainModel):
 
 
 class AssetPosition(DomainModel):
-    """Held and currently available quantity for one portfolio position asset."""
+    """Held and currently available quantity for one SPOT portfolio position asset."""
 
     asset: NonEmptyText
     quantity: NonNegativeDecimal
@@ -63,6 +67,103 @@ class AssetPosition(DomainModel):
     def available_cannot_exceed_quantity(self) -> "AssetPosition":
         if self.available > self.quantity:
             raise ValueError("available quantity cannot exceed held quantity")
+        return self
+
+
+class DerivativeInstrument(DomainModel):
+    """Provider-normalized derivative contract metadata used by PAPER/Risk."""
+
+    symbol: NonEmptyText
+    venue_symbol: NonEmptyText
+    market_type: MarketType
+    contract_kind: DerivativeContractKind
+    underlying_asset: NonEmptyText
+    quote_asset: NonEmptyText
+    contract_size: PositiveDecimal
+    tick_size: PositiveDecimal
+    min_order_quantity: PositiveDecimal
+    max_position_quantity: PositiveDecimal | None = None
+    initial_margin_rate: PositiveDecimal
+    maintenance_margin_rate: PositiveDecimal
+    max_leverage: PositiveDecimal
+    funding_interval_seconds: PositiveDecimal | None = None
+    expires_at: UtcDateTime | None = None
+
+    @model_validator(mode="after")
+    def validate_derivative_contract(self) -> "DerivativeInstrument":
+        parse_canonical_symbol(self.symbol)
+        if self.market_type is MarketType.SPOT:
+            raise ValueError("DerivativeInstrument cannot use SPOT market_type")
+        if self.initial_margin_rate > Decimal(1):
+            raise ValueError("initial_margin_rate cannot exceed 1")
+        if self.maintenance_margin_rate > self.initial_margin_rate:
+            raise ValueError("maintenance_margin_rate cannot exceed initial_margin_rate")
+        if self.max_leverage < Decimal(1):
+            raise ValueError("max_leverage must be at least 1")
+        if self.market_type is MarketType.PERPETUAL:
+            if self.expires_at is not None:
+                raise ValueError("PERPETUAL instruments cannot have expires_at")
+            if self.funding_interval_seconds is None:
+                raise ValueError("PERPETUAL instruments require funding_interval_seconds")
+        elif self.market_type is MarketType.FUTURE and self.expires_at is None:
+            raise ValueError("dated FUTURE instruments require expires_at")
+        return self
+
+
+class DerivativeMarketContext(DomainModel):
+    """Derivative-specific public market facts attached to the canonical MarketState."""
+
+    observed_at: UtcDateTime
+    instrument: DerivativeInstrument
+    mark_price: PositiveDecimal
+    index_price: PositiveDecimal | None = None
+    funding_rate: Decimal | None = None
+
+    @model_validator(mode="after")
+    def funding_only_for_perpetuals(self) -> "DerivativeMarketContext":
+        if (
+            self.instrument.market_type is not MarketType.PERPETUAL
+            and self.funding_rate is not None
+        ):
+            raise ValueError("funding_rate is only valid for PERPETUAL instruments")
+        return self
+
+
+class DerivativePosition(DomainModel):
+    """Net one-way PAPER derivative position with explicit margin and P&L."""
+
+    symbol: NonEmptyText
+    side: PositionSide
+    quantity: PositiveDecimal
+    average_entry_price: PositiveDecimal
+    mark_price: PositiveDecimal
+    contract_size: PositiveDecimal = Decimal(1)
+    notional: PositiveDecimal
+    realized_pnl: Decimal = Decimal(0)
+    unrealized_pnl: Decimal
+    leverage: PositiveDecimal
+    margin_used: PositiveDecimal
+    initial_margin_rate: PositiveDecimal
+    maintenance_margin_rate: PositiveDecimal
+    maintenance_margin: NonNegativeDecimal
+    cumulative_funding: Decimal = Decimal(0)
+    liquidation_price: PositiveDecimal | None = None
+    margin_mode: MarginMode = MarginMode.ISOLATED
+    funding_updated_at: UtcDateTime | None = None
+
+    @model_validator(mode="after")
+    def validate_derivative_position(self) -> "DerivativePosition":
+        parse_canonical_symbol(self.symbol)
+        expected_notional = self.mark_price * self.quantity * self.contract_size
+        if self.notional != expected_notional:
+            raise ValueError("derivative notional must equal mark_price * quantity * contract_size")
+        expected_maintenance = self.notional * self.maintenance_margin_rate
+        if self.maintenance_margin != expected_maintenance:
+            raise ValueError("maintenance_margin must match notional * maintenance_margin_rate")
+        if self.maintenance_margin_rate > self.initial_margin_rate:
+            raise ValueError("maintenance margin rate cannot exceed initial margin rate")
+        if self.leverage < Decimal(1):
+            raise ValueError("derivative leverage must be at least 1")
         return self
 
 
@@ -182,29 +283,46 @@ class MarketContext(DomainModel):
 
 
 class MarketState(DomainModel):
-    """Canonical deterministic market snapshot exposed to downstream components."""
+    """Canonical deterministic SPOT or derivative market snapshot."""
 
     market_state_id: UUID
     as_of: UtcDateTime
     symbol: NonEmptyText
     last_price: PositiveDecimal
     context: MarketContext | None = None
+    market_type: MarketType = MarketType.SPOT
+    derivative: DerivativeMarketContext | None = None
 
     @model_validator(mode="after")
-    def context_cannot_be_from_the_future(self) -> "MarketState":
+    def validate_market_contexts(self) -> "MarketState":
         if self.context is not None and self.context.last_observed_at > self.as_of:
             raise ValueError("market context cannot contain observations newer than the snapshot")
+        if self.market_type is MarketType.SPOT:
+            if self.derivative is not None:
+                raise ValueError("SPOT MarketState cannot carry derivative context")
+            return self
+        if self.derivative is None:
+            raise ValueError("derivative MarketState requires derivative context")
+        if self.derivative.observed_at > self.as_of:
+            raise ValueError("derivative observation cannot be newer than the snapshot")
+        if self.derivative.instrument.symbol != self.symbol:
+            raise ValueError("derivative instrument symbol must match MarketState symbol")
+        if self.derivative.instrument.market_type is not self.market_type:
+            raise ValueError("derivative instrument market_type must match MarketState")
+        if self.last_price != self.derivative.mark_price:
+            raise ValueError("derivative MarketState last_price must equal mark_price")
         return self
 
 
 class PortfolioState(DomainModel):
-    """Canonical PAPER portfolio snapshot with disjoint balance and position roles."""
+    """Canonical PAPER portfolio with separate SPOT holdings and derivative positions."""
 
     portfolio_state_id: UUID
     as_of: UtcDateTime
     mode: ExecutionMode = ExecutionMode.PAPER
     balances: tuple[AssetBalance, ...] = ()
     positions: tuple[AssetPosition, ...] = ()
+    derivative_positions: tuple[DerivativePosition, ...] = ()
 
     @model_validator(mode="after")
     def asset_roles_must_be_unambiguous(self) -> "PortfolioState":
@@ -218,6 +336,9 @@ class PortfolioState(DomainModel):
         if overlap:
             names = ", ".join(sorted(overlap))
             raise ValueError(f"portfolio asset roles must be disjoint: {names}")
+        derivative_symbols = tuple(position.symbol for position in self.derivative_positions)
+        if len(set(derivative_symbols)) != len(derivative_symbols):
+            raise ValueError("portfolio derivative positions must be one-way and unique by symbol")
         return self
 
 
@@ -357,6 +478,7 @@ class DecisionCandidate(DomainModel):
     symbol: NonEmptyText
     proposed_quantity: PositiveDecimal | None = None
     rationale: str | None = None
+    market_type: MarketType = MarketType.SPOT
 
     @model_validator(mode="after")
     def validate_proposed_quantity(self) -> "DecisionCandidate":
@@ -410,7 +532,7 @@ class RiskAssessment(DomainModel):
 
 
 class ExecutionIntent(DomainModel):
-    """Risk-approved PAPER execution request for BUY or SELL only."""
+    """Risk-approved PAPER execution request for SPOT or derivatives."""
 
     execution_id: UUID
     cycle_id: UUID
@@ -421,11 +543,21 @@ class ExecutionIntent(DomainModel):
     action: TradingAction
     symbol: NonEmptyText
     quantity: PositiveDecimal
+    market_type: MarketType = MarketType.SPOT
+    reduce_only: bool = False
+    leverage: PositiveDecimal | None = None
 
     @model_validator(mode="after")
-    def hold_is_not_executable(self) -> "ExecutionIntent":
+    def validate_execution_contract(self) -> "ExecutionIntent":
         if self.action is TradingAction.HOLD:
             raise ValueError("HOLD does not create an execution intent")
+        if self.market_type is MarketType.SPOT:
+            if self.reduce_only:
+                raise ValueError("SPOT intents cannot be reduce_only")
+            if self.leverage is not None:
+                raise ValueError("SPOT intents cannot use leverage")
+        elif self.leverage is None:
+            raise ValueError("derivative intents require explicit leverage")
         return self
 
 
@@ -446,6 +578,12 @@ class Fill(DomainModel):
     fee: NonNegativeDecimal
     spread_cost: NonNegativeDecimal
     slippage_cost: NonNegativeDecimal
+    market_type: MarketType = MarketType.SPOT
+    contract_size: PositiveDecimal = Decimal(1)
+    reduce_only: bool = False
+    realized_pnl: Decimal = Decimal(0)
+    margin_delta: Decimal = Decimal(0)
+    funding_payment: Decimal = Decimal(0)
 
     @model_validator(mode="after")
     def validate_paper_fill(self) -> "Fill":
@@ -453,8 +591,10 @@ class Fill(DomainModel):
             raise ValueError("HOLD cannot produce a fill")
         if self.pricing_as_of > self.filled_at:
             raise ValueError("pricing snapshot cannot be newer than the fill")
-        if self.notional != self.price * self.quantity:
-            raise ValueError("fill notional must equal execution price times quantity")
+        if self.notional != self.price * self.quantity * self.contract_size:
+            raise ValueError(
+                "fill notional must equal execution price times quantity times contract_size"
+            )
 
         if self.action is TradingAction.BUY:
             adverse_price_delta = self.price - self.reference_price
@@ -462,9 +602,14 @@ class Fill(DomainModel):
             adverse_price_delta = self.reference_price - self.price
         if adverse_price_delta < 0:
             raise ValueError("PAPER execution costs cannot improve the reference price")
-        expected_execution_cost = adverse_price_delta * self.quantity
+        expected_execution_cost = adverse_price_delta * self.quantity * self.contract_size
         if self.spread_cost + self.slippage_cost != expected_execution_cost:
             raise ValueError(
                 "spread_cost plus slippage_cost must explain the execution price delta"
             )
+        if self.market_type is MarketType.SPOT:
+            if self.reduce_only or self.realized_pnl != 0 or self.margin_delta != 0:
+                raise ValueError("SPOT fills cannot carry derivative execution fields")
+            if self.funding_payment != 0 or self.contract_size != 1:
+                raise ValueError("SPOT fills require contract_size=1 and no funding")
         return self

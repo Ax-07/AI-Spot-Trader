@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from ai_spot_trader.domain.enums import RiskDecision, TradingAction
+from ai_spot_trader.domain.enums import MarketType, RiskDecision, TradingAction
 from ai_spot_trader.domain.models import (
     AgentInput,
     AssetBalance,
@@ -20,6 +20,7 @@ from ai_spot_trader.domain.models import (
 from ai_spot_trader.domain.symbols import parse_canonical_symbol
 
 ANALYTICS_VERSION = "paper-analytics-v1"
+DERIVATIVES_ANALYTICS_VERSION = "paper-analytics-v2"
 ZERO = Decimal(0)
 
 
@@ -55,6 +56,7 @@ class PaperAnalyticsPoint:
     cumulative_fees: Decimal
     cumulative_spread_cost: Decimal
     cumulative_slippage_cost: Decimal
+    cumulative_funding_pnl: Decimal
     exposure_value: Decimal
     exposure_fraction: Decimal | None
     cumulative_return_fraction: Decimal | None
@@ -76,6 +78,7 @@ class PaperDailyPerformance:
     fees: Decimal
     spread_cost: Decimal
     slippage_cost: Decimal
+    funding_pnl: Decimal
     trade_count: int
 
 
@@ -105,6 +108,7 @@ class PaperAnalyticsSummary:
     valued_cycle_count: int
     first_at: datetime | None
     last_at: datetime | None
+    funding_pnl: Decimal = ZERO
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +188,14 @@ def build_paper_analytics_report(
         )
 
     prepared.sort(key=lambda item: (item.at, str(item.cycle_id)))
+    calculation_version = (
+        DERIVATIVES_ANALYTICS_VERSION
+        if any(
+            item.agent_input.market_state.market_type is not MarketType.SPOT
+            for item in prepared
+        )
+        else ANALYTICS_VERSION
+    )
     if not prepared:
         summary = PaperAnalyticsSummary(
             initial_equity=None,
@@ -193,6 +205,7 @@ def build_paper_analytics_report(
             fees=ZERO,
             spread_cost=ZERO,
             slippage_cost=ZERO,
+            funding_pnl=ZERO,
             max_drawdown_value=ZERO,
             max_drawdown_fraction=None,
             current_drawdown_value=ZERO,
@@ -232,6 +245,7 @@ def build_paper_analytics_report(
     cumulative_fees = ZERO
     cumulative_spread = ZERO
     cumulative_slippage = ZERO
+    realized_funding = ZERO
     trade_ids: set[UUID] = set()
     buy_trade_ids: set[UUID] = set()
     sell_trade_ids: set[UUID] = set()
@@ -250,6 +264,7 @@ def build_paper_analytics_report(
             cumulative_fees += fill.fee
             cumulative_spread += fill.spread_cost
             cumulative_slippage += fill.slippage_cost
+            realized_funding += fill.funding_payment
             trade_ids.add(fill.execution_id)
             if fill.action is TradingAction.BUY:
                 buy_trade_ids.add(fill.execution_id)
@@ -261,9 +276,13 @@ def build_paper_analytics_report(
             symbol=market.symbol,
             reference_price=market.last_price,
         )
+        open_funding = sum(
+            position.cumulative_funding for position in item.portfolio_after.derivative_positions
+        )
+        cumulative_funding = realized_funding + open_funding
         net_pnl = equity - initial_equity
-        total_costs = cumulative_fees + cumulative_spread + cumulative_slippage
-        gross_pnl = net_pnl + total_costs
+        total_execution_costs = cumulative_fees + cumulative_spread + cumulative_slippage
+        gross_pnl = net_pnl + total_execution_costs - cumulative_funding
         cumulative_return = _fraction(net_pnl, initial_equity)
 
         if equity > equity_peak:
@@ -296,6 +315,7 @@ def build_paper_analytics_report(
                 cumulative_fees=cumulative_fees,
                 cumulative_spread_cost=cumulative_spread,
                 cumulative_slippage_cost=cumulative_slippage,
+                cumulative_funding_pnl=cumulative_funding,
                 exposure_value=exposure_value,
                 exposure_fraction=exposure_fraction,
                 cumulative_return_fraction=cumulative_return,
@@ -316,6 +336,7 @@ def build_paper_analytics_report(
         fees=last.cumulative_fees,
         spread_cost=last.cumulative_spread_cost,
         slippage_cost=last.cumulative_slippage_cost,
+        funding_pnl=last.cumulative_funding_pnl,
         max_drawdown_value=max_drawdown_value,
         max_drawdown_fraction=max_drawdown_fraction,
         current_drawdown_value=last.drawdown_value,
@@ -335,7 +356,7 @@ def build_paper_analytics_report(
         last_at=last.at,
     )
     return PaperAnalyticsReport(
-        calculation_version=ANALYTICS_VERSION,
+        calculation_version=calculation_version,
         timezone="UTC",
         source_digest=source_digest,
         summary=summary,
@@ -378,7 +399,18 @@ def _resolve_portfolio_after(
     fills: tuple[Fill, ...],
     payload: dict[str, object] | None,
 ) -> PortfolioState:
-    replayed = _replay_fills(agent_input.portfolio_state, fills)
+    has_derivatives_fill = any(fill.market_type is not MarketType.SPOT for fill in fills)
+    if has_derivatives_fill:
+        if payload is None:
+            raise PaperAnalyticsDataError(
+                "derivatives fills require durable post-trade portfolio state"
+            )
+        try:
+            return PortfolioState.model_validate_json(json.dumps(payload))
+        except ValueError as exc:
+            raise PaperAnalyticsDataError("invalid durable post-trade portfolio payload") from exc
+
+    replayed = _replay_spot_fills(agent_input.portfolio_state, fills)
     if payload is None:
         return replayed
     try:
@@ -389,11 +421,13 @@ def _resolve_portfolio_after(
     return persisted
 
 
-def _replay_fills(portfolio: PortfolioState, fills: tuple[Fill, ...]) -> PortfolioState:
+def _replay_spot_fills(portfolio: PortfolioState, fills: tuple[Fill, ...]) -> PortfolioState:
     balances = {item.asset: item.available for item in portfolio.balances}
     positions = {item.asset: (item.quantity, item.available) for item in portfolio.positions}
 
     for fill in fills:
+        if fill.market_type is not MarketType.SPOT:
+            raise PaperAnalyticsDataError("derivatives fill cannot use SPOT replay")
         try:
             base_asset, quote_asset = parse_canonical_symbol(fill.symbol)
         except ValueError as exc:
@@ -430,6 +464,7 @@ def _replay_fills(portfolio: PortfolioState, fills: tuple[Fill, ...]) -> Portfol
             AssetPosition(asset=asset, quantity=amount[0], available=amount[1])
             for asset, amount in sorted(positions.items())
         ),
+        derivative_positions=portfolio.derivative_positions,
     )
 
 
@@ -444,6 +479,8 @@ def _validate_fill_market_link(*, agent_input: AgentInput, fills: tuple[Fill, ..
             )
         if fill.symbol != market.symbol or fill.reference_price != market.last_price:
             raise PaperAnalyticsDataError("fill pricing differs from durable market state")
+        if fill.market_type is not market.market_type:
+            raise PaperAnalyticsDataError("fill market type differs from durable market state")
 
 
 def _cycle_end_time(
@@ -480,26 +517,39 @@ def _value_portfolio(
                 f"cannot value non-zero balance asset {balance.asset} from {symbol}"
             )
 
-    base_quantity = ZERO
+    spot_exposure = ZERO
     for position in portfolio.positions:
         if position.asset == base_asset:
-            base_quantity += position.quantity
+            spot_exposure += position.quantity * reference_price
         elif position.quantity != ZERO:
             raise PaperAnalyticsDataError(
                 f"cannot value non-zero position asset {position.asset} from {symbol}"
             )
 
-    exposure_value = base_quantity * reference_price
-    equity = quote_available + exposure_value
+    derivative_equity = sum(
+        (
+            position.margin_used + position.unrealized_pnl + position.cumulative_funding
+            for position in portfolio.derivative_positions
+        ),
+        ZERO,
+    )
+    derivative_exposure = sum(
+        (position.notional for position in portfolio.derivative_positions),
+        ZERO,
+    )
+    exposure_value = spot_exposure + derivative_exposure
+    equity = quote_available + spot_exposure + derivative_equity
     return equity, exposure_value, _fraction(exposure_value, equity)
 
 
 def _validate_portfolio_continuity(left: PortfolioState, right: PortfolioState) -> None:
-    if _portfolio_amounts(left) != _portfolio_amounts(right):
-        raise PaperAnalyticsDataError("durable portfolio continuity is broken")
+    if _spot_portfolio_amounts(left) != _spot_portfolio_amounts(right):
+        raise PaperAnalyticsDataError("durable SPOT portfolio continuity is broken")
+    if _derivative_structural_amounts(left) != _derivative_structural_amounts(right):
+        raise PaperAnalyticsDataError("durable derivatives position continuity is broken")
 
 
-def _portfolio_amounts(
+def _spot_portfolio_amounts(
     portfolio: PortfolioState,
 ) -> tuple[
     tuple[tuple[str, Decimal], ...],
@@ -510,6 +560,26 @@ def _portfolio_amounts(
         sorted((item.asset, item.quantity, item.available) for item in portfolio.positions)
     )
     return balances, positions
+
+
+def _derivative_structural_amounts(
+    portfolio: PortfolioState,
+) -> tuple[tuple[object, ...], ...]:
+    return tuple(
+        sorted(
+            (
+                position.symbol,
+                position.side,
+                position.quantity,
+                position.average_entry_price,
+                position.realized_pnl,
+                position.leverage,
+                position.margin_mode,
+                position.margin_used,
+            )
+            for position in portfolio.derivative_positions
+        )
+    )
 
 
 def _daily_performance(
@@ -526,6 +596,7 @@ def _daily_performance(
     previous_fees = ZERO
     previous_spread = ZERO
     previous_slippage = ZERO
+    previous_funding = ZERO
     previous_trades = 0
     for day in sorted(by_day):
         day_points = by_day[day]
@@ -534,6 +605,7 @@ def _daily_performance(
         fees = close.cumulative_fees - previous_fees
         spread = close.cumulative_spread_cost - previous_spread
         slippage = close.cumulative_slippage_cost - previous_slippage
+        funding = close.cumulative_funding_pnl - previous_funding
         trade_count = close.trade_count - previous_trades
         daily.append(
             PaperDailyPerformance(
@@ -548,6 +620,7 @@ def _daily_performance(
                 fees=fees,
                 spread_cost=spread,
                 slippage_cost=slippage,
+                funding_pnl=funding,
                 trade_count=trade_count,
             )
         )
@@ -555,6 +628,7 @@ def _daily_performance(
         previous_fees = close.cumulative_fees
         previous_spread = close.cumulative_spread_cost
         previous_slippage = close.cumulative_slippage_cost
+        previous_funding = close.cumulative_funding_pnl
         previous_trades = close.trade_count
     return tuple(daily)
 

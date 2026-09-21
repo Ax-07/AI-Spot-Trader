@@ -1,5 +1,7 @@
 from dataclasses import dataclass
-from typing import cast
+from datetime import timedelta
+from decimal import Decimal
+from typing import Protocol, cast
 from uuid import uuid4
 
 from ai_spot_trader.agent.openai_client import OpenAIResponsesClient
@@ -11,11 +13,14 @@ from ai_spot_trader.chat.service import OperatorChatService, RuntimeChatContextS
 from ai_spot_trader.core.clock import SystemClock
 from ai_spot_trader.core.config import PaperRunConfiguration, Settings
 from ai_spot_trader.core.runtime import AppRuntime
+from ai_spot_trader.domain.enums import MarketType
 from ai_spot_trader.domain.models import AssetBalance, PortfolioState
-from ai_spot_trader.integrations.kraken.market_data import (
-    KrakenMarketDataSource,
-    build_kraken_market_data_source,
+from ai_spot_trader.domain.ports import MarketDataSource
+from ai_spot_trader.integrations.kraken.derivatives import (
+    KrakenDerivativesMarketDataSource,
+    KrakenDerivativesPublicClient,
 )
+from ai_spot_trader.integrations.kraken.market_data import build_kraken_market_data_source
 from ai_spot_trader.persistence.analytics import SqlAlchemyPaperAnalyticsQueryService
 from ai_spot_trader.persistence.audit import AuditedTradingCycleRunner
 from ai_spot_trader.persistence.db import Database
@@ -31,13 +36,19 @@ from ai_spot_trader.trading.engine import (
 )
 
 
+class RuntimeMarketDataSource(MarketDataSource, Protocol):
+    """Canonical market source plus the runtime-owned async close surface."""
+
+    async def aclose(self) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class PaperRuntimeComposition:
     """Canonical objects assembled for the executable PAPER application."""
 
     runtime: AppRuntime
     chat_service: OperatorChatService
-    market_data: KrakenMarketDataSource
+    market_data: RuntimeMarketDataSource
     portfolio: PaperPortfolioLedger
     agent: OpenAIDecisionProvider
     risk_engine: RiskEngine
@@ -49,7 +60,7 @@ class PaperRuntimeComposition:
 
 
 def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
-    """Compose the real PAPER runtime from existing canonical components only."""
+    """Compose one canonical SPOT or PERPETUAL PAPER runtime."""
 
     run = PaperRunConfiguration.from_settings(settings)
     clock = SystemClock()
@@ -59,7 +70,6 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
     audit_reader = SqlAlchemyCycleAuditQueryService(database.sessions)
     analytics_reader = SqlAlchemyPaperAnalyticsQueryService(database.sessions)
 
-    market_data = build_kraken_market_data_source(settings, clock=clock)
     openai_client = OpenAIResponsesClient(
         api_key=run.openai_api_key,
         base_url=settings.openai_base_url,
@@ -83,6 +93,25 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
     )
     portfolio = PaperPortfolioLedger(initial_state=initial_portfolio, clock=clock)
 
+    if run.market_type is MarketType.SPOT:
+        market_data: RuntimeMarketDataSource = build_kraken_market_data_source(
+            settings, clock=clock
+        )
+    else:
+        market_data = KrakenDerivativesMarketDataSource(
+            KrakenDerivativesPublicClient(
+                settings.kraken_derivatives_rest_url,
+                timeout_seconds=settings.kraken_rest_timeout_seconds,
+            ),
+            clock=clock,
+            market_sink=portfolio,
+            stale_after=(
+                timedelta(seconds=settings.kraken_stale_after_seconds)
+                if settings.kraken_stale_after_seconds is not None
+                else None
+            ),
+        )
+
     cost_model = PaperExecutionCostModel(
         fee_rate=run.fee_rate,
         spread_bps=run.spread_bps,
@@ -93,6 +122,14 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
             max_order_notional=run.max_order_notional,
             allowed_pairs=run.allowed_pairs,
             allow_quantity_reduction=run.allow_quantity_reduction,
+            derivative_leverage=run.derivative_leverage or Decimal(1),
+            max_derivative_leverage=run.max_derivative_leverage or Decimal(1),
+            max_derivative_position_notional=run.max_derivative_position_notional,
+            max_total_derivative_exposure=run.max_total_derivative_exposure,
+            derivative_liquidation_buffer_ratio=(
+                run.derivative_liquidation_buffer_ratio or Decimal("1.10")
+            ),
+            derivative_margin_mode=run.derivative_margin_mode,
         ),
         cost_model=cost_model,
         clock=clock,

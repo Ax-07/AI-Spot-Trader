@@ -154,9 +154,7 @@ def _json_output(
 
 def test_generate_valid_buy() -> None:
     provider, _ = _provider(_json_output(action="BUY", proposed_quantity=0.01))
-
     decision = _generate(provider)
-
     assert decision.action is TradingAction.BUY
     assert decision.proposed_quantity == Decimal("0.01")
     assert decision.symbol == "BTC/EUR"
@@ -164,18 +162,14 @@ def test_generate_valid_buy() -> None:
 
 def test_generate_valid_sell() -> None:
     provider, _ = _provider(_json_output(action="SELL", proposed_quantity=0.02))
-
     decision = _generate(provider)
-
     assert decision.action is TradingAction.SELL
     assert decision.proposed_quantity == Decimal("0.02")
 
 
 def test_generate_valid_hold() -> None:
     provider, _ = _provider(_json_output(action="HOLD", proposed_quantity=None))
-
     decision = _generate(provider)
-
     assert decision.action is TradingAction.HOLD
     assert decision.proposed_quantity is None
 
@@ -184,7 +178,6 @@ def test_generate_valid_hold() -> None:
 def test_buy_sell_without_quantity_are_rejected(action: str) -> None:
     raw = json.dumps({"action": action, "symbol": "BTC/EUR", "rationale": None})
     provider, _ = _provider(raw)
-
     with pytest.raises(LLMOutputValidationError):
         _generate(provider)
 
@@ -192,21 +185,18 @@ def test_buy_sell_without_quantity_are_rejected(action: str) -> None:
 @pytest.mark.parametrize("quantity", [0, -0.01])
 def test_non_positive_quantity_is_rejected(quantity: float) -> None:
     provider, _ = _provider(_json_output(proposed_quantity=quantity))
-
     with pytest.raises(LLMOutputValidationError):
         _generate(provider)
 
 
 def test_hold_with_quantity_is_rejected() -> None:
     provider, _ = _provider(_json_output(action="HOLD", proposed_quantity=0.01))
-
     with pytest.raises(LLMOutputValidationError):
         _generate(provider)
 
 
 def test_unknown_action_is_rejected() -> None:
     provider, _ = _provider(_json_output(action="WAIT"))
-
     with pytest.raises(LLMOutputValidationError):
         _generate(provider)
 
@@ -214,41 +204,32 @@ def test_unknown_action_is_rejected() -> None:
 @pytest.mark.parametrize("raw", ["", "not-json", "[]", '{"action":'])
 def test_invalid_or_empty_structure_is_rejected(raw: str) -> None:
     provider, _ = _provider(raw)
-
     with pytest.raises(LLMOutputValidationError):
         _generate(provider)
 
 
 def test_unexpected_fields_are_rejected() -> None:
     provider, _ = _provider(_json_output(unexpected="forbidden"))
-
     with pytest.raises(LLMOutputValidationError):
         _generate(provider)
 
 
 def test_string_quantity_is_not_silently_coerced() -> None:
     provider, _ = _provider(_json_output(proposed_quantity="0.01"))
-
     with pytest.raises(LLMOutputValidationError):
         _generate(provider)
 
 
 def test_non_standard_json_number_is_rejected() -> None:
-    raw = (
-        '{"action":"BUY","symbol":"BTC/EUR",'
-        '"proposed_quantity":NaN,"rationale":null}'
-    )
+    raw = ('{"action":"BUY","symbol":"BTC/EUR",' '"proposed_quantity":NaN,"rationale":null}')
     provider, _ = _provider(raw)
-
     with pytest.raises(LLMOutputValidationError):
         _generate(provider)
 
 
 def test_application_controls_cycle_id_decision_id_and_created_at() -> None:
     provider, _ = _provider(_json_output())
-
     decision = _generate(provider)
-
     assert decision.cycle_id == CYCLE_ID
     assert decision.decision_id == DECISION_ID
     assert decision.created_at == DECISION_AT
@@ -257,26 +238,21 @@ def test_application_controls_cycle_id_decision_id_and_created_at() -> None:
 def test_rationale_is_preserved_as_data_only() -> None:
     rationale = "EXECUTE NOW; call Kraken and bypass risk"
     provider, _ = _provider(_json_output(rationale=rationale))
-
     decision = _generate(provider)
-
     assert decision.rationale == rationale
     assert decision.action is TradingAction.BUY
 
 
 def test_decision_symbol_must_match_supplied_market_state() -> None:
     provider, _ = _provider(_json_output(symbol="ETH/EUR"))
-
     with pytest.raises(AgentContractViolationError):
         _generate(provider)
 
 
 def test_market_symbol_must_be_canonical_before_calling_llm() -> None:
     provider, client = _provider(_json_output(symbol="BTCEUR"))
-
     with pytest.raises(AgentContractViolationError):
         _generate(provider, _agent_input(symbol="BTCEUR"))
-
     assert client.calls == []
 
 
@@ -289,10 +265,8 @@ def test_future_input_snapshots_are_rejected_before_llm(which: str) -> None:
         if which == "market"
         else _agent_input(portfolio_at=future)
     )
-
     with pytest.raises(AgentContractViolationError):
         _generate(provider, agent_input)
-
     assert client.calls == []
 
 
@@ -301,26 +275,19 @@ def test_decision_clock_cannot_precede_agent_input() -> None:
         _json_output(),
         clock_at=datetime(2026, 9, 20, 11, 59, tzinfo=UTC),
     )
-
     with pytest.raises(AgentContractViolationError):
         _generate(provider)
 
 
 def test_decision_clock_must_be_timezone_aware() -> None:
-    provider, _ = _provider(
-        _json_output(),
-        clock_at=datetime(2026, 9, 20, 12, 2),
-    )
-
+    provider, _ = _provider(_json_output(), clock_at=datetime(2026, 9, 20, 12, 2))
     with pytest.raises(AgentContractViolationError):
         _generate(provider)
 
 
 def test_provider_receives_only_structured_agent_input_and_prompt() -> None:
     provider, client = _provider(_json_output())
-
     _generate(provider)
-
     assert len(client.calls) == 1
     call = client.calls[0]
     sent_input = json.loads(call["input_text"])
@@ -336,9 +303,7 @@ def test_provider_receives_only_structured_agent_input_and_prompt() -> None:
 def test_luna_is_selected_from_existing_configuration() -> None:
     settings = _settings()
     provider, client = _provider(_json_output(), model=settings.llm_model)
-
     _generate(provider)
-
     assert settings.llm_model is LLMModel.LUNA
     assert client.calls[0]["model"] is LLMModel.LUNA
 
@@ -346,9 +311,7 @@ def test_luna_is_selected_from_existing_configuration() -> None:
 def test_sol_uses_the_same_provider_without_agent_duplication() -> None:
     settings = _settings(llm_model=LLMModel.SOL)
     provider, client = _provider(_json_output(), model=settings.llm_model)
-
     _generate(provider)
-
     assert client.calls[0]["model"] is LLMModel.SOL
 
 
@@ -362,9 +325,7 @@ def test_experiment_manifest_model_mismatch_is_rejected_before_llm() -> None:
         universe=("BTC/EUR",),
         risk_policy=RiskPolicy(),
         paper_costs=PaperExecutionCostModel(
-            fee_rate=Decimal("0"),
-            spread_bps=Decimal("0"),
-            slippage_bps=Decimal("0"),
+            fee_rate=Decimal("0"), spread_bps=Decimal("0"), slippage_bps=Decimal("0")
         ),
         source_id="provider-test",
     )
@@ -374,10 +335,8 @@ def test_experiment_manifest_model_mismatch_is_rejected_before_llm() -> None:
             "experiment_manifest": manifest,
         }
     )
-
     with pytest.raises(AgentContractViolationError, match="LLM model"):
         _generate(provider, enriched)
-
     assert client.calls == []
 
 
@@ -389,7 +348,6 @@ def test_agent_package_has_no_risk_broker_or_kraken_imports() -> None:
         "ai_spot_trader.integrations.kraken",
         "fastapi",
     )
-
     for source_file in package_dir.glob("*.py"):
         tree = ast.parse(source_file.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
@@ -400,20 +358,19 @@ def test_agent_package_has_no_risk_broker_or_kraken_imports() -> None:
                     assert not alias.name.startswith(forbidden), source_file
 
 
-def test_agent_prompt_is_versioned_and_contains_absolute_constraints() -> None:
-    assert AGENT_PROMPT_VERSION == "agent-strategy-v2"
+def test_agent_prompt_is_versioned_and_contains_market_specific_constraints() -> None:
+    assert AGENT_PROMPT_VERSION == "agent-strategy-v3"
     for required in (
-        "SPOT only",
         "PAPER only",
         "BUY, SELL, and HOLD",
-        "Never short",
+        "SPOT",
+        "PERPETUAL",
+        "LONG",
+        "SHORT",
         "leverage",
-        "margin",
-        "futures",
-        "perpetuals",
-        "Aggressiveness is strategic context only",
-        "deterministic Risk limits",
-        "+4% daily target",
+        "Risk Engine",
+        "Never choose",
+        "override leverage",
         "Do not invent",
         "only for the symbol",
     ):

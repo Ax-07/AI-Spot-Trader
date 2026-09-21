@@ -1,4 +1,4 @@
-"""Deterministic Risk Engine for PAPER SPOT execution proposals."""
+"""Deterministic Risk Engine for PAPER SPOT and DERIVATIVES proposals."""
 
 from ai_spot_trader.risk.engine import RiskEngine, RiskResult
 from ai_spot_trader.risk.errors import InvalidRiskTimeError, RiskEngineError

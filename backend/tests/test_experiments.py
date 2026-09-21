@@ -228,7 +228,7 @@ def test_same_configuration_produces_same_manifest_digest() -> None:
     assert left.experiment_digest == right.experiment_digest
     assert (
         left.experiment_digest
-        == "6e4b31942703ea04bee0aeac9fd949a14608b19e8eb8b4f0ed2dba85acc28159"
+        == "e458683918bdafa7300a3e5984cee8df52336bce2c3543802ad990495ee364f6"
     )
     validate_experiment_manifest_digest(left)
 

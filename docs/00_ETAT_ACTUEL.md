@@ -2,63 +2,61 @@
 
 > Mémoire courte de reprise. Ce fichier doit rester synthétique et être mis à jour après chaque batch important.
 
-## Référence intégrée actuelle
+## Référence technique
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub intégré : `d0f6d46b9adb37117051a7a497a8d55075c41d32` (`fix: decouple market context from engine cadence`).
-- Parent direct : `bb1aa047157deb1b62d27de952fa53ec14992f09` (`docs: finalize Batch 15.2 state`).
-- Batch 15.3 est intégré sur `main` au commit fonctionnel `d0f6d46b9adb37117051a7a497a8d55075c41d32`.
+- HEAD GitHub vérifié au démarrage du Batch 16 : `c2e21f9b5b47086ea8dad336cc80ff15afa27ba0` (`docs: finalize Batch 15.3 integration`).
+- Référence fonctionnelle précédente : `d0f6d46b9adb37117051a7a497a8d55075c41d32` (`fix: decouple market context from engine cadence`).
+- Le présent Batch 16 est un **patch local proposé**, non intégré à GitHub tant qu'il n'a pas été validé et commité par l'utilisateur.
 
-## Contexte du correctif
+## Batch 16 — SPOT + Kraken Derivatives en PAPER
 
-Le Batch 15.2 est intégré et validé. Les essais PAPER réels ont confirmé le contexte 5 min / 30 min, mais ont aussi montré que les tickers successifs du moteur étaient conservés dans le même `MarketStateBuilder` que les clôtures OHLC 1 minute.
+Le projet n'est plus conceptuellement limité au SPOT. Le même backend et le même agent stratégique peuvent traiter :
 
-Conséquence confirmée : le nombre d'observations et les statistiques descriptives pouvaient dépendre de `trading_cadence_seconds`, alors que la cadence moteur ne doit pas modifier l'échantillonnage du contexte marché.
+- `SPOT` : règles historiques inchangées, aucun short ni levier ; `SELL` exige une position détenue ;
+- `PERPETUAL` Kraken Derivatives : positions `LONG`/`SHORT`, marge isolée, levier déterministe, P&L réalisé/non réalisé, funding, exposition et risque de liquidation ;
+- `FUTURE` daté : métadonnées de domaine prévues et découverte possible, mais exécution PAPER volontairement refusée dans ce batch ;
+- contrats inverses : découverts mais refusés à l'exécution PAPER ; seuls les perpetuals linéaires sont exécutables dans ce premier lot.
 
-## Batch 15.3 — contexte marché indépendant de la cadence
-
-Correctif intégré sans moteur Market parallèle :
-
-- `MarketStateBuilder` reste l'unique calculateur des fenêtres descriptives ;
-- les observations retenues dans le builder constituent uniquement la série statistique déterministe ;
-- le ticker courant devient une observation de snapshot non persistée dans cette série ;
-- `MarketState.last_price`, `MarketContext.last_observed_at` et la fraîcheur restent basés sur le ticker courant ;
-- un `statistics_as_of` distinct ancre les fenêtres sur la dernière observation statistique causale disponible ;
-- le runtime Kraken utilise la dernière clôture OHLC 1 minute retenue comme ancre statistique ;
-- sans nouvelle clôture OHLC, des cycles supplémentaires ne changent donc pas artificiellement compte, min/max/range, rendement ou volatilité réalisée ;
-- quand une nouvelle clôture devient disponible, elle est ajoutée une seule fois et l'ancre statistique avance naturellement ;
-- les clôtures à ou après le ticker courant restent exclues ;
-- les fenêtres vides/partielles restent explicites et honnêtes ;
-- l'ordre temporel strict des tickers successifs reste contrôlé ;
-- aucun indicateur stratégique, score BUY/SELL/HOLD, changement Agent/Risk, Kraken privé ou LIVE.
-
-Le chemin d'exécution reste strictement :
+Le chemin canonique reste unique :
 
 ```text
 Market -> Agent -> DecisionCandidate -> Risk -> ExecutionIntent -> Paper Broker
 ```
 
-## Validations du Batch 15.3
+L'Agent conserve `BUY / SELL / HOLD`. En dérivés, `SELL` peut ouvrir/augmenter un `SHORT` et `BUY` ouvrir/augmenter un `LONG`. Une action opposée réduit/ferme la position existante ; aucun retournement LONG↔SHORT par dépassement n'est autorisé silencieusement.
 
-Exécutées par ChatGPT pendant le développement :
+## Garde-fous dérivés
 
-- `pytest` Market State + Kraken Market Data : **38 tests passés** ;
-- `compileall` des 4 fichiers Python créés/modifiés : **réussi** ;
-- contrôles déterministes ajoutés pour snapshots répétés sans nouvelle bougie, simulation cadence 10 s vs 120 s, ticker courant, fraîcheur, no-look-ahead, fenêtres partielles, ordre strict et snapshots successifs.
+- `Risk Engine` conserve l'autorité finale ;
+- levier PAPER par défaut : `1x` ;
+- plafond de levier interne explicite dans `RiskPolicy` ;
+- caps explicites de notionnel par position et d'exposition dérivés totale pour un runtime PERPETUAL ;
+- marge `ISOLATED` uniquement dans Batch 16 ; `CROSS` est représenté mais refusé à l'exécution ;
+- buffer de liquidation déterministe ;
+- coûts PAPER : frais, spread et slippage ;
+- funding perpetual comptabilisé au mark-to-market ;
+- `reduce_only` produit par Risk, jamais par le LLM ;
+- aucune route Kraken privée ni ordre LIVE n'est ajoutée.
 
-Validation complète exécutée localement par l'utilisateur avant le push : **315 tests passés**, 2 warnings externes ; Ruff **All checks passed** ; mypy **94 fichiers sans erreur** ; `git diff --check` sans erreur, avec uniquement les warnings Windows LF -> CRLF.
+## Kraken public
 
-La présente clôture documentaire ne modifie aucun comportement fonctionnel.
+La couche Derivatives publique utilise la base `https://futures.kraken.com/derivatives/api/v3` avec découverte des instruments et tickers publics. Aucun secret Kraken n'est requis pour le Batch 16.
 
-## Limites conservées
+## Validation disponible dans le livrable
 
-- PAPER/SPOT uniquement ; aucun LIVE, aucune API Kraken privée.
-- Chat opérateur strictement conversationnel et non mutant.
-- Ledger PAPER toujours mémoire ; recovery/réconciliation après crash différés.
-- Aucun exactly-once global ledger/PostgreSQL.
-- La granularité OHLC 1 minute reste un mécanisme descriptif de bootstrap et d'échantillonnage fixe, pas une stratégie de trading.
+Exécuté par ChatGPT sur la copie de reconstruction du patch :
+
+```text
+pytest ciblé Batch 16 : 23 passés
+python -m compileall   : réussi
+```
+
+Non exécuté dans l'environnement ChatGPT faute d'outils installés : `ruff` et `mypy`.
+
+La validation complète doit être exécutée sur le dépôt local utilisateur après extraction : suite `pytest`, Ruff, mypy, `git diff --check` et `git status --short`.
 
 ## Prochaine étape
 
-Poursuivre les essais PAPER contrôlés sur l'état intégré `d0f6d46`, en conservant la comparaison de cadences comme contrôle expérimental. Le LIVE reste séparé et hors périmètre.
+Valider le ZIP Batch 16 dans `E:\AI-Spot-Trader`. Si la suite complète passe, commiter/pousser le batch puis lancer un premier smoke test PERPETUAL PAPER avec paramètres conservateurs (`1x`, faible notionnel, limites d'exposition strictes).

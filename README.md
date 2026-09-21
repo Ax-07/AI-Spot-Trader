@@ -1,274 +1,157 @@
 # AI Spot Trader
 
-AI Spot Trader est une application expérimentale de **trading crypto SPOT pilotée par un agent IA unique**.
+AI Spot Trader est une application expérimentale de trading crypto **SPOT + Kraken Derivatives** pilotée par **un agent IA unique**. L'agent conserve la décision stratégique (`BUY`, `SELL`, `HOLD`) tandis qu'un **Risk Engine déterministe** garde l'autorité finale avant toute exécution.
 
-Le projet étudie jusqu'où un agent IA peut prendre des décisions de trading autonomes à partir d'un état de marché et de portefeuille structurés, tout en restant encadré par un **Risk Engine déterministe** qui conserve l'autorité finale avant toute exécution.
-
-> **Statut :** le runtime PAPER exécutable, le Batch 15.2 — contexte marché multi-horizon — et le Batch 15.3 — contexte marché indépendant de la cadence du moteur — sont intégrés sur GitHub `main`. Le Batch 15.3 est intégré au commit fonctionnel `d0f6d46b9adb37117051a7a497a8d55075c41d32` (`fix: decouple market context from engine cadence`). Il sépare l'observation ticker courante de la série statistique OHLC afin que les fenêtres descriptives ne dépendent plus de la cadence du moteur.
+> **État Batch 16 :** le support Kraken Derivatives est ajouté en **PAPER uniquement** sous forme de patch local proposé. Le HEAD GitHub vérifié avant le batch est `c2e21f9b5b47086ea8dad336cc80ff15afa27ba0`. Aucun ordre LIVE/private Kraken Derivatives n'est implémenté.
 
 ## Principes
 
 - Exchange initial : **Kraken**.
-- Trading **SPOT uniquement**.
-- Aucun short, levier, margin, future ou perpetual.
-- Actions stratégiques : `BUY`, `SELL`, `HOLD`.
-- Impossible de vendre un actif non détenu.
-- Un seul agent IA conserve la décision stratégique.
-- Le Risk Engine déterministe autorise, réduit ou refuse une proposition.
-- Seul Risk peut produire un `ExecutionIntent`.
-- Aucune sortie LLM ne déclenche directement un Broker ou un ordre Kraken.
-- Les premières versions restent exclusivement en **PAPER**.
-- Frais, spread et slippage restent explicitement mesurables.
-- Toutes les décisions, y compris HOLD et REJECT, sont auditables.
-- Les erreurs techniques restent distinctes des décisions métier.
-- Aucun secret dans prompts, logs, réponses API ou fichiers versionnés.
-- Aucun look-ahead ni réécriture post-hoc.
-- Le chat opérateur est **informatif uniquement** : il ne modifie jamais silencieusement la stratégie et n'est jamais injecté dans les cycles suivants.
+- Marchés : **SPOT** et **Kraken Derivatives**.
+- SPOT : aucun short, aucun levier ; `SELL` reste impossible sans actif détenu.
+- Derivatives : `LONG`/`SHORT` autorisés uniquement dans le domaine dérivés.
+- Batch 16 exécute en PAPER uniquement les **perpetuals linéaires** ; futures datés et contrats inverses sont représentés/découverts mais refusés à l'exécution.
+- Marge PAPER dérivés : **ISOLATED** ; `CROSS` reste représenté mais non exécuté.
+- Levier PAPER dérivés : **1x par défaut**, borné par une limite Risk interne et les métadonnées instrument disponibles.
+- L'agent ne choisit pas et ne modifie pas le levier.
+- Aucune sortie LLM ne déclenche directement un ordre Kraken.
+- Frais, spread, slippage et funding sont pris en compte.
+- Toutes les décisions, y compris `HOLD`, restent auditables.
+- Aucun secret dans prompts, logs ou fichiers versionnés.
+- Le frontend reste un cockpit ; fermer le frontend n'arrête jamais le moteur backend.
 
 Principe central : **l'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
-## Architecture
-
-Le backend constitue l'application de trading. Le frontend est uniquement un cockpit de contrôle et de visualisation : fermer ou redémarrer le frontend ne doit jamais arrêter le moteur.
-
-Stack :
-
-- backend : Python, `asyncio`, FastAPI, Pydantic ;
-- persistance : PostgreSQL, SQLAlchemy 2 async, `asyncpg`, Alembic ;
-- frontend : Next.js, TypeScript, shadcn/ui, Tailwind CSS ;
-- communication : REST tant qu'aucun besoin réel et bus d'événements canonique ne justifient un WebSocket ;
-- Kraken et le fournisseur LLM restent derrière des interfaces dédiées.
+## Architecture canonique
 
 ```text
-Kraken public AssetPairs + OHLC 1 min clôturées + ticker courant
+Kraken public Spot / Derivatives
         |
         v
- MarketStateBuilder
-  | série statistique OHLC -> fenêtres descriptives 5 min / 30 min
-  ` ticker courant        -> last_price + fraîcheur du snapshot
+   MarketState
         |
-        v
-   MarketState --------+
-                       |
- PortfolioState -------+--> AgentInput --> Agent Luna/Sol
-                                          BUY / SELL / HOLD
-                                                  |
-                                                  v
-                                             Risk Engine
-                                      ALLOW / MODIFY / REJECT
-                                                  |
-                            HOLD/REJECT -----------+--- tradable
-                            aucun Broker                 |
-                                                      v
-                                             ExecutionIntent
-                                               créé par Risk
-                                                      |
-                                                      v
-                                               Paper Broker
-                                                      |
-                                             Fill(s) + ledger
-                                                      |
-                                                      v
-                                            TradingCycleResult
-                                                      |
-                                                      v
-                                     AuditedTradingCycleRunner
-                                                      |
-                                                      v
-                                      PostgreSQL audit journal
-                                                      |
-                                                      v
-                              durable read/query + analytics reducer
-                                                      |
-                                                      v
-                                       FastAPI REST / analytics
-                                                      |
-                                                      v
-                                          Next.js cockpit
+        +----------------+
+        |                |
+        v                v
+ PortfolioState      AgentInput
+        |                |
+        +-------> Agent IA
+                    BUY/SELL/HOLD
+                         |
+                         v
+                    Risk Engine
+             ALLOW / MODIFY / REJECT
+                         |
+             HOLD/REJECT|tradable
+                         v
+                  ExecutionIntent
+                         |
+                         v
+                   Paper Broker
+                         |
+                  Fill(s) + ledger
+                         |
+                         v
+                TradingCycleResult
+                         |
+                         v
+              PostgreSQL audit/analytics
+                         |
+                         v
+                 FastAPI / cockpit
 ```
 
-Le dernier élément OHLC renvoyé par Kraken correspond à la fenêtre courante non clôturée : il est exclu du bootstrap historique. Les clôtures conservées sont horodatées à leur disponibilité causale (`started_at + interval`). Depuis le Batch 15.3, elles constituent seules la série statistique retenue par le `MarketStateBuilder`; les fenêtres sont ancrées sur la dernière clôture causale disponible. Le ticker courant reste séparé et fournit uniquement le prix courant du snapshot et ses métadonnées de fraîcheur. Des cycles supplémentaires sans nouvelle bougie OHLC ne modifient donc pas artificiellement les statistiques descriptives. Aucune logique BUY/SELL/HOLD n'est ajoutée à la couche marché.
+Le chemin reste unique : `Market -> Agent -> DecisionCandidate -> Risk -> ExecutionIntent -> Paper Broker`.
 
-Le Batch 15 ajoute un chemin conversationnel **latéral et en lecture seule** :
+## Sémantique SPOT / Derivatives
+
+### SPOT
+
+`BUY` augmente un actif détenu. `SELL` ne peut vendre qu'une quantité réellement disponible. Aucun short, levier ou marge n'est appliqué au SPOT.
+
+### PERPETUAL
+
+Le même vocabulaire stratégique `BUY / SELL / HOLD` est conservé :
+
+- `BUY` sans position ouvre/augmente un `LONG` ;
+- `SELL` sans position ouvre/augmente un `SHORT` ;
+- une action opposée réduit/ferme la position existante ;
+- le Risk Engine produit `reduce_only` lorsque nécessaire ;
+- un dépassement ne peut pas retourner silencieusement une position `LONG` en `SHORT` ou inversement.
+
+Le portefeuille dérivés conserve notamment : side, quantité, prix moyen, mark, notionnel, P&L réalisé/non réalisé, levier, marge utilisée, maintenance margin, funding cumulé et prix de liquidation estimé.
+
+## Kraken Derivatives public
+
+Le Batch 16 ajoute un client public séparé de Kraken Spot, basé sur :
 
 ```text
-Cockpit Chat -> FastAPI /api/v1/chat -> OperatorChatService
-                                      |-> faits canoniques runtime/audit/analytics
-                                      `-> OpenAIChatProvider -> même LLMModel Luna/Sol
-
-Ce chemin ne rejoint jamais Risk, Broker, Kraken privé ou ExecutionIntent.
+https://futures.kraken.com/derivatives/api/v3
 ```
 
-## Agent IA
+Il découvre les instruments et lit les tickers publics. Les symboles Kraken sont normalisés vers le format canonique `BASE/QUOTE` (`XBT -> BTC`). Aucune clé privée Kraken n'est utilisée.
 
-Le port canonique reste :
+## Risk Engine dérivés
 
-```python
-LLMProvider.generate_decision(agent_input: AgentInput) -> DecisionCandidate
-```
+En plus des garde-fous historiques SPOT, Risk contrôle :
 
-Le fournisseur ne produit que `action`, `symbol`, `proposed_quantity` et `rationale`. Les IDs et timestamps restent sous contrôle applicatif. GPT-5.6 Luna est le modèle initial ; Sol reste sélectionnable par configuration.
+- type de marché et type de contrat ;
+- quantité minimale et limite instrument ;
+- levier demandé/configuré et plafond interne ;
+- marge disponible ;
+- notionnel maximal par ordre ;
+- notionnel maximal par position ;
+- exposition dérivés totale ;
+- buffer de liquidation ;
+- `reduce_only` et interdiction de retournement accidentel.
 
-### Agressivité — Batch 13 intégré
+Les contrats inverses, `CROSS` et futures datés sont fail-closed dans ce premier batch PAPER.
 
-Le Batch 13 fixe une interprétation **discrète et versionnée** des niveaux `1..10` sous `aggressiveness-map-v1`. Chaque niveau fournit un `AggressivenessContext` explicite (posture + instruction stratégique) transmis dans `AgentInput`.
+## Funding et marge PAPER
 
-L'agressivité peut influencer uniquement la **volonté stratégique d'agir** et la **quantité proposée par l'Agent**. Elle ne modifie jamais `RiskPolicy`, les balances, les positions détenues, la solvabilité BUY, les contraintes temporelles, les coûts PAPER ou l'autorité finale de Risk.
+Le market source dérivés marque les positions avant la création du `PortfolioState` du cycle. Le funding perpetual est accumulé dans le ledger à partir du taux public normalisé, du mark et du temps écoulé. Les ouvertures bloquent une marge isolée et les réductions/fermetures libèrent la marge au prorata en réalisant P&L et funding.
 
-Le prompt Agent devient `agent-strategy-v2`. Une expérience contrôlée peut attacher à chaque `AgentInput` un `ExperimentManifest` `paper-experiment-v1`. Les comparaisons d'agressivité réutilisent directement les rapports `paper-analytics-v1` du Batch 12 : aucun classement automatique n'est produit.
+Le modèle reste volontairement conservateur : il ne prétend pas reproduire l'intégralité du moteur de liquidation privé de Kraken.
 
-### Comparaison Luna / Sol — Batch 14 intégré
+## Configuration
 
-Le Batch 14 conserve `paper-experiment-v1` pour l'axe agressivité et introduit `paper-experiment-v2` pour une expérience dont **le modèle LLM est l'unique variable contrôlée**.
-
-`paper-experiment-v2` ajoute `comparison_variable = LLM_MODEL`, `experiment_group_digest`, `replicate_index` et `replicate_count`. `source_digest` devient obligatoire afin d'identifier un dataset/snapshot figé. `compare_model_runs(...)` réutilise directement `PaperAnalyticsReport` (`paper-analytics-v1`) et ne produit ni score composite, ni classement, ni « meilleur modèle » automatique.
-
-### Chat opérateur — Batch 15 intégré
-
-Le Batch 15 ajoute une interface conversationnelle vers **le même modèle Agent configuré** (`LLMModel.LUNA` ou `LLMModel.SOL`) sans créer un deuxième agent stratégique.
-
-Contrat :
-
-- provider conversationnel distinct de `OpenAIDecisionProvider` ;
-- prompt conversationnel versionné `operator-chat-v1` ;
-- historique borné et process-local pour la V1 ;
-- `POST /api/v1/chat/messages` pour envoyer un message ;
-- `GET /api/v1/chat/sessions/{session_id}` pour relire l'historique de la session ;
-- lecture des faits canoniques du runtime, du journal et des analytics ;
-- contexte d'un cycle historique chargé depuis son `AgentInput` persisté exact ;
-- état courant étiqueté séparément et interdit comme justification rétroactive d'une décision historique ;
-- aucune instruction conversationnelle n'est ajoutée à `AgentInput` ni au manifeste expérimental ;
-- « BUY maintenant », « agressivité 8 » ou « ignore Risk » restent conversationnels et ne déclenchent aucune mutation.
-
-L'historique chat n'est pas persisté en PostgreSQL dans cette V1. Cette décision minimise les risques de contamination des digests expérimentaux et maintient une séparation explicite entre conversation et faits de trading.
-
-## Trading PAPER canonique
-
-`TradingCycleRunner.run_cycle()` exécute exactement un cycle et `TradingEngine` répète cette primitive séquentiellement. Un seul `MarketState` est partagé entre Agent, Risk et Broker pour le cycle, et un seul `PortfolioState` pré-cycle est partagé entre Agent et Risk.
-
-Pour le runtime Kraken PAPER, `MarketDataSource.snapshot(symbol)` construit le snapshot via le `MarketStateBuilder` existant : historique public OHLC 1 minute **clôturé uniquement**, ticker WebSocket courant, contexte de fraîcheur et fenêtres descriptives canoniques 5/30 minutes. Le ticker n'est plus ajouté à l'historique statistique : il reste la source de `MarketState.last_price` et de la fraîcheur, tandis que les fenêtres sont calculées sur les clôtures OHLC à cadence fixe et ancrées sur la dernière clôture retenue. Le runner ne calcule aucun indicateur et continue à consommer exactement un snapshot par cycle.
-
-- HOLD traverse Risk et produit un résultat complet sans intent.
-- REJECT est une issue métier normale sans Broker.
-- MODIFY utilise exactement la quantité autorisée par Risk.
-- ALLOW transmet l'intent produit par Risk.
-- Les erreurs Market/Portfolio/Agent/Risk/Broker restent des cycles `FAILED`, jamais des HOLD synthétiques.
-- Les erreurs de chat restent des erreurs HTTP/chat séparées et ne marquent aucun cycle `FAILED`.
-
-## Persistance durable — Batch 09 intégré
-
-Le package `ai_spot_trader.persistence` utilise SQLAlchemy async, PostgreSQL et Alembic. `AuditedTradingCycleRunner` persiste le `TradingCycleResult` après le runner canonique sans dupliquer l'orchestration.
-
-Le schéma `0001_audit_journal` conserve `audit_cycles`, `audit_decisions`, `audit_risk_assessments`, `audit_execution_intents` et `audit_fills`.
-
-Le graphe est transactionnel et idempotent par `cycle_id`. La persistance ne garantit pas encore un exactly-once global entre la mutation du ledger PAPER mémoire et le commit PostgreSQL ; la reconstruction/réconciliation après crash reste différée.
-
-Les Batches 13/14 n'ajoutent pas de table ni de migration. Le Batch 15 n'ajoute également **aucune migration** : les messages chat restent en mémoire et ne participent ni au `result_digest`, ni aux digests expérimentaux, ni aux analytics historiques. Le contexte marché enrichi est sérialisé dans l'`AgentInput` déjà durable ; les Batches 15.2/15.3 ne nécessitent aucune migration.
-
-## API FastAPI
-
-La façade REST versionnée `/api/v1` expose notamment :
-
-- `GET /health`
-- `GET /api/v1/engine`
-- `POST /api/v1/engine/run-cycle`
-- `POST /api/v1/engine/start`
-- `POST /api/v1/engine/stop`
-- `GET /api/v1/portfolio`
-- `GET /api/v1/cycles`
-- `GET /api/v1/cycles/latest`
-- `GET /api/v1/cycles/{cycle_id}`
-- `GET /api/v1/decisions`
-- `GET /api/v1/risk-assessments`
-- `GET /api/v1/executions`
-- `GET /api/v1/errors/latest`
-- `GET /api/v1/market/latest`
-- `GET /api/v1/analytics`
-- `POST /api/v1/chat/messages`
-- `GET /api/v1/chat/sessions/{session_id}`
-
-Les routes chat n'exposent aucune méthode de mutation Risk/Broker/stratégie et leurs erreurs fournisseur sont sanitizées (`502`) sans fuite du message brut.
-
-## Frontend cockpit
-
-Le cockpit affiche l'état backend/moteur, portefeuille, marché durable, cycles, décisions, Risk, exécutions/fills, erreurs sanitizées et analytics PAPER.
-
-Le Batch 15 ajoute un panneau Chat séparé. Le navigateur ne possède aucun chemin chat vers `startEngine`, `stopEngine`, Risk, Broker ou Kraken. Recharger/fermer le frontend n'arrête donc pas le moteur backend ; une session chat mémoire peut en revanche expirer si le **backend** redémarre, ce qui est intentionnel en V1.
-
-## Analytics PAPER — Batch 12 intégré
-
-Le reducer analytics reste **pur, déterministe et en lecture seule** au-dessus du journal durable. Les coûts sont lus dans les fills persistés, chaque point est valorisé au `MarketState` durable du même cycle et la reproductibilité des métriques repose sur `paper-analytics-v1` + digest des `result_digest`.
-
-Le chat peut lire un résumé analytics courant, mais ce résumé n'est jamais utilisé comme cause d'une décision historique et les messages chat ne modifient aucune métrique.
-
-## Validation
-
-### Batch 15 intégré
-
-Validation locale finale confirmée le 21 septembre 2026 :
+SPOT reste le défaut. Pour activer le chemin PERPETUAL PAPER :
 
 ```text
-pytest backend                          : 277 tests passés, 2 warnings externes
-ruff check backend                      : All checks passed
-mypy backend/src backend/tests          : 89 fichiers sans erreur
-pnpm lint                               : réussi
-pnpm typecheck                          : réussi
-pnpm build                              : réussi
-git diff --check                        : aucune erreur, warnings LF -> CRLF uniquement
-commit/push fonctionnel                 : 1c182b829c141c20be5cc8e62a3f8afa6f71b4d6
+AI_SPOT_TRADER_PAPER_MARKET_TYPE=PERPETUAL
+AI_SPOT_TRADER_PAPER_DERIVATIVE_LEVERAGE=1
+AI_SPOT_TRADER_PAPER_DERIVATIVE_MARGIN_MODE=ISOLATED
+AI_SPOT_TRADER_RISK_MAX_DERIVATIVE_LEVERAGE=1
+AI_SPOT_TRADER_RISK_MAX_DERIVATIVE_POSITION_NOTIONAL=<positive-decimal>
+AI_SPOT_TRADER_RISK_MAX_TOTAL_DERIVATIVE_EXPOSURE=<positive-decimal>
+AI_SPOT_TRADER_RISK_DERIVATIVE_LIQUIDATION_BUFFER_RATIO=1.10
 ```
 
-### Runtime PAPER intégré
+Les paramètres SPOT historiques (`PAPER_SYMBOL`, capital, cadence, coûts, max order notional, whitelist, etc.) restent utilisés.
 
-Le commit `4b9701f07854a943cf47a14287aadfdf4aa48232` compose le runtime PAPER exécutable. Le premier essai réel a ensuite confirmé PostgreSQL, FastAPI, Kraken public, Luna, le journal, un cycle manuel et un smoke run autonome ; l'absence de contexte historique (`market_state.context = null`) a motivé le Batch 15.2.
+## API / analytics
 
-### Batch 15.2 intégré et validé
+Les contrats API ajoutent `market_type`, le contexte dérivés et `derivative_positions` sans retirer les champs SPOT historiques. Les analytics PAPER valorisent désormais l'exposition dérivés, la marge, le P&L non réalisé et le funding tout en conservant le replay historique SPOT.
 
-Le commit fonctionnel `97d529647179c6769a6bdc528b9d9f5e7c85c119` intègre le contexte marché multi-horizon. Le commit documentaire `bb1aa047157deb1b62d27de952fa53ec14992f09` clôt son état.
+## Validation Batch 16
 
-Validation locale du 21 septembre 2026 :
+Exécuté par ChatGPT sur la reconstruction locale du patch :
 
 ```text
-tests ciblés contexte marché             : 71 passés
-pytest                                   : 306 passés, 2 warnings externes
-ruff check .                             : All checks passed
-mypy .                                   : 94 fichiers sans erreur
-git diff --check                         : aucune erreur, warnings LF -> CRLF uniquement
+pytest ciblé Batch 16 : 23 passed
+python -m compileall   : OK
 ```
 
-Un cycle PAPER réel `BTC/USDC` a terminé `COMPLETED` avec `market_state.context` non nul, fenêtres canoniques 5 min / 30 min complètes, respect du no-look-ahead et rationale Agent exploitant explicitement les deux horizons. Les essais autonomes ultérieurs ont révélé la contamination des fenêtres par les tickers moteur, corrigée par le Batch 15.3.
+`ruff` et `mypy` ne sont pas installés dans l'environnement de reconstruction ChatGPT et doivent être exécutés dans le dépôt local utilisateur. La suite complète du repo doit également être rejouée localement avant intégration.
 
-### Batch 15.3 — intégré sur `main`
+## Sécurité / LIVE
 
-Commit fonctionnel : `d0f6d46b9adb37117051a7a497a8d55075c41d32` (`fix: decouple market context from engine cadence`).
-
-Validation ciblée exécutée par ChatGPT pendant le développement :
-
-```text
-pytest Market State + Kraken Market Data : 38 passés
-compileall fichiers Python modifiés       : réussi
-```
-
-Validation complète exécutée localement par l'utilisateur avant le push :
-
-```text
-pytest                                   : 315 passés, 2 warnings externes
-ruff check .                             : All checks passed
-mypy .                                   : 94 fichiers sans erreur
-git diff --check                         : aucune erreur, warnings LF -> CRLF uniquement
-```
-
-Les tests ajoutés couvrent explicitement l'absence de variation statistique sans nouvelle clôture OHLC, une simulation de cadences 10 s et 120 s aboutissant aux mêmes statistiques finales, le ticker courant comme `last_price`, la fraîcheur, le no-look-ahead, les fenêtres partielles et l'ordre temporel. La présente clôture documentaire ne modifie aucun comportement fonctionnel.
-
-## Sécurité
-
-- Aucun secret ou clé API réel ne doit être versionné, journalisé ou renvoyé par l'API.
+- PAPER uniquement.
+- Aucun endpoint Kraken Derivatives privé d'ordre n'est implémenté.
+- Aucun secret Kraken requis.
 - Une future clé Kraken ne devra jamais disposer du droit de retrait.
-- PAPER et LIVE restent explicitement séparés.
-- Toute exécution doit continuer à passer par Risk.
-- Le chat redige les formes de secrets courantes avant de conserver le message en mémoire et n'expose pas les erreurs brutes du fournisseur.
-- Le bind API par défaut reste local (`127.0.0.1`). Toute exposition distante des commandes lifecycle/chat devra être protégée explicitement avant usage.
+- Le passage au LIVE restera une décision séparée et explicite.
 
 ## Avertissement
 
-AI Spot Trader est un projet expérimental de recherche et développement. Il ne constitue pas un conseil financier et ne garantit aucun résultat de trading. La cible expérimentale de +4 %/jour reste une métrique de recherche, jamais une promesse.
+AI Spot Trader est un projet expérimental de recherche et développement. Il ne constitue pas un conseil financier et ne garantit aucun rendement. La cible expérimentale de +4 %/jour reste une métrique de recherche, jamais une promesse.

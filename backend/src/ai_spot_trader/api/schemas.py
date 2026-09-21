@@ -128,7 +128,9 @@ class MarketStateResponse(ApiModel):
     as_of: datetime
     symbol: str
     last_price: Decimal = Field(gt=0)
+    market_type: Literal["SPOT", "PERPETUAL", "FUTURE"] = "SPOT"
     context: JsonObject | None = None
+    derivative: JsonObject | None = None
 
 
 class AssetBalanceResponse(ApiModel):
@@ -142,12 +144,34 @@ class AssetPositionResponse(ApiModel):
     available: Decimal = Field(ge=0)
 
 
+class DerivativePositionResponse(ApiModel):
+    symbol: str
+    side: Literal["LONG", "SHORT"]
+    quantity: Decimal = Field(gt=0)
+    average_entry_price: Decimal = Field(gt=0)
+    mark_price: Decimal = Field(gt=0)
+    contract_size: Decimal = Field(gt=0)
+    notional: Decimal = Field(gt=0)
+    realized_pnl: Decimal
+    unrealized_pnl: Decimal
+    leverage: Decimal = Field(ge=1)
+    margin_used: Decimal = Field(gt=0)
+    initial_margin_rate: Decimal = Field(gt=0, le=1)
+    maintenance_margin_rate: Decimal = Field(gt=0, le=1)
+    maintenance_margin: Decimal = Field(ge=0)
+    cumulative_funding: Decimal
+    liquidation_price: Decimal | None = Field(default=None, gt=0)
+    margin_mode: Literal["ISOLATED", "CROSS"]
+    funding_updated_at: datetime | None = None
+
+
 class PortfolioResponse(ApiModel):
     portfolio_state_id: UUID
     as_of: datetime
     mode: Literal["PAPER"] = "PAPER"
     balances: tuple[AssetBalanceResponse, ...] = ()
     positions: tuple[AssetPositionResponse, ...] = ()
+    derivative_positions: tuple[DerivativePositionResponse, ...] = ()
 
 
 class EngineStatusResponse(ApiModel):
@@ -173,6 +197,7 @@ class PaperAnalyticsPointResponse(ApiModel):
     cumulative_fees: Decimal = Field(ge=0)
     cumulative_spread_cost: Decimal = Field(ge=0)
     cumulative_slippage_cost: Decimal = Field(ge=0)
+    cumulative_funding_pnl: Decimal
     exposure_value: Decimal = Field(ge=0)
     exposure_fraction: Decimal | None = Field(default=None, ge=0)
     cumulative_return_fraction: Decimal | None = None
@@ -193,6 +218,7 @@ class PaperDailyPerformanceResponse(ApiModel):
     fees: Decimal = Field(ge=0)
     spread_cost: Decimal = Field(ge=0)
     slippage_cost: Decimal = Field(ge=0)
+    funding_pnl: Decimal
     trade_count: int = Field(ge=0)
 
 
@@ -204,6 +230,7 @@ class PaperAnalyticsSummaryResponse(ApiModel):
     fees: Decimal = Field(ge=0)
     spread_cost: Decimal = Field(ge=0)
     slippage_cost: Decimal = Field(ge=0)
+    funding_pnl: Decimal
     max_drawdown_value: Decimal = Field(ge=0)
     max_drawdown_fraction: Decimal | None = Field(default=None, ge=0)
     current_drawdown_value: Decimal = Field(ge=0)

@@ -5,6 +5,7 @@ from ai_spot_trader.broker.errors import InvalidPaperCostModelError
 from ai_spot_trader.domain.enums import TradingAction
 
 BASIS_POINTS = Decimal(10_000)
+ONE = Decimal(1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +44,7 @@ class PaperExecutionEstimate:
 
     action: TradingAction
     quantity: Decimal
+    contract_size: Decimal
     reference_price: Decimal
     price: Decimal
     notional: Decimal
@@ -69,11 +71,13 @@ def estimate_paper_execution(
     reference_price: Decimal,
     quantity: Decimal,
     cost_model: PaperExecutionCostModel,
+    contract_size: Decimal = ONE,
 ) -> PaperExecutionEstimate:
     """Estimate one immediate full PAPER fill without side effects."""
 
     _validate_positive_decimal(reference_price, "reference_price")
     _validate_positive_decimal(quantity, "quantity")
+    _validate_positive_decimal(contract_size, "contract_size")
     if action is TradingAction.HOLD:
         raise ValueError("HOLD has no execution estimate")
 
@@ -84,16 +88,18 @@ def estimate_paper_execution(
     else:
         price = reference_price - spread_per_unit - slippage_per_unit
 
-    notional = price * quantity
+    exposure_units = quantity * contract_size
+    notional = price * exposure_units
     return PaperExecutionEstimate(
         action=action,
         quantity=quantity,
+        contract_size=contract_size,
         reference_price=reference_price,
         price=price,
         notional=notional,
         fee=notional * cost_model.fee_rate,
-        spread_cost=spread_per_unit * quantity,
-        slippage_cost=slippage_per_unit * quantity,
+        spread_cost=spread_per_unit * exposure_units,
+        slippage_cost=slippage_per_unit * exposure_units,
     )
 
 
