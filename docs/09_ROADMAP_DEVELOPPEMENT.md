@@ -113,7 +113,7 @@ Cycle réel de référence : `paper_run_id = 8bbfe6a5-a5d5-4c32-96dc-eb9c5e4113d
 
 ## Batch 16.6 — Validation comportementale GPT-5.6 Luna avec contexte enrichi
 
-**État : validé localement le 22 septembre 2026 ; documentation de clôture à intégrer sur `main`. Aucun changement de code.**
+**État : intégré sur GitHub `main` au commit `251d530ad12951605068c1c8eb8cbeb313c36b49` (`docs: validate Batch 16.6 Luna perpetual behavior`). Aucun changement de code pour le batch.**
 
 Run propre `paper_run_id = c9443243-57ca-43de-9356-adc1e6fe3226` sur `BTC/USD / PF_XBTUSD`, `PERPETUAL`, `ISOLATED`, levier `1x`, capital `1000 USD`, agressivité `2`, composition normale et GPT-5.6 Luna :
 
@@ -133,11 +133,27 @@ Un premier essai a réutilisé le run Batch 16.5 parce que le backend n'avait pa
 
 L'absence de BUY/SELL naturel ne constitue pas un échec et ne justifie aucune modification destinée à provoquer un trade.
 
+## Prompt Agent `agent-strategy-v4` — localisation française
+
+**État : intégré sur GitHub `main` au commit `bacf29c83b4f29477ee9e35a1a65756a866ba250` (`feat: localize agent strategy prompt to French`).**
+
+Évolution ciblée hors Batch 17 :
+
+- instructions humaines du prompt stratégique en français ;
+- valeurs contractuelles `BUY/SELL/HOLD`, `SPOT/PERPETUAL/FUTURE`, `LONG/SHORT` inchangées ;
+- `rationale` demandé en français ;
+- aucun changement du schéma structuré ni du chemin `Agent -> Risk -> Broker` ;
+- test ciblé Agent : `30 passed` ;
+- Ruff ciblé : `All checks passed!` ;
+- `git diff --check` : aucune erreur de contenu.
+
 ## Batch 17 — Robustesse Derivatives
 
-**Proposé après clôture et intégration documentaire du Batch 16.6.**
+**Prochain batch proposé. À lancer dans une nouvelle discussion après resynchronisation avec `main`.**
 
-Pistes : validation des schémas publics Kraken sur davantage d'instruments, tiers de marge par taille, liquidation PAPER plus fidèle, cockpit dédié dérivés, reprise/réconciliation du ledger mémoire, scénarios multi-position/multi-instrument, puis éventuel enrichissement public supplémentaire (funding historique, liquidité/volume) uniquement si son utilité est mesurée.
+Pistes à auditer avant implémentation : validation des schémas publics Kraken sur davantage d'instruments, tiers de marge par taille, liquidation PAPER plus fidèle, cockpit dédié dérivés, reprise/réconciliation du ledger mémoire, scénarios multi-position/multi-instrument, puis éventuel enrichissement public supplémentaire (funding historique, liquidité/volume) uniquement si son utilité est mesurée.
+
+Le périmètre exact du Batch 17 doit être limité et décidé après audit de l'existant ; ces pistes ne constituent pas encore toutes des décisions architecturales.
 
 ## LIVE — toujours séparé
 

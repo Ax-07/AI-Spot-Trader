@@ -8,7 +8,8 @@
 - Branche : `main`
 - Référence fonctionnelle Batch 16.5 : `595bd2c8b4311ac255db927515207f10875b1505` (`feat: enrich perpetual paper market context`).
 - Clôture documentaire Batch 16.5 intégrée sur `main` : `84272713b66439a16e7769da83eccc1514aa64f7` (`docs: finalize Batch 16.5 integration`).
-- Batch 16.6 validé localement le 22 septembre 2026 ; documentation de clôture à intégrer.
+- Validation comportementale Batch 16.6 intégrée sur `main` : `251d530ad12951605068c1c8eb8cbeb313c36b49` (`docs: validate Batch 16.6 Luna perpetual behavior`).
+- Prompt stratégique `agent-strategy-v4` en français intégré sur `main` : `bacf29c83b4f29477ee9e35a1a65756a866ba250` (`feat: localize agent strategy prompt to French`).
 
 ## Batch 16.5 — Contexte PERPETUAL intégré
 
@@ -43,13 +44,25 @@ Run propre via composition normale, sans harness ni décision forcée :
 
 Aucun BUY/SELL naturel n'est apparu. Ce n'est pas un échec du batch et aucune modification du prompt, de l'agressivité ou de Risk n'est justifiée pour provoquer un trade.
 
+## Prompt stratégique courant
+
+Le prompt Agent courant est `agent-strategy-v4`.
+
+- instructions humaines en français ;
+- valeurs contractuelles techniques inchangées : `BUY`, `SELL`, `HOLD`, `SPOT`, `PERPETUAL`, `FUTURE`, `LONG`, `SHORT` ;
+- `rationale` demandé en français ;
+- même `OpenAIDecisionProvider`, même schéma structuré, mêmes frontières Agent -> Risk -> Broker ;
+- aucune permission supplémentaire donnée au LLM.
+
+La localisation v4 a été validée localement par `pytest backend/tests/test_agent_provider.py` (`30 passed`) et Ruff ciblé (`All checks passed!`).
+
 ## Invariants
 
 Un seul Agent stratégique. PAPER uniquement. Risk garde l'autorité finale. Levier `1x` et `ISOLATED` déterministes pour ce protocole. Aucun LLM -> Broker direct. Aucun look-ahead. Aucun secret ni clé Kraken privée nécessaire. HOLD reste un résultat stratégique valide.
 
 ## Validation
 
-Aucun changement de code n'a été nécessaire au Batch 16.6. La dernière validation complète du code reste celle du Batch 16.5 :
+Dernière validation complète du code : Batch 16.5.
 
 ```text
 pytest backend                                  : 357 passed, 2 warnings externes
@@ -58,4 +71,12 @@ mypy --config-file backend\pyproject.toml ... : Success, 107 source files
 git diff --check                               : aucune erreur ; avertissements LF -> CRLF uniquement
 ```
 
-Prochaine étape : toute nouvelle expérimentation ou évolution Derivatives doit être lancée dans un batch distinct, sans forcer BUY/SELL à partir du résultat 16.6.
+Validation ciblée postérieure pour `agent-strategy-v4` :
+
+```text
+pytest backend/tests/test_agent_provider.py     : 30 passed
+ruff check prompt.py + test_agent_provider.py  : All checks passed
+git diff --check                               : aucune erreur ; avertissements LF -> CRLF uniquement
+```
+
+Prochaine étape : Batch 17 — Robustesse Derivatives, dans une nouvelle discussion et sans forcer BUY/SELL à partir du résultat 16.6.
