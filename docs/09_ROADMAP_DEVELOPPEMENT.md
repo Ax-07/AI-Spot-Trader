@@ -18,19 +18,18 @@ Un batch est **intégré** uniquement après validation locale, commit et push c
 - Batch 18.1 : tools Agent read-only bornés, boucle Responses function calling, traces causales et migration `0003_agent_tool_traces`.
 - Batch 18.2 : sélection causale du marché exécutable par le même Agent, univers PAPER typé, routeur SPOT/PERPETUAL, persistance/API multi-marchés, migration `0004_multi_market_selection` et analytics causal v3.
 - Batch 18.3 : validation comportementale PAPER multi-marchés/cross-symbol et correction du parsing des `marginSchedules` Kraken Derivatives imbriqués.
+- Batch 18.5 : protocole expérimental `paper-experiment-v3` pour versionner univers typé, sélection et capacité tools sans modifier la stratégie.
 
-Référence GitHub auditée au démarrage du Batch 18.5 :
+Commit d’intégration code du Batch 18.5 :
 
 ```text
-HEAD réel main = 5cc2e2897d9a1dccba325f8a543b208360c6120d
-docs: record batch 18.3 behavioral validation
-
-dernier commit code validé = 4042e0b0e6394de788009229e3dae5924cd732d7
-fix: support nested Kraken derivative margin schedules
+84548d23efda0b0a8e2c1350bacc830c1de34140
+feat: version multi-market experiment protocol
 ```
 
-`4042e0b...` n'est donc pas le HEAD GitHub courant ; il reste la référence du dernier commit code
-validé avant le Batch 18.5.
+Base historique auditée au démarrage du Batch 18.5 : `5cc2e289...`, avec `4042e0b...` comme dernier
+commit code validé avant ce batch. Le HEAD GitHub réel peut être ultérieur après la synchronisation
+documentaire de clôture et doit être relevé à chaque reprise.
 
 ## Batch 18.2 — intégré
 
@@ -121,14 +120,14 @@ Les deux warnings Starlette/AnyIO restent non bloquants.
 Ces limites ne remettent pas en cause les branches validées, mais elles restent des axes de
 robustesse/expérimentation à mesurer au lieu d'être déclarées résolues.
 
-## Batch 18.5 — patch proposé
+## Batch 18.5 — intégré
 
 ### Objectif
 
 Versionner scientifiquement l'environnement Agent/tools/sélection déjà utilisé par le pipeline
 multi-marché, sans modifier la stratégie de trading.
 
-### Décisions du patch
+### Décisions intégrées
 
 - nouvelle identité `paper-experiment-v3` pour les **nouveaux** manifestes multi-marchés ;
 - conservation stricte de `paper-experiment-v1` et `paper-experiment-v2` comme identités
@@ -144,10 +143,18 @@ multi-marché, sans modifier la stratégie de trading.
 - aucune migration PostgreSQL, le JSON persistant existant restant suffisant ;
 - `experiment_manifest=None` reste valide pour le PAPER normal.
 
-### Statut
+### Validation et intégration
 
-Le Batch 18.5 ne devient **intégré** qu'après extraction du ZIP, validation locale complète,
-commit et push sur `main`. Aucun HEAD futur n'est anticipé dans cette documentation.
+```text
+pytest ciblé experiments/provider/tools/market-selection : 136 passed
+pytest backend : 460 passed, 2 warnings
+ruff check backend : All checks passed!
+mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
+git diff --check : aucune erreur, uniquement warnings LF -> CRLF
+commit : 84548d23efda0b0a8e2c1350bacc830c1de34140
+```
+
+Le commit a été poussé sur `origin/main` et le working tree opérateur était propre après push.
 
 ## Prochains candidats après 18.5
 

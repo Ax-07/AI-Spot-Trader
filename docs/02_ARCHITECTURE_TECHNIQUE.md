@@ -2,18 +2,16 @@
 
 ## 1. Référence
 
-Base GitHub auditée au démarrage du Batch 18.5 :
+Commit d’intégration code du Batch 18.5 :
 
 ```text
-HEAD réel main = 5cc2e2897d9a1dccba325f8a543b208360c6120d
-docs: record batch 18.3 behavioral validation
-
-dernier commit code validé = 4042e0b0e6394de788009229e3dae5924cd732d7
-fix: support nested Kraken derivative margin schedules
+84548d23efda0b0a8e2c1350bacc830c1de34140
+feat: version multi-market experiment protocol
 ```
 
-Les Batches 18.1, 18.2 et 18.3 sont intégrés. Le Batch 18.5 est un patch proposé jusqu'à validation,
-commit et push ; il ne doit pas être présenté comme un HEAD GitHub déjà intégré.
+Le Batch 18.5 est intégré. Sa base historique de démarrage était `5cc2e289...`, avec `4042e0b...`
+comme dernier commit code validé avant le batch. Un commit documentaire de clôture peut être
+postérieur ; le HEAD GitHub réel doit être relevé à chaque reprise.
 
 ## 2. Modules concernés
 

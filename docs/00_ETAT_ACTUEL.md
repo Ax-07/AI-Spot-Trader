@@ -6,16 +6,15 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub réel audité au démarrage du Batch 18.5 : `5cc2e2897d9a1dccba325f8a543b208360c6120d`
-- Commit HEAD : `docs: record batch 18.3 behavioral validation`
-- Dernier commit contenant du code validé avant le Batch 18.5 : `4042e0b0e6394de788009229e3dae5924cd732d7`
-- Commit code : `fix: support nested Kraken derivative margin schedules`
-- Batch 18.3 : **intégré** ; Batch 18.5 : **patch proposé, non intégré tant qu'il n'est pas validé/commité/poussé**.
+- Commit d'intégration code du Batch 18.5 : `84548d23efda0b0a8e2c1350bacc830c1de34140`
+- Commit : `feat: version multi-market experiment protocol`
+- HEAD GitHub observé après ce push et avant la synchronisation documentaire de clôture : `84548d23...`
+- Batch 18.5 : **intégré** après validation locale complète, commit et push sur `main`.
 - Prompt stratégique : `agent-strategy-v4`.
 
-La référence `4042e0b...` reste utile comme dernier HEAD **code** validé de 18.3, mais ne doit plus
-être présentée comme le HEAD GitHub courant puisque le commit documentaire `5cc2e289...` lui est
-postérieur.
+Référence historique de démarrage du Batch 18.5 : `main = 5cc2e289...`, avec `4042e0b...`
+comme dernier commit code validé à ce moment-là. Un commit documentaire de clôture peut être
+postérieur à `84548d23...` ; le HEAD GitHub réel doit donc toujours être relevé à chaque reprise.
 
 ## État intégré
 
@@ -32,9 +31,9 @@ Le chemin intégré supporte :
 - parser Kraken Derivatives public compatible avec les `marginSchedules` directs ou imbriqués,
   toujours fail-closed et conservateur sur les marges publiques.
 
-## Patch Batch 18.5 — protocole expérimental v3
+## Batch 18.5 intégré — protocole expérimental v3
 
-Le patch introduit `paper-experiment-v3` pour les futures expériences multi-marchés. Cette identité
+Le Batch 18.5 introduit `paper-experiment-v3` pour les futures expériences multi-marchés. Cette identité
 versionne le comportement déjà existant sans modifier la stratégie :
 
 - univers exécutable exact `ExecutableMarket(symbol, market_type)` ;
@@ -51,14 +50,17 @@ historiques ne sont pas réinterprétés. `experiment_manifest=None` reste le ch
 Aucune migration PostgreSQL n'est requise : les manifestes restent persistés dans les payloads JSON
 existants.
 
-## Validation intégrée Batch 18.3
+## Validation Batch 18.5
 
 ```text
-pytest backend : 449 passed, 2 warnings
-ruff check backend : OK
-mypy backend/src : OK, 79 source files
-git diff --check : OK hors warnings LF/CRLF avant commit
+pytest ciblé experiments/provider/tools/market-selection : 136 passed
+pytest backend : 460 passed, 2 warnings
+ruff check backend : All checks passed!
+mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
+git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 ```
+
+Les deux warnings Starlette/AnyIO sont des warnings de dépendances non bloquants déjà connus.
 
 Smokes réels confirmés :
 
@@ -86,7 +88,7 @@ Principe : **l'Agent cherche, sélectionne et propose ; le Risk Engine autorise,
 
 ## Suite à auditer
 
-Après intégration éventuelle de 18.5 : recovery durable du ledger PAPER multi-actifs, robustesse
+Après 18.5 : recovery durable du ledger PAPER multi-actifs, robustesse
 réseau/observabilité bornée des erreurs transitoires, enrichissement mesuré des données de
 recherche puis campagnes Luna/Sol multi-marchés sous protocole v3. Aucun de ces sujets n'est
 implémenté par le Batch 18.5.
