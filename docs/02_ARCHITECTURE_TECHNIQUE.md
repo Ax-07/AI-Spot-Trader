@@ -4,7 +4,7 @@
 
 Ce document décrit l'architecture technique courante d'AI Spot Trader. Depuis le Batch 16, l'architecture canonique couvre SPOT et Kraken Derivatives PAPER sans créer de moteur parallèle.
 
-Référence GitHub actuelle après intégration du Batch 16.5 : `main` au commit `595bd2c8b4311ac255db927515207f10875b1505` (`feat: enrich perpetual paper market context`).
+Référence fonctionnelle Batch 16.5 : `595bd2c8b4311ac255db927515207f10875b1505` (`feat: enrich perpetual paper market context`). Validation comportementale Batch 16.6 intégrée sur `main` : `251d530ad12951605068c1c8eb8cbeb313c36b49` (`docs: validate Batch 16.6 Luna perpetual behavior`).
 
 Le Batch 16.4 est un résultat d'exécution local confirmé : premier run réel GPT-5.6 Luna en PERPETUAL PAPER, 4 cycles `COMPLETED`, 4 HOLD naturels, aucune erreur et aucun trade.
 
@@ -213,11 +213,11 @@ Le `paper_run_id` reste une frontière d'audit/exécution et ne devient pas une 
 
 ## 7. Agent et transport OpenAI
 
-Le prompt stratégique courant reste **`agent-strategy-v3`**. `OpenAIDecisionProvider` reste le provider normal produisant un `DecisionCandidate`.
+Le prompt stratégique courant est **`agent-strategy-v4`**. `OpenAIDecisionProvider` reste le provider normal produisant un `DecisionCandidate`.
 
-Aucune nouvelle structure de prompt n'est nécessaire pour le Batch 16.5 : le provider sérialise déjà l'`AgentInput` complet, donc un `MarketState.context` non nul est transmis automatiquement au modèle.
+La v4 localise les instructions humaines en français sans modifier le schéma structuré ni le vocabulaire contractuel : `BUY`, `SELL`, `HOLD`, `SPOT`, `PERPETUAL`, `FUTURE`, `LONG` et `SHORT` restent les valeurs techniques attendues. Le champ `rationale` doit être rédigé en français.
 
-Le prompt v3 impose déjà de décider uniquement à partir de l'`AgentInput`, de ne pas inventer d'indicateurs absents et de respecter les sémantiques SPOT/PERPETUAL sans donner au LLM le contrôle du levier, du `reduce_only` ou de la validation finale.
+Le provider sérialise toujours l'`AgentInput` complet. Le prompt v4 conserve les contraintes de la v3 : décision uniquement à partir de l'`AgentInput`, aucune invention de données absentes, aucun contrôle LLM du levier, du `reduce_only` ou de la validation finale Risk.
 
 `OpenAIResponsesClient` reste le transport partagé. Le chat utilise `OpenAIChatProvider` et `operator-chat-v1` sans tools d'exécution.
 
@@ -352,7 +352,7 @@ Le Batch 16.5 n'ajoute aucune route API : le contexte enrichi est déjà sérial
 
 ## 16. Frontend
 
-Le frontend reste un cockpit de visualisation/contrôle. Il ne possède pas le moteur de trading et sa fermeture n'arrête pas le backend.
+Le frontend reste un cockpit de visualisation/contrôle. Il ne possède pas le moteur detrading et sa fermeture n'arrête pas le backend.
 
 Aucun changement frontend n'est requis pour le Batch 16.5.
 

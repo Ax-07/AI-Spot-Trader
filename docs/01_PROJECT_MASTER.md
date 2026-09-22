@@ -4,7 +4,7 @@
 
 Ce document est la spécification fonctionnelle et architecturale principale d'**AI Spot Trader**. Depuis le Batch 16, le projet couvre **SPOT + Kraken Derivatives**, sans changer le principe d'un agent stratégique unique ni l'autorité finale du Risk Engine.
 
-Référence fonctionnelle Batch 16.5 : `595bd2c8b4311ac255db927515207f10875b1505` (`feat: enrich perpetual paper market context`). Clôture documentaire Batch 16.5 intégrée sur `main` : `84272713b66439a16e7769da83eccc1514aa64f7` (`docs: finalize Batch 16.5 integration`). Le Batch 16.6 est validé localement et sa clôture documentaire reste à intégrer.
+Référence fonctionnelle Batch 16.5 : `595bd2c8b4311ac255db927515207f10875b1505` (`feat: enrich perpetual paper market context`). Clôture documentaire Batch 16.5 intégrée sur `main` : `84272713b66439a16e7769da83eccc1514aa64f7` (`docs: finalize Batch 16.5 integration`). Validation comportementale Batch 16.6 intégrée sur `main` : `251d530ad12951605068c1c8eb8cbeb313c36b49` (`docs: validate Batch 16.6 Luna perpetual behavior`).
 
 ## 2. Vision et invariants
 
@@ -108,7 +108,7 @@ Le ledger PAPER reste actuellement **process-local**. Un redémarrage backend re
 
 Le schéma de sortie LLM reste simple : `action = BUY | SELL | HOLD`, `symbol`, `proposed_quantity?`, `rationale?`.
 
-Le provider applicatif copie `market_type` depuis le `MarketState` dans `DecisionCandidate`. Le LLM ne choisit jamais le type de marché ni le levier. Le prompt stratégique reste versionné `agent-strategy-v3` : le contrat n'est pas modifié par les Batches 16.5 ou 16.6.
+Le provider applicatif copie `market_type` depuis le `MarketState` dans `DecisionCandidate`. Le LLM ne choisit jamais le type de marché ni le levier. Le prompt stratégique courant est versionné `agent-strategy-v4` : les instructions humaines sont en français, les valeurs contractuelles `BUY`, `SELL`, `HOLD`, `SPOT`, `PERPETUAL`, `FUTURE`, `LONG` et `SHORT` restent inchangées, et le champ `rationale` doit être rédigé en français.
 
 Le `paper_run_id` est une identité d'audit/exécution et n'est pas ajouté au contrat stratégique LLM : il n'influence pas la décision de marché.
 
@@ -342,7 +342,7 @@ Aucun BUY/SELL naturel n'a été observé. Cela ne constitue pas un échec et ne
 
 ## 12. Prochaine expérimentation
 
-Le Batch 16.6 est validé localement. Après intégration de sa clôture documentaire, toute nouvelle expérimentation doit rester un batch distinct. Il ne faut pas modifier le prompt, l'agressivité ou Risk uniquement pour obtenir un BUY/SELL. Les pistes de robustesse Derivatives restent celles du futur Batch 17 ou d'un batch explicitement défini.
+Le Batch 16.6 est intégré sur `main` au commit `251d530ad12951605068c1c8eb8cbeb313c36b49`. Le prompt stratégique courant est désormais `agent-strategy-v4`, localisé en français sans modification du schéma de sortie ni des responsabilités Agent/Risk. Toute nouvelle expérimentation doit rester un batch distinct. Il ne faut pas modifier le prompt, l'agressivité ou Risk uniquement pour obtenir un BUY/SELL. Les pistes de robustesse Derivatives restent celles du futur Batch 17 ou d'un batch explicitement défini.
 
 ## 13. LIVE
 

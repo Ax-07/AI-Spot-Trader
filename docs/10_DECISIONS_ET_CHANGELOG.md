@@ -102,10 +102,15 @@ Les anciennes mentions **SPOT uniquement / aucun future-perpetual** sont supers�
 ## Décisions Batch 16.6
 
 ### ADR-117 — Un HOLD naturel reste une observation valide
-**ACCEPTÉE LOCALEMENT.** Le Batch 16.6 ne modifie ni prompt, ni agressivité, ni stratégie pour provoquer BUY/SELL. Huit HOLD naturels consécutifs sur le run isolé final sont conservés comme résultat expérimental valide.
+**ACCEPTÉE ET INTÉGRÉE au commit `251d530ad12951605068c1c8eb8cbeb313c36b49`.** Le Batch 16.6 ne modifie ni prompt, ni agressivité, ni stratégie pour provoquer BUY/SELL. Huit HOLD naturels consécutifs sur le run isolé final sont conservés comme résultat expérimental valide.
 
 ### ADR-118 — Un essai non isolé n'est pas utilisé comme preuve d'isolation
-**ACCEPTÉE LOCALEMENT.** Un premier essai 16.6 a continué le run Batch 16.5 faute de redémarrage complet du backend. Les cycles restent dans l'audit durable mais sont exclus de la preuve finale 16.6. La validation repose sur le run neuf `c9443243-57ca-43de-9356-adc1e6fe3226`.
+**ACCEPTÉE ET INTÉGRÉE au commit `251d530ad12951605068c1c8eb8cbeb313c36b49`.** Un premier essai 16.6 a continué le run Batch 16.5 faute de redémarrage complet du backend. Les cycles restent dans l'audit durable mais sont exclus de la preuve finale 16.6. La validation repose sur le run neuf `c9443243-57ca-43de-9356-adc1e6fe3226`.
+
+## Décision post-Batch 16.6 — localisation du prompt Agent
+
+### ADR-119 — Prompt Agent `agent-strategy-v4` en français
+**ACCEPTÉE.** Le prompt stratégique est localisé en français et le champ `rationale` doit être rédigé en français. Les valeurs contractuelles `BUY`, `SELL`, `HOLD`, `SPOT`, `PERPETUAL`, `FUTURE`, `LONG` et `SHORT`, le schéma structuré, la séparation Agent/Risk et le chemin d'exécution restent inchangés. Le changement de version rend l'évolution traçable dans les manifestes expérimentaux.
 
 ## Changelog — 2026-09-21 — Batch 16.1 Smoke PERPETUAL PAPER
 
@@ -217,7 +222,7 @@ Le premier essai effectué avant redémarrage du backend avait encore `context =
 
 ## Changelog — 2026-09-22 — Batch 16.6 Validation comportementale Luna PERPETUAL PAPER
 
-**État : validé localement ; documentation de clôture à intégrer. Aucun changement de code.**
+**État : intégré sur GitHub `main` au commit `251d530ad12951605068c1c8eb8cbeb313c36b49` (`docs: validate Batch 16.6 Luna perpetual behavior`). Aucun changement de code dans le Batch 16.6.**
 
 Audit effectué depuis GitHub `main` au HEAD `84272713b66439a16e7769da83eccc1514aa64f7`.
 
@@ -251,9 +256,17 @@ Un premier essai 16.6 a continué le run Batch 16.5 parce que le backend n'avait
 
 Conclusion : le contexte enrichi est systématiquement transmis dans le run final, la causalité est respectée, les rationales observées n'inventent pas d'indicateurs absents, Risk reste l'autorité finale, les analytics run-scoped restent cohérents et l'isolation est confirmée. Aucun BUY/SELL naturel n'est apparu ; ce résultat n'est pas un échec et ne déclenche aucune optimisation de stratégie.
 
+## Changelog — 2026-09-22 — Prompt Agent `agent-strategy-v4` en français
+
+- instructions stratégiques localisées en français ;
+- valeurs contractuelles et schéma structuré inchangés ;
+- `rationale` explicitement demandé en français ;
+- mêmes invariants PAPER, Agent unique, Risk autorité finale et absence d'exécution directe LLM ;
+- test du contrat de prompt mis à jour pour `agent-strategy-v4`.
+
 ## Prochaine étape
 
-Le Batch 16.6 est validé localement. Après revue, commit et push explicite de cette clôture documentaire, toute nouvelle expérimentation ou évolution Derivatives doit être lancée dans un batch distinct.
+Le Batch 16.6 est intégré sur `main` au commit `251d530ad12951605068c1c8eb8cbeb313c36b49`. La localisation v4 ne constitue pas un nouveau batch fonctionnel ; toute nouvelle expérimentation ou évolution Derivatives doit être lancée dans un batch distinct.
 
 ## LIVE
 

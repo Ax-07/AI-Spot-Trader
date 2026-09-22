@@ -359,19 +359,21 @@ def test_agent_package_has_no_risk_broker_or_kraken_imports() -> None:
 
 
 def test_agent_prompt_is_versioned_and_contains_market_specific_constraints() -> None:
-    assert AGENT_PROMPT_VERSION == "agent-strategy-v3"
+    assert AGENT_PROMPT_VERSION == "agent-strategy-v4"
     for required in (
-        "PAPER only",
-        "BUY, SELL, and HOLD",
-        "SPOT",
-        "PERPETUAL",
-        "LONG",
-        "SHORT",
-        "leverage",
+        "PAPER",
+        "`BUY`",
+        "`SELL`",
+        "`HOLD`",
+        "`SPOT`",
+        "`PERPETUAL`",
+        "`LONG`",
+        "`SHORT`",
         "Risk Engine",
-        "Never choose",
-        "override leverage",
-        "Do not invent",
-        "only for the symbol",
+        "effet de levier",
+        "N'inventez",
+        "AgentInput",
+        "rationale",
+        "français",
     ):
         assert required in AGENT_SYSTEM_PROMPT

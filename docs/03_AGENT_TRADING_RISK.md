@@ -24,7 +24,7 @@ DecisionCandidate
 
 BUY/SELL nécessitent une quantité stratégique positive ; HOLD n'en porte aucune. IDs et timestamps restent contrôlés par l'application.
 
-Luna et Sol utilisent le même `OpenAIDecisionProvider`. Le prompt stratégique courant est **`agent-strategy-v3`**. Le provider ne dispose d'aucun outil Broker/Kraken et ne connaît pas l'API lifecycle.
+Luna et Sol utilisent le même `OpenAIDecisionProvider`. Le prompt stratégique courant est **`agent-strategy-v4`**. Les instructions humaines sont en français, les valeurs techniques `BUY`/`SELL`/`HOLD` et `SPOT`/`PERPETUAL`/`FUTURE` restent inchangées, et `rationale` doit être rédigé en français. Le provider ne dispose d'aucun outil Broker/Kraken et ne connaît pas l'API lifecycle.
 
 Le LLM ne choisit ni `market_type`, ni levier, ni `reduce_only`. Ces éléments sont fournis par le contexte ou déterminés par l'application/Risk.
 
@@ -297,3 +297,5 @@ Le chat ou l'opérateur ne doivent jamais réécrire rétroactivement une décis
 ## 18. Prochain jalon
 
 Le Batch 16.6 confirme le fonctionnement naturel de GPT-5.6 Luna avec le contexte PERPETUAL enrichi sur un run isolé de 8 cycles, sans changement de code. Aucun BUY/SELL n'a été observé et aucun mécanisme ne doit être ajouté pour en provoquer un. Toute nouvelle expérimentation, robustesse Derivatives ou enrichissement de données doit rester un batch distinct et être justifié par un besoin mesuré.
+
+La localisation `agent-strategy-v4` est un changement de langue du contrat explicatif ; elle ne modifie ni le schéma structuré, ni les responsabilités Agent/Risk, ni les règles d'exécution.
