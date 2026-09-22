@@ -29,6 +29,9 @@ _DERIVATIVES_HISTORY_INTERVAL = timedelta(minutes=1)
 _HISTORY_PADDING_INTERVALS = 2
 _ASSET_ALIASES = {"XBT": "BTC", "XDG": "DOGE"}
 _QUOTE_CANDIDATES = ("USDC", "USDT", "USD", "EUR", "GBP", "BTC", "ETH")
+_MARGIN_LEVEL_KEYS = frozenset(
+    {"contracts", "numNonContractUnits", "initialMargin", "maintenanceMargin"}
+)
 
 
 class DerivativeMarketSink(Protocol):
@@ -463,14 +466,7 @@ def _conservative_margin_rates(raw: Mapping[str, Any]) -> tuple[Decimal, Decimal
     if named is not None:
         if not isinstance(named, Mapping):
             raise KrakenPayloadError("marginSchedules must be an object")
-        named_rows: list[Mapping[str, Any]] = []
-        for schedule_name, item in named.items():
-            if not isinstance(schedule_name, str) or not schedule_name.strip():
-                raise KrakenPayloadError("marginSchedules contains an invalid schedule name")
-            if not isinstance(item, Mapping):
-                raise KrakenPayloadError("marginSchedules contains an invalid margin level")
-            named_rows.append(item)
-        schedule_groups.append(("marginSchedules", tuple(named_rows)))
+        schedule_groups.append(("marginSchedules", _margin_schedule_rows(named)))
 
     schedules = [item for _, rows in schedule_groups for item in rows]
     if not schedules:
@@ -498,6 +494,37 @@ def _conservative_margin_rates(raw: Mapping[str, Any]) -> tuple[Decimal, Decimal
     # Keep the existing conservative semantics: use the strictest public rates and preserve
     # the full tier-aware model as a separate architectural decision instead of guessing it.
     return max(initials), max(maintenance)
+
+
+def _margin_schedule_rows(
+    value: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    """Flatten named Kraken public margin schedules while validating every leaf."""
+
+    rows: list[Mapping[str, Any]] = []
+    for schedule_name, item in value.items():
+        if not isinstance(schedule_name, str) or not schedule_name.strip():
+            raise KrakenPayloadError("marginSchedules contains an invalid schedule name")
+        if isinstance(item, Mapping):
+            if _MARGIN_LEVEL_KEYS.intersection(item):
+                rows.append(item)
+                continue
+            rows.extend(_margin_schedule_rows(item))
+            continue
+        if isinstance(item, list):
+            for level in item:
+                if not isinstance(level, Mapping):
+                    raise KrakenPayloadError(
+                        "marginSchedules contains an invalid margin level"
+                    )
+                if not _MARGIN_LEVEL_KEYS.intersection(level):
+                    raise KrakenPayloadError(
+                        "marginSchedules contains an invalid margin level"
+                    )
+                rows.append(level)
+            continue
+        raise KrakenPayloadError("marginSchedules contains an invalid margin level")
+    return tuple(rows)
 
 
 def _validate_margin_threshold(item: Mapping[str, Any], key: str) -> None:

@@ -151,6 +151,103 @@ def test_parse_margin_schedules_mapping_without_guessing_account_tier() -> None:
     assert instrument.max_leverage == Decimal("10")
 
 
+def test_parse_nested_margin_schedules_from_public_kraken_shape() -> None:
+    payload = {
+        "result": "success",
+        "instruments": [
+            {
+                "symbol": "PF_ETHUSD",
+                "base": "ETH",
+                "quote": "USD",
+                "type": "flexible_futures",
+                "tickSize": "0.1",
+                "contractSize": 1,
+                "tradeable": True,
+                "contractValueTradePrecision": 3,
+                "marginLevels": [
+                    {
+                        "numNonContractUnits": 0,
+                        "initialMargin": "0.01",
+                        "maintenanceMargin": "0.005",
+                    }
+                ],
+                "marginSchedules": {
+                    "europa": {
+                        "retail": [
+                            {
+                                "numNonContractUnits": 0,
+                                "initialMargin": "0.10",
+                                "maintenanceMargin": "0.05",
+                            }
+                        ],
+                        "professional": [
+                            {
+                                "numNonContractUnits": 0,
+                                "initialMargin": "0.10",
+                                "maintenanceMargin": "0.05",
+                            }
+                        ],
+                    },
+                    "dlt": {
+                        "retail": [
+                            {
+                                "numNonContractUnits": 0,
+                                "initialMargin": "0.50",
+                                "maintenanceMargin": "0.25",
+                            }
+                        ],
+                        "professional": [
+                            {
+                                "numNonContractUnits": 0,
+                                "initialMargin": "0.02",
+                                "maintenanceMargin": "0.01",
+                            }
+                        ],
+                    },
+                },
+            }
+        ],
+    }
+
+    (instrument,) = parse_kraken_derivatives_instruments(payload)
+
+    assert instrument.symbol == "ETH/USD"
+    assert instrument.initial_margin_rate == Decimal("0.50")
+    assert instrument.maintenance_margin_rate == Decimal("0.25")
+    assert instrument.max_leverage == Decimal("2")
+
+
+def test_nested_margin_schedules_still_fail_closed_on_malformed_leaf() -> None:
+    payload = {
+        "result": "success",
+        "instruments": [
+            {
+                "symbol": "PF_ETHUSD",
+                "base": "ETH",
+                "quote": "USD",
+                "type": "flexible_futures",
+                "tickSize": "0.1",
+                "contractSize": 1,
+                "tradeable": True,
+                "contractValueTradePrecision": 3,
+                "marginSchedules": {
+                    "europa": {
+                        "retail": [
+                            {
+                                "numNonContractUnits": 0,
+                                "maintenanceMargin": "0.05",
+                            }
+                        ]
+                    }
+                },
+            }
+        ],
+    }
+
+    with pytest.raises(KrakenPayloadError, match="initialMargin is invalid"):
+        parse_kraken_derivatives_instruments(payload)
+
+
 @pytest.mark.parametrize(
     ("mutation", "match"),
     [
