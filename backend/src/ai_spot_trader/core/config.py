@@ -8,6 +8,7 @@ from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ai_spot_trader.domain.enums import ExecutionMode, LLMModel, MarginMode, MarketType
+from ai_spot_trader.domain.models import ExecutableMarket
 from ai_spot_trader.domain.symbols import parse_canonical_symbol
 
 Environment = Literal["development", "test", "production"]
@@ -21,10 +22,11 @@ class PaperRuntimeConfigurationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class PaperRunConfiguration:
-    """Validated values required to compose one executable PAPER runtime."""
+    """Validated values required to compose one executable multi-market PAPER runtime."""
 
     symbol: str
     market_type: MarketType
+    executable_markets: tuple[ExecutableMarket, ...]
     initial_capital: Decimal
     settlement_asset: str
     cadence_seconds: float
@@ -76,22 +78,6 @@ class PaperRunConfiguration:
             "database_url": settings.database_url,
             "openai_api_key": settings.openai_api_key,
         }
-        if settings.paper_market_type is not MarketType.SPOT:
-            required.update(
-                {
-                    "paper_derivative_leverage": settings.paper_derivative_leverage,
-                    "risk_max_derivative_leverage": settings.risk_max_derivative_leverage,
-                    "risk_max_derivative_position_notional": (
-                        settings.risk_max_derivative_position_notional
-                    ),
-                    "risk_max_total_derivative_exposure": (
-                        settings.risk_max_total_derivative_exposure
-                    ),
-                    "risk_derivative_liquidation_buffer_ratio": (
-                        settings.risk_derivative_liquidation_buffer_ratio
-                    ),
-                }
-            )
         missing = sorted(name for name, value in required.items() if value is None)
         if missing:
             raise PaperRuntimeConfigurationError(
@@ -131,18 +117,37 @@ class PaperRunConfiguration:
         assert database_url is not None
         assert openai_api_key is not None
 
+        if settings.paper_market_type is MarketType.FUTURE:
+            raise PaperRuntimeConfigurationError(
+                "dated FUTURE is discoverable but PAPER execution supports SPOT/PERPETUAL only"
+            )
         try:
-            _, quote_asset = parse_canonical_symbol(symbol)
+            _, bootstrap_quote = parse_canonical_symbol(symbol)
         except ValueError as exc:
             raise PaperRuntimeConfigurationError(
                 "paper_symbol must use canonical BASE/QUOTE"
             ) from exc
+
+        executable_markets = _executable_markets(settings, bootstrap_symbol=symbol)
+        bootstrap = ExecutableMarket(symbol=symbol, market_type=settings.paper_market_type)
+        if bootstrap not in executable_markets:
+            raise PaperRuntimeConfigurationError(
+                "paper_symbol + paper_market_type must belong to paper_executable_markets"
+            )
+
         if not settlement_asset.strip():
             raise PaperRuntimeConfigurationError("paper_settlement_asset cannot be empty")
-        if settlement_asset != quote_asset:
+        if settlement_asset != bootstrap_quote:
             raise PaperRuntimeConfigurationError(
                 "paper_settlement_asset must equal the quote asset of paper_symbol"
             )
+        for market in executable_markets:
+            _, quote_asset = parse_canonical_symbol(market.symbol)
+            if quote_asset != settlement_asset:
+                raise PaperRuntimeConfigurationError(
+                    "all paper_executable_markets must use paper_settlement_asset as quote"
+                )
+
         if not allowed_pairs:
             raise PaperRuntimeConfigurationError("risk_allowed_pairs cannot be empty")
         for pair in allowed_pairs:
@@ -152,28 +157,48 @@ class PaperRunConfiguration:
                 raise PaperRuntimeConfigurationError(
                     "risk_allowed_pairs must contain canonical BASE/QUOTE symbols"
                 ) from exc
-        if symbol not in allowed_pairs:
+        executable_symbols = {market.symbol for market in executable_markets}
+        if not executable_symbols.issubset(allowed_pairs):
             raise PaperRuntimeConfigurationError(
-                "paper_symbol must be present in risk_allowed_pairs"
+                "every paper_executable_markets symbol must be present in risk_allowed_pairs"
             )
-        if settings.paper_market_type is MarketType.FUTURE:
-            raise PaperRuntimeConfigurationError(
-                "Batch 16 discovers dated futures metadata but executes PERPETUAL only"
+
+        has_perpetual = any(
+            market.market_type is MarketType.PERPETUAL for market in executable_markets
+        )
+        if has_perpetual:
+            derivative_required = {
+                "paper_derivative_leverage": settings.paper_derivative_leverage,
+                "risk_max_derivative_leverage": settings.risk_max_derivative_leverage,
+                "risk_max_derivative_position_notional": (
+                    settings.risk_max_derivative_position_notional
+                ),
+                "risk_max_total_derivative_exposure": (
+                    settings.risk_max_total_derivative_exposure
+                ),
+                "risk_derivative_liquidation_buffer_ratio": (
+                    settings.risk_derivative_liquidation_buffer_ratio
+                ),
+            }
+            derivative_missing = sorted(
+                name for name, value in derivative_required.items() if value is None
             )
-        if (
-            settings.paper_market_type is MarketType.PERPETUAL
-            and settings.paper_derivative_margin_mode is not MarginMode.ISOLATED
-        ):
-            raise PaperRuntimeConfigurationError(
-                "Batch 16 PAPER execution supports ISOLATED margin only"
-            )
-        if settings.paper_market_type is MarketType.PERPETUAL:
+            if derivative_missing:
+                raise PaperRuntimeConfigurationError(
+                    "missing required PAPER runtime settings: "
+                    + ", ".join(derivative_missing)
+                )
+            if settings.paper_derivative_margin_mode is not MarginMode.ISOLATED:
+                raise PaperRuntimeConfigurationError(
+                    "PAPER PERPETUAL execution supports ISOLATED margin only"
+                )
             assert settings.paper_derivative_leverage is not None
             assert settings.risk_max_derivative_leverage is not None
             if settings.paper_derivative_leverage > settings.risk_max_derivative_leverage:
                 raise PaperRuntimeConfigurationError(
                     "paper_derivative_leverage cannot exceed risk_max_derivative_leverage"
                 )
+
         database_value = database_url.get_secret_value().strip()
         if not database_value:
             raise PaperRuntimeConfigurationError("database_url cannot be empty")
@@ -191,6 +216,7 @@ class PaperRunConfiguration:
         return cls(
             symbol=symbol,
             market_type=settings.paper_market_type,
+            executable_markets=executable_markets,
             initial_capital=initial_capital,
             settlement_asset=settlement_asset,
             cadence_seconds=cadence_seconds,
@@ -222,6 +248,54 @@ class PaperRunConfiguration:
         )
 
 
+def _executable_markets(
+    settings: "Settings",
+    *,
+    bootstrap_symbol: str,
+) -> tuple[ExecutableMarket, ...]:
+    configured = settings.paper_executable_markets
+    if configured is None:
+        return (
+            ExecutableMarket(
+                symbol=bootstrap_symbol,
+                market_type=settings.paper_market_type,
+            ),
+        )
+    if not configured:
+        raise PaperRuntimeConfigurationError("paper_executable_markets cannot be empty")
+
+    parsed: list[ExecutableMarket] = []
+    for raw in configured:
+        if not isinstance(raw, str) or not raw.strip() or ":" not in raw:
+            raise PaperRuntimeConfigurationError(
+                "paper_executable_markets entries must use MARKET_TYPE:BASE/QUOTE"
+            )
+        raw_type, raw_symbol = raw.split(":", 1)
+        try:
+            market_type = MarketType(raw_type.strip().upper())
+        except ValueError as exc:
+            raise PaperRuntimeConfigurationError(
+                "paper_executable_markets contains an unsupported market type"
+            ) from exc
+        if market_type is MarketType.FUTURE:
+            raise PaperRuntimeConfigurationError(
+                "dated FUTURE is discoverable but PAPER execution supports SPOT/PERPETUAL only"
+            )
+        symbol = raw_symbol.strip()
+        try:
+            parse_canonical_symbol(symbol)
+            parsed.append(ExecutableMarket(symbol=symbol, market_type=market_type))
+        except ValueError as exc:
+            raise PaperRuntimeConfigurationError(
+                "paper_executable_markets must contain canonical typed markets"
+            ) from exc
+
+    ordered = tuple(sorted(parsed, key=lambda item: (item.market_type.value, item.symbol)))
+    if len(set(ordered)) != len(ordered):
+        raise PaperRuntimeConfigurationError("paper_executable_markets contains duplicates")
+    return ordered
+
+
 class Settings(BaseSettings):
     """Typed process configuration loaded from environment variables."""
 
@@ -241,6 +315,7 @@ class Settings(BaseSettings):
     aggressiveness: int | None = Field(default=None, ge=1, le=10)
     paper_symbol: str | None = None
     paper_market_type: MarketType = MarketType.SPOT
+    paper_executable_markets: tuple[str, ...] | None = None
     paper_initial_capital: Decimal | None = Field(default=None, gt=0)
     paper_settlement_asset: str | None = None
     paper_derivative_leverage: Decimal | None = Field(default=Decimal(1), ge=1)
@@ -255,7 +330,9 @@ class Settings(BaseSettings):
     risk_max_derivative_leverage: Decimal | None = Field(default=Decimal(1), ge=1)
     risk_max_derivative_position_notional: Decimal | None = Field(default=None, gt=0)
     risk_max_total_derivative_exposure: Decimal | None = Field(default=None, gt=0)
-    risk_derivative_liquidation_buffer_ratio: Decimal | None = Field(default=Decimal("1.10"), ge=1)
+    risk_derivative_liquidation_buffer_ratio: Decimal | None = Field(
+        default=Decimal("1.10"), ge=1
+    )
     paper_fee_rate: Decimal | None = Field(default=None, ge=0, lt=1)
     paper_spread_bps: Decimal | None = Field(default=None, ge=0)
     paper_slippage_bps: Decimal | None = Field(default=None, ge=0)
@@ -280,4 +357,5 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     """Return the process-wide settings instance."""
+
     return Settings()

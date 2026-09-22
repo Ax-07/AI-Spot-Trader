@@ -53,7 +53,10 @@ def _reader(request: Request) -> CycleAuditReader:
     return reader
 
 
-def _resolved_run_id(request: Request, paper_run_id: UUID | None) -> UUID | None:
+def _resolved_run_id(
+    request: Request,
+    paper_run_id: UUID | None,
+) -> UUID | None:
     if paper_run_id is not None:
         return paper_run_id
     runtime = cast(AppRuntime, request.app.state.runtime)
@@ -113,6 +116,7 @@ def _cycle_summary(value: CycleAuditSummary) -> CycleSummaryResponse:
         recorded_at=value.recorded_at,
         decision_action=value.decision_action,
         symbol=value.symbol,
+        market_type=value.market_type,
         risk_status=value.risk_status,
         execution_id=value.execution_id,
         fill_count=value.fill_count,
@@ -133,6 +137,8 @@ def _cycle_detail(value: CycleAuditDetail) -> CycleDetailResponse:
         market_as_of=value.market_as_of,
         portfolio_before_as_of=value.portfolio_before_as_of,
         portfolio_after_as_of=value.portfolio_after_as_of,
+        market_selection_input=value.market_selection_input,
+        market_selection=value.market_selection,
         agent_input=value.agent_input,
         agent_tool_traces=value.agent_tool_traces,
         decision=value.decision,
@@ -196,7 +202,10 @@ async def list_cycles(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     order: AuditSortOrder = AuditSortOrder.DESC,
-    status_filter: Annotated[CycleStatusFilter | None, Query(alias="status")] = None,
+    status_filter: Annotated[
+        CycleStatusFilter | None,
+        Query(alias="status"),
+    ] = None,
     action: ActionFilter | None = None,
     risk_status: RiskStatusFilter | None = None,
     paper_run_id: UUID | None = None,
@@ -243,15 +252,24 @@ async def latest_cycle(
     )
     item = await _audit_call(operation)
     if item is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="cycle not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="cycle not found",
+        )
     return _cycle_detail(item)
 
 
 @router.get("/cycles/{cycle_id}", response_model=CycleDetailResponse)
-async def get_cycle(cycle_id: UUID, request: Request) -> CycleDetailResponse:
+async def get_cycle(
+    cycle_id: UUID,
+    request: Request,
+) -> CycleDetailResponse:
     item = await _audit_call(_reader(request).get_cycle(cycle_id))
     if item is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="cycle not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="cycle not found",
+        )
     return _cycle_detail(item)
 
 
@@ -262,13 +280,20 @@ async def list_decisions(
     offset: Annotated[int, Query(ge=0)] = 0,
     order: AuditSortOrder = AuditSortOrder.DESC,
     action: ActionFilter | None = None,
-    symbol: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
+    symbol: Annotated[
+        str | None,
+        Query(min_length=1, max_length=64),
+    ] = None,
     paper_run_id: UUID | None = None,
 ) -> DecisionPageResponse:
     resolved_run_id = _resolved_run_id(request, paper_run_id)
     if resolved_run_id is None:
         operation = _reader(request).list_decisions(
-            limit=limit, offset=offset, order=order, action=action, symbol=symbol
+            limit=limit,
+            offset=offset,
+            order=order,
+            action=action,
+            symbol=symbol,
         )
     else:
         operation = _scoped_reader(request).list_decisions_for_run(
@@ -294,13 +319,19 @@ async def list_risk_assessments(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     order: AuditSortOrder = AuditSortOrder.DESC,
-    status_filter: Annotated[RiskStatusFilter | None, Query(alias="status")] = None,
+    status_filter: Annotated[
+        RiskStatusFilter | None,
+        Query(alias="status"),
+    ] = None,
     paper_run_id: UUID | None = None,
 ) -> RiskAssessmentPageResponse:
     resolved_run_id = _resolved_run_id(request, paper_run_id)
     if resolved_run_id is None:
         operation = _reader(request).list_risk_assessments(
-            limit=limit, offset=offset, order=order, status=status_filter
+            limit=limit,
+            offset=offset,
+            order=order,
+            status=status_filter,
         )
     else:
         operation = _scoped_reader(request).list_risk_assessments_for_run(
@@ -325,14 +356,24 @@ async def list_executions(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     order: AuditSortOrder = AuditSortOrder.DESC,
-    action: Annotated[Literal["BUY", "SELL"] | None, Query()] = None,
-    symbol: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
+    action: Annotated[
+        Literal["BUY", "SELL"] | None,
+        Query(),
+    ] = None,
+    symbol: Annotated[
+        str | None,
+        Query(min_length=1, max_length=64),
+    ] = None,
     paper_run_id: UUID | None = None,
 ) -> ExecutionPageResponse:
     resolved_run_id = _resolved_run_id(request, paper_run_id)
     if resolved_run_id is None:
         operation = _reader(request).list_executions(
-            limit=limit, offset=offset, order=order, action=action, symbol=symbol
+            limit=limit,
+            offset=offset,
+            order=order,
+            action=action,
+            symbol=symbol,
         )
     else:
         operation = _scoped_reader(request).list_executions_for_run(
@@ -365,7 +406,10 @@ async def latest_error(
     )
     item = await _audit_call(operation)
     if item is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="error not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="error not found",
+        )
     return _latest_error(item)
 
 

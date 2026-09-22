@@ -2,133 +2,212 @@
 
 ## 1. Principe central
 
-**L'Agent cherche. L'Agent analyse. L'Agent propose BUY / SELL / HOLD. Risk autorise, modifie ou refuse.**
+**L'Agent cherche, sélectionne et propose. Risk autorise, modifie ou refuse.**
 
-Les tools du Batch 18.1 ajoutent des faits au contexte de raisonnement ; ils ne déplacent aucune autorité d'exécution.
+Le Batch 18.2 donne à l'Agent la sélection du marché exécutable sans lui donner l'autorité
+d'exécution.
 
 ## 2. Agent unique
 
-L'Agent reçoit toujours un `AgentInput` complet :
+Il n'existe toujours qu'un `OpenAIDecisionProvider` par runtime. Le même Agent intervient en deux
+phases :
 
-- `MarketState` du symbole du cycle ;
-- `PortfolioState` complet ;
-- `cycle_id` et timestamps ;
-- agressivité + contexte versionné ;
-- éventuel manifeste expérimental.
+1. sélection du marché ;
+2. décision finale sur le snapshot exécutable acquis par le backend.
 
-Le provider reste `OpenAIDecisionProvider` pour Luna et Sol. Il n'existe ni Agent scanner ni Agent trader secondaire.
+Aucun second Agent scanner/trader n'est créé.
 
-## 3. Recherche optionnelle
+## 3. Phase de sélection
 
-Avec le registry activé, l'Agent peut appeler :
+Entrée : `MarketSelectionInput`.
 
-- `list_markets` pour voir des marchés/métadonnées factuels ;
-- `get_market_snapshot` pour examiner un snapshot SPOT ou PERPETUAL normalisé.
+L'Agent voit :
 
-L'Agent choisit lui-même :
+- portefeuille complet ;
+- univers PAPER exécutable typé ;
+- agressivité ;
+- éventuel contexte expérimental.
 
-- s'il recherche ou non ;
-- quel symbole examiner ;
-- combien de recherches effectuer dans le budget technique ;
-- quand arrêter et produire sa décision.
+Il peut :
 
-Le code ne calcule aucun score d'opportunité, classement, scanner momentum ou présélection stratégique.
+- choisir directement un marché ;
+- appeler `list_markets` ;
+- appeler `get_market_snapshot` ;
+- comparer plusieurs symboles ;
+- arrêter lui-même ses recherches.
 
-## 4. Budget non stratégique
+Les budgets de tools restent des limites de ressources, jamais une stratégie.
 
-Les limites de nombre d'appels, timeout et taille de résultat sont des garde-fous d'ingénierie. Elles ne doivent jamais être interprétées comme une préférence de marché ou une instruction de trading.
+## 4. Sélection explicite
 
-Un dépassement de budget est une erreur technique du stade Agent, pas un HOLD automatique.
-
-## 5. Sémantique des erreurs de tools
-
-Une erreur de données/exécution d'un tool est transformée en résultat borné de forme factuelle, par exemple :
+La sortie structurée de sélection contient seulement :
 
 ```text
-{"ok": false, "error": {"type": "KrakenConnectionError"}}
-```
-
-Le message brut fournisseur n'est pas exposé au modèle ni au journal. L'Agent peut décider de poursuivre ses recherches ou de conclure avec les faits disponibles.
-
-Un tool inconnu ou des arguments non conformes sont refusés avant handler et font échouer la boucle.
-
-## 6. Symbole final en Batch 18.1
-
-La validation historique reste en place :
-
-```text
-DecisionCandidate.symbol == AgentInput.market_state.symbol
-```
-
-Ainsi, rechercher un autre marché **n'autorise pas** à le trader dans ce batch. Le symbole de Risk/Broker reste celui du `MarketState` initial du runner.
-
-Le Batch 18.2 devra traiter explicitement le choix du marché exécutable avant la construction du snapshot causal final.
-
-## 7. SPOT
-
-- `BUY` augmente une position de base ;
-- `SELL` ne réduit qu'une quantité détenue/disponible ;
-- aucun short, levier ou marge ;
-- les tools n'assouplissent aucune de ces règles.
-
-## 8. Derivatives
-
-- `BUY` peut ouvrir/augmenter LONG ou réduire SHORT ;
-- `SELL` peut ouvrir/augmenter SHORT ou réduire LONG ;
-- levier et `reduce_only` restent déterministes ;
-- Risk impose marge, caps, liquidation et anti-reversal ;
-- un snapshot de recherche Derivatives ne marque jamais le ledger.
-
-## 9. DecisionCandidate et traces
-
-La sortie structurée LLM reste limitée à :
-
-```text
-action
 symbol
-proposed_quantity
+market_type
 rationale
 ```
 
-Les `tool_traces` ne sont **pas** fournis par le LLM. L'application les ajoute au `DecisionCandidate` après exécution des tools. Le modèle ne peut donc ni fabriquer ni supprimer ses traces d'accès aux données.
+L'application ajoute identité, timestamp, traces et digest pour produire `MarketSelection`.
 
-## 10. Risk
+Le couple choisi doit être présent exactement dans `executable_markets`. `FUTURE` est refusé.
 
-Risk reste synchrone et déterministe. Il reçoit le `DecisionCandidate`, le `MarketState` causal du cycle et le `PortfolioState`.
+La rationale reste explicative et en français. La sélection n'est donc pas cachée dans la
+rationale : elle possède ses propres champs structurés et son propre digest.
 
-Il peut produire :
+## 5. Acquisition exécutable
 
-- `ALLOW` ;
-- `MODIFY` avec quantité strictement réduite ;
-- `REJECT`.
+Une sélection valide ne suffit pas à trader. Le backend doit encore acquérir un `MarketState`
+canonique via la source **execution**, distincte de la source research.
 
-Un HOLD valide reste `ALLOW` sans `ExecutionIntent`. Aucun tool ne peut appeler Risk directement.
+Pour `PERPETUAL`, le routeur exige :
 
-## 11. Broker
+- contexte derivative présent ;
+- instrument `PERPETUAL` ;
+- contrat `LINEAR`.
 
-Le Broker reçoit seulement un `ExecutionIntent` déjà autorisé par Risk. Aucun nom de function tool ne correspond à `buy`, `sell`, `execute`, `place_order` ou équivalent.
+Un instrument inverse, future daté, inconnu ou hors univers échoue fermé.
 
-## 12. Causalité et audit
+## 6. Phase de décision finale
 
-Chaque tool call possède des timestamps. Une décision ne peut être créée avant la fin d'une trace qu'elle utilise. Les recherches déjà terminées restent persistées même si le modèle échoue ensuite à produire une décision conforme.
+Entrée : `AgentInput` contenant le `MarketState` exécutable exact et le `MarketSelection`.
 
-Le digest du cycle intègre ces traces afin d'empêcher qu'une modification du contexte de recherche soit invisible dans l'identité durable.
+Le même Agent choisit :
 
-## 13. Prompt
+```text
+BUY
+SELL
+HOLD
+```
 
-L'identifiant demandé reste `agent-strategy-v4`. Le texte précise désormais la possibilité d'utiliser des tools read-only factuels et la limitation cross-symbol de Batch 18.1. Les valeurs contractuelles `BUY`, `SELL`, `HOLD`, `SPOT`, `PERPETUAL`, `FUTURE`, `LONG`, `SHORT` restent inchangées et `rationale` reste en français.
+Le chemin 18.2 ne relance pas les tools à cette phase. Les recherches antérieures sont déjà
+attachées à `MarketSelection` et le marché d'exécution vient d'être acquis.
 
-### Dette à traiter avant expériences comparatives
+La décision doit respecter :
 
-Comme la capacité de recherche change le contexte accessible à l'Agent tout en conservant l'identifiant `agent-strategy-v4` imposé pour ce batch, une future campagne comparative doit versionner explicitement la **politique de tools / protocole Agent** dans son manifeste au lieu de supposer que le seul `prompt_version` distingue tous les environnements expérimentaux.
+```text
+DecisionCandidate.symbol      == AgentInput.market_state.symbol
+DecisionCandidate.market_type == AgentInput.market_state.market_type
+```
 
-## 14. Interdits maintenus
+Elle ne peut pas sélectionner ETH puis décider BTC après le snapshot.
+
+## 7. HOLD
+
+HOLD reste un résultat stratégique valide après n'importe quelle recherche/sélection :
+
+```text
+Risk = ALLOW
+ExecutionIntent = None
+Broker non appelé
+```
+
+La sélection et les recherches restent malgré tout auditables.
+
+## 8. SPOT
+
+- `BUY` acquiert l'actif de base ;
+- `SELL` réduit uniquement une position détenue ;
+- aucun short ;
+- aucun levier/marge ;
+- changement de marché ne relâche aucune de ces règles.
+
+## 9. PERPETUAL
+
+- `BUY` peut ouvrir/augmenter LONG ou réduire SHORT ;
+- `SELL` peut ouvrir/augmenter SHORT ou réduire LONG ;
+- le LLM ne choisit ni levier ni `reduce_only` ;
+- Risk impose marge, caps, liquidation et anti-reversal ;
+- contrat linéaire et marge ISOLATED seulement dans ce batch.
+
+## 10. Portfolio global
+
+Le portefeuille n'est jamais filtré selon le symbole choisi. L'Agent et Risk disposent des :
+
+- balances ;
+- positions SPOT ;
+- positions Derivatives ;
+- expositions globales.
+
+Pour un PERPETUAL sélectionné, le portfolio final est recapturé après le mark/funding du snapshot
+d'exécution.
+
+## 11. Risk Engine
+
+Risk reste la seule autorité pour :
+
+- quantité autorisée ;
+- max notional ;
+- whitelist ;
+- solvabilité SPOT ;
+- disponibilité de position ;
+- exposition Derivatives ;
+- leverage ;
+- marge ;
+- liquidation ;
+- `reduce_only` ;
+- anti-reversal.
+
+Le nouvel univers exécutable est une frontière supplémentaire en amont, pas un remplacement de
+Risk.
+
+## 12. Broker
+
+Le Broker reçoit seulement un `ExecutionIntent` déjà autorisé et **exactement le même
+`MarketState`** que Risk.
+
+Chaque Fill doit rester corrélé au `market_state_id`, au `pricing_as_of`, au prix de référence, au
+symbole et au type de marché.
+
+## 13. Erreurs
+
+Les échecs techniques ne deviennent jamais un HOLD :
+
+- sélection hors univers ;
+- résultat LLM non conforme ;
+- marché exécutable indisponible ;
+- mismatch symbole/type ;
+- contrat derivative non supporté ;
+- timeout ;
+- incohérence de corrélation.
+
+Ils produisent un cycle `FAILED` avec métadonnées sanitizées.
+
+## 14. Audit causal
+
+L'ordre reconstructible est :
+
+```text
+MarketSelectionInput
+-> recherches
+-> MarketSelection
+-> MarketState
+-> AgentInput final
+-> DecisionCandidate
+-> RiskAssessment
+-> ExecutionIntent
+-> Fill
+```
+
+Une panne à chaque frontière conserve les artefacts déjà terminés.
+
+## 15. Prompt
+
+L'identifiant reste `agent-strategy-v4` conformément à la décision de ne pas le renommer dans ce
+batch. Son texte décrit désormais les deux phases.
+
+Dette expérimentale conservée : une future campagne comparative doit versionner explicitement la
+politique/capacité de tools et de sélection, car le seul `prompt_version` ne suffit pas à décrire
+tout l'environnement expérimental.
+
+## 16. Interdits maintenus
 
 - aucun LIVE ;
 - aucune clé Kraken privée ;
 - aucun LLM -> Broker ;
 - aucun tool -> Broker/Risk ;
 - aucun second Agent ;
+- aucun scanner/ranking/opportunity score déterministe ;
 - aucune obligation de trader ;
 - aucun look-ahead ;
-- aucun signal déterministe transformé en BUY/SELL/HOLD.
+- aucune modification post-hoc d'une décision.

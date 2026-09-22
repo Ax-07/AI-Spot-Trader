@@ -2,7 +2,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
 from pydantic import (
@@ -451,33 +451,19 @@ class ExperimentManifest(DomainModel):
         return self
 
 
-class AgentInput(DomainModel):
-    """Structured input boundary for the single strategic trading agent."""
+class ExecutableMarket(DomainModel):
+    """One explicitly authorized PAPER market addressable by symbol and market type."""
 
-    cycle_id: UUID
-    created_at: UtcDateTime
-    market_state: MarketState
-    portfolio_state: PortfolioState
-    aggressiveness: Annotated[int, Field(ge=1, le=10)]
-    aggressiveness_context: AggressivenessContext | None = None
-    experiment_manifest: ExperimentManifest | None = None
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    symbol: NonEmptyText
+    market_type: MarketType
 
     @model_validator(mode="after")
-    def validate_experimental_context(self) -> "AgentInput":
-        if (
-            self.aggressiveness_context is not None
-            and self.aggressiveness_context.level != self.aggressiveness
-        ):
-            raise ValueError("aggressiveness_context level must match aggressiveness")
-        manifest = self.experiment_manifest
-        if manifest is None:
-            return self
-        if self.aggressiveness_context is None:
-            raise ValueError("experiment_manifest requires aggressiveness_context")
-        if manifest.aggressiveness != self.aggressiveness_context:
-            raise ValueError("experiment_manifest aggressiveness context mismatch")
-        if self.market_state.symbol not in manifest.universe:
-            raise ValueError("AgentInput symbol is outside the experiment universe")
+    def validate_executable_market(self) -> "ExecutableMarket":
+        parse_canonical_symbol(self.symbol)
+        if self.market_type is MarketType.FUTURE:
+            raise ValueError("dated FUTURE markets are not executable")
         return self
 
 
@@ -504,6 +490,153 @@ class AgentToolTrace(DomainModel):
             raise ValueError("error tool traces require a sanitized error_type")
         if self.result_digest != canonical_json_digest(self.result):
             raise ValueError("tool trace result_digest must match the normalized result")
+        return self
+
+
+class MarketSelectionInput(DomainModel):
+    """Causal research boundary shown to the same strategic Agent before market acquisition."""
+
+    cycle_id: UUID
+    created_at: UtcDateTime
+    portfolio_state: PortfolioState
+    executable_markets: tuple[ExecutableMarket, ...]
+    aggressiveness: Annotated[int, Field(ge=1, le=10)]
+    aggressiveness_context: AggressivenessContext | None = None
+    experiment_manifest: ExperimentManifest | None = None
+
+    @model_validator(mode="after")
+    def validate_selection_context(self) -> "MarketSelectionInput":
+        if self.portfolio_state.as_of > self.created_at:
+            raise ValueError("PortfolioState cannot be newer than MarketSelectionInput")
+        if not self.executable_markets:
+            raise ValueError("market selection requires a non-empty executable universe")
+        ordered = tuple(
+            sorted(
+                self.executable_markets,
+                key=lambda market: (market.market_type.value, market.symbol),
+            )
+        )
+        if ordered != self.executable_markets:
+            raise ValueError("executable_markets must use deterministic sorted order")
+        keys = tuple((market.symbol, market.market_type) for market in self.executable_markets)
+        if len(set(keys)) != len(keys):
+            raise ValueError("executable_markets must be unique by symbol + market_type")
+        if (
+            self.aggressiveness_context is not None
+            and self.aggressiveness_context.level != self.aggressiveness
+        ):
+            raise ValueError("aggressiveness_context level must match aggressiveness")
+        manifest = self.experiment_manifest
+        if manifest is not None:
+            if self.aggressiveness_context is None:
+                raise ValueError("experiment_manifest requires aggressiveness_context")
+            if manifest.aggressiveness != self.aggressiveness_context:
+                raise ValueError("experiment_manifest aggressiveness context mismatch")
+            if any(market.symbol not in manifest.universe for market in self.executable_markets):
+                raise ValueError("executable market is outside the experiment universe")
+        return self
+
+
+def market_selection_digest(
+    *,
+    selection_id: UUID,
+    cycle_id: UUID,
+    selected_at: datetime,
+    symbol: str,
+    market_type: MarketType,
+    tool_traces: tuple[AgentToolTrace, ...],
+    rationale: str | None = None,
+) -> str:
+    payload = {
+        "selection_id": str(selection_id),
+        "cycle_id": str(cycle_id),
+        "selected_at": selected_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        "symbol": symbol,
+        "market_type": market_type.value,
+        "rationale": rationale,
+        "tool_traces": [trace.model_dump(mode="json") for trace in tool_traces],
+    }
+    return canonical_json_digest(cast(JsonValue, payload))
+
+
+class MarketSelection(DomainModel):
+    """Explicit auditable market chosen by the strategic Agent before executable acquisition."""
+
+    selection_id: UUID
+    cycle_id: UUID
+    selected_at: UtcDateTime
+    symbol: NonEmptyText
+    market_type: MarketType
+    rationale: str | None = None
+    tool_traces: tuple[AgentToolTrace, ...] = ()
+    selection_digest: Sha256Digest
+
+    @model_validator(mode="after")
+    def validate_selection(self) -> "MarketSelection":
+        parse_canonical_symbol(self.symbol)
+        if self.market_type is MarketType.FUTURE:
+            raise ValueError("dated FUTURE markets cannot be selected for execution")
+        call_ids = tuple(trace.call_id for trace in self.tool_traces)
+        if len(call_ids) != len(set(call_ids)):
+            raise ValueError("MarketSelection tool_traces must have unique call_id values")
+        if any(trace.completed_at > self.selected_at for trace in self.tool_traces):
+            raise ValueError("selection cannot use tool data completed after selected_at")
+        expected = market_selection_digest(
+            selection_id=self.selection_id,
+            cycle_id=self.cycle_id,
+            selected_at=self.selected_at,
+            symbol=self.symbol,
+            market_type=self.market_type,
+            tool_traces=self.tool_traces,
+            rationale=self.rationale,
+        )
+        if self.selection_digest != expected:
+            raise ValueError("MarketSelection selection_digest mismatch")
+        return self
+
+
+class AgentInput(DomainModel):
+    """Structured final-decision boundary for the single strategic trading agent."""
+
+    cycle_id: UUID
+    created_at: UtcDateTime
+    market_state: MarketState
+    portfolio_state: PortfolioState
+    aggressiveness: Annotated[int, Field(ge=1, le=10)]
+    aggressiveness_context: AggressivenessContext | None = None
+    experiment_manifest: ExperimentManifest | None = None
+    market_selection: MarketSelection | None = None
+
+    @model_validator(mode="after")
+    def validate_experimental_context(self) -> "AgentInput":
+        if self.market_state.as_of > self.created_at:
+            raise ValueError("MarketState cannot be newer than AgentInput.created_at")
+        if self.portfolio_state.as_of > self.created_at:
+            raise ValueError("PortfolioState cannot be newer than AgentInput.created_at")
+        if (
+            self.aggressiveness_context is not None
+            and self.aggressiveness_context.level != self.aggressiveness
+        ):
+            raise ValueError("aggressiveness_context level must match aggressiveness")
+        selection = self.market_selection
+        if selection is not None:
+            if selection.cycle_id != self.cycle_id:
+                raise ValueError("MarketSelection cycle_id must match AgentInput")
+            if selection.selected_at > self.created_at:
+                raise ValueError("MarketSelection cannot postdate AgentInput")
+            if selection.symbol != self.market_state.symbol:
+                raise ValueError("MarketSelection symbol must match MarketState")
+            if selection.market_type is not self.market_state.market_type:
+                raise ValueError("MarketSelection market_type must match MarketState")
+        manifest = self.experiment_manifest
+        if manifest is None:
+            return self
+        if self.aggressiveness_context is None:
+            raise ValueError("experiment_manifest requires aggressiveness_context")
+        if manifest.aggressiveness != self.aggressiveness_context:
+            raise ValueError("experiment_manifest aggressiveness context mismatch")
+        if self.market_state.symbol not in manifest.universe:
+            raise ValueError("AgentInput symbol is outside the experiment universe")
         return self
 
 

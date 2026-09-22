@@ -2,7 +2,8 @@
 
 ## Règle de lecture
 
-Un batch est **intégré** uniquement après validation locale, commit et push confirmés sur GitHub `main`. Un ZIP livré par ChatGPT reste un patch proposé tant que ces étapes ne sont pas réalisées.
+Un batch est **intégré** uniquement après validation locale, commit et push confirmés sur GitHub
+`main`. Un ZIP livré par ChatGPT reste un patch proposé tant que ces étapes ne sont pas réalisées.
 
 ## Historique intégré synthétique
 
@@ -14,64 +15,85 @@ Un batch est **intégré** uniquement après validation locale, commit et push c
 - Batch 16.6 : validation comportementale Luna sans forcer BUY/SELL.
 - Prompt `agent-strategy-v4` : localisation française.
 - Batch 17 : durcissement fail-closed de la frontière Kraken Derivatives publique.
+- Batch 18.1 : tools Agent read-only bornés, boucle Responses function calling, traces causales et migration `0003_agent_tool_traces`.
 
-Référence intégrée actuelle avant Batch 18.1 : `main = ca5077af00293ccca9794132ee0dd53a5b339911`; `baseline-batch17` pointe sur ce commit.
+Référence intégrée actuelle :
 
-## Batch 18.1 — Socle Agent tools read-only et tool loop OpenAI bornée
+```text
+main = e158ea71d9f7cdf010d98d41be1968440c640a53
+feat: add bounded read-only market research tools
+```
+
+Le Batch 18.1 est **intégré** sur cette référence.
+
+## Batch 18.2 — Sélection causale du marché exécutable
 
 **État : patch proposé, non intégré.**
 
 ### Objectif
 
-Permettre au même Agent stratégique de rechercher des faits marché de façon volontaire et bornée avant sa décision, sans déplacer l'autorité de Risk et sans encore rendre un autre symbole exécutable.
+Permettre au même Agent stratégique de choisir réellement un marché `SPOT` ou `PERPETUAL`
+exécutable, puis d'obtenir le `MarketState` canonique exact de ce marché avant sa décision finale.
+
+### Architecture retenue
+
+Deux phases avec **le même Agent** :
+
+```text
+MarketSelectionInput
+-> research/selection Agent
+-> MarketSelection
+-> acquisition executable MarketState
+-> AgentInput final
+-> BUY/SELL/HOLD
+-> Risk
+-> Broker éventuel
+```
 
 ### Périmètre proposé
 
-- `MarketResearchService` provider-agnostic ;
-- tools `list_markets` et `get_market_snapshot` uniquement ;
-- sources Kraken de recherche séparées des sources de trading ;
-- SPOT + PERPETUAL snapshots ; catalogue pouvant inclure FUTURE ;
-- Responses API `store=false`, strict functions, `parallel_tool_calls=false` ;
-- max calls, timeout et taille de résultat configurables ;
-- erreurs fournisseur sanitizées ;
-- traces causales complètes avec digest ;
-- migration `0003_agent_tool_traces` ;
-- persistance des traces même lors d'un échec Agent avant décision finale ;
-- digest de cycle intégrant les traces.
+- `ExecutableMarket` typé ;
+- univers `PAPER_EXECUTABLE_MARKETS` configurable/auditable ;
+- `MarketSelectionInput` + `MarketSelection` avec rationale/traces/digest ;
+- routeur exécution SPOT/PERPETUAL ;
+- refus FUTURE, inverse, hors-univers et mismatch source ;
+- séparation stricte sources research/execution ;
+- recapture du portefeuille après snapshot Derivatives ;
+- migration `0004_multi_market_selection` ;
+- `paper_runs.execution_universe_payload` ;
+- `market_selection_*_payload` sur les cycles ;
+- API audit typée même en échec avant décision ;
+- analytics multi-marchés causal `paper-analytics-v3` ;
+- compatibilité du runner/provider mono-marché historique.
 
-### Ce que 18.1 ne fait pas
+### Ce que 18.2 ne fait pas
 
-- pas de ranking/scanner/momentum score ;
+- pas de scanner/ranking/momentum score ;
 - pas de second Agent ;
+- pas de `FUTURE` daté exécutable ;
+- pas de contrat inverse ;
+- pas de conversion multi-devise/FX ;
 - pas d'order tool ;
 - pas de LIVE/private Kraken ;
-- pas de remplacement du `MarketState` de Risk/Broker par un snapshot recherché ;
-- pas de décision exécutable sur un symbole différent du `paper_symbol`.
+- pas de recovery durable du ledger.
 
 ### Critère de sortie
 
-Après validation locale complète : l'Agent peut décider sans tool, appeler un ou plusieurs tools, recevoir des résultats bornés/auditables, puis produire un `DecisionCandidate` toujours limité au symbole initial du cycle.
+Avant intégration :
 
-## Batch 18.2 — Vrai choix de marché exécutable
-
-**À concevoir séparément après intégration/validation de 18.1.**
-
-Le problème à résoudre n'est pas seulement d'autoriser `DecisionCandidate.symbol != AgentInput.market_state.symbol`. Il faut réorganiser causalement le cycle pour que :
-
-1. l'Agent choisisse un marché à partir de faits disponibles ;
-2. le backend acquière/valide le `MarketState` exact de ce marché ;
-3. le portefeuille complet reste visible ;
-4. Risk évalue la bonne paire/le bon type ;
-5. Broker utilise exactement le snapshot autorisé ;
-6. l'audit relie sélection, snapshot final, décision, Risk et fill sans look-ahead.
-
-Aucun raccourci consistant à réutiliser le `MarketState` du `paper_symbol` pour une autre décision n'est acceptable.
+1. suite complète backend verte ;
+2. Ruff + mypy verts ;
+3. migration `0004` appliquée sur PostgreSQL de validation ;
+4. API paper-runs/cycle audit vérifiée ;
+5. smoke PAPER montrant au moins une sélection cross-symbol et, si configuré, un passage SPOT/PERPETUAL ;
+6. `git diff --check` propre.
 
 ## Après 18.2 — pistes à décider
 
-- protocole expérimental versionnant explicitement la politique de tools ;
-- univers multi-marché configurable et politique de coûts/cache ;
-- snapshots FUTURE génériques si l'exécution datée devient réellement supportée ;
-- enrichissements mesurés : order book, volume, recent trades ou funding historique uniquement si un besoin empirique le justifie ;
-- recovery durable du ledger PAPER ;
-- LIVE toujours en batch séparé.
+- version formelle du protocole Agent/tools/sélection dans `ExperimentManifest` ;
+- recovery/restart durable du ledger PAPER multi-actifs ;
+- valorisation multi-quote avec FX explicite si besoin mesuré ;
+- snapshots/exécution FUTURE datés seulement si le domaine est réellement implémenté ;
+- enrichissements de recherche mesurés : order book, trades, funding historique, news ;
+- campagnes d'expériences Luna/Sol sur univers multi-marché ;
+- LIVE toujours dans un batch séparé.

@@ -13,18 +13,30 @@ from ai_spot_trader.agent.errors import (
 )
 from ai_spot_trader.agent.prompt import AGENT_PROMPT_VERSION, AGENT_SYSTEM_PROMPT
 from ai_spot_trader.core.clock import Clock, SystemClock
-from ai_spot_trader.domain.enums import LLMModel, TradingAction
+from ai_spot_trader.domain.enums import LLMModel, MarketType, TradingAction
 from ai_spot_trader.domain.experiments import (
     aggressiveness_context,
     validate_experiment_manifest_digest,
 )
-from ai_spot_trader.domain.models import AgentInput, AgentToolTrace, DecisionCandidate
+from ai_spot_trader.domain.models import (
+    AgentInput,
+    AgentToolTrace,
+    AggressivenessContext,
+    DecisionCandidate,
+    ExecutableMarket,
+    ExperimentManifest,
+    MarketSelection,
+    MarketSelectionInput,
+    market_selection_digest,
+)
 from ai_spot_trader.domain.symbols import parse_canonical_symbol
 from ai_spot_trader.tools.read_only import ReadOnlyToolRegistry, ToolLoopResult
 
 DecisionIdFactory = Callable[[], UUID]
+SelectionIdFactory = Callable[[], UUID]
 PositiveDecimal = Annotated[Decimal, Field(gt=0)]
 StrategicAction = Literal["BUY", "SELL", "HOLD"]
+SelectionMarketType = Literal["SPOT", "PERPETUAL"]
 
 STRATEGIC_DECISION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -35,6 +47,17 @@ STRATEGIC_DECISION_SCHEMA: dict[str, Any] = {
         "rationale": {"type": ["string", "null"]},
     },
     "required": ["action", "symbol", "proposed_quantity", "rationale"],
+    "additionalProperties": False,
+}
+
+MARKET_SELECTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "symbol": {"type": "string", "minLength": 1},
+        "market_type": {"type": "string", "enum": ["SPOT", "PERPETUAL"]},
+        "rationale": {"type": ["string", "null"]},
+    },
+    "required": ["symbol", "market_type", "rationale"],
     "additionalProperties": False,
 }
 
@@ -87,8 +110,18 @@ class _StrategicDecisionPayload(BaseModel):
         return self
 
 
+class _MarketSelectionPayload(BaseModel):
+    """Provider-only output used before canonical executable MarketState acquisition."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    symbol: Annotated[str, Field(min_length=1)]
+    market_type: SelectionMarketType
+    rationale: str | None
+
+
 class OpenAIDecisionProvider:
-    """Canonical Luna/Sol Agent with optional bounded read-only market research."""
+    """Single Luna/Sol Agent: research/select first, then decide on the acquired market."""
 
     def __init__(
         self,
@@ -97,6 +130,7 @@ class OpenAIDecisionProvider:
         model: LLMModel = LLMModel.LUNA,
         clock: Clock | None = None,
         decision_id_factory: DecisionIdFactory = uuid4,
+        selection_id_factory: SelectionIdFactory = uuid4,
         tool_registry: ReadOnlyToolRegistry | None = None,
         max_tool_calls: int = 0,
     ) -> None:
@@ -108,23 +142,105 @@ class OpenAIDecisionProvider:
         self._model = model
         self._clock = clock or SystemClock()
         self._decision_id_factory = decision_id_factory
+        self._selection_id_factory = selection_id_factory
         self._tool_registry = tool_registry
         self._max_tool_calls = max_tool_calls
         self._last_tool_traces: tuple[AgentToolTrace, ...] = ()
 
     @property
     def last_tool_traces(self) -> tuple[AgentToolTrace, ...]:
-        """Read-only research completed in the latest Agent call, even if it failed later."""
+        """Read-only research completed in the latest Agent phase, including partial failures."""
 
         return self._last_tool_traces
 
-    async def generate_decision(self, agent_input: AgentInput) -> DecisionCandidate:
-        """Generate one strict strategic decision; tools can only add read-only facts."""
+    async def select_market(self, selection_input: MarketSelectionInput) -> MarketSelection:
+        """Let the same strategic Agent research and choose one typed executable market."""
 
-        normalized_input = _normalize_agent_input(agent_input, model=self._model)
+        normalized_input = _normalize_selection_input(selection_input, model=self._model)
         traces: tuple[AgentToolTrace, ...] = ()
         self._last_tool_traces = ()
         if self._tool_registry is not None and self._max_tool_calls > 0:
+            tool_client = cast(ToolStructuredDecisionClient, self._client)
+            try:
+                loop_result = await tool_client.generate_structured_decision_with_tools(
+                    model=self._model,
+                    instructions=AGENT_SYSTEM_PROMPT,
+                    input_text=normalized_input.model_dump_json(),
+                    schema=MARKET_SELECTION_SCHEMA,
+                    tool_registry=self._tool_registry,
+                    max_tool_calls=self._max_tool_calls,
+                )
+            except Exception:
+                self._capture_partial_traces(tool_client)
+                raise
+            raw_output = loop_result.output_text
+            traces = loop_result.traces
+            self._last_tool_traces = traces
+        else:
+            raw_output = await self._client.generate_structured_decision(
+                model=self._model,
+                instructions=AGENT_SYSTEM_PROMPT,
+                input_text=normalized_input.model_dump_json(),
+                schema=MARKET_SELECTION_SCHEMA,
+            )
+
+        payload = _parse_selection_output(raw_output)
+        try:
+            parse_canonical_symbol(payload.symbol)
+        except ValueError as exc:
+            raise AgentContractViolationError("selected market symbol is not canonical") from exc
+        selected_market = ExecutableMarket(
+            symbol=payload.symbol,
+            market_type=MarketType(payload.market_type),
+        )
+        if selected_market not in normalized_input.executable_markets:
+            raise AgentContractViolationError(
+                "LLM selected symbol + market_type outside the executable universe"
+            )
+
+        selected_at = _normalize_decision_time(self._clock.now())
+        if selected_at < normalized_input.created_at:
+            raise AgentContractViolationError(
+                "market-selection clock cannot precede MarketSelectionInput.created_at"
+            )
+        if any(trace.completed_at > selected_at for trace in traces):
+            raise AgentContractViolationError(
+                "tool trace cannot contain data completed after market selection"
+            )
+
+        selection_id = self._selection_id_factory()
+        self._last_tool_traces = traces
+        return MarketSelection(
+            selection_id=selection_id,
+            cycle_id=normalized_input.cycle_id,
+            selected_at=selected_at,
+            symbol=selected_market.symbol,
+            market_type=selected_market.market_type,
+            rationale=payload.rationale,
+            tool_traces=traces,
+            selection_digest=market_selection_digest(
+                selection_id=selection_id,
+                cycle_id=normalized_input.cycle_id,
+                selected_at=selected_at,
+                symbol=selected_market.symbol,
+                market_type=selected_market.market_type,
+                tool_traces=traces,
+                rationale=payload.rationale,
+            ),
+        )
+
+    async def generate_decision(self, agent_input: AgentInput) -> DecisionCandidate:
+        """Generate the final BUY/SELL/HOLD decision on the exact executable MarketState."""
+
+        normalized_input = _normalize_agent_input(agent_input, model=self._model)
+        selection = normalized_input.market_selection
+        traces: tuple[AgentToolTrace, ...] = () if selection is None else selection.tool_traces
+        self._last_tool_traces = traces
+
+        # Legacy Batch 18.1 callers without an explicit MarketSelection keep the historical
+        # optional research loop. The Batch 18.2 causal path never researches after acquiring
+        # the executable MarketState: it reuses exactly the selection-phase traces.
+        if selection is None and self._tool_registry is not None and self._max_tool_calls > 0:
             tool_client = cast(ToolStructuredDecisionClient, self._client)
             try:
                 loop_result = await tool_client.generate_structured_decision_with_tools(
@@ -136,11 +252,7 @@ class OpenAIDecisionProvider:
                     max_tool_calls=self._max_tool_calls,
                 )
             except Exception:
-                partial = getattr(tool_client, "last_tool_traces", ())
-                if isinstance(partial, tuple) and all(
-                    isinstance(trace, AgentToolTrace) for trace in partial
-                ):
-                    self._last_tool_traces = partial
+                self._capture_partial_traces(tool_client)
                 raise
             raw_output = loop_result.output_text
             traces = loop_result.traces
@@ -152,12 +264,12 @@ class OpenAIDecisionProvider:
                 input_text=normalized_input.model_dump_json(),
                 schema=STRATEGIC_DECISION_SCHEMA,
             )
-        payload = _parse_strategic_output(raw_output)
 
+        payload = _parse_strategic_output(raw_output)
         expected_symbol = normalized_input.market_state.symbol
         if payload.symbol != expected_symbol:
             raise AgentContractViolationError(
-                "LLM decision symbol must equal the supplied MarketState symbol"
+                "LLM decision symbol must equal the supplied executable MarketState symbol"
             )
 
         created_at = _normalize_decision_time(self._clock.now())
@@ -183,6 +295,56 @@ class OpenAIDecisionProvider:
             tool_traces=traces,
         )
 
+    def _capture_partial_traces(self, tool_client: ToolStructuredDecisionClient) -> None:
+        partial = getattr(tool_client, "last_tool_traces", ())
+        if isinstance(partial, tuple) and all(
+            isinstance(trace, AgentToolTrace) for trace in partial
+        ):
+            self._last_tool_traces = partial
+
+
+def _normalize_selection_input(
+    selection_input: MarketSelectionInput,
+    *,
+    model: LLMModel,
+) -> MarketSelectionInput:
+    if selection_input.portfolio_state.as_of > selection_input.created_at:
+        raise AgentContractViolationError(
+            "PortfolioState cannot be newer than MarketSelectionInput.created_at"
+        )
+    if not selection_input.executable_markets:
+        raise AgentContractViolationError("executable market universe cannot be empty")
+    for market in selection_input.executable_markets:
+        try:
+            parse_canonical_symbol(market.symbol)
+        except ValueError as exc:
+            raise AgentContractViolationError(
+                "executable market universe contains a non-canonical symbol"
+            ) from exc
+        if market.market_type is MarketType.FUTURE:
+            raise AgentContractViolationError(
+                "dated FUTURE markets cannot enter the executable universe"
+            )
+
+    canonical_context = aggressiveness_context(selection_input.aggressiveness)
+    if (
+        selection_input.aggressiveness_context is not None
+        and selection_input.aggressiveness_context != canonical_context
+    ):
+        raise AgentContractViolationError(
+            "MarketSelectionInput aggressiveness_context does not match the canonical mapping"
+        )
+    _validate_manifest(
+        selection_input.experiment_manifest,
+        model=model,
+        canonical_context=canonical_context,
+    )
+    if selection_input.aggressiveness_context is None:
+        return selection_input.model_copy(
+            update={"aggressiveness_context": canonical_context}
+        )
+    return selection_input
+
 
 def _normalize_agent_input(agent_input: AgentInput, *, model: LLMModel) -> AgentInput:
     try:
@@ -198,6 +360,20 @@ def _normalize_agent_input(agent_input: AgentInput, *, model: LLMModel) -> Agent
         raise AgentContractViolationError(
             "PortfolioState cannot be newer than AgentInput.created_at"
         )
+    selection = agent_input.market_selection
+    if selection is not None:
+        if selection.cycle_id != agent_input.cycle_id:
+            raise AgentContractViolationError("MarketSelection cycle_id mismatch")
+        if selection.selected_at > agent_input.created_at:
+            raise AgentContractViolationError("MarketSelection cannot postdate AgentInput")
+        if selection.symbol != agent_input.market_state.symbol:
+            raise AgentContractViolationError(
+                "MarketSelection symbol does not match executable MarketState"
+            )
+        if selection.market_type is not agent_input.market_state.market_type:
+            raise AgentContractViolationError(
+                "MarketSelection market_type does not match executable MarketState"
+            )
 
     canonical_context = aggressiveness_context(agent_input.aggressiveness)
     if (
@@ -207,37 +383,67 @@ def _normalize_agent_input(agent_input: AgentInput, *, model: LLMModel) -> Agent
         raise AgentContractViolationError(
             "AgentInput aggressiveness_context does not match the canonical mapping"
         )
-
-    manifest = agent_input.experiment_manifest
-    if manifest is not None:
-        try:
-            validate_experiment_manifest_digest(manifest)
-        except ValueError as exc:
-            raise AgentContractViolationError(str(exc)) from exc
-        if manifest.llm_model is not model:
-            raise AgentContractViolationError(
-                "experiment manifest LLM model does not match the configured provider"
-            )
-        if manifest.prompt_version != AGENT_PROMPT_VERSION:
-            raise AgentContractViolationError(
-                "experiment manifest prompt version does not match the active prompt"
-            )
-        if manifest.aggressiveness != canonical_context:
-            raise AgentContractViolationError(
-                "experiment manifest aggressiveness does not match the canonical mapping"
-            )
-
+    _validate_manifest(
+        agent_input.experiment_manifest,
+        model=model,
+        canonical_context=canonical_context,
+    )
     if agent_input.aggressiveness_context is None:
         return agent_input.model_copy(update={"aggressiveness_context": canonical_context})
     return agent_input
 
 
+def _validate_manifest(
+    manifest: ExperimentManifest | None,
+    *,
+    model: LLMModel,
+    canonical_context: AggressivenessContext,
+) -> None:
+    if manifest is None:
+        return
+    try:
+        validate_experiment_manifest_digest(manifest)
+    except ValueError as exc:
+        raise AgentContractViolationError(str(exc)) from exc
+    if manifest.llm_model is not model:
+        raise AgentContractViolationError(
+            "experiment manifest LLM model does not match the configured provider"
+        )
+    if manifest.prompt_version != AGENT_PROMPT_VERSION:
+        raise AgentContractViolationError(
+            "experiment manifest prompt version does not match the active prompt"
+        )
+    if manifest.aggressiveness != canonical_context:
+        raise AgentContractViolationError(
+            "experiment manifest aggressiveness does not match the canonical mapping"
+        )
+
+
+def _parse_selection_output(raw_output: str) -> _MarketSelectionPayload:
+    parsed = _parse_json(raw_output)
+    try:
+        return _MarketSelectionPayload.model_validate(parsed)
+    except ValidationError as exc:
+        raise LLMOutputValidationError(
+            "LLM structured output violates the market-selection schema"
+        ) from exc
+
+
 def _parse_strategic_output(raw_output: str) -> _StrategicDecisionPayload:
+    parsed = _parse_json(raw_output)
+    try:
+        return _StrategicDecisionPayload.model_validate(parsed)
+    except ValidationError as exc:
+        raise LLMOutputValidationError(
+            "LLM structured output violates the strategic schema"
+        ) from exc
+
+
+def _parse_json(raw_output: str) -> object:
     if not raw_output or not raw_output.strip():
         raise LLMOutputValidationError("LLM structured output is empty")
-
     try:
-        parsed = json.loads(
+        return json.loads(
             raw_output,
             parse_float=Decimal,
             parse_int=Decimal,
@@ -245,13 +451,6 @@ def _parse_strategic_output(raw_output: str) -> _StrategicDecisionPayload:
         )
     except (json.JSONDecodeError, ValueError) as exc:
         raise LLMOutputValidationError("LLM structured output is not valid JSON") from exc
-
-    try:
-        return _StrategicDecisionPayload.model_validate(parsed)
-    except ValidationError as exc:
-        raise LLMOutputValidationError(
-            "LLM structured output violates the strategic schema"
-        ) from exc
 
 
 def _reject_json_constant(value: str) -> None:

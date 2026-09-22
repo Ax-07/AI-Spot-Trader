@@ -2,9 +2,14 @@
 
 ## 1. Rôle
 
-AI Spot Trader est une application expérimentale de trading crypto PAPER pilotée par **un seul Agent IA stratégique**. Le backend est l'application de trading ; le frontend est un cockpit de contrôle et de visualisation.
+AI Spot Trader est une application expérimentale de trading crypto PAPER pilotée par **un seul
+Agent IA stratégique**. Le backend est l'application de trading ; le frontend est un cockpit de
+contrôle et de visualisation.
 
-Référence intégrée au début du Batch 18.1 : GitHub `main` au commit `ca5077af00293ccca9794132ee0dd53a5b339911`. Le Batch 18.1 décrit ci-dessous est un **patch proposé non intégré** tant qu'il n'a pas été validé localement, commité et poussé.
+Référence intégrée au début du Batch 18.2 : GitHub `main` au commit
+`e158ea71d9f7cdf010d98d41be1968440c640a53`. Le Batch 18.1 y est intégré. Le contenu Batch 18.2
+ci-dessous décrit un **patch proposé non intégré** tant qu'il n'a pas été validé localement,
+commité et poussé.
 
 ## 2. Invariants fonctionnels
 
@@ -13,14 +18,14 @@ Référence intégrée au début du Batch 18.1 : GitHub `main` au commit `ca5077
 - un seul Agent IA stratégique ;
 - Kraken comme exchange initial ;
 - PAPER uniquement ;
-- décisions `BUY`, `SELL`, `HOLD` ;
+- décisions finales `BUY`, `SELL`, `HOLD` ;
 - GPT-5.6 Luna par défaut, Sol sélectionnable ;
-- cible expérimentale +4 %/jour = métrique de recherche, jamais garantie ni obligation de trader ;
+- cible expérimentale +4 %/jour = métrique de recherche, jamais garantie ;
 - Risk Engine déterministe avec autorité finale ;
 - seul Risk produit un `ExecutionIntent` ;
 - aucune sortie LLM ni aucun tool ne déclenche directement Broker/Kraken ;
-- frais, spread, slippage et funding Derivatives restent pris en compte ;
-- toutes les décisions et recherches causales sont auditables ;
+- frais, spread, slippage et funding restent pris en compte ;
+- décisions, recherches et sélections causales sont auditables ;
 - aucun secret dans prompts, logs ou fichiers versionnés ;
 - aucun look-ahead ;
 - backend indépendant du frontend.
@@ -29,168 +34,240 @@ Référence intégrée au début du Batch 18.1 : GitHub `main` au commit `ca5077
 
 - aucun short ;
 - aucun levier/margin ;
-- `SELL` ne peut réduire qu'un actif effectivement détenu.
+- `SELL` ne peut réduire qu'un actif détenu/disponible.
 
 ### Derivatives
 
-- LONG/SHORT uniquement sur instruments compatibles ;
-- le levier est déterministe/configuré, jamais choisi par le LLM ;
+- Batch 18.2 exécute uniquement les `PERPETUAL` linéaires supportés ;
+- LONG/SHORT permis sous contrôle Risk ;
+- levier déterministe/configuré, jamais choisi par le LLM ;
 - Risk contrôle marge, exposition, liquidation, `reduce_only` et anti-reversal ;
-- exécution PAPER actuelle : perpetual linéaire, marge ISOLATED ;
-- futures datés, contrats inverses et CROSS restent non exécutables dans le runtime actuel.
+- marge `ISOLATED` ;
+- futures datés, contrats inverses et CROSS restent non exécutables.
 
-## 3. Pipeline de confiance
-
-```text
-Kraken public data
-      |
-      +-------------------------> MarketResearchService
-      |                                   |
-      |                              read-only tools
-      |                                   |
-      v                                   v
- MarketState -----------------------> AgentInput --> Agent
-      ^                                              |
-      |                                        BUY/SELL/HOLD
- PortfolioState complet                              |
-                                                     v
-                                                Risk Engine
-                                         ALLOW/MODIFY/REJECT
-                                                     |
-                                              ExecutionIntent
-                                                     |
-                                                     v
-                                               Paper Broker
-                                                     |
-                                                Fill + ledger
-                                                     |
-                                                     v
-                                            TradingCycleResult
-                                                     |
-                                        audit PostgreSQL / analytics
-```
-
-Le chemin d'exécution reste unique : `Market -> Agent -> Risk -> PaperBroker`. La recherche est une source de faits supplémentaire pour le même Agent, pas une stratégie parallèle.
-
-## 4. Contrats de marché
-
-`MarketState` est le snapshot canonique utilisé par le cycle et par Risk/Broker. `MarketStateBuilder` calcule les statistiques descriptives multi-horizon déjà existantes : fraîcheur, min/max, range, rendement et volatilité réalisée.
-
-Le Batch 18.1 introduit `MarketResearchService`, qui expose ces faits sans dupliquer les calculs. Il reçoit un backend provider-specific mais renvoie des modèles provider-agnostic bornés.
-
-### `list_markets`
-
-- catalogue factuel, tri déterministe ;
-- pagination par `cursor` + `limit` ;
-- SPOT depuis `KrakenPairRegistry` ;
-- Derivatives depuis les instruments publics normalisés ;
-- aucun score, ranking, top-N stratégique ou filtre momentum.
-
-### `get_market_snapshot`
-
-- symbole + type de marché explicites ;
-- SPOT/PERPETUAL dans Batch 18.1 ;
-- réutilisation des sources canoniques et du `MarketStateBuilder` ;
-- retourne prix, timestamps, fraîcheur, fenêtres descriptives et, pour PERPETUAL, instrument/mark/index/funding ;
-- aucune donnée postérieure à la décision ne peut être retenue dans la trace causale.
-
-`FUTURE` peut apparaître dans le catalogue, mais son snapshot n'est pas exposé en 18.1 car le source Derivatives exécutable actuel résout volontairement les collisions canoniques en faveur du perpetual linéaire.
-
-## 5. Agent et tool loop
-
-Le prompt reste identifié `agent-strategy-v4` et les rationales restent en français. L'Agent peut :
-
-- décider immédiatement sans tool ;
-- appeler un tool ;
-- enchaîner plusieurs recherches ;
-- choisir les symboles examinés ;
-- arrêter lui-même ses recherches et produire sa décision finale.
-
-Les contraintes de boucle sont **non stratégiques** : elles bornent coût, latence et taille, mais ne disent pas à l'Agent quel marché préférer.
-
-La Responses API conserve `store=false`. Quand un `function_call` est reçu, l'application :
-
-1. valide strictement le nom et les arguments ;
-2. exécute le tool read-only sous timeout ;
-3. normalise et borne le résultat ;
-4. crée une trace causale ;
-5. rejoue explicitement les éléments de sortie précédents avec un `function_call_output` portant le même `call_id`.
-
-`parallel_tool_calls=false` évite les appels concurrents dans un même tour. Les tools sont déclarés `strict=true` avec `additionalProperties=false`.
-
-## 6. Limitation volontaire du Batch 18.1
-
-L'Agent peut rechercher `ETH/USD`, `SOL/USD` ou un autre marché, mais la décision finale doit toujours respecter :
+## 3. Pipeline de confiance Batch 18.2
 
 ```text
-DecisionCandidate.symbol == AgentInput.market_state.symbol
+PortfolioState complet
+        |
+        v
+MarketSelectionInput
+        |
+        v
+Agent unique + tools read-only optionnels
+        |
+        v
+MarketSelection
+        |
+        v
+validation déterministe de l'univers exécutable
+        |
+        v
+MarketState canonique exact du marché sélectionné
+        |
+        v
+AgentInput final -> même Agent -> BUY / SELL / HOLD
+        |
+        v
+Risk Engine -> ALLOW / MODIFY / REJECT
+        |
+        v
+ExecutionIntent éventuel -> PaperBroker -> Fill
+        |
+        v
+journal PostgreSQL / analytics
 ```
 
-Le runner continue donc à acquérir un seul `MarketState` causal pour son `paper_symbol`, qui reste le seul symbole pouvant atteindre Risk/Broker. Le Batch 18.2 devra déplacer le choix de marché **avant** la construction du `MarketState` exécutable afin de garder une causalité correcte.
+La stratégie de sélection appartient à l'Agent. Les composants déterministes ne calculent aucun
+ranking, score d'opportunité ou signal d'achat/vente.
 
-## 7. PortfolioState
+## 4. Marché découvrable, recherchable et exécutable
 
-`PortfolioState` reste complet dans `AgentInput` : balances, positions SPOT et toutes les `derivative_positions`. Une recherche sur un autre symbole ne filtre ni ne réécrit le portefeuille.
-
-## 8. Erreurs et fail-closed
-
-Les pannes de données au sein d'un tool (réseau, payload fournisseur, symbole inconnu, timeout, résultat trop volumineux) deviennent un résultat d'outil sanitizé et auditable que l'Agent peut constater. Les détails sensibles/raw ne sont jamais renvoyés.
-
-En revanche, un tool non enregistré, des arguments malformed ou un dépassement du budget global constituent une violation technique de la boucle et font échouer le stade Agent. Ce type d'échec n'est jamais converti en HOLD.
-
-## 9. Audit causal des tools
-
-Chaque recherche terminée produit un `AgentToolTrace` :
-
-- `call_id` ;
-- nom du tool ;
-- arguments validés/sanitizés ;
-- `started_at` / `completed_at` ;
-- statut `SUCCESS|ERROR` ;
-- type d'erreur sanitizé ;
-- résultat normalisé borné ;
-- SHA-256 déterministe du résultat canonique.
-
-Les traces d'une décision sont aussi attachées à `DecisionCandidate`. Pour couvrir un échec **après** des recherches mais **avant** une décision valide, elles existent également au niveau de `TradingCycleResult` et sont persistées sur `audit_cycles.agent_tool_traces_payload` via la migration `0003_agent_tool_traces`.
-
-Le digest global du cycle inclut explicitement les traces. Deux cycles identiques hors recherches mais ayant des traces différentes n'ont donc pas la même identité durable.
-
-## 10. Séparation research/trading Kraken
-
-La composition construit des sources de recherche dédiées séparées des sources de trading. Cela évite qu'une recherche :
-
-- modifie l'état/cache du source de marché canonique du cycle ;
-- marque un ledger Derivatives ;
-- accumule du funding dans le portefeuille ;
-- affecte un futur `MarketState` de trading par effet de bord.
-
-Le source Derivatives de recherche est construit sans `market_sink`. Aucune clé Kraken privée n'est nécessaire.
-
-## 11. Risk et Broker
-
-Aucun tool du registry n'importe ou n'appelle `RiskEngine`, `PaperBroker` ou `ExecutionIntent`. Les tools ne peuvent donc ni autoriser, ni modifier, ni exécuter une position.
-
-Risk conserve toutes les règles SPOT/Derivatives existantes. En particulier, un HOLD reste `ALLOW` sans intent, le SPOT reste sans short et l'anti-reversal Derivatives reste déterministe.
-
-## 12. Persistance et migration
-
-La chaîne de migrations devient :
+Ces ensembles sont distincts :
 
 ```text
-0001_audit_journal
-  -> 0002_paper_runs
-  -> 0003_agent_tool_traces
+univers Kraken découvert
+>= univers Agent recherchable
+>=/!= univers PAPER exécutable configuré
+>= univers finalement autorisable par Risk
 ```
 
-`0003` ajoute une colonne JSONB nullable `audit_cycles.agent_tool_traces_payload`. Le nullable conserve la compatibilité avec les cycles historiques qui n'avaient aucune notion de tools.
+`list_markets` peut montrer des instruments non exécutables. `get_market_snapshot` reste une
+capacité de recherche factuelle. Aucun résultat de tool ne devient automatiquement un marché de
+trading.
 
-## 13. Dette / décisions futures
+Le nouvel univers exécutable est un tuple de `ExecutableMarket(symbol, market_type)` limité à :
 
-- Batch 18.2 : sélection causale du symbole exécutable et construction du bon `MarketState` avant décision/Risk ;
-- décider si une version explicite de politique de tools doit entrer dans `ExperimentManifest` avant toute comparaison expérimentale pré/post tools ;
-- ne pas ajouter order book, recent trades ou funding historique sans besoin mesuré ;
-- ne pas prétendre supporter des snapshots FUTURE génériques tant que le mapping provider/exécution n'est pas séparé proprement.
+- `SPOT` ;
+- `PERPETUAL` linéaire.
 
-## 14. LIVE
+`FUTURE` daté reste non exécutable.
 
-LIVE reste hors périmètre. Il nécessitera un batch séparé avec adaptateur privé, permissions minimales sans retrait, idempotence, réconciliation, recovery et activation explicite.
+## 5. Configuration de l'univers
+
+Nouvelle variable :
+
+```text
+AI_SPOT_TRADER_PAPER_EXECUTABLE_MARKETS=["SPOT:BTC/USD","PERPETUAL:ETH/USD"]
+```
+
+`paper_symbol` et `paper_market_type` restent un bootstrap de compatibilité. Quand l'univers est
+omis, le runtime redevient un singleton équivalent au comportement historique. Quand il est
+fourni, le bootstrap doit y appartenir mais ne fixe plus le marché des cycles.
+
+Contraintes :
+
+- ordre canonique déterministe ;
+- aucun doublon `symbol + market_type` ;
+- chaque symbole doit appartenir à `risk_allowed_pairs` ;
+- quote commune égale à `paper_settlement_asset` ;
+- présence d'un PERPETUAL => configuration Derivatives complète obligatoire.
+
+La quote commune est une limitation explicite du Batch 18.2 : aucune conversion FX implicite
+n'est introduite.
+
+## 6. Sélection stratégique explicite
+
+`MarketSelectionInput` contient :
+
+- `cycle_id` ;
+- timestamp causal ;
+- `PortfolioState` complet ;
+- univers exécutable typé ;
+- agressivité et contexte expérimental éventuel.
+
+Le même `OpenAIDecisionProvider` exécute `select_market()`. Il peut appeler les tools read-only du
+Batch 18.1 ou sélectionner directement un marché dans l'univers fourni.
+
+Le résultat `MarketSelection` persiste :
+
+- `selection_id` ;
+- `cycle_id` ;
+- `selected_at` ;
+- `symbol` ;
+- `market_type` ;
+- `rationale` ;
+- `AgentToolTrace[]` ;
+- `selection_digest` SHA-256 déterministe.
+
+Le LLM ne fournit pas lui-même les identifiants, timestamps, traces ou digest : l'application les
+contrôle.
+
+## 7. Acquisition du MarketState exécutable
+
+Après sélection, `RoutedExecutableMarketDataSource` vérifie :
+
+- symbole canonique ;
+- couple exact présent dans l'univers ;
+- type `SPOT` ou `PERPETUAL` ;
+- cohérence du snapshot retourné ;
+- pour PERPETUAL : contexte dérivé présent, instrument réellement perpetual et contrat linéaire.
+
+Le snapshot retourné devient **l'unique `MarketState`** utilisé ensuite par Agent, Risk et Broker.
+Aucun snapshot de recherche n'est promu silencieusement vers l'exécution.
+
+## 8. PortfolioState
+
+La sélection reçoit un `PortfolioState` complet. Après l'acquisition du marché sélectionné, le
+runner recapture le portefeuille avant la décision finale.
+
+Cette seconde capture est importante pour les Derivatives : la source d'exécution peut marquer
+une position déjà ouverte et accumuler le funding avant que l'Agent et Risk évaluent l'état.
+
+Les sources de recherche n'ont aucun droit de modifier le ledger.
+
+## 9. Décision finale
+
+Le même Agent reçoit ensuite `AgentInput` contenant :
+
+- le `MarketState` exécutable exact ;
+- le `PortfolioState` complet ;
+- le `MarketSelection`, donc aussi les recherches causales ;
+- l'agressivité et le contexte expérimental.
+
+Dans le chemin 18.2, la phase finale ne relance pas de tools : elle raisonne sur les recherches de
+sélection déjà enregistrées et le nouveau `MarketState` canonique. Cela évite qu'un contexte de
+recherche postérieur au snapshot d'exécution soit mélangé implicitement au cycle.
+
+Contraintes finales :
+
+```text
+DecisionCandidate.symbol      == MarketState.symbol
+DecisionCandidate.market_type == MarketState.market_type
+```
+
+## 10. Risk et Broker
+
+Risk reçoit exactement la décision, le `MarketState` sélectionné et le portefeuille complet.
+Toutes les règles SPOT/Derivatives existantes restent actives.
+
+Le Broker reçoit le même `MarketState` que Risk. Les fills doivent référencer son
+`market_state_id`, son timestamp de pricing et son prix de référence.
+
+## 11. Causalité temporelle
+
+Le pipeline vérifie notamment :
+
+```text
+selection portfolio.as_of <= selection_input.created_at
+trace.completed_at         <= selection.selected_at
+selection.selected_at      <= final AgentInput.created_at
+market_state.as_of         <= final AgentInput.created_at
+AgentInput.created_at      <= DecisionCandidate.created_at
+DecisionCandidate.created_at <= RiskAssessment.assessed_at
+```
+
+Aucun prix ou tool call postérieur à la décision finale n'est utilisable comme contexte causal.
+
+## 12. Audit durable
+
+`TradingCycleResult` porte désormais aussi :
+
+```text
+market_selection_input
+market_selection
+```
+
+La migration `0004` ajoute deux payloads nullable sur `audit_cycles`. Les anciennes rows restent
+compatibles avec `NULL`.
+
+Une panne :
+
+- pendant la recherche : conserve les traces terminées ;
+- après la sélection mais avant le snapshot exécutable : conserve entrée + sélection ;
+- après snapshot mais avant décision : conserve aussi l'`AgentInput` final.
+
+Le digest global du cycle couvre ces artefacts.
+
+## 13. `paper_runs`
+
+Le contrat historique `market_type + symbol` ne suffit pas pour un run multi-marchés.
+`0004` ajoute donc `execution_universe_payload` et rend les deux colonnes historiques nullables.
+
+- singleton : les colonnes historiques gardent la vraie paire/type ;
+- multi-marchés : elles sont `NULL` ;
+- aucun faux marqueur `MULTI`.
+
+Les rows existantes sont backfillées vers un univers singleton lors de la migration.
+
+## 14. Analytics
+
+L'analytics passe à `paper-analytics-v3` lorsque plusieurs marchés distincts apparaissent dans le
+journal. Les positions SPOT sont valorisées par le dernier mark SPOT causal durable connu pour
+chaque `BASE/settlement_asset`.
+
+Un mark absent provoque une erreur de données explicite. Aucune requête marché actuelle n'est
+faite pendant le replay et aucun look-ahead n'est possible.
+
+## 15. Compatibilité
+
+Le runner conserve le mode historique `market_data + symbol` pour les tests/consommateurs
+existants. Le provider conserve aussi le chemin Batch 18.1 sans `MarketSelection`, y compris sa
+boucle de tools optionnelle.
+
+La composition PAPER canonique utilise, elle, le nouveau chemin multi-marché.
+
+## 16. LIVE
+
+LIVE reste hors périmètre. Il nécessitera un batch séparé avec adaptateur privé, permissions
+minimales sans retrait, idempotence, réconciliation, recovery et activation explicite.

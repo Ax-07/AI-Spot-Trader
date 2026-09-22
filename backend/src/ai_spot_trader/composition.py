@@ -13,7 +13,6 @@ from ai_spot_trader.chat.service import OperatorChatService, RuntimeChatContextS
 from ai_spot_trader.core.clock import SystemClock
 from ai_spot_trader.core.config import PaperRunConfiguration, Settings
 from ai_spot_trader.core.runtime import AppRuntime
-from ai_spot_trader.domain.enums import MarketType
 from ai_spot_trader.domain.models import AssetBalance, PortfolioState
 from ai_spot_trader.domain.ports import MarketDataSource
 from ai_spot_trader.integrations.kraken.derivatives import (
@@ -25,6 +24,7 @@ from ai_spot_trader.integrations.kraken.market_data import (
     build_kraken_market_data_source,
 )
 from ai_spot_trader.integrations.kraken.research import KrakenMarketResearchBackend
+from ai_spot_trader.market.execution import RoutedExecutableMarketDataSource
 from ai_spot_trader.market.research import MarketResearchService
 from ai_spot_trader.persistence.analytics import SqlAlchemyPaperAnalyticsQueryService
 from ai_spot_trader.persistence.audit import AuditedTradingCycleRunner, RunBoundCycleAuditWriter
@@ -48,18 +48,18 @@ from ai_spot_trader.trading.engine import (
 
 
 class RuntimeMarketDataSource(MarketDataSource, Protocol):
-    """Canonical market source plus the runtime-owned async close surface."""
+    """Canonical network market source plus the runtime-owned async close surface."""
 
     async def aclose(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class PaperRuntimeComposition:
-    """Canonical objects assembled for the executable PAPER application."""
+    """Canonical objects assembled for the executable multi-market PAPER application."""
 
     runtime: AppRuntime
     chat_service: OperatorChatService
-    market_data: RuntimeMarketDataSource
+    market_data: RoutedExecutableMarketDataSource
     market_research: MarketResearchService
     agent_tools: ReadOnlyToolRegistry
     portfolio: PaperPortfolioLedger
@@ -96,7 +96,7 @@ def _derivatives_source(
 
 
 def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
-    """Compose one canonical SPOT or PERPETUAL PAPER runtime."""
+    """Compose one canonical PAPER runtime with Agent-selected SPOT/PERPETUAL execution."""
 
     run = PaperRunConfiguration.from_settings(settings)
     clock = SystemClock()
@@ -107,8 +107,7 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
     analytics_reader = SqlAlchemyPaperAnalyticsQueryService(database.sessions)
     paper_run_lifecycle = SqlAlchemyPaperRunLifecycle(
         database.sessions,
-        market_type=run.market_type.value,
-        symbol=run.symbol,
+        execution_universe=run.executable_markets,
         clock=clock,
     )
     paper_run_reader = SqlAlchemyPaperRunQueryService(database.sessions)
@@ -125,6 +124,8 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
     )
     portfolio = PaperPortfolioLedger(initial_state=initial_portfolio, clock=clock)
 
+    # Research sources are distinct from execution sources. In particular, the research
+    # Derivatives source has no market_sink and can never mark positions or accrue funding.
     research_spot: KrakenMarketDataSource = build_kraken_market_data_source(
         settings, clock=clock
     )
@@ -170,16 +171,19 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         max_tool_calls=run.agent_tool_max_calls,
     )
 
-    if run.market_type is MarketType.SPOT:
-        market_data: RuntimeMarketDataSource = build_kraken_market_data_source(
-            settings, clock=clock
-        )
-    else:
-        market_data = _derivatives_source(
-            settings,
-            clock=clock,
-            market_sink=portfolio,
-        )
+    execution_spot: RuntimeMarketDataSource = build_kraken_market_data_source(
+        settings, clock=clock
+    )
+    execution_derivatives = _derivatives_source(
+        settings,
+        clock=clock,
+        market_sink=portfolio,
+    )
+    market_data = RoutedExecutableMarketDataSource(
+        spot=execution_spot,
+        derivatives=execution_derivatives,
+        allowed_markets=run.executable_markets,
+    )
 
     cost_model = PaperExecutionCostModel(
         fee_rate=run.fee_rate,
@@ -209,12 +213,12 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         clock=clock,
     )
     cycle_runner = TradingCycleRunner(
-        market_data=market_data,
+        executable_market_data=market_data,
+        executable_markets=run.executable_markets,
         portfolio=portfolio,
         agent=agent,
         risk_engine=risk_engine,
         broker=broker,
-        symbol=run.symbol,
         aggressiveness=run.aggressiveness,
         timeouts=TradingCycleTimeouts(
             market_seconds=run.market_timeout_seconds,
@@ -236,10 +240,16 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         cadence_seconds=run.cadence_seconds,
     )
 
-    resources: list[RuntimeMarketDataSource] = [market_data]
-    for resource in (research_spot, research_derivatives):
-        if all(resource is not owned for owned in resources):
-            resources.append(resource)
+    resources: list[RuntimeMarketDataSource] = [
+        execution_spot,
+        execution_derivatives,
+        research_spot,
+        research_derivatives,
+    ]
+    unique_resources: list[RuntimeMarketDataSource] = []
+    for resource in resources:
+        if all(resource is not owned for owned in unique_resources):
+            unique_resources.append(resource)
 
     runtime = AppRuntime(
         trading_engine=trading_engine,
@@ -249,7 +259,7 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         paper_run_lifecycle=paper_run_lifecycle,
         paper_run_reader=paper_run_reader,
         owned_database=database,
-        owned_resources=tuple(resources),
+        owned_resources=tuple(unique_resources),
     )
     chat_service = OperatorChatService(
         provider=OpenAIChatProvider(client=openai_client, model=run.llm_model),

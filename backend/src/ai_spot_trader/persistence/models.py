@@ -20,8 +20,13 @@ class PaperRunRecord(Base):
         DateTime(timezone=True), nullable=False, index=True
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
-    market_type: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    symbol: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    # Legacy singleton projection. Multi-market Batch 18.2 runs deliberately keep these NULL
+    # rather than inventing a fake MULTI symbol/type.
+    market_type: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    symbol: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    execution_universe_payload: Mapped[list[dict[str, object]]] = mapped_column(
+        JsonType, nullable=False
+    )
 
     cycles: Mapped[list["CycleRecord"]] = relationship(back_populates="paper_run")
 
@@ -50,6 +55,8 @@ class CycleRecord(Base):
     market_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     portfolio_before_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     portfolio_after_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    market_selection_input_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
+    market_selection_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
     agent_input_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
     agent_tool_traces_payload: Mapped[list[dict[str, object]] | None] = mapped_column(JsonType)
     portfolio_after_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)

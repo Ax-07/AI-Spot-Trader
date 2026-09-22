@@ -4,8 +4,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
-from ai_spot_trader.api.schemas import PaperRunPageResponse, PaperRunResponse
+from ai_spot_trader.api.schemas import (
+    ExecutableMarketResponse,
+    PaperRunPageResponse,
+    PaperRunResponse,
+)
 from ai_spot_trader.core.runtime import AppRuntime
+from ai_spot_trader.domain.enums import MarketType
+from ai_spot_trader.domain.models import ExecutableMarket
 from ai_spot_trader.persistence.runs import (
     PaperRunReader,
     PaperRunSortOrder,
@@ -40,13 +46,39 @@ async def _run_call[T](operation: Awaitable[T]) -> T:
         ) from exc
 
 
-def _response(value: PaperRunView, *, current_run_id: UUID | None) -> PaperRunResponse:
+def _response(
+    value: PaperRunView,
+    *,
+    current_run_id: UUID | None,
+) -> PaperRunResponse:
+    universe = value.execution_universe
+    if not universe and value.market_type is not None and value.symbol is not None:
+        # Compatibility with injected/read models created before Batch 18.2. A dated
+        # FUTURE remains historical metadata only and is not promoted to executable.
+        try:
+            legacy_type = MarketType(value.market_type)
+            if legacy_type is not MarketType.FUTURE:
+                universe = (
+                    ExecutableMarket(
+                        symbol=value.symbol,
+                        market_type=legacy_type,
+                    ),
+                )
+        except ValueError:
+            universe = ()
     return PaperRunResponse(
         paper_run_id=value.paper_run_id,
         started_at=value.started_at,
         ended_at=value.ended_at,
         market_type=value.market_type,
         symbol=value.symbol,
+        execution_universe=tuple(
+            ExecutableMarketResponse(
+                symbol=item.symbol,
+                market_type=item.market_type.value,
+            )
+            for item in universe
+        ),
         is_current=value.paper_run_id == current_run_id,
     )
 
@@ -59,11 +91,18 @@ async def list_paper_runs(
     order: PaperRunSortOrder = PaperRunSortOrder.DESC,
 ) -> PaperRunPageResponse:
     page = await _run_call(
-        _reader(request).list_runs(limit=limit, offset=offset, order=order)
+        _reader(request).list_runs(
+            limit=limit,
+            offset=offset,
+            order=order,
+        )
     )
     current_run_id = _runtime(request).current_paper_run_id
     return PaperRunPageResponse(
-        items=tuple(_response(item, current_run_id=current_run_id) for item in page.items),
+        items=tuple(
+            _response(item, current_run_id=current_run_id)
+            for item in page.items
+        ),
         total=page.total,
         limit=page.limit,
         offset=page.offset,
@@ -80,13 +119,25 @@ async def current_paper_run(request: Request) -> PaperRunResponse:
         )
     item = await _run_call(_reader(request).get_run(current_run_id))
     if item is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PAPER run not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="PAPER run not found",
+        )
     return _response(item, current_run_id=current_run_id)
 
 
 @router.get("/{paper_run_id}", response_model=PaperRunResponse)
-async def get_paper_run(paper_run_id: UUID, request: Request) -> PaperRunResponse:
+async def get_paper_run(
+    paper_run_id: UUID,
+    request: Request,
+) -> PaperRunResponse:
     item = await _run_call(_reader(request).get_run(paper_run_id))
     if item is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PAPER run not found")
-    return _response(item, current_run_id=_runtime(request).current_paper_run_id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="PAPER run not found",
+        )
+    return _response(
+        item,
+        current_run_id=_runtime(request).current_paper_run_id,
+    )

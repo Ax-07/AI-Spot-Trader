@@ -30,14 +30,10 @@ class SqlAlchemyCycleAuditRepository:
         self._sessions = sessions
 
     async def ensure_available(self) -> None:
-        """Fail before trading when the durable audit table cannot be queried."""
-
         async with self._sessions() as session:
             await session.execute(select(CycleRecord.cycle_id).limit(1))
 
     async def ensure_run_available(self, paper_run_id: UUID) -> None:
-        """Fail before trading when the durable run boundary is not writable."""
-
         async with self._sessions() as session:
             run = await session.get(PaperRunRecord, paper_run_id)
             if run is None:
@@ -47,56 +43,28 @@ class SqlAlchemyCycleAuditRepository:
             await session.execute(select(CycleRecord.cycle_id).limit(1))
 
     async def ensure_available_for_run(self, paper_run_id: UUID) -> None:
-        """Run-scoped writer adapter used by the canonical audited runner."""
-
         await self.ensure_run_available(paper_run_id)
 
-    async def record(
-        self,
-        result: TradingCycleResult,
-        *,
-        paper_run_id: UUID | None = None,
-    ) -> bool:
-        """Persist a cycle once; legacy callers may intentionally leave the run unset."""
-
+    async def record(self, result: TradingCycleResult, *, paper_run_id: UUID | None = None) -> bool:
         digest = _result_digest(result, paper_run_id=paper_run_id)
         async with self._sessions() as session, session.begin():
             if paper_run_id is not None:
                 run = await session.get(PaperRunRecord, paper_run_id)
                 if run is None:
-                    raise PaperRunNotFoundError(
-                        f"paper run {paper_run_id} does not exist"
-                    )
+                    raise PaperRunNotFoundError(f"paper run {paper_run_id} does not exist")
                 if run.ended_at is not None:
                     raise PaperRunClosedError(f"paper run {paper_run_id} is closed")
             existing = await session.get(CycleRecord, result.cycle_id)
             if existing is not None:
-                if (
-                    existing.paper_run_id == paper_run_id
-                    and existing.result_digest == digest
-                ):
+                if existing.paper_run_id == paper_run_id and existing.result_digest == digest:
                     return False
                 raise CycleAuditConflictError(
                     f"cycle_id {result.cycle_id} already exists with different content"
                 )
-            if paper_run_id is None:
-                self._add_graph(session, result=result, digest=digest)
-            else:
-                self._add_graph(
-                    session,
-                    result=result,
-                    digest=digest,
-                    paper_run_id=paper_run_id,
-                )
+            self._add_graph(session, result=result, digest=digest, paper_run_id=paper_run_id)
         return True
 
-    async def record_for_run(
-        self,
-        paper_run_id: UUID,
-        result: TradingCycleResult,
-    ) -> bool:
-        """Run-scoped writer adapter used by the canonical audited runner."""
-
+    async def record_for_run(self, paper_run_id: UUID, result: TradingCycleResult) -> bool:
         return await self.record(result, paper_run_id=paper_run_id)
 
     def _add_graph(
@@ -108,6 +76,14 @@ class SqlAlchemyCycleAuditRepository:
         paper_run_id: UUID | None = None,
     ) -> None:
         agent_input = result.agent_input
+        selection_input = result.market_selection_input
+        portfolio_before = (
+            agent_input.portfolio_state
+            if agent_input is not None
+            else selection_input.portfolio_state
+            if selection_input is not None
+            else None
+        )
         portfolio_after = result.portfolio_state_after
         session.add(
             CycleRecord(
@@ -119,26 +95,22 @@ class SqlAlchemyCycleAuditRepository:
                 failure_stage=result.failure.stage.value if result.failure else None,
                 failure_error_type=result.failure.error_type if result.failure else None,
                 failure_timed_out=result.failure.timed_out if result.failure else None,
-                market_state_id=(
-                    agent_input.market_state.market_state_id if agent_input is not None else None
-                ),
+                market_state_id=agent_input.market_state.market_state_id if agent_input else None,
                 portfolio_state_before_id=(
-                    agent_input.portfolio_state.portfolio_state_id
-                    if agent_input is not None
-                    else None
+                    portfolio_before.portfolio_state_id if portfolio_before is not None else None
                 ),
                 portfolio_state_after_id=(
                     portfolio_after.portfolio_state_id if portfolio_after is not None else None
                 ),
-                market_as_of=(
-                    agent_input.market_state.as_of if agent_input is not None else None
-                ),
+                market_as_of=agent_input.market_state.as_of if agent_input else None,
                 portfolio_before_as_of=(
-                    agent_input.portfolio_state.as_of if agent_input is not None else None
+                    portfolio_before.as_of if portfolio_before is not None else None
                 ),
                 portfolio_after_as_of=(
                     portfolio_after.as_of if portfolio_after is not None else None
                 ),
+                market_selection_input_payload=_model_payload(selection_input),
+                market_selection_payload=_model_payload(result.market_selection),
                 agent_input_payload=_model_payload(agent_input),
                 agent_tool_traces_payload=_tool_trace_payload(result),
                 portfolio_after_payload=_model_payload(portfolio_after),
@@ -147,55 +119,44 @@ class SqlAlchemyCycleAuditRepository:
 
         if result.decision is not None:
             decision = result.decision
-            session.add(
-                DecisionRecord(
-                    decision_id=decision.decision_id,
-                    cycle_id=decision.cycle_id,
-                    created_at=decision.created_at,
-                    action=decision.action.value,
-                    symbol=decision.symbol,
-                    payload=decision.model_dump(mode="json"),
-                )
-            )
-
+            session.add(DecisionRecord(
+                decision_id=decision.decision_id,
+                cycle_id=decision.cycle_id,
+                created_at=decision.created_at,
+                action=decision.action.value,
+                symbol=decision.symbol,
+                payload=decision.model_dump(mode="json"),
+            ))
         if result.risk_assessment is not None:
             assessment = result.risk_assessment
-            session.add(
-                RiskAssessmentRecord(
-                    risk_assessment_id=assessment.risk_assessment_id,
-                    cycle_id=assessment.cycle_id,
-                    decision_id=assessment.decision_id,
-                    assessed_at=assessment.assessed_at,
-                    status=assessment.status.value,
-                    payload=assessment.model_dump(mode="json"),
-                )
-            )
-
+            session.add(RiskAssessmentRecord(
+                risk_assessment_id=assessment.risk_assessment_id,
+                cycle_id=assessment.cycle_id,
+                decision_id=assessment.decision_id,
+                assessed_at=assessment.assessed_at,
+                status=assessment.status.value,
+                payload=assessment.model_dump(mode="json"),
+            ))
         if result.execution_intent is not None:
             intent = result.execution_intent
-            session.add(
-                ExecutionIntentRecord(
-                    execution_id=intent.execution_id,
-                    cycle_id=intent.cycle_id,
-                    decision_id=intent.decision_id,
-                    risk_assessment_id=intent.risk_assessment_id,
-                    created_at=intent.created_at,
-                    action=intent.action.value,
-                    symbol=intent.symbol,
-                    payload=intent.model_dump(mode="json"),
-                )
-            )
-
+            session.add(ExecutionIntentRecord(
+                execution_id=intent.execution_id,
+                cycle_id=intent.cycle_id,
+                decision_id=intent.decision_id,
+                risk_assessment_id=intent.risk_assessment_id,
+                created_at=intent.created_at,
+                action=intent.action.value,
+                symbol=intent.symbol,
+                payload=intent.model_dump(mode="json"),
+            ))
         for fill in result.fills:
-            session.add(
-                FillRecord(
-                    fill_id=fill.fill_id,
-                    execution_id=fill.execution_id,
-                    market_state_id=fill.market_state_id,
-                    filled_at=fill.filled_at,
-                    payload=fill.model_dump(mode="json"),
-                )
-            )
+            session.add(FillRecord(
+                fill_id=fill.fill_id,
+                execution_id=fill.execution_id,
+                market_state_id=fill.market_state_id,
+                filled_at=fill.filled_at,
+                payload=fill.model_dump(mode="json"),
+            ))
 
 
 def _model_payload(model: Any | None) -> dict[str, object] | None:
@@ -208,12 +169,8 @@ def _tool_trace_payload(result: TradingCycleResult) -> list[dict[str, object]]:
     return [dict(trace.model_dump(mode="json")) for trace in result.agent_tool_traces]
 
 
-def _result_digest(
-    result: TradingCycleResult,
-    *,
-    paper_run_id: UUID | None,
-) -> str:
-    payload = {
+def _result_digest(result: TradingCycleResult, *, paper_run_id: UUID | None) -> str:
+    payload: dict[str, object] = {
         "cycle_id": str(result.cycle_id),
         "status": result.status.value,
         "failure": (
@@ -222,9 +179,10 @@ def _result_digest(
                 "error_type": result.failure.error_type,
                 "timed_out": result.failure.timed_out,
             }
-            if result.failure is not None
-            else None
+            if result.failure is not None else None
         ),
+        "market_selection_input": _model_payload(result.market_selection_input),
+        "market_selection": _model_payload(result.market_selection),
         "agent_input": _model_payload(result.agent_input),
         "agent_tool_traces": _tool_trace_payload(result),
         "decision": _model_payload(result.decision),

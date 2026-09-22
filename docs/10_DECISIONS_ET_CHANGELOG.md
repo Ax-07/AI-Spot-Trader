@@ -1,84 +1,148 @@
 # 10 — Décisions et changelog
 
-> Les décisions détaillées antérieures au Batch 18 restent dans l'historique Git. Ce document conserve les principes courants et les décisions nouvelles du Batch 18.1.
+> Ce document conserve les principes courants et les décisions récentes. L'historique détaillé
+> antérieur reste dans Git.
 
 ## Principes historiques conservés
 
-Un seul Agent stratégique, PAPER d'abord, Risk autorité finale, aucun LLM direct vers Broker, SPOT sans short/levier, Derivatives avec protections déterministes, audit durable, no-look-ahead, backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE séparé.
+Un seul Agent stratégique, PAPER d'abord, Risk autorité finale, aucun LLM direct vers Broker,
+SPOT sans short/levier, Derivatives avec protections déterministes, audit durable, no-look-ahead,
+backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE séparé.
 
-Référence intégrée avant Batch 18.1 : `ca5077af00293ccca9794132ee0dd53a5b339911` ; tag `baseline-batch17` identique et non modifié.
+Référence intégrée au début du Batch 18.2 :
+`e158ea71d9f7cdf010d98d41be1968440c640a53`.
 
-## Décisions Batch 18.1 — patch proposé non intégré
+## Statut du Batch 18.1
 
-### ADR-127 — Les tools sont des capacités factuelles read-only, jamais des agents ou signaux
+Les ADR-127 à ADR-135 du Batch 18.1 sont désormais **INTÉGRÉES** sur `main = e158ea7` :
 
-**PROPOSÉE.** Le registry initial contient uniquement `list_markets` et `get_market_snapshot`. Aucun scanner, ranking, score d'opportunité, top-N stratégique, second Agent, Broker tool ou `buy/sell` tool n'est introduit.
+- tools factuels read-only uniquement ;
+- recherche cross-symbol sans exécution cross-symbol dans 18.1 ;
+- boucle Responses stateless/bornée ;
+- sources research isolées ;
+- traces causales durables ;
+- digest incluant les recherches ;
+- erreurs sanitizées et fail-closed ;
+- Risk unique frontière d'exécution ;
+- dette explicite de versionnement de la politique de tools.
 
-### ADR-128 — La recherche cross-symbol n'élargit pas encore le symbole exécutable
+La limitation cross-symbol d'ADR-128 est précisément celle que le Batch 18.2 fait évoluer par un
+nouveau pipeline causal, sans réutiliser le mauvais `MarketState`.
 
-**PROPOSÉE.** L'Agent peut examiner d'autres marchés, mais `DecisionCandidate.symbol` doit toujours être égal à `AgentInput.market_state.symbol`. Le `MarketState` envoyé à Risk/Broker reste celui du `paper_symbol`. Le choix multi-symbole exécutable est explicitement reporté au Batch 18.2.
+## Décisions Batch 18.2 — patch proposé
 
-### ADR-129 — La tool loop Responses reste stateless côté OpenAI et bornée côté application
+### ADR-136 — Séparer sélection de marché et décision finale avec le même Agent
 
-**PROPOSÉE.** `store=false` est conservé. L'application rejoue explicitement les output items du tour précédent avec les `function_call_output`. Les functions utilisent des schémas stricts, `parallel_tool_calls=false`, un nombre max d'appels, un timeout par tool et une taille max de résultat.
+**PROPOSÉE.** Un cycle multi-marché possède deux appels stratégiques au même
+`OpenAIDecisionProvider` : sélection, puis décision finale après acquisition du marché choisi.
+Aucun second Agent n'est introduit.
 
-Ces limites sont techniques et non stratégiques.
+### ADR-137 — L'univers exécutable est typé par `symbol + market_type`
 
-### ADR-130 — Les sources de recherche sont isolées des sources de trading
+**PROPOSÉE.** `risk_allowed_pairs` reste une whitelist Risk de symboles, mais ne peut pas à lui
+seul représenter SPOT vs PERPETUAL. `ExecutableMarket` et
+`AI_SPOT_TRADER_PAPER_EXECUTABLE_MARKETS` fournissent cette frontière explicite.
 
-**PROPOSÉE.** Les recherches SPOT et Derivatives réutilisent les mêmes classes/adapters canoniques mais dans des instances dédiées. Le source Derivatives de recherche n'a pas de `market_sink`, donc une recherche ne peut ni marquer le ledger ni accumuler du funding.
+Seuls SPOT et PERPETUAL sont autorisés. FUTURE daté reste non exécutable.
 
-Le catalogue Derivatives s'appuie sur les instruments publics normalisés complets. Le snapshot 18.1 reste SPOT/PERPETUAL ; un snapshot FUTURE générique n'est pas prétendu tant que le mapping exécutable privilégie volontairement le perpetual lors de collisions canoniques.
+### ADR-138 — La sélection est un artefact durable explicite
 
-### ADR-131 — Les traces de tools sont des faits causaux durables au niveau du cycle
+**PROPOSÉE.** `MarketSelection` contient identité, timestamp, symbole, type, rationale, traces et
+digest. La sélection ne doit pas être reconstruite à partir d'un texte libre de rationale.
 
-**PROPOSÉE.** Chaque appel terminé produit un `AgentToolTrace` normalisé et digesté. Les traces d'une décision sont attachées au `DecisionCandidate`, mais elles sont aussi portées par `TradingCycleResult` afin de survivre à un échec Agent survenu après une recherche et avant une décision valide.
+Une panne après sélection conserve cet artefact.
 
-La migration `0003_agent_tool_traces` ajoute `audit_cycles.agent_tool_traces_payload`. Les lignes historiques restent compatibles via `NULL`/liste vide à la lecture.
+### ADR-139 — Aucun snapshot de recherche ne devient un snapshot d'exécution
 
-### ADR-132 — Le digest du cycle inclut les recherches causales
+**PROPOSÉE.** Le marché sélectionné est reacquis via `RoutedExecutableMarketDataSource` et les
+sources execution dédiées. Le routeur valide le couple typé et le contrat Derivatives mais ne
+classe ni ne choisit jamais les marchés.
 
-**PROPOSÉE.** `_result_digest()` incorpore `agent_tool_traces`. Une variation de résultats, d'arguments, d'ordre ou de statut de tools modifie donc l'identité durable du cycle, y compris pour un cycle `FAILED` sans `DecisionRecord`.
+### ADR-140 — La phase finale ne relance pas les tools dans le chemin 18.2
 
-### ADR-133 — Les erreurs fournisseur sont observables mais sanitizées ; les violations de contrat échouent fermées
+**PROPOSÉE.** Les recherches de sélection sont attachées à `MarketSelection` puis transmises dans
+`AgentInput`. Après acquisition du `MarketState` exécutable, la décision finale est structurée mais
+sans nouvelle recherche. Cela maintient une frontière causale lisible : recherches -> sélection ->
+snapshot exécutable -> décision.
 
-**PROPOSÉE.** Réseau, payload Kraken, symbole indisponible, timeout ou résultat trop volumineux deviennent des résultats de tool bornés avec seulement un type d'erreur. Les messages bruts ne sont pas transmis.
+Le chemin historique 18.1 sans `MarketSelection` garde sa boucle de tools optionnelle.
 
-Un nom de tool inconnu, des arguments malformed ou un budget global dépassé arrêtent le stade Agent ; ils ne sont jamais masqués en HOLD.
+### ADR-141 — Recapturer le portefeuille après acquisition du marché sélectionné
 
-### ADR-134 — Risk reste l'unique frontière vers l'exécution
+**PROPOSÉE.** La phase de sélection reçoit le portefeuille complet avant recherche. Le runner
+recapture ensuite le portefeuille après le snapshot d'exécution. C'est nécessaire car un snapshot
+PERPETUAL d'exécution peut marquer une position existante et accumuler du funding.
 
-**PROPOSÉE.** Le registry read-only ne dépend ni de `RiskEngine`, ni de `PaperBroker`, ni de `ExecutionIntent`. Le LLM ne choisit toujours ni levier ni `reduce_only`. Seul Risk peut construire un intent.
+Les sources research restent sans `market_sink`.
 
-### ADR-135 — Conserver `agent-strategy-v4` implique de versionner séparément la politique de tools pour les futures expériences
+### ADR-142 — `paper_runs` persiste l'univers au lieu d'inventer `MULTI`
 
-**PROPOSÉE.** Le Batch 18.1 conserve explicitement l'identifiant de prompt demandé `agent-strategy-v4`, tout en ajoutant des instructions de recherche. Avant toute comparaison expérimentale sérieuse pré/post tools, le manifeste devra identifier distinctement la politique/capacité de tools afin de ne pas attribuer à tort deux environnements différents au seul même `prompt_version`.
+**PROPOSÉE.** La migration `0004_multi_market_selection` ajoute
+`execution_universe_payload JSONB NOT NULL` et rend `market_type`/`symbol` nullables.
 
-## Changelog — 2026-09-22 — Batch 18.1 proposé
+Un singleton conserve la projection historique. Un vrai multi-marché met les deux colonnes à
+`NULL`. Le downgrade est refusé tant qu'un run multi-marché existe.
+
+### ADR-143 — Le journal de cycle persiste l'entrée et le résultat de sélection
+
+**PROPOSÉE.** `audit_cycles` reçoit `market_selection_input_payload` et
+`market_selection_payload`, tous deux nullable pour compatibilité historique. Le digest global les
+inclut.
+
+Le résumé API expose le marché typé sélectionné même si la décision finale n'existe pas encore.
+
+### ADR-144 — Analytics multi-marchés utilise seulement des marks SPOT causaux durables
+
+**PROPOSÉE.** `paper-analytics-v3` conserve le dernier prix SPOT déjà rencontré dans le journal
+pour chaque actif détenu. Aucun prix actuel externe ou futur n'est recherché lors du replay.
+
+Si un actif n'a pas de mark causal, le calcul échoue explicitement.
+
+### ADR-145 — Une quote de règlement commune est requise dans Batch 18.2
+
+**PROPOSÉE.** Tous les marchés de `PAPER_EXECUTABLE_MARKETS` doivent avoir la même quote que
+`paper_settlement_asset`. Le batch n'introduit aucune conversion FX implicite ou non auditée.
+
+### ADR-146 — Conserver un chemin mono-marché compatible pendant la transition
+
+**PROPOSÉE.** `TradingCycleRunner` accepte encore le couple historique `market_data + symbol`, et
+`OpenAIDecisionProvider.generate_decision()` conserve le comportement 18.1 en l'absence de
+`MarketSelection`. La composition PAPER canonique utilise néanmoins le nouveau chemin.
+
+## Changelog — 2026-09-22 — Batch 18.2 proposé
 
 Audit de départ :
 
-- GitHub `main = ca5077af00293ccca9794132ee0dd53a5b339911` ;
-- `baseline-batch17` vérifié identique ;
-- `docs/00_ETAT_ACTUEL.md` contenait encore textuellement le HEAD fonctionnel Batch 17 `25efe211...`, corrigé dans le patch documentaire ;
-- architecture existante confirmée : un seul runner, validations de symbole en place, transport OpenAI partagé, journal de cycle/décision durable et `MarketStateBuilder` réutilisable.
+- GitHub `main = e158ea71d9f7cdf010d98d41be1968440c640a53` ;
+- Batch 18.1 confirmé intégré malgré des documents encore marqués « patch proposé » ;
+- verrou historique confirmé dans provider + runner autour du `MarketState` initial ;
+- modèle `paper_runs.market_type/symbol` confirmé insuffisant pour un run multi-marché honnête ;
+- séparation research/execution du Batch 18.1 confirmée et conservée.
 
-Implémentation proposée : service de recherche provider-agnostic, adapter Kraken read-only, registry strict, tool loop bornée, traces causales, migration/reader API et composition de sources isolées.
+Implémentation proposée :
 
-Validation exécutée dans l'environnement de livraison :
+- contrats de sélection et univers typé ;
+- deux phases du même Agent ;
+- routeur d'exécution causal ;
+- configuration multi-marché ;
+- migration/persistance/API ;
+- analytics multi-actifs causal ;
+- tests de fail-closed et compatibilité.
+
+Validation réellement exécutée par ChatGPT :
 
 ```text
-47 tests ciblés/non-régression passés
-compileall code + test + migration : OK
+40 tests ciblés Batch 18.2 : passed
+python -m compileall sur code/tests/migration : OK
 ```
 
-Non exécuté dans cet environnement : suite complète `pytest backend`, Ruff, mypy, Alembic PostgreSQL réel et commandes Git. Ces validations restent obligatoires localement avant intégration.
+Non exécuté dans cet environnement : suite complète `pytest backend`, Ruff, mypy, tests de
+persistance SQL async, migration Alembic sur PostgreSQL réel et contrôles Git du dépôt utilisateur.
 
-## À décider après 18.1
+## À décider après 18.2
 
-- architecture exacte du Batch 18.2 pour choisir le symbole exécutable avant le snapshot final ;
-- version formelle de la politique de tools dans `ExperimentManifest` ;
-- éventuel support de snapshots FUTURE distincts ;
-- utilité empirique de données supplémentaires ;
-- recovery durable du ledger ;
+- intégrer la politique de sélection/tools dans le protocole expérimental versionné ;
+- recovery durable du ledger multi-actifs ;
+- éventuel multi-quote avec conversion explicite ;
+- FUTURE daté et contrats supplémentaires seulement après implémentation réelle ;
 - LIVE dans un batch séparé.

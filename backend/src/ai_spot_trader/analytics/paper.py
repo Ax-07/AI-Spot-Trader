@@ -14,6 +14,7 @@ from ai_spot_trader.domain.models import (
     AssetPosition,
     DecisionCandidate,
     Fill,
+    MarketState,
     PortfolioState,
     RiskAssessment,
 )
@@ -21,6 +22,7 @@ from ai_spot_trader.domain.symbols import parse_canonical_symbol
 
 ANALYTICS_VERSION = "paper-analytics-v1"
 DERIVATIVES_ANALYTICS_VERSION = "paper-analytics-v2"
+MULTI_MARKET_ANALYTICS_VERSION = "paper-analytics-v3"
 ZERO = Decimal(0)
 
 
@@ -173,7 +175,11 @@ def build_paper_analytics_report(
             payload=fact.portfolio_after_payload,
         )
         _validate_fill_market_link(agent_input=agent_input, fills=fills)
-        at = _cycle_end_time(agent_input=agent_input, fills=fills, portfolio_after=portfolio_after)
+        at = _cycle_end_time(
+            agent_input=agent_input,
+            fills=fills,
+            portfolio_after=portfolio_after,
+        )
         prepared.append(
             _PreparedCycle(
                 cycle_id=fact.cycle_id,
@@ -188,8 +194,14 @@ def build_paper_analytics_report(
         )
 
     prepared.sort(key=lambda item: (item.at, str(item.cycle_id)))
+    distinct_markets = {
+        (item.agent_input.market_state.symbol, item.agent_input.market_state.market_type)
+        for item in prepared
+    }
     calculation_version = (
-        DERIVATIVES_ANALYTICS_VERSION
+        MULTI_MARKET_ANALYTICS_VERSION
+        if len(distinct_markets) > 1
+        else DERIVATIVES_ANALYTICS_VERSION
         if any(
             item.agent_input.market_state.market_type is not MarketType.SPOT
             for item in prepared
@@ -235,10 +247,13 @@ def build_paper_analytics_report(
 
     first = prepared[0]
     first_market = first.agent_input.market_state
+    _, settlement_asset = _market_assets(first_market.symbol)
+    spot_prices: dict[str, Decimal] = {}
+    _remember_spot_price(spot_prices, first_market)
     initial_equity, _, _ = _value_portfolio(
         first.agent_input.portfolio_state,
-        symbol=first_market.symbol,
-        reference_price=first_market.last_price,
+        settlement_asset=settlement_asset,
+        spot_prices=spot_prices,
     )
 
     previous_portfolio: PortfolioState | None = None
@@ -256,6 +271,12 @@ def build_paper_analytics_report(
 
     for item in prepared:
         market = item.agent_input.market_state
+        _, quote_asset = _market_assets(market.symbol)
+        if quote_asset != settlement_asset:
+            raise PaperAnalyticsDataError(
+                "multi-market analytics requires one common settlement quote asset"
+            )
+        _remember_spot_price(spot_prices, market)
         before = item.agent_input.portfolio_state
         if previous_portfolio is not None:
             _validate_portfolio_continuity(previous_portfolio, before)
@@ -273,11 +294,12 @@ def build_paper_analytics_report(
 
         equity, exposure_value, exposure_fraction = _value_portfolio(
             item.portfolio_after,
-            symbol=market.symbol,
-            reference_price=market.last_price,
+            settlement_asset=settlement_asset,
+            spot_prices=spot_prices,
         )
         open_funding = sum(
-            position.cumulative_funding for position in item.portfolio_after.derivative_positions
+            position.cumulative_funding
+            for position in item.portfolio_after.derivative_positions
         )
         cumulative_funding = realized_funding + open_funding
         net_pnl = equity - initial_equity
@@ -408,7 +430,9 @@ def _resolve_portfolio_after(
         try:
             return PortfolioState.model_validate_json(json.dumps(payload))
         except ValueError as exc:
-            raise PaperAnalyticsDataError("invalid durable post-trade portfolio payload") from exc
+            raise PaperAnalyticsDataError(
+                "invalid durable post-trade portfolio payload"
+            ) from exc
 
     replayed = _replay_spot_fills(agent_input.portfolio_state, fills)
     if payload is None:
@@ -421,9 +445,14 @@ def _resolve_portfolio_after(
     return persisted
 
 
-def _replay_spot_fills(portfolio: PortfolioState, fills: tuple[Fill, ...]) -> PortfolioState:
+def _replay_spot_fills(
+    portfolio: PortfolioState,
+    fills: tuple[Fill, ...],
+) -> PortfolioState:
     balances = {item.asset: item.available for item in portfolio.balances}
-    positions = {item.asset: (item.quantity, item.available) for item in portfolio.positions}
+    positions = {
+        item.asset: (item.quantity, item.available) for item in portfolio.positions
+    }
 
     for fill in fills:
         if fill.market_type is not MarketType.SPOT:
@@ -433,7 +462,9 @@ def _replay_spot_fills(portfolio: PortfolioState, fills: tuple[Fill, ...]) -> Po
         except ValueError as exc:
             raise PaperAnalyticsDataError("invalid durable fill symbol") from exc
         if quote_asset not in balances:
-            raise PaperAnalyticsDataError("fill quote asset is absent from durable portfolio")
+            raise PaperAnalyticsDataError(
+                "fill quote asset is absent from durable portfolio"
+            )
         quantity, available = positions.get(base_asset, (ZERO, ZERO))
         if fill.action is TradingAction.BUY:
             balances[quote_asset] -= fill.notional + fill.fee
@@ -441,12 +472,16 @@ def _replay_spot_fills(portfolio: PortfolioState, fills: tuple[Fill, ...]) -> Po
             available += fill.quantity
         else:
             if quantity < fill.quantity or available < fill.quantity:
-                raise PaperAnalyticsDataError("durable SELL fill exceeds portfolio position")
+                raise PaperAnalyticsDataError(
+                    "durable SELL fill exceeds portfolio position"
+                )
             balances[quote_asset] += fill.notional - fill.fee
             quantity -= fill.quantity
             available -= fill.quantity
         if balances[quote_asset] < 0:
-            raise PaperAnalyticsDataError("durable BUY fill would make quote balance negative")
+            raise PaperAnalyticsDataError(
+                "durable BUY fill would make quote balance negative"
+            )
         if quantity == ZERO and available == ZERO:
             positions.pop(base_asset, None)
         else:
@@ -468,11 +503,15 @@ def _replay_spot_fills(portfolio: PortfolioState, fills: tuple[Fill, ...]) -> Po
     )
 
 
-def _validate_fill_market_link(*, agent_input: AgentInput, fills: tuple[Fill, ...]) -> None:
+def _validate_fill_market_link(
+    *, agent_input: AgentInput, fills: tuple[Fill, ...]
+) -> None:
     market = agent_input.market_state
     for fill in fills:
         if fill.market_state_id != market.market_state_id:
-            raise PaperAnalyticsDataError("fill references a different durable market state")
+            raise PaperAnalyticsDataError(
+                "fill references a different durable market state"
+            )
         if fill.pricing_as_of != market.as_of:
             raise PaperAnalyticsDataError(
                 "fill pricing timestamp differs from durable market state"
@@ -480,7 +519,9 @@ def _validate_fill_market_link(*, agent_input: AgentInput, fills: tuple[Fill, ..
         if fill.symbol != market.symbol or fill.reference_price != market.last_price:
             raise PaperAnalyticsDataError("fill pricing differs from durable market state")
         if fill.market_type is not market.market_type:
-            raise PaperAnalyticsDataError("fill market type differs from durable market state")
+            raise PaperAnalyticsDataError(
+                "fill market type differs from durable market state"
+            )
 
 
 def _cycle_end_time(
@@ -497,38 +538,53 @@ def _cycle_end_time(
     return at
 
 
-def _value_portfolio(
-    portfolio: PortfolioState,
-    *,
-    symbol: str,
-    reference_price: Decimal,
-) -> tuple[Decimal, Decimal, Decimal | None]:
+def _market_assets(symbol: str) -> tuple[str, str]:
     try:
-        base_asset, quote_asset = parse_canonical_symbol(symbol)
+        return parse_canonical_symbol(symbol)
     except ValueError as exc:
         raise PaperAnalyticsDataError("invalid durable market symbol") from exc
 
+
+def _remember_spot_price(
+    spot_prices: dict[str, Decimal],
+    market: MarketState,
+) -> None:
+    if market.market_type is MarketType.SPOT:
+        spot_prices[market.symbol] = market.last_price
+
+
+def _value_portfolio(
+    portfolio: PortfolioState,
+    *,
+    settlement_asset: str,
+    spot_prices: dict[str, Decimal],
+) -> tuple[Decimal, Decimal, Decimal | None]:
     quote_available = ZERO
     for balance in portfolio.balances:
-        if balance.asset == quote_asset:
+        if balance.asset == settlement_asset:
             quote_available += balance.available
         elif balance.available != ZERO:
             raise PaperAnalyticsDataError(
-                f"cannot value non-zero balance asset {balance.asset} from {symbol}"
+                f"cannot value non-zero balance asset {balance.asset} without FX conversion"
             )
 
     spot_exposure = ZERO
     for position in portfolio.positions:
-        if position.asset == base_asset:
-            spot_exposure += position.quantity * reference_price
-        elif position.quantity != ZERO:
+        if position.quantity == ZERO:
+            continue
+        symbol = f"{position.asset}/{settlement_asset}"
+        reference_price = spot_prices.get(symbol)
+        if reference_price is None:
             raise PaperAnalyticsDataError(
-                f"cannot value non-zero position asset {position.asset} from {symbol}"
+                f"no causal SPOT mark available to value held asset {position.asset}"
             )
+        spot_exposure += position.quantity * reference_price
 
     derivative_equity = sum(
         (
-            position.margin_used + position.unrealized_pnl + position.cumulative_funding
+            position.margin_used
+            + position.unrealized_pnl
+            + position.cumulative_funding
             for position in portfolio.derivative_positions
         ),
         ZERO,
@@ -542,11 +598,16 @@ def _value_portfolio(
     return equity, exposure_value, _fraction(exposure_value, equity)
 
 
-def _validate_portfolio_continuity(left: PortfolioState, right: PortfolioState) -> None:
+def _validate_portfolio_continuity(
+    left: PortfolioState,
+    right: PortfolioState,
+) -> None:
     if _spot_portfolio_amounts(left) != _spot_portfolio_amounts(right):
         raise PaperAnalyticsDataError("durable SPOT portfolio continuity is broken")
     if _derivative_structural_amounts(left) != _derivative_structural_amounts(right):
-        raise PaperAnalyticsDataError("durable derivatives position continuity is broken")
+        raise PaperAnalyticsDataError(
+            "durable derivatives position continuity is broken"
+        )
 
 
 def _spot_portfolio_amounts(
@@ -557,7 +618,10 @@ def _spot_portfolio_amounts(
 ]:
     balances = tuple(sorted((item.asset, item.available) for item in portfolio.balances))
     positions = tuple(
-        sorted((item.asset, item.quantity, item.available) for item in portfolio.positions)
+        sorted(
+            (item.asset, item.quantity, item.available)
+            for item in portfolio.positions
+        )
     )
     return balances, positions
 
@@ -644,7 +708,9 @@ def _source_digest(facts: tuple[PaperAnalyticsCycleFact, ...]) -> str:
         {"cycle_id": str(item.cycle_id), "result_digest": item.result_digest}
         for item in facts
     ]
-    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    encoded = json.dumps(
+        canonical, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 

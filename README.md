@@ -1,129 +1,224 @@
 # AI Spot Trader
 
-AI Spot Trader est une application expérimentale de trading crypto **SPOT + Kraken Derivatives** en mode **PAPER**, pilotée par **un seul Agent IA stratégique**. L'Agent propose `BUY`, `SELL` ou `HOLD`; un **Risk Engine déterministe** garde l'autorité finale et seul Risk peut créer un `ExecutionIntent`.
+AI Spot Trader est une application expérimentale de trading crypto **PAPER** sur Kraken,
+pilotée par **un seul Agent IA stratégique**. L'Agent choisit le marché à analyser et propose
+`BUY`, `SELL` ou `HOLD`; un **Risk Engine déterministe** conserve l'autorité finale et reste le
+seul composant autorisé à créer un `ExecutionIntent`.
 
 ## Référence de développement
 
-La base intégrée auditée avant le Batch 18.1 est GitHub `main` au commit :
+État intégré de départ du Batch 18.2 :
 
 ```text
-ca5077af00293ccca9794132ee0dd53a5b339911
+repository : Ax-07/AI-Spot-Trader
+branche    : main
+HEAD       : e158ea71d9f7cdf010d98d41be1968440c640a53
+commit     : feat: add bounded read-only market research tools
 ```
 
-Le tag annoté `baseline-batch17` pointe sur ce même commit. Le Batch 18.1 livré sous forme de ZIP est un **patch proposé non intégré** tant que sa validation locale, son commit et son push ne sont pas confirmés.
+Le **Batch 18.1 est intégré** sur ce HEAD. Le Batch 18.2 livré ici est un **patch proposé non
+intégré** tant que sa validation locale, son commit et son push ne sont pas confirmés.
 
 ## Principes
 
+- un seul Agent IA stratégique ;
 - Kraken comme exchange initial ;
 - PAPER uniquement ;
-- SPOT sans short, levier ou marge ;
-- Derivatives avec LONG/SHORT seulement sur produits compatibles ;
-- levier et `reduce_only` déterministes, jamais choisis par le LLM ;
-- aucune sortie LLM ni aucun tool ne déclenche directement un ordre ;
-- frais, spread, slippage et funding pris en compte ;
-- audit durable des décisions, HOLD, erreurs et recherches causales ;
-- aucun secret dans prompts/logs/Git ;
+- SPOT sans short, levier ni marge ;
+- PERPETUAL linéaire avec LONG/SHORT, marge ISOLATED et protections déterministes ;
+- le LLM ne choisit ni le levier ni `reduce_only` ;
+- aucune sortie LLM et aucun tool ne déclenche directement un ordre ;
+- frais, spread, slippage et funding restent pris en compte ;
+- toutes les décisions, recherches et sélections causales sont auditables ;
+- aucune clé Kraken privée n'est nécessaire ;
+- aucun secret dans prompts, logs ou Git ;
+- aucun look-ahead ;
 - backend indépendant du frontend ;
-- cible +4 %/jour = objectif expérimental, jamais garantie.
+- cible +4 %/jour = objectif expérimental, jamais une garantie.
 
-Principe : **l'Agent cherche et propose ; Risk autorise, modifie ou refuse.**
+Principe : **l'Agent cherche, sélectionne et propose ; Risk autorise, modifie ou refuse.**
 
-## Architecture Batch 18.1
-
-```text
-Kraken public data
-      |
-      +--> sources research dédiées --> MarketResearchService
-      |                                  |
-      |                        list_markets / get_market_snapshot
-      |                                  |
-      v                                  v
-Trading MarketState + PortfolioState --> AgentInput --> Agent
-                                                   BUY/SELL/HOLD
-                                                         |
-                                                         v
-                                                    Risk Engine
-                                                         |
-                                                   ExecutionIntent
-                                                         |
-                                                         v
-                                                    Paper Broker
-```
-
-Les sources de recherche sont isolées des sources de trading. En Derivatives elles n'ont aucun `market_sink`, donc explorer un marché ne modifie pas le ledger.
-
-## Tools read-only
-
-Le socle 18.1 expose seulement :
-
-- `list_markets` : catalogue factuel, tri/pagination déterministes, aucun classement stratégique ;
-- `get_market_snapshot` : snapshot SPOT/PERPETUAL normalisé, réutilisant le contexte et les calculs canoniques existants.
-
-L'Agent peut décider sans tool, effectuer une ou plusieurs recherches et choisir lui-même quand conclure. Les budgets de tool sont uniquement techniques.
-
-### Limitation volontaire
-
-La recherche peut examiner d'autres symboles, mais l'exécution reste liée au symbole initial du cycle :
+## Architecture Batch 18.2
 
 ```text
-DecisionCandidate.symbol == AgentInput.market_state.symbol
+PortfolioState complet
+        |
+        v
+MarketSelectionInput
+        |
+        v
+même Agent stratégique
+   |        \
+   |         +--> list_markets / get_market_snapshot (read-only)
+   |                         |
+   +-------------------------+
+        |
+        v
+MarketSelection explicite
+(symbol + market_type + rationale + traces + digest)
+        |
+        v
+validation de l'univers PAPER exécutable
+        |
+        v
+RoutedExecutableMarketDataSource
+        |
+        +--> source SPOT d'exécution
+        |
+        +--> source PERPETUAL d'exécution
+        |
+        v
+MarketState canonique exact du marché sélectionné
+        |
+        v
+AgentInput + même Agent
+        |
+        v
+BUY / SELL / HOLD
+        |
+        v
+Risk Engine -> ExecutionIntent éventuel -> PaperBroker
 ```
 
-Le vrai choix multi-symbole exécutable est réservé au Batch 18.2 afin de conserver une corrélation causale correcte entre sélection, `MarketState`, Risk et Broker.
+Il n'existe pas de second Agent, scanner, ranking, `opportunity score` ou présélection
+algorithmique. Le code déterministe vérifie uniquement qu'un choix de l'Agent est techniquement
+et réglementairement représentable par le runtime.
 
-## Audit des recherches
+## Univers exécutable typé
 
-Chaque appel conserve : nom, arguments validés, timestamps, statut, type d'erreur sanitizé, résultat borné et digest SHA-256. Les traces sont persistées au niveau du cycle, y compris si l'Agent échoue après une recherche et avant sa décision finale.
-
-Le digest global du cycle inclut les traces.
-
-## Configuration technique des tools
-
-Valeurs par défaut proposées :
+Le Batch 18.2 ajoute :
 
 ```text
-AI_SPOT_TRADER_AGENT_TOOL_MAX_CALLS=6
-AI_SPOT_TRADER_AGENT_TOOL_TIMEOUT_SECONDS=5
-AI_SPOT_TRADER_AGENT_TOOL_MAX_RESULT_BYTES=32768
-AI_SPOT_TRADER_AGENT_TOOL_LIST_MARKETS_MAX_LIMIT=50
+AI_SPOT_TRADER_PAPER_EXECUTABLE_MARKETS
 ```
 
-Mettre `AI_SPOT_TRADER_AGENT_TOOL_MAX_CALLS=0` désactive la boucle et conserve le chemin direct historique.
+Format :
+
+```text
+["SPOT:BTC/USD", "SPOT:ETH/USD", "PERPETUAL:SOL/USD"]
+```
+
+`paper_symbol + paper_market_type` restent le **bootstrap de compatibilité** et doivent appartenir
+à cet univers lorsqu'il est configuré. Ils ne fixent plus le marché de chaque cycle.
+
+Contraintes actuelles :
+
+- uniquement `SPOT` et `PERPETUAL` linéaire ;
+- `FUTURE` daté reste découvrable mais non exécutable ;
+- chaque symbole exécutable doit rester présent dans `risk_allowed_pairs` ;
+- tous les marchés d'un même runtime utilisent le même actif de règlement/quote ;
+- la présence d'un instrument dans Kraken ou dans `list_markets` ne l'autorise jamais à elle seule.
+
+## Recherche vs exécution
+
+Les sources Kraken de **recherche** restent distinctes des sources de **trading/exécution**.
+Une recherche Derivatives n'a aucun `market_sink` et ne peut donc ni marquer le ledger, ni
+accumuler du funding, ni modifier le portefeuille.
+
+Seule l'acquisition du marché finalement sélectionné passe par le routeur d'exécution. Pour un
+PERPETUAL, cette acquisition peut mettre à jour le mark/funding d'une position déjà ouverte ; le
+`PortfolioState` final fourni à l'Agent est capturé ensuite.
+
+## Causalité et audit
+
+Le journal permet de reconstruire :
+
+```text
+cycle
+-> MarketSelectionInput
+-> AgentToolTrace(s)
+-> MarketSelection
+-> MarketState exécutable
+-> AgentInput final
+-> DecisionCandidate
+-> RiskAssessment
+-> ExecutionIntent éventuel
+-> Fill éventuel
+```
+
+Une panne après sélection mais avant décision finale conserve la sélection et ses traces.
+Le digest du cycle inclut ces artefacts. Le résumé `/api/v1/cycles` expose aussi le `symbol` et le
+`market_type` sélectionnés lorsqu'une décision n'existe pas encore.
+
+## `paper_runs` multi-marchés
+
+La migration `0004_multi_market_selection` ajoute un univers durable typé :
+
+```text
+paper_runs.execution_universe_payload
+```
+
+Les anciens runs singleton sont automatiquement backfillés. Pour un nouveau run réellement
+multi-marché :
+
+```text
+paper_runs.symbol      = NULL
+paper_runs.market_type = NULL
+```
+
+Aucun faux `symbol="MULTI"` ou `market_type="MULTI"` n'est inventé. L'API `/api/v1/paper-runs`
+expose `execution_universe` et conserve les champs historiques uniquement pour un singleton réel.
+
+## Analytics multi-marchés
+
+`paper-analytics-v3` valorise les positions SPOT détenues à partir du **dernier mark SPOT causal
+durable** connu pour chaque actif. Aucun prix futur ou prix courant hors journal n'est injecté.
+Les positions Derivatives continuent d'utiliser leurs marks/P&L durables dans `PortfolioState`.
+
+Si un actif détenu ne possède aucun mark causal disponible, l'analytics échoue explicitement au
+lieu d'inventer une valorisation.
 
 ## Migrations PostgreSQL
 
-Après extraction du patch et configuration de `AI_SPOT_TRADER_DATABASE_URL` :
+Après extraction du patch à la racine :
 
 ```powershell
 cd backend
 .\.venv\Scripts\python.exe -m alembic upgrade head
 ```
 
-La chaîne devient :
+Chaîne attendue :
 
 ```text
-0001_audit_journal -> 0002_paper_runs -> 0003_agent_tool_traces
+0001_audit_journal
+-> 0002_paper_runs
+-> 0003_agent_tool_traces
+-> 0004_multi_market_selection
 ```
 
-La migration 0003 ajoute un JSONB nullable pour les traces Agent ; les cycles historiques restent compatibles.
+Le downgrade de `0004` refuse de s'exécuter si des runs multi-marchés existent, car les anciennes
+colonnes singleton ne pourraient pas les représenter honnêtement.
 
-## Validation du patch
+## Validation du patch 18.2
 
-Exécuté par ChatGPT dans l'environnement de livraison partiel :
+Exécuté par ChatGPT dans l'environnement de livraison :
 
 ```text
-47 tests ciblés/non-régression : passés
-compileall code/test/migration    : OK
+40 tests ciblés Batch 18.2 : passés
+python -m compileall code/tests/migration : OK
 ```
 
-Ruff, mypy, la suite complète du repository, Alembic sur votre PostgreSQL et les contrôles Git restent à exécuter localement.
+La couche SQL async n'a pas pu être exécutée ici : `aiosqlite` n'est pas installé et l'environnement
+n'a pas d'accès réseau pour l'ajouter. Ruff, mypy, la suite complète du repository et Alembic sur
+votre PostgreSQL restent donc à exécuter localement.
+
+Commandes minimales :
+
+```powershell
+backend\.venv\Scripts\python.exe -m pytest backend
+backend\.venv\Scripts\ruff.exe check backend
+backend\.venv\Scripts\mypy.exe --config-file backend\pyproject.toml backend\src
+cd backend
+.\.venv\Scripts\python.exe -m alembic upgrade head
+cd ..
+git diff --check
+git status --short
+```
 
 ## Sécurité / LIVE
 
-- aucune API Kraken privée nécessaire ;
-- aucune clé avec droit de retrait ;
-- aucun tool d'ordre ;
-- LIVE reste un batch séparé avec permissions minimales, idempotence, réconciliation, recovery et activation explicite.
+LIVE reste hors périmètre. Il nécessitera un batch séparé avec permissions minimales sans retrait,
+idempotence, réconciliation, recovery et activation explicite.
 
 ## Documentation
 
@@ -132,4 +227,4 @@ Ruff, mypy, la suite complète du repository, Alembic sur votre PostgreSQL et le
 - `docs/02_ARCHITECTURE_TECHNIQUE.md` : architecture ;
 - `docs/03_AGENT_TRADING_RISK.md` : responsabilités Agent/Risk ;
 - `docs/09_ROADMAP_DEVELOPPEMENT.md` : roadmap ;
-- `docs/10_DECISIONS_ET_CHANGELOG.md` : ADR/changelog.
+- `docs/10_DECISIONS_ET_CHANGELOG.md` : décisions et changelog.

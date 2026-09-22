@@ -64,6 +64,7 @@ class CycleAuditSummary:
     fill_count: int
     failure: CycleFailureView | None
     paper_run_id: UUID | None = None
+    market_type: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +96,8 @@ class CycleAuditDetail:
     portfolio_state_after: JsonObject | None
     paper_run_id: UUID | None = None
     agent_tool_traces: tuple[JsonObject, ...] = ()
+    market_selection_input: JsonObject | None = None
+    market_selection: JsonObject | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +208,8 @@ class RunScopedCycleAuditReader(CycleAuditReader, Protocol):
     ) -> AuditPage[CycleAuditSummary]: ...
 
     async def latest_cycle_for_run(
-        self, paper_run_id: UUID
+        self,
+        paper_run_id: UUID,
     ) -> CycleAuditDetail | None: ...
 
     async def list_decisions_for_run(
@@ -241,11 +245,13 @@ class RunScopedCycleAuditReader(CycleAuditReader, Protocol):
     ) -> AuditPage[ExecutionAuditItem]: ...
 
     async def latest_error_for_run(
-        self, paper_run_id: UUID
+        self,
+        paper_run_id: UUID,
     ) -> LatestErrorView | None: ...
 
     async def latest_market_state_for_run(
-        self, paper_run_id: UUID
+        self,
+        paper_run_id: UUID,
     ) -> JsonObject | None: ...
 
 
@@ -287,18 +293,26 @@ class SqlAlchemyCycleAuditQueryService:
                     statement = statement.join(RiskAssessmentRecord)
                     count_statement = count_statement.join(RiskAssessmentRecord)
                 if resolved_run_id is not None:
-                    statement = statement.where(CycleRecord.paper_run_id == resolved_run_id)
+                    statement = statement.where(
+                        CycleRecord.paper_run_id == resolved_run_id
+                    )
                     count_statement = count_statement.where(
                         CycleRecord.paper_run_id == resolved_run_id
                     )
                 if status is not None:
                     statement = statement.where(CycleRecord.status == status)
-                    count_statement = count_statement.where(CycleRecord.status == status)
+                    count_statement = count_statement.where(
+                        CycleRecord.status == status
+                    )
                 if action is not None:
                     statement = statement.where(DecisionRecord.action == action)
-                    count_statement = count_statement.where(DecisionRecord.action == action)
+                    count_statement = count_statement.where(
+                        DecisionRecord.action == action
+                    )
                 if risk_status is not None:
-                    statement = statement.where(RiskAssessmentRecord.status == risk_status)
+                    statement = statement.where(
+                        RiskAssessmentRecord.status == risk_status
+                    )
                     count_statement = count_statement.where(
                         RiskAssessmentRecord.status == risk_status
                     )
@@ -312,11 +326,13 @@ class SqlAlchemyCycleAuditQueryService:
                 )
                 if order is AuditSortOrder.ASC:
                     statement = statement.order_by(
-                        CycleRecord.recorded_at.asc(), CycleRecord.cycle_id.asc()
+                        CycleRecord.recorded_at.asc(),
+                        CycleRecord.cycle_id.asc(),
                     )
                 else:
                     statement = statement.order_by(
-                        CycleRecord.recorded_at.desc(), CycleRecord.cycle_id.desc()
+                        CycleRecord.recorded_at.desc(),
+                        CycleRecord.cycle_id.desc(),
                     )
                 statement = statement.offset(offset).limit(limit)
                 total = int(await session.scalar(count_statement) or 0)
@@ -352,7 +368,8 @@ class SqlAlchemyCycleAuditQueryService:
         )
 
     async def latest_cycle_for_run(
-        self, paper_run_id: UUID
+        self,
+        paper_run_id: UUID,
     ) -> CycleAuditDetail | None:
         return await self.latest_cycle(paper_run_id=paper_run_id)
 
@@ -385,7 +402,9 @@ class SqlAlchemyCycleAuditQueryService:
                 statement = select(CycleRecord)
                 resolved_run_id = self._run_id(paper_run_id)
                 if resolved_run_id is not None:
-                    statement = statement.where(CycleRecord.paper_run_id == resolved_run_id)
+                    statement = statement.where(
+                        CycleRecord.paper_run_id == resolved_run_id
+                    )
                 statement = (
                     statement.options(
                         selectinload(CycleRecord.decision),
@@ -394,7 +413,10 @@ class SqlAlchemyCycleAuditQueryService:
                             ExecutionIntentRecord.fills
                         ),
                     )
-                    .order_by(CycleRecord.recorded_at.desc(), CycleRecord.cycle_id.desc())
+                    .order_by(
+                        CycleRecord.recorded_at.desc(),
+                        CycleRecord.cycle_id.desc(),
+                    )
                     .limit(1)
                 )
                 record = await session.scalar(statement)
@@ -426,17 +448,23 @@ class SqlAlchemyCycleAuditQueryService:
                     )
                 if action is not None:
                     statement = statement.where(DecisionRecord.action == action)
-                    count_statement = count_statement.where(DecisionRecord.action == action)
+                    count_statement = count_statement.where(
+                        DecisionRecord.action == action
+                    )
                 if symbol is not None:
                     statement = statement.where(DecisionRecord.symbol == symbol)
-                    count_statement = count_statement.where(DecisionRecord.symbol == symbol)
+                    count_statement = count_statement.where(
+                        DecisionRecord.symbol == symbol
+                    )
                 if order is AuditSortOrder.ASC:
                     statement = statement.order_by(
-                        DecisionRecord.created_at.asc(), DecisionRecord.decision_id.asc()
+                        DecisionRecord.created_at.asc(),
+                        DecisionRecord.decision_id.asc(),
                     )
                 else:
                     statement = statement.order_by(
-                        DecisionRecord.created_at.desc(), DecisionRecord.decision_id.desc()
+                        DecisionRecord.created_at.desc(),
+                        DecisionRecord.decision_id.desc(),
                     )
                 statement = statement.offset(offset).limit(limit)
                 total = int(await session.scalar(count_statement) or 0)
@@ -462,7 +490,9 @@ class SqlAlchemyCycleAuditQueryService:
         try:
             async with self._sessions() as session:
                 statement = select(RiskAssessmentRecord)
-                count_statement = select(func.count()).select_from(RiskAssessmentRecord)
+                count_statement = select(func.count()).select_from(
+                    RiskAssessmentRecord
+                )
                 resolved_run_id = self._run_id(paper_run_id)
                 if resolved_run_id is not None:
                     statement = statement.join(CycleRecord).where(
@@ -472,7 +502,9 @@ class SqlAlchemyCycleAuditQueryService:
                         CycleRecord.paper_run_id == resolved_run_id
                     )
                 if status is not None:
-                    statement = statement.where(RiskAssessmentRecord.status == status)
+                    statement = statement.where(
+                        RiskAssessmentRecord.status == status
+                    )
                     count_statement = count_statement.where(
                         RiskAssessmentRecord.status == status
                     )
@@ -513,7 +545,9 @@ class SqlAlchemyCycleAuditQueryService:
                 statement = select(ExecutionIntentRecord).options(
                     selectinload(ExecutionIntentRecord.fills)
                 )
-                count_statement = select(func.count()).select_from(ExecutionIntentRecord)
+                count_statement = select(func.count()).select_from(
+                    ExecutionIntentRecord
+                )
                 resolved_run_id = self._run_id(paper_run_id)
                 if resolved_run_id is not None:
                     statement = statement.join(CycleRecord).where(
@@ -523,12 +557,16 @@ class SqlAlchemyCycleAuditQueryService:
                         CycleRecord.paper_run_id == resolved_run_id
                     )
                 if action is not None:
-                    statement = statement.where(ExecutionIntentRecord.action == action)
+                    statement = statement.where(
+                        ExecutionIntentRecord.action == action
+                    )
                     count_statement = count_statement.where(
                         ExecutionIntentRecord.action == action
                     )
                 if symbol is not None:
-                    statement = statement.where(ExecutionIntentRecord.symbol == symbol)
+                    statement = statement.where(
+                        ExecutionIntentRecord.symbol == symbol
+                    )
                     count_statement = count_statement.where(
                         ExecutionIntentRecord.symbol == symbol
                     )
@@ -565,7 +603,11 @@ class SqlAlchemyCycleAuditQueryService:
         symbol: str | None = None,
     ) -> AuditPage[DecisionAuditItem]:
         return await self.list_decisions(
-            limit=limit, offset=offset, order=order, action=action, symbol=symbol,
+            limit=limit,
+            offset=offset,
+            order=order,
+            action=action,
+            symbol=symbol,
             paper_run_id=paper_run_id,
         )
 
@@ -579,7 +621,10 @@ class SqlAlchemyCycleAuditQueryService:
         status: str | None = None,
     ) -> AuditPage[RiskAssessmentAuditItem]:
         return await self.list_risk_assessments(
-            limit=limit, offset=offset, order=order, status=status,
+            limit=limit,
+            offset=offset,
+            order=order,
+            status=status,
             paper_run_id=paper_run_id,
         )
 
@@ -594,7 +639,11 @@ class SqlAlchemyCycleAuditQueryService:
         symbol: str | None = None,
     ) -> AuditPage[ExecutionAuditItem]:
         return await self.list_executions(
-            limit=limit, offset=offset, order=order, action=action, symbol=symbol,
+            limit=limit,
+            offset=offset,
+            order=order,
+            action=action,
+            symbol=symbol,
             paper_run_id=paper_run_id,
         )
 
@@ -612,16 +661,21 @@ class SqlAlchemyCycleAuditQueryService:
                 )
                 resolved_run_id = self._run_id(paper_run_id)
                 if resolved_run_id is not None:
-                    statement = statement.where(CycleRecord.paper_run_id == resolved_run_id)
+                    statement = statement.where(
+                        CycleRecord.paper_run_id == resolved_run_id
+                    )
                 statement = statement.order_by(
-                    CycleRecord.recorded_at.desc(), CycleRecord.cycle_id.desc()
+                    CycleRecord.recorded_at.desc(),
+                    CycleRecord.cycle_id.desc(),
                 ).limit(1)
                 record = await session.scalar(statement)
                 if record is None:
                     return None
                 failure = _failure(record)
                 if failure is None:
-                    raise AuditDataIntegrityError("failed cycle has no failure metadata")
+                    raise AuditDataIntegrityError(
+                        "failed cycle has no failure metadata"
+                    )
                 recorded_at = _utc(record.recorded_at)
                 assert recorded_at is not None
                 return LatestErrorView(
@@ -634,7 +688,8 @@ class SqlAlchemyCycleAuditQueryService:
             raise AuditStoreUnavailableError("audit store unavailable") from exc
 
     async def latest_error_for_run(
-        self, paper_run_id: UUID
+        self,
+        paper_run_id: UUID,
     ) -> LatestErrorView | None:
         return await self.latest_error(paper_run_id=paper_run_id)
 
@@ -650,9 +705,12 @@ class SqlAlchemyCycleAuditQueryService:
                 )
                 resolved_run_id = self._run_id(paper_run_id)
                 if resolved_run_id is not None:
-                    statement = statement.where(CycleRecord.paper_run_id == resolved_run_id)
+                    statement = statement.where(
+                        CycleRecord.paper_run_id == resolved_run_id
+                    )
                 statement = statement.order_by(
-                    CycleRecord.recorded_at.desc(), CycleRecord.cycle_id.desc()
+                    CycleRecord.recorded_at.desc(),
+                    CycleRecord.cycle_id.desc(),
                 ).limit(1)
                 record = await session.scalar(statement)
                 if record is None:
@@ -672,7 +730,8 @@ class SqlAlchemyCycleAuditQueryService:
             raise AuditStoreUnavailableError("audit store unavailable") from exc
 
     async def latest_market_state_for_run(
-        self, paper_run_id: UUID
+        self,
+        paper_run_id: UUID,
     ) -> JsonObject | None:
         return await self.latest_market_state(paper_run_id=paper_run_id)
 
@@ -689,11 +748,17 @@ def _json(value: dict[str, object] | None) -> JsonObject | None:
     return None if value is None else dict(value)
 
 
-def _json_list(value: list[dict[str, object]] | None) -> tuple[JsonObject, ...]:
+def _json_list(
+    value: list[dict[str, object]] | None,
+) -> tuple[JsonObject, ...]:
     if value is None:
         return ()
-    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
-        raise AuditDataIntegrityError("agent tool traces payload must be an array of objects")
+    if not isinstance(value, list) or any(
+        not isinstance(item, dict) for item in value
+    ):
+        raise AuditDataIntegrityError(
+            "agent tool traces payload must be an array of objects"
+        )
     return tuple(dict(item) for item in value)
 
 
@@ -725,15 +790,37 @@ def _cycle_summary(record: CycleRecord) -> CycleAuditSummary:
     intent = record.execution_intent
     recorded_at = _utc(record.recorded_at)
     assert recorded_at is not None
+
+    selected_symbol: str | None = None
+    selected_market_type: str | None = None
+    selection_payload = record.market_selection_payload
+    if isinstance(selection_payload, dict):
+        raw_symbol = selection_payload.get("symbol")
+        raw_market_type = selection_payload.get("market_type")
+        if isinstance(raw_symbol, str):
+            selected_symbol = raw_symbol
+        if isinstance(raw_market_type, str):
+            selected_market_type = raw_market_type
+
+    decision = record.decision
+    if decision is not None:
+        selected_symbol = decision.symbol
+        raw_market_type = decision.payload.get("market_type")
+        if isinstance(raw_market_type, str):
+            selected_market_type = raw_market_type
+
     return CycleAuditSummary(
         cycle_id=record.cycle_id,
         paper_run_id=record.paper_run_id,
         status=record.status,
         recorded_at=recorded_at,
-        decision_action=record.decision.action if record.decision is not None else None,
-        symbol=record.decision.symbol if record.decision is not None else None,
+        decision_action=decision.action if decision is not None else None,
+        symbol=selected_symbol,
+        market_type=selected_market_type,
         risk_status=(
-            record.risk_assessment.status if record.risk_assessment is not None else None
+            record.risk_assessment.status
+            if record.risk_assessment is not None
+            else None
         ),
         execution_id=intent.execution_id if intent is not None else None,
         fill_count=len(intent.fills) if intent is not None else 0,
@@ -763,9 +850,15 @@ def _cycle_detail(record: CycleRecord) -> CycleAuditDetail:
         market_as_of=_utc(record.market_as_of),
         portfolio_before_as_of=_utc(record.portfolio_before_as_of),
         portfolio_after_as_of=_utc(record.portfolio_after_as_of),
+        market_selection_input=_json(record.market_selection_input_payload),
+        market_selection=_json(record.market_selection_payload),
         agent_input=_json(record.agent_input_payload),
         agent_tool_traces=_json_list(record.agent_tool_traces_payload),
-        decision=_json(record.decision.payload) if record.decision is not None else None,
+        decision=(
+            _json(record.decision.payload)
+            if record.decision is not None
+            else None
+        ),
         risk_assessment=(
             _json(record.risk_assessment.payload)
             if record.risk_assessment is not None

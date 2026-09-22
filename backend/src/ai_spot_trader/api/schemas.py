@@ -27,6 +27,7 @@ class CycleSummaryResponse(ApiModel):
     recorded_at: datetime
     decision_action: str | None = None
     symbol: str | None = None
+    market_type: Literal["SPOT", "PERPETUAL", "FUTURE"] | None = None
     risk_status: str | None = None
     execution_id: UUID | None = None
     fill_count: int = Field(ge=0)
@@ -53,6 +54,8 @@ class CycleDetailResponse(ApiModel):
     market_as_of: datetime | None = None
     portfolio_before_as_of: datetime | None = None
     portfolio_after_as_of: datetime | None = None
+    market_selection_input: JsonObject | None = None
+    market_selection: JsonObject | None = None
     agent_input: JsonObject | None = None
     agent_tool_traces: tuple[JsonObject, ...] = ()
     decision: JsonObject | None = None
@@ -187,12 +190,19 @@ class EngineStatusResponse(ApiModel):
     last_unexpected_error_type: str | None = None
 
 
+class ExecutableMarketResponse(ApiModel):
+    symbol: str
+    market_type: Literal["SPOT", "PERPETUAL"]
+
+
 class PaperRunResponse(ApiModel):
     paper_run_id: UUID
     started_at: datetime
     ended_at: datetime | None = None
-    market_type: Literal["SPOT", "PERPETUAL", "FUTURE"]
-    symbol: str
+    # Legacy singleton projection. Genuine multi-market runs return null here.
+    market_type: Literal["SPOT", "PERPETUAL", "FUTURE"] | None = None
+    symbol: str | None = None
+    execution_universe: tuple[ExecutableMarketResponse, ...] = ()
     is_current: bool = False
 
 

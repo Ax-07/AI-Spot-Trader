@@ -12,36 +12,46 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ai_spot_trader.core.clock import Clock, SystemClock
+from ai_spot_trader.domain.enums import MarketType
+from ai_spot_trader.domain.models import ExecutableMarket
 from ai_spot_trader.persistence.models import PaperRunRecord
 
 RunIdFactory = Callable[[], UUID]
 
 
 class PaperRunSortOrder(StrEnum):
-    """Stable sort directions supported by PAPER-run list endpoints."""
-
     ASC = "asc"
     DESC = "desc"
 
 
 class PaperRunNotFoundError(RuntimeError):
-    """Raised when a requested durable PAPER run does not exist."""
+    pass
 
 
 class PaperRunClosedError(RuntimeError):
-    """Raised when a cycle would be written to an already closed PAPER run."""
+    pass
 
 
 class PaperRunStoreUnavailableError(RuntimeError):
-    """Raised when durable PAPER run metadata cannot be queried."""
+    pass
 
 
 @dataclass(frozen=True, slots=True)
 class PaperRunDefinition:
     paper_run_id: UUID
     started_at: datetime
-    market_type: str
-    symbol: str
+    market_type: str | None = None
+    symbol: str | None = None
+    execution_universe: tuple[ExecutableMarket, ...] = ()
+
+    def __post_init__(self) -> None:
+        has_legacy = self.market_type is not None or self.symbol is not None
+        if (self.market_type is None) != (self.symbol is None):
+            raise ValueError("legacy paper run metadata requires both market_type and symbol")
+        if self.execution_universe and has_legacy:
+            raise ValueError(
+                "paper run definition must use either execution_universe or legacy metadata"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,8 +59,9 @@ class PaperRunView:
     paper_run_id: UUID
     started_at: datetime
     ended_at: datetime | None
-    market_type: str
-    symbol: str
+    market_type: str | None
+    symbol: str | None
+    execution_universe: tuple[ExecutableMarket, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,19 +73,13 @@ class PaperRunPage:
 
 
 class PaperRunLifecycle(Protocol):
-    """Process-local lifecycle for the durable identity of one PAPER experiment."""
-
     @property
     def current_run_id(self) -> UUID | None: ...
-
     async def initialize(self) -> PaperRunView: ...
-
     async def close(self) -> None: ...
 
 
 class PaperRunReader(Protocol):
-    """Read-only durable PAPER-run catalog."""
-
     async def list_runs(
         self,
         *,
@@ -82,12 +87,11 @@ class PaperRunReader(Protocol):
         offset: int,
         order: PaperRunSortOrder,
     ) -> PaperRunPage: ...
-
     async def get_run(self, paper_run_id: UUID) -> PaperRunView | None: ...
 
 
 class SqlAlchemyPaperRunLifecycle:
-    """Create one fresh run per backend lifetime and close it on graceful shutdown."""
+    """Create one fresh durable run with an honest typed executable universe."""
 
     def __init__(
         self,
@@ -95,22 +99,33 @@ class SqlAlchemyPaperRunLifecycle:
         *,
         market_type: str | None = None,
         symbol: str | None = None,
+        execution_universe: tuple[ExecutableMarket, ...] | None = None,
         definition: PaperRunDefinition | None = None,
         clock: Clock | None = None,
         run_id_factory: RunIdFactory = uuid4,
     ) -> None:
         if definition is not None:
-            if market_type is not None or symbol is not None:
-                raise ValueError("definition cannot be combined with market_type or symbol")
-            market_type = definition.market_type
-            symbol = definition.symbol
-        if market_type is None or not market_type.strip():
-            raise ValueError("paper run market_type cannot be empty")
-        if symbol is None or not symbol.strip():
-            raise ValueError("paper run symbol cannot be empty")
+            if market_type is not None or symbol is not None or execution_universe is not None:
+                raise ValueError("definition cannot be combined with run metadata")
+            if definition.execution_universe:
+                execution_universe = definition.execution_universe
+                market_type = None
+                symbol = None
+            else:
+                market_type = definition.market_type
+                symbol = definition.symbol
+                execution_universe = None
+
+        universe = _normalize_universe(
+            execution_universe=execution_universe,
+            market_type=market_type,
+            symbol=symbol,
+        )
+        legacy_type, legacy_symbol = _legacy_projection(universe)
         self._sessions = sessions
-        self._market_type = market_type
-        self._symbol = symbol
+        self._execution_universe = universe
+        self._market_type = legacy_type
+        self._symbol = legacy_symbol
         self._definition = definition
         self._clock = clock or SystemClock()
         self._run_id_factory = run_id_factory
@@ -121,13 +136,9 @@ class SqlAlchemyPaperRunLifecycle:
         return self._current_run_id
 
     async def initialize(self) -> PaperRunView:
-        """Create a fresh run because composition also creates a fresh in-memory ledger."""
-
         current_id = self._current_run_id
         if current_id is not None:
-            existing = await SqlAlchemyPaperRunQueryService(self._sessions).get_run(
-                current_id
-            )
+            existing = await SqlAlchemyPaperRunQueryService(self._sessions).get_run(current_id)
             if existing is None:
                 raise PaperRunNotFoundError(f"paper run {current_id} does not exist")
             return existing
@@ -147,6 +158,9 @@ class SqlAlchemyPaperRunLifecycle:
             ended_at=None,
             market_type=self._market_type,
             symbol=self._symbol,
+            execution_universe_payload=[
+                item.model_dump(mode="json") for item in self._execution_universe
+            ],
         )
         try:
             async with self._sessions() as session, session.begin():
@@ -157,8 +171,6 @@ class SqlAlchemyPaperRunLifecycle:
             raise PaperRunStoreUnavailableError("paper run store unavailable") from exc
 
     async def close(self) -> None:
-        """Close only this process' current run; interrupted runs stay explicitly open-ended."""
-
         current_id = self._current_run_id
         if current_id is None:
             return
@@ -167,9 +179,7 @@ class SqlAlchemyPaperRunLifecycle:
             async with self._sessions() as session, session.begin():
                 current = await session.get(PaperRunRecord, current_id)
                 if current is None:
-                    raise PaperRunNotFoundError(
-                        f"paper run {current_id} does not exist"
-                    )
+                    raise PaperRunNotFoundError(f"paper run {current_id} does not exist")
                 if current.ended_at is None:
                     current.ended_at = ended_at
         except (SQLAlchemyError, OSError, TimeoutError) as exc:
@@ -179,18 +189,10 @@ class SqlAlchemyPaperRunLifecycle:
 
 
 class SqlAlchemyPaperRunQueryService:
-    """Read durable PAPER run identities without inventing legacy run boundaries."""
-
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 
-    async def list_runs(
-        self,
-        *,
-        limit: int,
-        offset: int,
-        order: PaperRunSortOrder,
-    ) -> PaperRunPage:
+    async def list_runs(self, *, limit: int, offset: int, order: PaperRunSortOrder) -> PaperRunPage:
         try:
             async with self._sessions() as session:
                 statement = select(PaperRunRecord)
@@ -206,14 +208,12 @@ class SqlAlchemyPaperRunQueryService:
                     )
                 count_statement = select(func.count()).select_from(PaperRunRecord)
                 total = int(await session.scalar(count_statement) or 0)
-                records = (
-                    await session.scalars(statement.offset(offset).limit(limit))
-                ).all()
+                records = (await session.scalars(statement.offset(offset).limit(limit))).all()
                 return PaperRunPage(
-                    items=tuple(_view(record) for record in records),
-                    total=total,
-                    limit=limit,
-                    offset=offset,
+                    tuple(_view(record) for record in records),
+                    total,
+                    limit,
+                    offset,
                 )
         except (SQLAlchemyError, OSError, TimeoutError) as exc:
             raise PaperRunStoreUnavailableError("paper run store unavailable") from exc
@@ -227,13 +227,76 @@ class SqlAlchemyPaperRunQueryService:
             raise PaperRunStoreUnavailableError("paper run store unavailable") from exc
 
 
+def _normalize_universe(
+    *,
+    execution_universe: tuple[ExecutableMarket, ...] | None,
+    market_type: str | None,
+    symbol: str | None,
+) -> tuple[ExecutableMarket, ...]:
+    universe: tuple[ExecutableMarket, ...]
+    if execution_universe is not None and (market_type is not None or symbol is not None):
+        raise ValueError(
+            "execution_universe cannot be combined with legacy market_type or symbol"
+        )
+    if execution_universe is None:
+        if market_type is None or not market_type.strip() or symbol is None or not symbol.strip():
+            raise ValueError(
+                "paper run requires an execution universe or legacy market_type + symbol"
+            )
+        try:
+            universe = (ExecutableMarket(symbol=symbol, market_type=MarketType(market_type)),)
+        except ValueError as exc:
+            raise ValueError("invalid legacy paper run market") from exc
+    else:
+        if not execution_universe:
+            raise ValueError("paper run execution_universe cannot be empty")
+        universe = tuple(
+            sorted(
+                execution_universe,
+                key=lambda item: (item.market_type.value, item.symbol),
+            )
+        )
+        if len(set(universe)) != len(universe):
+            raise ValueError("paper run execution_universe contains duplicates")
+    return universe
+
+
+def _legacy_projection(universe: tuple[ExecutableMarket, ...]) -> tuple[str | None, str | None]:
+    if len(universe) != 1:
+        return None, None
+    item = universe[0]
+    return item.market_type.value, item.symbol
+
+
+def _universe_from_record(record: PaperRunRecord) -> tuple[ExecutableMarket, ...]:
+    payload = record.execution_universe_payload
+    if payload:
+        try:
+            return tuple(
+                ExecutableMarket(
+                    symbol=str(item["symbol"]),
+                    market_type=MarketType(str(item["market_type"])),
+                )
+                for item in payload
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise PaperRunStoreUnavailableError("invalid paper run execution universe") from exc
+    # Defensive compatibility for rows created before migration backfill.
+    if record.market_type is not None and record.symbol is not None:
+        return (ExecutableMarket(symbol=record.symbol, market_type=MarketType(record.market_type)),)
+    raise PaperRunStoreUnavailableError("paper run has no executable universe")
+
+
 def _view(record: PaperRunRecord) -> PaperRunView:
+    universe = _universe_from_record(record)
+    legacy_type, legacy_symbol = _legacy_projection(universe)
     return PaperRunView(
         paper_run_id=record.paper_run_id,
         started_at=_utc(record.started_at),
         ended_at=None if record.ended_at is None else _utc(record.ended_at),
-        market_type=record.market_type,
-        symbol=record.symbol,
+        market_type=legacy_type,
+        symbol=legacy_symbol,
+        execution_universe=universe,
     )
 
 

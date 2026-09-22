@@ -19,14 +19,23 @@ from ai_spot_trader.domain.models import (
     AgentInput,
     AgentToolTrace,
     DecisionCandidate,
+    ExecutableMarket,
     ExecutionIntent,
     ExperimentManifest,
     Fill,
+    MarketSelection,
+    MarketSelectionInput,
     MarketState,
     PortfolioState,
     RiskAssessment,
 )
-from ai_spot_trader.domain.ports import Broker, LLMProvider, MarketDataSource
+from ai_spot_trader.domain.ports import (
+    Broker,
+    ExecutableMarketDataSource,
+    LLMProvider,
+    MarketDataSource,
+    MarketSelectingLLMProvider,
+)
 from ai_spot_trader.domain.symbols import parse_canonical_symbol
 from ai_spot_trader.portfolio.ledger import PaperPortfolioLedger
 from ai_spot_trader.risk.engine import RiskEngine, RiskResult
@@ -54,6 +63,8 @@ class TradingCycleStage(StrEnum):
 
     MARKET = "MARKET"
     PORTFOLIO = "PORTFOLIO"
+    SELECTION_INPUT = "SELECTION_INPUT"
+    MARKET_SELECTION = "MARKET_SELECTION"
     INPUT = "INPUT"
     AGENT = "AGENT"
     RISK = "RISK"
@@ -92,11 +103,13 @@ class TradingCycleFailure:
 
 @dataclass(frozen=True, slots=True)
 class TradingCycleResult:
-    """Internal orchestration result preserving canonical business artefacts."""
+    """Internal orchestration result preserving canonical causal business artefacts."""
 
     cycle_id: UUID
     status: TradingCycleStatus
     failure: TradingCycleFailure | None = None
+    market_selection_input: MarketSelectionInput | None = None
+    market_selection: MarketSelection | None = None
     agent_input: AgentInput | None = None
     decision: DecisionCandidate | None = None
     risk_assessment: RiskAssessment | None = None
@@ -109,8 +122,26 @@ class TradingCycleResult:
         call_ids = tuple(trace.call_id for trace in self.agent_tool_traces)
         if len(set(call_ids)) != len(call_ids):
             raise ValueError("cycle Agent tool traces must have unique call_id values")
+        if self.market_selection is not None:
+            if self.market_selection.cycle_id != self.cycle_id:
+                raise ValueError("MarketSelection cycle_id must match TradingCycleResult")
+            if self.market_selection.tool_traces != self.agent_tool_traces:
+                raise ValueError("cycle Agent tool traces must match MarketSelection traces")
+        if (
+            self.market_selection_input is not None
+            and self.market_selection_input.cycle_id != self.cycle_id
+        ):
+            raise ValueError("MarketSelectionInput cycle_id must match TradingCycleResult")
+        if self.market_selection is not None and self.market_selection_input is None:
+            raise ValueError("MarketSelection requires its causal MarketSelectionInput")
         if self.decision is not None and self.decision.tool_traces != self.agent_tool_traces:
             raise ValueError("cycle Agent tool traces must match DecisionCandidate traces")
+        if (
+            self.agent_input is not None
+            and self.market_selection is not None
+            and self.agent_input.market_selection != self.market_selection
+        ):
+            raise ValueError("AgentInput must reference the cycle MarketSelection")
         if self.status is TradingCycleStatus.FAILED:
             if self.failure is None:
                 raise ValueError("FAILED cycle results require failure metadata")
@@ -136,24 +167,53 @@ class TradingEngineAlreadyRunningError(RuntimeError):
 
 
 class TradingCycleRunner:
-    """Execute exactly one serialized PAPER cycle over one explicit symbol."""
+    """Execute one serialized PAPER cycle, in legacy or causal market-selection mode."""
 
     def __init__(
         self,
         *,
-        market_data: MarketDataSource,
         portfolio: PaperPortfolioLedger,
         agent: LLMProvider,
         risk_engine: RiskEngine,
         broker: Broker,
-        symbol: str,
         aggressiveness: int,
         timeouts: TradingCycleTimeouts,
+        market_data: MarketDataSource | None = None,
+        symbol: str | None = None,
+        executable_market_data: ExecutableMarketDataSource | None = None,
+        executable_markets: tuple[ExecutableMarket, ...] | None = None,
         experiment_manifest: ExperimentManifest | None = None,
         clock: Clock | None = None,
         cycle_id_factory: CycleIdFactory = uuid4,
     ) -> None:
-        parse_canonical_symbol(symbol)
+        legacy_mode = market_data is not None or symbol is not None
+        selection_mode = executable_market_data is not None or executable_markets is not None
+        if legacy_mode == selection_mode:
+            raise ValueError(
+                "configure exactly one runner mode: legacy symbol or executable market selection"
+            )
+        if legacy_mode:
+            if market_data is None or symbol is None:
+                raise ValueError("legacy mode requires market_data and symbol")
+            parse_canonical_symbol(symbol)
+        else:
+            if executable_market_data is None or not executable_markets:
+                raise ValueError(
+                    "selection mode requires executable_market_data and executable_markets"
+                )
+            ordered = tuple(
+                sorted(
+                    executable_markets,
+                    key=lambda market: (market.market_type.value, market.symbol),
+                )
+            )
+            if ordered != executable_markets:
+                raise ValueError("executable_markets must use deterministic sorted order")
+            if len(set(executable_markets)) != len(executable_markets):
+                raise ValueError("executable_markets must be unique")
+            if not isinstance(agent, MarketSelectingLLMProvider):
+                raise TypeError("selection mode requires the same Agent to implement select_market")
+
         context = aggressiveness_context(aggressiveness)
         if experiment_manifest is not None:
             validate_experiment_manifest_digest(experiment_manifest)
@@ -161,14 +221,22 @@ class TradingCycleRunner:
                 raise ValueError(
                     "experiment manifest aggressiveness must match the runner configuration"
                 )
-            if symbol not in experiment_manifest.universe:
-                raise ValueError("runner symbol must belong to the experiment universe")
+            required_symbols = (
+                {symbol}
+                if symbol is not None
+                else {item.symbol for item in executable_markets or ()}
+            )
+            if not required_symbols.issubset(set(experiment_manifest.universe)):
+                raise ValueError("runner markets must belong to the experiment universe")
+
         self._market_data = market_data
+        self._symbol = symbol
+        self._executable_market_data = executable_market_data
+        self._executable_markets = executable_markets or ()
         self._portfolio = portfolio
         self._agent = agent
         self._risk_engine = risk_engine
         self._broker = broker
-        self._symbol = symbol
         self._aggressiveness = aggressiveness
         self._aggressiveness_context = context
         self._experiment_manifest = experiment_manifest
@@ -181,14 +249,141 @@ class TradingCycleRunner:
         """Run one cycle; technical step failures are returned, never converted to HOLD."""
 
         async with self._cycle_lock:
-            return await self._run_cycle_locked()
+            if self._executable_market_data is not None:
+                return await self._run_selected_cycle_locked()
+            return await self._run_legacy_cycle_locked()
 
-    async def _run_cycle_locked(self) -> TradingCycleResult:
+    async def _run_selected_cycle_locked(self) -> TradingCycleResult:
         cycle_id = self._cycle_id_factory()
 
         try:
+            selection_portfolio = self._portfolio.snapshot()
+        except Exception as exc:
+            return self._failed(cycle_id, TradingCycleStage.PORTFOLIO, exc)
+
+        try:
+            selection_created_at = self._now()
+            selection_input = MarketSelectionInput(
+                cycle_id=cycle_id,
+                created_at=selection_created_at,
+                portfolio_state=selection_portfolio,
+                executable_markets=self._executable_markets,
+                aggressiveness=self._aggressiveness,
+                aggressiveness_context=self._aggressiveness_context,
+                experiment_manifest=self._experiment_manifest,
+            )
+        except Exception as exc:
+            return self._failed(cycle_id, TradingCycleStage.SELECTION_INPUT, exc)
+
+        try:
+            selecting_agent = self._agent
+            assert isinstance(selecting_agent, MarketSelectingLLMProvider)
+            async with asyncio.timeout(self._timeouts.agent_seconds):
+                market_selection = await selecting_agent.select_market(selection_input)
+            self._validate_market_selection(
+                selection_input=selection_input,
+                selection=market_selection,
+            )
+        except Exception as exc:
+            return self._failed(
+                cycle_id,
+                TradingCycleStage.MARKET_SELECTION,
+                exc,
+                market_selection_input=selection_input,
+                agent_tool_traces=self._agent_tool_traces(),
+            )
+
+        try:
+            execution_source = self._executable_market_data
+            assert execution_source is not None
             async with asyncio.timeout(self._timeouts.market_seconds):
-                market_state = await self._market_data.snapshot(self._symbol)
+                market_state = await execution_source.snapshot(
+                    market_selection.symbol,
+                    market_selection.market_type,
+                )
+            self._validate_selected_market_state(
+                selection=market_selection,
+                market_state=market_state,
+            )
+        except Exception as exc:
+            return self._failed(
+                cycle_id,
+                TradingCycleStage.MARKET,
+                exc,
+                market_selection_input=selection_input,
+                market_selection=market_selection,
+                agent_tool_traces=market_selection.tool_traces,
+            )
+
+        # The selected Derivatives execution source is allowed to mark an already-open
+        # position/funding. Capture the complete portfolio only after this canonical market
+        # acquisition. Research sources remain side-effect free and cannot reach this ledger.
+        try:
+            portfolio_state = self._portfolio.snapshot()
+        except Exception as exc:
+            return self._failed(
+                cycle_id,
+                TradingCycleStage.PORTFOLIO,
+                exc,
+                market_selection_input=selection_input,
+                market_selection=market_selection,
+                agent_tool_traces=market_selection.tool_traces,
+            )
+
+        try:
+            created_at = self._now()
+            if market_state.as_of > created_at:
+                raise TradingCycleInvariantError(
+                    "MarketState cannot be newer than AgentInput.created_at"
+                )
+            if portfolio_state.as_of > created_at:
+                raise TradingCycleInvariantError(
+                    "PortfolioState cannot be newer than AgentInput.created_at"
+                )
+            if market_selection.selected_at > created_at:
+                raise TradingCycleInvariantError(
+                    "MarketSelection cannot be newer than AgentInput.created_at"
+                )
+            agent_input = AgentInput(
+                cycle_id=cycle_id,
+                created_at=created_at,
+                market_state=market_state,
+                portfolio_state=portfolio_state,
+                aggressiveness=self._aggressiveness,
+                aggressiveness_context=self._aggressiveness_context,
+                experiment_manifest=self._experiment_manifest,
+                market_selection=market_selection,
+            )
+            market_state = agent_input.market_state
+            portfolio_state = agent_input.portfolio_state
+        except Exception as exc:
+            return self._failed(
+                cycle_id,
+                TradingCycleStage.INPUT,
+                exc,
+                market_selection_input=selection_input,
+                market_selection=market_selection,
+                agent_tool_traces=market_selection.tool_traces,
+            )
+
+        return await self._finish_cycle(
+            cycle_id=cycle_id,
+            agent_input=agent_input,
+            market_state=market_state,
+            portfolio_state=portfolio_state,
+            market_selection_input=selection_input,
+            market_selection=market_selection,
+        )
+
+    async def _run_legacy_cycle_locked(self) -> TradingCycleResult:
+        cycle_id = self._cycle_id_factory()
+        market_source = self._market_data
+        symbol = self._symbol
+        assert market_source is not None and symbol is not None
+
+        try:
+            async with asyncio.timeout(self._timeouts.market_seconds):
+                market_state = await market_source.snapshot(symbol)
         except Exception as exc:
             return self._failed(cycle_id, TradingCycleStage.MARKET, exc)
 
@@ -221,17 +416,47 @@ class TradingCycleRunner:
         except Exception as exc:
             return self._failed(cycle_id, TradingCycleStage.INPUT, exc)
 
+        return await self._finish_cycle(
+            cycle_id=cycle_id,
+            agent_input=agent_input,
+            market_state=market_state,
+            portfolio_state=portfolio_state,
+        )
+
+    async def _finish_cycle(
+        self,
+        *,
+        cycle_id: UUID,
+        agent_input: AgentInput,
+        market_state: MarketState,
+        portfolio_state: PortfolioState,
+        market_selection_input: MarketSelectionInput | None = None,
+        market_selection: MarketSelection | None = None,
+    ) -> TradingCycleResult:
         try:
             async with asyncio.timeout(self._timeouts.agent_seconds):
                 decision = await self._agent.generate_decision(agent_input)
             self._validate_decision(agent_input=agent_input, decision=decision)
+            if (
+                market_selection is not None
+                and decision.tool_traces != market_selection.tool_traces
+            ):
+                raise TradingCycleInvariantError(
+                    "final decision must preserve market-selection research traces"
+                )
         except Exception as exc:
             return self._failed(
                 cycle_id,
                 TradingCycleStage.AGENT,
                 exc,
+                market_selection_input=market_selection_input,
+                market_selection=market_selection,
                 agent_input=agent_input,
-                agent_tool_traces=self._agent_tool_traces(),
+                agent_tool_traces=(
+                    market_selection.tool_traces
+                    if market_selection is not None
+                    else self._agent_tool_traces()
+                ),
             )
 
         try:
@@ -246,6 +471,8 @@ class TradingCycleRunner:
                 cycle_id,
                 TradingCycleStage.RISK,
                 exc,
+                market_selection_input=market_selection_input,
+                market_selection=market_selection,
                 agent_input=agent_input,
                 decision=decision,
             )
@@ -256,6 +483,8 @@ class TradingCycleRunner:
             return TradingCycleResult(
                 cycle_id=cycle_id,
                 status=TradingCycleStatus.COMPLETED,
+                market_selection_input=market_selection_input,
+                market_selection=market_selection,
                 agent_input=agent_input,
                 decision=decision,
                 risk_assessment=assessment,
@@ -271,6 +500,8 @@ class TradingCycleRunner:
                 cycle_id,
                 TradingCycleStage.BROKER,
                 exc,
+                market_selection_input=market_selection_input,
+                market_selection=market_selection,
                 agent_input=agent_input,
                 decision=decision,
                 risk_assessment=assessment,
@@ -289,6 +520,8 @@ class TradingCycleRunner:
                 cycle_id,
                 TradingCycleStage.POST_PORTFOLIO,
                 exc,
+                market_selection_input=market_selection_input,
+                market_selection=market_selection,
                 agent_input=agent_input,
                 decision=decision,
                 risk_assessment=assessment,
@@ -299,6 +532,8 @@ class TradingCycleRunner:
         return TradingCycleResult(
             cycle_id=cycle_id,
             status=TradingCycleStatus.COMPLETED,
+            market_selection_input=market_selection_input,
+            market_selection=market_selection,
             agent_input=agent_input,
             decision=decision,
             risk_assessment=assessment,
@@ -307,6 +542,34 @@ class TradingCycleRunner:
             portfolio_state_after=portfolio_after,
             agent_tool_traces=decision.tool_traces,
         )
+
+    def _validate_market_selection(
+        self,
+        *,
+        selection_input: MarketSelectionInput,
+        selection: MarketSelection,
+    ) -> None:
+        if selection.cycle_id != selection_input.cycle_id:
+            raise TradingCycleInvariantError("MarketSelection cycle_id mismatch")
+        if selection.selected_at < selection_input.created_at:
+            raise TradingCycleInvariantError("MarketSelection predates MarketSelectionInput")
+        selected = ExecutableMarket(
+            symbol=selection.symbol,
+            market_type=selection.market_type,
+        )
+        if selected not in selection_input.executable_markets:
+            raise TradingCycleInvariantError("MarketSelection is outside executable universe")
+
+    def _validate_selected_market_state(
+        self,
+        *,
+        selection: MarketSelection,
+        market_state: MarketState,
+    ) -> None:
+        if market_state.symbol != selection.symbol:
+            raise TradingCycleInvariantError("selected MarketState symbol mismatch")
+        if market_state.market_type is not selection.market_type:
+            raise TradingCycleInvariantError("selected MarketState market_type mismatch")
 
     def _validate_decision(
         self,
@@ -318,6 +581,8 @@ class TradingCycleRunner:
             raise TradingCycleInvariantError("DecisionCandidate cycle_id mismatch")
         if decision.symbol != agent_input.market_state.symbol:
             raise TradingCycleInvariantError("DecisionCandidate symbol mismatch")
+        if decision.market_type is not agent_input.market_state.market_type:
+            raise TradingCycleInvariantError("DecisionCandidate market_type mismatch")
         if decision.created_at < agent_input.created_at:
             raise TradingCycleInvariantError("DecisionCandidate predates AgentInput")
 
@@ -353,6 +618,8 @@ class TradingCycleRunner:
             raise TradingCycleInvariantError("ExecutionIntent timestamp must equal assessed_at")
         if intent.action is not decision.action or intent.symbol != decision.symbol:
             raise TradingCycleInvariantError("Risk cannot change action or symbol")
+        if intent.market_type is not decision.market_type:
+            raise TradingCycleInvariantError("Risk cannot change market_type")
         if intent.quantity != assessment.authorized_quantity:
             raise TradingCycleInvariantError("ExecutionIntent quantity must be Risk-authorized")
 
@@ -377,6 +644,8 @@ class TradingCycleRunner:
                 raise TradingCycleInvariantError("Fill reference price mismatch")
             if fill.action is not intent.action or fill.symbol != intent.symbol:
                 raise TradingCycleInvariantError("Fill action or symbol mismatch")
+            if fill.market_type is not intent.market_type:
+                raise TradingCycleInvariantError("Fill market_type mismatch")
             if fill.filled_at < market_state.as_of:
                 raise TradingCycleInvariantError("Fill predates MarketState")
             total_quantity += fill.quantity
@@ -403,6 +672,8 @@ class TradingCycleRunner:
         stage: TradingCycleStage,
         exc: Exception,
         *,
+        market_selection_input: MarketSelectionInput | None = None,
+        market_selection: MarketSelection | None = None,
         agent_input: AgentInput | None = None,
         decision: DecisionCandidate | None = None,
         risk_assessment: RiskAssessment | None = None,
@@ -413,7 +684,11 @@ class TradingCycleRunner:
         traces = (
             agent_tool_traces
             if agent_tool_traces is not None
-            else decision.tool_traces if decision is not None else ()
+            else market_selection.tool_traces
+            if market_selection is not None
+            else decision.tool_traces
+            if decision is not None
+            else ()
         )
         return TradingCycleResult(
             cycle_id=cycle_id,
@@ -423,6 +698,8 @@ class TradingCycleRunner:
                 error_type=type(exc).__name__,
                 timed_out=isinstance(exc, TimeoutError),
             ),
+            market_selection_input=market_selection_input,
+            market_selection=market_selection,
             agent_input=agent_input,
             decision=decision,
             risk_assessment=risk_assessment,

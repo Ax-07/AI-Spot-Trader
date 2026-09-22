@@ -259,14 +259,12 @@ def test_market_symbol_must_be_canonical_before_calling_llm() -> None:
 @pytest.mark.parametrize("which", ["market", "portfolio"])
 def test_future_input_snapshots_are_rejected_before_llm(which: str) -> None:
     future = datetime(2026, 9, 20, 12, 5, tzinfo=UTC)
-    provider, client = _provider(_json_output())
-    agent_input = (
-        _agent_input(market_at=future)
-        if which == "market"
-        else _agent_input(portfolio_at=future)
-    )
-    with pytest.raises(AgentContractViolationError):
-        _generate(provider, agent_input)
+    _, client = _provider(_json_output())
+    with pytest.raises(ValueError, match="cannot be newer than AgentInput.created_at"):
+        if which == "market":
+            _agent_input(market_at=future)
+        else:
+            _agent_input(portfolio_at=future)
     assert client.calls == []
 
 
