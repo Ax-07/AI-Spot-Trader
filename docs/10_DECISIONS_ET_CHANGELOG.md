@@ -9,12 +9,13 @@ Un seul Agent stratégique, PAPER d'abord, Risk autorité finale, aucun LLM dire
 SPOT sans short/levier, Derivatives avec protections déterministes, audit durable, no-look-ahead,
 backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE séparé.
 
-Référence intégrée au début du Batch 18.2 :
-`e158ea71d9f7cdf010d98d41be1968440c640a53`.
+Référence intégrée actuelle :
+`e19255df2ff0f2d432034808abeacca88832d403`
+(`feat: add causal executable market selection`).
 
 ## Statut du Batch 18.1
 
-Les ADR-127 à ADR-135 du Batch 18.1 sont désormais **INTÉGRÉES** sur `main = e158ea7` :
+Les ADR-127 à ADR-135 du Batch 18.1 ont été **INTÉGRÉES** au commit `e158ea7` et restent actives :
 
 - tools factuels read-only uniquement ;
 - recherche cross-symbol sans exécution cross-symbol dans 18.1 ;
@@ -29,17 +30,17 @@ Les ADR-127 à ADR-135 du Batch 18.1 sont désormais **INTÉGRÉES** sur `main =
 La limitation cross-symbol d'ADR-128 est précisément celle que le Batch 18.2 fait évoluer par un
 nouveau pipeline causal, sans réutiliser le mauvais `MarketState`.
 
-## Décisions Batch 18.2 — patch proposé
+## Décisions Batch 18.2 — intégrées
 
 ### ADR-136 — Séparer sélection de marché et décision finale avec le même Agent
 
-**PROPOSÉE.** Un cycle multi-marché possède deux appels stratégiques au même
+**INTÉGRÉE.** Un cycle multi-marché possède deux appels stratégiques au même
 `OpenAIDecisionProvider` : sélection, puis décision finale après acquisition du marché choisi.
 Aucun second Agent n'est introduit.
 
 ### ADR-137 — L'univers exécutable est typé par `symbol + market_type`
 
-**PROPOSÉE.** `risk_allowed_pairs` reste une whitelist Risk de symboles, mais ne peut pas à lui
+**INTÉGRÉE.** `risk_allowed_pairs` reste une whitelist Risk de symboles, mais ne peut pas à lui
 seul représenter SPOT vs PERPETUAL. `ExecutableMarket` et
 `AI_SPOT_TRADER_PAPER_EXECUTABLE_MARKETS` fournissent cette frontière explicite.
 
@@ -47,20 +48,20 @@ Seuls SPOT et PERPETUAL sont autorisés. FUTURE daté reste non exécutable.
 
 ### ADR-138 — La sélection est un artefact durable explicite
 
-**PROPOSÉE.** `MarketSelection` contient identité, timestamp, symbole, type, rationale, traces et
+**INTÉGRÉE.** `MarketSelection` contient identité, timestamp, symbole, type, rationale, traces et
 digest. La sélection ne doit pas être reconstruite à partir d'un texte libre de rationale.
 
 Une panne après sélection conserve cet artefact.
 
 ### ADR-139 — Aucun snapshot de recherche ne devient un snapshot d'exécution
 
-**PROPOSÉE.** Le marché sélectionné est reacquis via `RoutedExecutableMarketDataSource` et les
+**INTÉGRÉE.** Le marché sélectionné est reacquis via `RoutedExecutableMarketDataSource` et les
 sources execution dédiées. Le routeur valide le couple typé et le contrat Derivatives mais ne
 classe ni ne choisit jamais les marchés.
 
 ### ADR-140 — La phase finale ne relance pas les tools dans le chemin 18.2
 
-**PROPOSÉE.** Les recherches de sélection sont attachées à `MarketSelection` puis transmises dans
+**INTÉGRÉE.** Les recherches de sélection sont attachées à `MarketSelection` puis transmises dans
 `AgentInput`. Après acquisition du `MarketState` exécutable, la décision finale est structurée mais
 sans nouvelle recherche. Cela maintient une frontière causale lisible : recherches -> sélection ->
 snapshot exécutable -> décision.
@@ -69,7 +70,7 @@ Le chemin historique 18.1 sans `MarketSelection` garde sa boucle de tools option
 
 ### ADR-141 — Recapturer le portefeuille après acquisition du marché sélectionné
 
-**PROPOSÉE.** La phase de sélection reçoit le portefeuille complet avant recherche. Le runner
+**INTÉGRÉE.** La phase de sélection reçoit le portefeuille complet avant recherche. Le runner
 recapture ensuite le portefeuille après le snapshot d'exécution. C'est nécessaire car un snapshot
 PERPETUAL d'exécution peut marquer une position existante et accumuler du funding.
 
@@ -77,7 +78,7 @@ Les sources research restent sans `market_sink`.
 
 ### ADR-142 — `paper_runs` persiste l'univers au lieu d'inventer `MULTI`
 
-**PROPOSÉE.** La migration `0004_multi_market_selection` ajoute
+**INTÉGRÉE.** La migration `0004_multi_market_selection` ajoute
 `execution_universe_payload JSONB NOT NULL` et rend `market_type`/`symbol` nullables.
 
 Un singleton conserve la projection historique. Un vrai multi-marché met les deux colonnes à
@@ -85,7 +86,7 @@ Un singleton conserve la projection historique. Un vrai multi-marché met les de
 
 ### ADR-143 — Le journal de cycle persiste l'entrée et le résultat de sélection
 
-**PROPOSÉE.** `audit_cycles` reçoit `market_selection_input_payload` et
+**INTÉGRÉE.** `audit_cycles` reçoit `market_selection_input_payload` et
 `market_selection_payload`, tous deux nullable pour compatibilité historique. Le digest global les
 inclut.
 
@@ -93,23 +94,23 @@ Le résumé API expose le marché typé sélectionné même si la décision fina
 
 ### ADR-144 — Analytics multi-marchés utilise seulement des marks SPOT causaux durables
 
-**PROPOSÉE.** `paper-analytics-v3` conserve le dernier prix SPOT déjà rencontré dans le journal
+**INTÉGRÉE.** `paper-analytics-v3` conserve le dernier prix SPOT déjà rencontré dans le journal
 pour chaque actif détenu. Aucun prix actuel externe ou futur n'est recherché lors du replay.
 
 Si un actif n'a pas de mark causal, le calcul échoue explicitement.
 
 ### ADR-145 — Une quote de règlement commune est requise dans Batch 18.2
 
-**PROPOSÉE.** Tous les marchés de `PAPER_EXECUTABLE_MARKETS` doivent avoir la même quote que
+**INTÉGRÉE.** Tous les marchés de `PAPER_EXECUTABLE_MARKETS` doivent avoir la même quote que
 `paper_settlement_asset`. Le batch n'introduit aucune conversion FX implicite ou non auditée.
 
 ### ADR-146 — Conserver un chemin mono-marché compatible pendant la transition
 
-**PROPOSÉE.** `TradingCycleRunner` accepte encore le couple historique `market_data + symbol`, et
+**INTÉGRÉE.** `TradingCycleRunner` accepte encore le couple historique `market_data + symbol`, et
 `OpenAIDecisionProvider.generate_decision()` conserve le comportement 18.1 en l'absence de
 `MarketSelection`. La composition PAPER canonique utilise néanmoins le nouveau chemin.
 
-## Changelog — 2026-09-22 — Batch 18.2 proposé
+## Changelog — 2026-09-22 — Batch 18.2 intégré
 
 Audit de départ :
 
@@ -119,7 +120,7 @@ Audit de départ :
 - modèle `paper_runs.market_type/symbol` confirmé insuffisant pour un run multi-marché honnête ;
 - séparation research/execution du Batch 18.1 confirmée et conservée.
 
-Implémentation proposée :
+Implémentation intégrée :
 
 - contrats de sélection et univers typé ;
 - deux phases du même Agent ;
@@ -129,15 +130,21 @@ Implémentation proposée :
 - analytics multi-actifs causal ;
 - tests de fail-closed et compatibilité.
 
-Validation réellement exécutée par ChatGPT :
+Validation locale confirmée avant intégration :
 
 ```text
-40 tests ciblés Batch 18.2 : passed
-python -m compileall sur code/tests/migration : OK
+pytest backend : 447 passed, 2 warnings
+ruff check backend : All checks passed!
+mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
+Alembic 0003_agent_tool_traces -> 0004_multi_market_selection sur PostgreSQL : OK
+git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 ```
 
-Non exécuté dans cet environnement : suite complète `pytest backend`, Ruff, mypy, tests de
-persistance SQL async, migration Alembic sur PostgreSQL réel et contrôles Git du dépôt utilisateur.
+Les deux warnings de dépendances Starlette/AnyIO sont non bloquants et ne constituent pas un
+échec du batch.
+
+Le smoke PAPER multi-marchés / cross-symbol n'est pas confirmé comme exécuté dans les validations
+fournies.
 
 ## À décider après 18.2
 

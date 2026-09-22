@@ -7,17 +7,17 @@ seul composant autorisé à créer un `ExecutionIntent`.
 
 ## Référence de développement
 
-État intégré de départ du Batch 18.2 :
+État intégré courant :
 
 ```text
 repository : Ax-07/AI-Spot-Trader
 branche    : main
-HEAD       : e158ea71d9f7cdf010d98d41be1968440c640a53
-commit     : feat: add bounded read-only market research tools
+HEAD       : e19255df2ff0f2d432034808abeacca88832d403
+commit     : feat: add causal executable market selection
 ```
 
-Le **Batch 18.1 est intégré** sur ce HEAD. Le Batch 18.2 livré ici est un **patch proposé non
-intégré** tant que sa validation locale, son commit et son push ne sont pas confirmés.
+Les **Batches 18.1 et 18.2 sont intégrés** sur `main`. Le Batch 18.2 apporte la sélection causale
+du marché exécutable par le même Agent stratégique avant acquisition du `MarketState` final.
 
 ## Principes
 
@@ -38,7 +38,7 @@ intégré** tant que sa validation locale, son commit et son push ne sont pas co
 
 Principe : **l'Agent cherche, sélectionne et propose ; Risk autorise, modifie ou refuse.**
 
-## Architecture Batch 18.2
+## Architecture intégrée — Batch 18.2
 
 ```text
 PortfolioState complet
@@ -86,7 +86,7 @@ et réglementairement représentable par le runtime.
 
 ## Univers exécutable typé
 
-Le Batch 18.2 ajoute :
+Le Batch 18.2 intégré ajoute :
 
 ```text
 AI_SPOT_TRADER_PAPER_EXECUTABLE_MARKETS
@@ -170,14 +170,10 @@ lieu d'inventer une valorisation.
 
 ## Migrations PostgreSQL
 
-Après extraction du patch à la racine :
+La migration `0004_multi_market_selection` est intégrée. Elle a été appliquée avec succès sur
+PostgreSQL lors de la validation locale précédant l'intégration.
 
-```powershell
-cd backend
-.\.venv\Scripts\python.exe -m alembic upgrade head
-```
-
-Chaîne attendue :
+Chaîne intégrée :
 
 ```text
 0001_audit_journal
@@ -189,31 +185,22 @@ Chaîne attendue :
 Le downgrade de `0004` refuse de s'exécuter si des runs multi-marchés existent, car les anciennes
 colonnes singleton ne pourraient pas les représenter honnêtement.
 
-## Validation du patch 18.2
+## Validation du Batch 18.2 intégré
 
-Exécuté par ChatGPT dans l'environnement de livraison :
+Validation locale confirmée avant intégration :
 
 ```text
-40 tests ciblés Batch 18.2 : passés
-python -m compileall code/tests/migration : OK
+pytest backend : 447 passed, 2 warnings
+ruff check backend : All checks passed!
+mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
+Alembic 0003_agent_tool_traces -> 0004_multi_market_selection sur PostgreSQL : OK
+git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 ```
 
-La couche SQL async n'a pas pu être exécutée ici : `aiosqlite` n'est pas installé et l'environnement
-n'a pas d'accès réseau pour l'ajouter. Ruff, mypy, la suite complète du repository et Alembic sur
-votre PostgreSQL restent donc à exécuter localement.
+Les deux warnings de dépendances Starlette/AnyIO ne constituent pas un échec du batch.
 
-Commandes minimales :
-
-```powershell
-backend\.venv\Scripts\python.exe -m pytest backend
-backend\.venv\Scripts\ruff.exe check backend
-backend\.venv\Scripts\mypy.exe --config-file backend\pyproject.toml backend\src
-cd backend
-.\.venv\Scripts\python.exe -m alembic upgrade head
-cd ..
-git diff --check
-git status --short
-```
+Le smoke PAPER multi-marchés / cross-symbol n'est **pas confirmé comme exécuté** dans les
+validations fournies. Il reste à exécuter s'il est toujours retenu comme validation comportementale.
 
 ## Sécurité / LIVE
 

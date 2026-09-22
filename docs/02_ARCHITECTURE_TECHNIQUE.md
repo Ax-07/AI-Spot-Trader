@@ -2,9 +2,12 @@
 
 ## 1. Référence
 
-État intégré de départ du Batch 18.2 :
-`main = e158ea71d9f7cdf010d98d41be1968440c640a53`.
-Le Batch 18.1 est intégré. Le contenu 18.2 de ce document décrit un patch proposé.
+État intégré actuel :
+`main = e19255df2ff0f2d432034808abeacca88832d403`
+(`feat: add causal executable market selection`).
+
+Les Batches 18.1 et 18.2 sont intégrés ; l'architecture décrite ci-dessous correspond au chemin
+PAPER multi-marché intégré.
 
 ## 2. Modules concernés
 
@@ -209,7 +212,7 @@ market_selection_payload       JSONB NULL
 Ces colonnes sont nullable pour les cycles historiques. Le `result_digest` inclut les deux.
 
 Le détail API expose les deux objets. Le résumé de cycle dérive `symbol + market_type` de la
-sélection quand aucune décision finale n'existe encore.
+sélection quand aucune décision finale n'existe pas encore.
 
 ## 12. `paper_runs`
 

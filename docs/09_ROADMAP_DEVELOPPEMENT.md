@@ -16,84 +16,60 @@ Un batch est **intégré** uniquement après validation locale, commit et push c
 - Prompt `agent-strategy-v4` : localisation française.
 - Batch 17 : durcissement fail-closed de la frontière Kraken Derivatives publique.
 - Batch 18.1 : tools Agent read-only bornés, boucle Responses function calling, traces causales et migration `0003_agent_tool_traces`.
+- Batch 18.2 : sélection causale du marché exécutable par le même Agent, univers PAPER typé, routeur SPOT/PERPETUAL, persistance/API multi-marchés, migration `0004_multi_market_selection` et analytics causal v3.
 
 Référence intégrée actuelle :
 
 ```text
-main = e158ea71d9f7cdf010d98d41be1968440c640a53
-feat: add bounded read-only market research tools
+main = e19255df2ff0f2d432034808abeacca88832d403
+feat: add causal executable market selection
 ```
 
-Le Batch 18.1 est **intégré** sur cette référence.
+## Batch 18.2 — intégré
 
-## Batch 18.2 — Sélection causale du marché exécutable
-
-**État : patch proposé, non intégré.**
-
-### Objectif
-
-Permettre au même Agent stratégique de choisir réellement un marché `SPOT` ou `PERPETUAL`
-exécutable, puis d'obtenir le `MarketState` canonique exact de ce marché avant sa décision finale.
-
-### Architecture retenue
-
-Deux phases avec **le même Agent** :
+Le même Agent stratégique exécute deux phases causales :
 
 ```text
 MarketSelectionInput
--> research/selection Agent
+-> recherche/sélection par l'Agent
 -> MarketSelection
--> acquisition executable MarketState
+-> acquisition du MarketState exécutable exact
 -> AgentInput final
 -> BUY/SELL/HOLD
 -> Risk
 -> Broker éventuel
 ```
 
-### Périmètre proposé
+Le périmètre intégré conserve les invariants suivants : aucun second Agent, aucun
+scanner/ranking/opportunity score, séparation stricte research/execution, SPOT sans short/levier,
+PERPETUAL linéaire uniquement lorsque supporté, Risk autorité finale et aucune exécution directe
+par le LLM ou un tool.
 
-- `ExecutableMarket` typé ;
-- univers `PAPER_EXECUTABLE_MARKETS` configurable/auditable ;
-- `MarketSelectionInput` + `MarketSelection` avec rationale/traces/digest ;
-- routeur exécution SPOT/PERPETUAL ;
-- refus FUTURE, inverse, hors-univers et mismatch source ;
-- séparation stricte sources research/execution ;
-- recapture du portefeuille après snapshot Derivatives ;
-- migration `0004_multi_market_selection` ;
-- `paper_runs.execution_universe_payload` ;
-- `market_selection_*_payload` sur les cycles ;
-- API audit typée même en échec avant décision ;
-- analytics multi-marchés causal `paper-analytics-v3` ;
-- compatibilité du runner/provider mono-marché historique.
+Validation locale confirmée avant intégration :
 
-### Ce que 18.2 ne fait pas
+```text
+pytest backend : 447 passed, 2 warnings
+ruff check backend : OK
+mypy backend/src : OK, 79 source files
+Alembic 0003_agent_tool_traces -> 0004_multi_market_selection sur PostgreSQL : OK
+git diff --check : aucune erreur, uniquement warnings LF -> CRLF
+```
 
-- pas de scanner/ranking/momentum score ;
-- pas de second Agent ;
-- pas de `FUTURE` daté exécutable ;
-- pas de contrat inverse ;
-- pas de conversion multi-devise/FX ;
-- pas d'order tool ;
-- pas de LIVE/private Kraken ;
-- pas de recovery durable du ledger.
+Les deux warnings Starlette/AnyIO sont non bloquants.
 
-### Critère de sortie
+Le smoke PAPER multi-marchés / cross-symbol demandé auparavant n'est **pas confirmé comme
+exécuté**. Il reste un candidat de validation comportementale, sans remettre en cause le statut
+d'intégration déjà confirmé du Batch 18.2.
 
-Avant intégration :
+## Prochain vrai batch — candidats à auditer
 
-1. suite complète backend verte ;
-2. Ruff + mypy verts ;
-3. migration `0004` appliquée sur PostgreSQL de validation ;
-4. API paper-runs/cycle audit vérifiée ;
-5. smoke PAPER montrant au moins une sélection cross-symbol et, si configuré, un passage SPOT/PERPETUAL ;
-6. `git diff --check` propre.
+Aucune priorité architecturale n'est décidée ici. Candidats :
 
-## Après 18.2 — pistes à décider
-
-- version formelle du protocole Agent/tools/sélection dans `ExperimentManifest` ;
+- smoke PAPER multi-marchés / cross-symbol réel ;
+- protocole expérimental versionné Agent/tools/sélection dans `ExperimentManifest` ;
 - recovery/restart durable du ledger PAPER multi-actifs ;
-- valorisation multi-quote avec FX explicite si besoin mesuré ;
-- snapshots/exécution FUTURE datés seulement si le domaine est réellement implémenté ;
-- enrichissements de recherche mesurés : order book, trades, funding historique, news ;
-- campagnes d'expériences Luna/Sol sur univers multi-marché ;
+- enrichissement mesuré des données de recherche : order book, trades, funding historique, news ;
+- campagnes Luna/Sol sur univers multi-marché ;
+- valorisation multi-quote avec FX explicite seulement si le besoin est mesuré ;
+- FUTURE daté seulement si le domaine correspondant est réellement implémenté ;
 - LIVE toujours dans un batch séparé.
