@@ -10,6 +10,7 @@ from ai_spot_trader.domain.enums import LLMModel
 from ai_spot_trader.domain.experiments import (
     EXPERIMENT_PROTOCOL_VERSION,
     MODEL_EXPERIMENT_PROTOCOL_VERSION,
+    MULTI_MARKET_MODEL_EXPERIMENT_PROTOCOL_VERSION,
     comparison_identity,
     model_comparison_identity,
     validate_experiment_manifest_digest,
@@ -186,9 +187,12 @@ def compare_model_runs(runs: tuple[ExperimentRun, ...]) -> ModelComparison:
         manifest = run.manifest
         report = run.analytics
         validate_experiment_manifest_digest(manifest)
-        if manifest.protocol_version != MODEL_EXPERIMENT_PROTOCOL_VERSION:
+        if manifest.protocol_version not in {
+            MODEL_EXPERIMENT_PROTOCOL_VERSION,
+            MULTI_MARKET_MODEL_EXPERIMENT_PROTOCOL_VERSION,
+        }:
             raise ExperimentComparisonError(
-                "model comparison requires paper-experiment-v2 manifests"
+                "model comparison requires paper-experiment-v2 or paper-experiment-v3 manifests"
             )
         identity = model_comparison_identity(manifest)
         if protocol_identity is None:

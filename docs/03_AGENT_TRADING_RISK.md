@@ -5,7 +5,8 @@
 **L'Agent cherche, sélectionne et propose. Risk autorise, modifie ou refuse.**
 
 Le Batch 18.2 donne à l'Agent la sélection du marché exécutable sans lui donner l'autorité
-d'exécution.
+d'exécution. Le Batch 18.5 ne change pas ce comportement : il le rend explicitement versionné
+pour les futures expériences contrôlées.
 
 ## 2. Agent unique
 
@@ -80,7 +81,7 @@ SELL
 HOLD
 ```
 
-Le chemin 18.2 ne relance pas les tools à cette phase. Les recherches antérieures sont déjà
+Le chemin causal ne relance pas les tools à cette phase. Les recherches antérieures sont déjà
 attachées à `MarketSelection` et le marché d'exécution vient d'être acquis.
 
 La décision doit respecter :
@@ -191,16 +192,52 @@ MarketSelectionInput
 
 Une panne à chaque frontière conserve les artefacts déjà terminés.
 
-## 15. Prompt
+## 15. Prompt et protocole expérimental
 
-L'identifiant reste `agent-strategy-v4` conformément à la décision de ne pas le renommer dans ce
-batch. Son texte décrit désormais les deux phases.
+L'identifiant du prompt reste `agent-strategy-v4`. Le Batch 18.5 n'en modifie ni la stratégie ni
+le texte.
 
-Dette expérimentale conservée : une future campagne comparative doit versionner explicitement la
-politique/capacité de tools et de sélection, car le seul `prompt_version` ne suffit pas à décrire
-tout l'environnement expérimental.
+Pour les futures expériences multi-marchés, `paper-experiment-v3` représente désormais le contexte
+stratégique qui était auparavant implicite :
 
-## 16. Interdits maintenus
+- univers exécutable exact `symbol + market_type` ;
+- identité du protocole de sélection à deux phases ;
+- tools autorisés pendant la sélection et absents pendant la décision finale ;
+- digest des définitions OpenAI réellement exposées ;
+- budget maximal de calls ;
+- timeout par tool ;
+- taille maximale du résultat ;
+- limite maximale de `list_markets`.
+
+Le provider valide cette identité contre sa configuration active **avant l'appel LLM**. Le runner
+valide l'univers typé du manifeste contre son univers exécutable avant le premier cycle Agent.
+Une divergence échoue fermé au lieu de produire une expérience faussement comparable.
+
+`paper-experiment-v1` et `paper-experiment-v2` restent des identités historiques séparées. Elles ne
+sont pas réinterprétées comme si elles contenaient ces nouvelles informations.
+
+## 16. Identité des tools
+
+Le Batch 18.5 ne repose pas sur un simple numéro manuel pour identifier la capacité tools.
+`ReadOnlyToolRegistry` calcule un digest canonique à partir de `openai_tools`, c'est-à-dire les
+définitions de fonctions effectivement présentées au modèle, dans un ordre déterministe.
+
+Les limites runtime sont enregistrées en plus du digest, car elles peuvent modifier la quantité de
+recherche réellement accessible à l'Agent sans nécessairement modifier la forme des fonctions.
+La limite `list_markets` est lue depuis le schéma effectif du tool plutôt que recopiée depuis une
+constante indépendante.
+
+## 17. Comparaisons Luna/Sol
+
+Le `experiment_group_digest` v3 inclut tous les facteurs contrôlés ci-dessus. Il exclut seulement :
+
+- `llm_model`, variable comparée ;
+- `replicate_index`, répétition de la même condition expérimentale.
+
+Une différence d'univers typé, de politique de sélection, de définition de tools ou de borne
+empêche donc deux runs d'appartenir au même groupe contrôlé.
+
+## 18. Interdits maintenus
 
 - aucun LIVE ;
 - aucune clé Kraken privée ;

@@ -6,10 +6,16 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub intégré : `4042e0b0e6394de788009229e3dae5924cd732d7`
-- Commit : `fix: support nested Kraken derivative margin schedules`
-- Batch 18.3 : **intégré** sur ce HEAD après validation comportementale PAPER.
+- HEAD GitHub réel audité au démarrage du Batch 18.5 : `5cc2e2897d9a1dccba325f8a543b208360c6120d`
+- Commit HEAD : `docs: record batch 18.3 behavioral validation`
+- Dernier commit contenant du code validé avant le Batch 18.5 : `4042e0b0e6394de788009229e3dae5924cd732d7`
+- Commit code : `fix: support nested Kraken derivative margin schedules`
+- Batch 18.3 : **intégré** ; Batch 18.5 : **patch proposé, non intégré tant qu'il n'est pas validé/commité/poussé**.
 - Prompt stratégique : `agent-strategy-v4`.
+
+La référence `4042e0b...` reste utile comme dernier HEAD **code** validé de 18.3, mais ne doit plus
+être présentée comme le HEAD GitHub courant puisque le commit documentaire `5cc2e289...` lui est
+postérieur.
 
 ## État intégré
 
@@ -26,7 +32,26 @@ Le chemin intégré supporte :
 - parser Kraken Derivatives public compatible avec les `marginSchedules` directs ou imbriqués,
   toujours fail-closed et conservateur sur les marges publiques.
 
-## Validation Batch 18.3
+## Patch Batch 18.5 — protocole expérimental v3
+
+Le patch introduit `paper-experiment-v3` pour les futures expériences multi-marchés. Cette identité
+versionne le comportement déjà existant sans modifier la stratégie :
+
+- univers exécutable exact `ExecutableMarket(symbol, market_type)` ;
+- version du protocole de sélection causale en deux phases ;
+- tools présents pendant la sélection et absents de la décision finale ;
+- digest canonique des définitions OpenAI effectivement exposées par `ReadOnlyToolRegistry` ;
+- bornes effectives : nombre maximal de calls, timeout, taille maximale des résultats et maximum
+  de `list_markets.limit` ;
+- inclusion de ces facteurs dans le `experiment_group_digest`, en continuant d'exclure uniquement
+  `llm_model` et `replicate_index` pour la comparaison Luna/Sol.
+
+`paper-experiment-v1` et `paper-experiment-v2` restent lisibles et leurs payloads/digests
+historiques ne sont pas réinterprétés. `experiment_manifest=None` reste le chemin PAPER normal.
+Aucune migration PostgreSQL n'est requise : les manifestes restent persistés dans les payloads JSON
+existants.
+
+## Validation intégrée Batch 18.3
 
 ```text
 pytest backend : 449 passed, 2 warnings
@@ -61,6 +86,7 @@ Principe : **l'Agent cherche, sélectionne et propose ; le Risk Engine autorise,
 
 ## Suite à auditer
 
-Candidats sans priorité décidée : protocole expérimental versionné Agent/tools/sélection,
-recovery durable du ledger PAPER multi-actifs, enrichissement mesuré des données de recherche,
-campagnes Luna/Sol multi-marchés et robustesse réseau/observabilité des erreurs transitoires.
+Après intégration éventuelle de 18.5 : recovery durable du ledger PAPER multi-actifs, robustesse
+réseau/observabilité bornée des erreurs transitoires, enrichissement mesuré des données de
+recherche puis campagnes Luna/Sol multi-marchés sous protocole v3. Aucun de ces sujets n'est
+implémenté par le Batch 18.5.

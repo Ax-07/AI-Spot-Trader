@@ -415,6 +415,10 @@ class ExperimentManifest(DomainModel):
     experiment_group_digest: Sha256Digest | None = None
     replicate_index: PositiveInt | None = None
     replicate_count: PositiveInt | None = None
+    agent_protocol: "ExperimentAgentProtocolSnapshot | None" = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
     @model_validator(mode="after")
     def validate_manifest_shape(self) -> "ExperimentManifest":
@@ -448,6 +452,14 @@ class ExperimentManifest(DomainModel):
             assert self.replicate_count is not None
             if self.replicate_index > self.replicate_count:
                 raise ValueError("replicate_index cannot exceed replicate_count")
+        if self.agent_protocol is not None:
+            protocol_symbols = tuple(
+                sorted({market.symbol for market in self.agent_protocol.executable_markets})
+            )
+            if protocol_symbols != self.universe:
+                raise ValueError(
+                    "experiment universe must equal the typed executable-market symbol projection"
+                )
         return self
 
 
@@ -464,6 +476,68 @@ class ExecutableMarket(DomainModel):
         parse_canonical_symbol(self.symbol)
         if self.market_type is MarketType.FUTURE:
             raise ValueError("dated FUTURE markets are not executable")
+        return self
+
+
+class ExperimentAgentPhaseSnapshot(DomainModel):
+    """Canonical record of whether one strategic phase exposes read-only tools."""
+
+    tools_enabled: bool
+    max_tool_calls: NonNegativeInt
+
+    @model_validator(mode="after")
+    def validate_tool_budget(self) -> "ExperimentAgentPhaseSnapshot":
+        if self.tools_enabled and self.max_tool_calls == 0:
+            raise ValueError("an enabled Agent tool phase requires a positive call budget")
+        if not self.tools_enabled and self.max_tool_calls != 0:
+            raise ValueError("a disabled Agent tool phase must use max_tool_calls=0")
+        return self
+
+
+class ExperimentAgentProtocolSnapshot(DomainModel):
+    """Controlled strategic environment for causal multi-market model experiments."""
+
+    executable_markets: tuple[ExecutableMarket, ...]
+    market_selection_protocol_version: NonEmptyText
+    selection_phase: ExperimentAgentPhaseSnapshot
+    final_decision_phase: ExperimentAgentPhaseSnapshot
+    tool_definitions_digest: Sha256Digest | None = None
+    tool_timeout_seconds: PositiveDecimal | None = None
+    tool_max_result_bytes: PositiveInt | None = None
+    list_markets_max_limit: PositiveInt | None = None
+
+    @model_validator(mode="after")
+    def validate_agent_protocol(self) -> "ExperimentAgentProtocolSnapshot":
+        if not self.executable_markets:
+            raise ValueError("multi-market Agent protocol requires an executable universe")
+        ordered = tuple(
+            sorted(
+                self.executable_markets,
+                key=lambda market: (market.market_type.value, market.symbol),
+            )
+        )
+        if ordered != self.executable_markets:
+            raise ValueError(
+                "Agent protocol executable_markets must use deterministic sorted order"
+            )
+        if len(set(self.executable_markets)) != len(self.executable_markets):
+            raise ValueError("Agent protocol executable_markets must be unique")
+
+        tools_exposed = (
+            self.selection_phase.tools_enabled or self.final_decision_phase.tools_enabled
+        )
+        tool_identity = (
+            self.tool_definitions_digest,
+            self.tool_timeout_seconds,
+            self.tool_max_result_bytes,
+            self.list_markets_max_limit,
+        )
+        if tools_exposed and any(value is None for value in tool_identity):
+            raise ValueError("enabled Agent tools require definitions and all effective bounds")
+        if not tools_exposed and any(value is not None for value in tool_identity):
+            raise ValueError(
+                "disabled Agent tools cannot carry an inactive tool capability identity"
+            )
         return self
 
 
@@ -532,7 +606,12 @@ class MarketSelectionInput(DomainModel):
                 raise ValueError("experiment_manifest requires aggressiveness_context")
             if manifest.aggressiveness != self.aggressiveness_context:
                 raise ValueError("experiment_manifest aggressiveness context mismatch")
-            if any(market.symbol not in manifest.universe for market in self.executable_markets):
+            if manifest.agent_protocol is not None:
+                if manifest.agent_protocol.executable_markets != self.executable_markets:
+                    raise ValueError(
+                        "executable market universe does not match the experiment Agent protocol"
+                    )
+            elif any(market.symbol not in manifest.universe for market in self.executable_markets):
                 raise ValueError("executable market is outside the experiment universe")
         return self
 
@@ -635,7 +714,18 @@ class AgentInput(DomainModel):
             raise ValueError("experiment_manifest requires aggressiveness_context")
         if manifest.aggressiveness != self.aggressiveness_context:
             raise ValueError("experiment_manifest aggressiveness context mismatch")
-        if self.market_state.symbol not in manifest.universe:
+        if manifest.agent_protocol is not None:
+            if selection is None:
+                raise ValueError("multi-market experiment manifests require MarketSelection")
+            selected_market = ExecutableMarket(
+                symbol=selection.symbol,
+                market_type=selection.market_type,
+            )
+            if selected_market not in manifest.agent_protocol.executable_markets:
+                raise ValueError(
+                    "AgentInput selected market is outside the typed experiment universe"
+                )
+        elif self.market_state.symbol not in manifest.universe:
             raise ValueError("AgentInput symbol is outside the experiment universe")
         return self
 
@@ -791,3 +881,6 @@ class Fill(DomainModel):
             if self.funding_payment != 0 or self.contract_size != 1:
                 raise ValueError("SPOT fills require contract_size=1 and no funding")
         return self
+
+
+ExperimentManifest.model_rebuild()

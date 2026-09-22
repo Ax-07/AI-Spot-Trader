@@ -147,7 +147,7 @@ class TradingCycleResult:
                 raise ValueError("FAILED cycle results require failure metadata")
             return
         if self.failure is not None:
-            raise ValueError("COMPLETED cycle results cannot carry failure metadata")
+            raise ValueError("COMPLETED cycles cannot carry failure metadata")
         if self.agent_input is None or self.decision is None or self.risk_assessment is None:
             raise ValueError("COMPLETED cycles require AgentInput, decision and RiskAssessment")
         if self.execution_intent is None:
@@ -221,13 +221,23 @@ class TradingCycleRunner:
                 raise ValueError(
                     "experiment manifest aggressiveness must match the runner configuration"
                 )
-            required_symbols = (
-                {symbol}
-                if symbol is not None
-                else {item.symbol for item in executable_markets or ()}
-            )
-            if not required_symbols.issubset(set(experiment_manifest.universe)):
-                raise ValueError("runner markets must belong to the experiment universe")
+            if experiment_manifest.agent_protocol is not None:
+                if legacy_mode:
+                    raise ValueError(
+                        "multi-market experiment manifests require executable market selection mode"
+                    )
+                if experiment_manifest.agent_protocol.executable_markets != executable_markets:
+                    raise ValueError(
+                        "runner executable markets must match the typed experiment universe"
+                    )
+            else:
+                required_symbols = (
+                    {symbol}
+                    if symbol is not None
+                    else {item.symbol for item in executable_markets or ()}
+                )
+                if not required_symbols.issubset(set(experiment_manifest.universe)):
+                    raise ValueError("runner markets must belong to the experiment universe")
 
         self._market_data = market_data
         self._symbol = symbol

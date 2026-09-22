@@ -15,6 +15,8 @@ from ai_spot_trader.agent.prompt import AGENT_PROMPT_VERSION, AGENT_SYSTEM_PROMP
 from ai_spot_trader.core.clock import Clock, SystemClock
 from ai_spot_trader.domain.enums import LLMModel, MarketType, TradingAction
 from ai_spot_trader.domain.experiments import (
+    MARKET_SELECTION_PROTOCOL_VERSION,
+    MULTI_MARKET_MODEL_EXPERIMENT_PROTOCOL_VERSION,
     aggressiveness_context,
     validate_experiment_manifest_digest,
 )
@@ -24,6 +26,7 @@ from ai_spot_trader.domain.models import (
     AggressivenessContext,
     DecisionCandidate,
     ExecutableMarket,
+    ExperimentAgentProtocolSnapshot,
     ExperimentManifest,
     MarketSelection,
     MarketSelectionInput,
@@ -156,7 +159,12 @@ class OpenAIDecisionProvider:
     async def select_market(self, selection_input: MarketSelectionInput) -> MarketSelection:
         """Let the same strategic Agent research and choose one typed executable market."""
 
-        normalized_input = _normalize_selection_input(selection_input, model=self._model)
+        normalized_input = _normalize_selection_input(
+            selection_input,
+            model=self._model,
+            tool_registry=self._tool_registry,
+            max_tool_calls=self._max_tool_calls,
+        )
         traces: tuple[AgentToolTrace, ...] = ()
         self._last_tool_traces = ()
         if self._tool_registry is not None and self._max_tool_calls > 0:
@@ -232,7 +240,12 @@ class OpenAIDecisionProvider:
     async def generate_decision(self, agent_input: AgentInput) -> DecisionCandidate:
         """Generate the final BUY/SELL/HOLD decision on the exact executable MarketState."""
 
-        normalized_input = _normalize_agent_input(agent_input, model=self._model)
+        normalized_input = _normalize_agent_input(
+            agent_input,
+            model=self._model,
+            tool_registry=self._tool_registry,
+            max_tool_calls=self._max_tool_calls,
+        )
         selection = normalized_input.market_selection
         traces: tuple[AgentToolTrace, ...] = () if selection is None else selection.tool_traces
         self._last_tool_traces = traces
@@ -307,6 +320,8 @@ def _normalize_selection_input(
     selection_input: MarketSelectionInput,
     *,
     model: LLMModel,
+    tool_registry: ReadOnlyToolRegistry | None,
+    max_tool_calls: int,
 ) -> MarketSelectionInput:
     if selection_input.portfolio_state.as_of > selection_input.created_at:
         raise AgentContractViolationError(
@@ -338,6 +353,10 @@ def _normalize_selection_input(
         selection_input.experiment_manifest,
         model=model,
         canonical_context=canonical_context,
+        tool_registry=tool_registry,
+        max_tool_calls=max_tool_calls,
+        selection_markets=selection_input.executable_markets,
+        has_market_selection=False,
     )
     if selection_input.aggressiveness_context is None:
         return selection_input.model_copy(
@@ -346,7 +365,13 @@ def _normalize_selection_input(
     return selection_input
 
 
-def _normalize_agent_input(agent_input: AgentInput, *, model: LLMModel) -> AgentInput:
+def _normalize_agent_input(
+    agent_input: AgentInput,
+    *,
+    model: LLMModel,
+    tool_registry: ReadOnlyToolRegistry | None,
+    max_tool_calls: int,
+) -> AgentInput:
     try:
         parse_canonical_symbol(agent_input.market_state.symbol)
     except ValueError as exc:
@@ -387,6 +412,10 @@ def _normalize_agent_input(agent_input: AgentInput, *, model: LLMModel) -> Agent
         agent_input.experiment_manifest,
         model=model,
         canonical_context=canonical_context,
+        tool_registry=tool_registry,
+        max_tool_calls=max_tool_calls,
+        selection_markets=None,
+        has_market_selection=selection is not None,
     )
     if agent_input.aggressiveness_context is None:
         return agent_input.model_copy(update={"aggressiveness_context": canonical_context})
@@ -398,6 +427,10 @@ def _validate_manifest(
     *,
     model: LLMModel,
     canonical_context: AggressivenessContext,
+    tool_registry: ReadOnlyToolRegistry | None,
+    max_tool_calls: int,
+    selection_markets: tuple[ExecutableMarket, ...] | None,
+    has_market_selection: bool,
 ) -> None:
     if manifest is None:
         return
@@ -416,6 +449,72 @@ def _validate_manifest(
     if manifest.aggressiveness != canonical_context:
         raise AgentContractViolationError(
             "experiment manifest aggressiveness does not match the canonical mapping"
+        )
+    if manifest.protocol_version != MULTI_MARKET_MODEL_EXPERIMENT_PROTOCOL_VERSION:
+        return
+
+    protocol = manifest.agent_protocol
+    assert protocol is not None
+    if protocol.market_selection_protocol_version != MARKET_SELECTION_PROTOCOL_VERSION:
+        raise AgentContractViolationError(
+            "experiment manifest market-selection protocol does not match the active provider"
+        )
+    if selection_markets is not None and protocol.executable_markets != selection_markets:
+        raise AgentContractViolationError(
+            "experiment manifest executable markets do not match the active selection input"
+        )
+    if selection_markets is None and not has_market_selection:
+        raise AgentContractViolationError(
+            "paper-experiment-v3 requires the causal market-selection path"
+        )
+    _validate_v3_tool_environment(
+        protocol,
+        tool_registry=tool_registry,
+        max_tool_calls=max_tool_calls,
+    )
+
+
+def _validate_v3_tool_environment(
+    protocol: ExperimentAgentProtocolSnapshot,
+    *,
+    tool_registry: ReadOnlyToolRegistry | None,
+    max_tool_calls: int,
+) -> None:
+    selection_tools_enabled = tool_registry is not None and max_tool_calls > 0
+    if protocol.selection_phase.tools_enabled is not selection_tools_enabled:
+        raise AgentContractViolationError(
+            "experiment manifest selection-tool presence does not match the active provider"
+        )
+    expected_calls = max_tool_calls if selection_tools_enabled else 0
+    if protocol.selection_phase.max_tool_calls != expected_calls:
+        raise AgentContractViolationError(
+            "experiment manifest selection tool-call budget does not match the active provider"
+        )
+    if protocol.final_decision_phase.tools_enabled or protocol.final_decision_phase.max_tool_calls:
+        raise AgentContractViolationError(
+            "paper-experiment-v3 requires tools only during market selection"
+        )
+    if not selection_tools_enabled:
+        return
+
+    assert tool_registry is not None
+    if protocol.tool_definitions_digest != tool_registry.openai_tools_digest:
+        raise AgentContractViolationError(
+            "experiment manifest tool definitions do not match the active provider"
+        )
+    active_timeout = Decimal(str(tool_registry.timeout_seconds)).normalize()
+    if protocol.tool_timeout_seconds != active_timeout:
+        raise AgentContractViolationError(
+            "experiment manifest tool timeout does not match the active provider"
+        )
+    if protocol.tool_max_result_bytes != tool_registry.max_result_bytes:
+        raise AgentContractViolationError(
+            "experiment manifest tool result bound does not match the active provider"
+        )
+    list_limit = tool_registry.integer_parameter_maximum("list_markets", "limit")
+    if protocol.list_markets_max_limit != list_limit:
+        raise AgentContractViolationError(
+            "experiment manifest list_markets bound does not match the active provider"
         )
 
 

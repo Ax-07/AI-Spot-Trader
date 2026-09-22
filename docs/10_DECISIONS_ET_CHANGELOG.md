@@ -9,9 +9,15 @@ Un seul Agent stratégique, PAPER d'abord, Risk autorité finale, aucun LLM dire
 SPOT sans short/levier, Derivatives avec protections déterministes, audit durable, no-look-ahead,
 backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE séparé.
 
-Référence intégrée actuelle :
-`4042e0b0e6394de788009229e3dae5924cd732d7`
-(`fix: support nested Kraken derivative margin schedules`).
+Référence GitHub auditée au démarrage du Batch 18.5 :
+
+```text
+HEAD réel main = 5cc2e2897d9a1dccba325f8a543b208360c6120d
+docs: record batch 18.3 behavioral validation
+
+dernier commit code validé = 4042e0b0e6394de788009229e3dae5924cd732d7
+fix: support nested Kraken derivative margin schedules
+```
 
 ## Statut du Batch 18.1
 
@@ -123,6 +129,56 @@ La politique de marge n'est pas rendue plus agressive : l'API publique ne permet
 prouver le tier privé applicable, le runtime conserve les `initialMargin` et `maintenanceMargin`
 publics les plus stricts observés. Aucun tier de compte n'est deviné.
 
+## Décisions Batch 18.5 — patch proposé
+
+### ADR-148 — Créer `paper-experiment-v3` sans réinterpréter v1/v2
+
+**PROPOSÉE.** Les nouvelles expériences Luna/Sol multi-marchés utilisent
+`paper-experiment-v3`. `paper-experiment-v1` et `paper-experiment-v2` restent lisibles, validables
+et calculés avec leurs champs historiques. Aucun ancien manifeste n'est promu implicitement vers
+v3. Le champ `agent_protocol` est omis de la sérialisation lorsqu'il est absent.
+
+### ADR-149 — Versionner l'univers exécutable par `symbol + market_type`
+
+**PROPOSÉE.** La v3 persiste le tuple canonique de `ExecutableMarket`. La projection symbolique
+historique `universe` reste présente pour compatibilité et doit correspondre exactement aux
+symboles du tuple typé. Une différence SPOT/PERPETUAL change l'identité du run et du groupe.
+
+### ADR-150 — Versionner le chemin de sélection à deux phases
+
+**PROPOSÉE.** La politique active porte l'identité `agent-market-selection-v1` : tools éventuels
+pendant `select_market`, acquisition du `MarketState`, puis décision finale sans nouveaux tools.
+Le provider vérifie cette identité avant l'appel LLM.
+
+### ADR-151 — Dériver l'identité tools des définitions réellement exposées
+
+**PROPOSÉE.** `ReadOnlyToolRegistry.openai_tools_digest` est calculé sur le JSON canonique des
+définitions OpenAI effectives triées. Les limites runtime sont enregistrées séparément : max calls,
+timeout, taille résultat et maximum de `list_markets.limit` lu depuis le schéma effectif. Aucun
+simple numéro manuel n'est la seule source d'identité de la capacité tools.
+
+### ADR-152 — Étendre `experiment_group_digest` aux nouveaux facteurs contrôlés
+
+**PROPOSÉE.** En v3, le group digest exclut uniquement `llm_model` et `replicate_index`. Univers
+typé, protocole de sélection, prompt, Risk, coûts, analytics, source, tools et bornes sont contrôlés.
+Une dérive sur l'un d'eux interdit l'appartenance au même groupe Luna/Sol.
+
+### ADR-153 — Refuser une incohérence v3 avant l'appel LLM
+
+**PROPOSÉE.** Le runner vérifie l'univers typé avant le cycle. Le provider vérifie modèle, prompt,
+protocole de sélection, présence/budget tools, digest des définitions et bornes avant l'appel LLM.
+La décision finale v3 exige une `MarketSelection`.
+
+### ADR-154 — Ne pas créer de migration PostgreSQL pour 18.5
+
+**PROPOSÉE.** Le manifeste reste dans les payloads JSON déjà persistés ; aucune colonne nouvelle
+n'est nécessaire.
+
+### ADR-155 — Garder le PAPER normal hors campagne expérimentale
+
+**PROPOSÉE.** `experiment_manifest=None` reste valide. La v3 est opt-in pour les campagnes qui ont
+besoin d'une identité contrôlée complète.
+
 ## Changelog — 2026-09-22 — Batch 18.2 intégré
 
 Audit de départ :
@@ -193,12 +249,22 @@ Observations non transformées en garanties :
 - un timeout SPOT au stage `MARKET` a été observé une fois puis non reproduit sur plusieurs cycles ;
 - un `LLMTransportError` au stage `MARKET_SELECTION` a été observé isolément.
 
-## À décider après 18.3
+## Changelog — 2026-09-23 — Batch 18.5 proposé
 
-- intégrer la politique de sélection/tools dans le protocole expérimental versionné ;
+Audit confirmé : v2 versionnait modèle, prompt, univers symbolique, Risk, coûts, analytics et
+source, mais pas l'univers typé ni l'environnement réel de sélection/tools. Le provider vérifiait
+modèle/prompt/agressivité sans contrôler ces nouveaux facteurs actifs.
+
+Le patch ajoute v3, l'identité tools dérivée des définitions effectives, les bornes runtime, les
+contrôles provider/runner et les tests de compatibilité historique, sans modifier le prompt
+stratégique, Risk, Broker ni le schéma PostgreSQL.
+
+## À décider après 18.5
+
 - recovery durable du ledger multi-actifs ;
-- renforcer si nécessaire l'observabilité bornée et la robustesse face aux erreurs réseau/LLM
-  transitoires, après mesure ;
+- robustesse/observabilité des erreurs réseau/LLM après mesure ;
+- enrichissement research mesuré ;
+- campagnes Luna/Sol multi-marchés sous protocole v3 ;
 - éventuel multi-quote avec conversion explicite ;
-- FUTURE daté et contrats supplémentaires seulement après implémentation réelle ;
+- FUTURE daté seulement après implémentation réelle ;
 - LIVE dans un batch séparé.

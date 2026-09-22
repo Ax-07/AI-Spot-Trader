@@ -6,10 +6,13 @@ AI Spot Trader est une application expérimentale de trading crypto PAPER pilot�
 Agent IA stratégique**. Le backend est l'application de trading ; le frontend est un cockpit de
 contrôle et de visualisation.
 
-Référence intégrée actuelle : GitHub `main` au commit
+Référence auditée au démarrage du Batch 18.5 : GitHub `main` a pour HEAD réel
+`5cc2e2897d9a1dccba325f8a543b208360c6120d`
+(`docs: record batch 18.3 behavioral validation`). Le dernier commit contenant du code validé est
 `4042e0b0e6394de788009229e3dae5924cd732d7`
-(`fix: support nested Kraken derivative margin schedules`). Les Batches 18.1, 18.2 et 18.3 y sont
-intégrés.
+(`fix: support nested Kraken derivative margin schedules`). Les Batches 18.1, 18.2 et 18.3 sont
+intégrés. Le Batch 18.5 décrit ci-dessous reste un patch proposé tant qu'il n'est pas validé,
+commité et poussé.
 
 ## 2. Invariants fonctionnels
 
@@ -261,7 +264,39 @@ chaque `BASE/settlement_asset`.
 Un mark absent provoque une erreur de données explicite. Aucune requête marché actuelle n'est
 faite pendant le replay et aucun look-ahead n'est possible.
 
-## 15. Compatibilité
+## 15. Protocole expérimental multi-marché — Batch 18.5
+
+Les protocoles historiques restent séparés :
+
+```text
+paper-experiment-v1  agressivité contrôlée historique
+paper-experiment-v2  comparaison Luna/Sol historique
+paper-experiment-v3  comparaison Luna/Sol multi-marché avec environnement Agent versionné
+```
+
+`paper-experiment-v3` ajoute à l'identité contrôlée :
+
+- tuple exact et ordonné `ExecutableMarket(symbol, market_type)` ;
+- `market_selection_protocol_version` ;
+- état tools de la phase sélection et de la phase finale ;
+- digest SHA-256 des définitions `ReadOnlyToolRegistry.openai_tools` effectivement exposées ;
+- `max_tool_calls` ;
+- timeout tools ;
+- taille maximale des résultats ;
+- maximum du paramètre `limit` de `list_markets` lu depuis le schéma effectif.
+
+Le chemin canonique représenté par v3 fixe : tools possibles en sélection, aucun tool en décision
+finale. Le `experiment_group_digest` inclut tous ces facteurs et exclut uniquement `llm_model` et
+`replicate_index`.
+
+Le provider refuse avant appel LLM un manifeste v3 dont modèle, prompt, protocole de sélection,
+capacité/bornes tools ou phase active ne correspondent pas au runtime. Le runner refuse avant le
+premier appel Agent un univers typé différent du manifeste.
+
+`experiment_manifest=None` reste valide pour un run PAPER ordinaire. Aucune migration SQL n'est
+requise : l'identité v3 reste imbriquée dans le JSON déjà persisté de l'`AgentInput`.
+
+## 16. Compatibilité
 
 Le runner conserve le mode historique `market_data + symbol` pour les tests/consommateurs
 existants. Le provider conserve aussi le chemin historique sans `MarketSelection`, y compris sa
@@ -269,14 +304,20 @@ boucle de tools optionnelle.
 
 La composition PAPER canonique utilise le chemin multi-marché.
 
-## 16. Validation comportementale connue
+Les payloads v1/v2 restent lisibles sans champ v3 ajouté lors de leur sérialisation normale, et
+leurs digests historiques restent calculés sur leurs champs historiques uniquement.
+
+## 17. Validation comportementale connue
 
 Le Batch 18.3 a confirmé le cross-symbol SPOT, le chargement/research d'un univers mixte
 SPOT/PERPETUAL et la branche PERPETUAL réelle en singleton jusqu'à la décision et Risk. Il n'a pas
 observé de sélection PERPETUAL spontanée depuis l'univers mixte ni de fill réel ; ces absences ne
 sont pas transformées en validation.
 
-## 17. LIVE
+Le Batch 18.5 versionne ce comportement existant ; il ne constitue pas une nouvelle campagne
+Luna/Sol et ne change aucune règle de sélection, Risk ou Broker.
+
+## 18. LIVE
 
 LIVE reste hors périmètre. Il nécessitera un batch séparé avec adaptateur privé, permissions
 minimales sans retrait, idempotence, réconciliation, recovery et activation explicite.

@@ -9,12 +9,19 @@ from ai_spot_trader.domain.models import AggressivenessContext, ExperimentManife
 AGGRESSIVENESS_MAPPING_VERSION = "aggressiveness-map-v1"
 EXPERIMENT_PROTOCOL_VERSION = "paper-experiment-v1"
 MODEL_EXPERIMENT_PROTOCOL_VERSION = "paper-experiment-v2"
+MULTI_MARKET_MODEL_EXPERIMENT_PROTOCOL_VERSION = "paper-experiment-v3"
+MARKET_SELECTION_PROTOCOL_VERSION = "agent-market-selection-v1"
 
 _MODEL_EXPERIMENT_FIELDS = {
     "comparison_variable",
     "experiment_group_digest",
     "replicate_index",
     "replicate_count",
+}
+_MULTI_MARKET_EXPERIMENT_FIELDS = {"agent_protocol"}
+_MODEL_COMPARISON_PROTOCOLS = {
+    MODEL_EXPERIMENT_PROTOCOL_VERSION,
+    MULTI_MARKET_MODEL_EXPERIMENT_PROTOCOL_VERSION,
 }
 
 _AGGRESSIVENESS_PROFILES: tuple[tuple[str, str], ...] = (
@@ -94,6 +101,7 @@ def validate_experiment_manifest_digest(manifest: ExperimentManifest) -> None:
     if manifest.protocol_version not in {
         EXPERIMENT_PROTOCOL_VERSION,
         MODEL_EXPERIMENT_PROTOCOL_VERSION,
+        MULTI_MARKET_MODEL_EXPERIMENT_PROTOCOL_VERSION,
     }:
         raise ValueError("unsupported experiment protocol version")
 
@@ -104,7 +112,18 @@ def validate_experiment_manifest_digest(manifest: ExperimentManifest) -> None:
     if manifest.protocol_version == EXPERIMENT_PROTOCOL_VERSION:
         if any(getattr(manifest, field) is not None for field in _MODEL_EXPERIMENT_FIELDS):
             raise ValueError("paper-experiment-v1 cannot carry model-comparison metadata")
+        if manifest.agent_protocol is not None:
+            raise ValueError("paper-experiment-v1 cannot carry multi-market Agent metadata")
+    elif manifest.protocol_version == MODEL_EXPERIMENT_PROTOCOL_VERSION:
+        if manifest.agent_protocol is not None:
+            raise ValueError("paper-experiment-v2 cannot carry multi-market Agent metadata")
+        _validate_model_experiment_metadata(manifest)
+        expected_group = canonical_experiment_digest(_model_comparison_payload(manifest))
+        if expected_group != manifest.experiment_group_digest:
+            raise ValueError("experiment group digest does not match controlled fields")
     else:
+        if manifest.agent_protocol is None:
+            raise ValueError("paper-experiment-v3 requires multi-market Agent metadata")
         _validate_model_experiment_metadata(manifest)
         expected_group = canonical_experiment_digest(_model_comparison_payload(manifest))
         if expected_group != manifest.experiment_group_digest:
@@ -122,7 +141,12 @@ def comparison_identity(manifest: ExperimentManifest) -> str:
     if manifest.protocol_version != EXPERIMENT_PROTOCOL_VERSION:
         raise ValueError("aggressiveness comparison requires paper-experiment-v1")
     payload = manifest.model_dump(
-        exclude={"experiment_digest", "aggressiveness", *_MODEL_EXPERIMENT_FIELDS}
+        exclude={
+            "experiment_digest",
+            "aggressiveness",
+            *_MODEL_EXPERIMENT_FIELDS,
+            *_MULTI_MARKET_EXPERIMENT_FIELDS,
+        }
     )
     payload["aggressiveness_mapping_version"] = manifest.aggressiveness.mapping_version
     return canonical_experiment_digest(payload)
@@ -132,8 +156,8 @@ def model_comparison_identity(manifest: ExperimentManifest) -> str:
     """Return the verified group identity for a controlled Luna/Sol experiment."""
 
     validate_experiment_manifest_digest(manifest)
-    if manifest.protocol_version != MODEL_EXPERIMENT_PROTOCOL_VERSION:
-        raise ValueError("model comparison requires paper-experiment-v2")
+    if manifest.protocol_version not in _MODEL_COMPARISON_PROTOCOLS:
+        raise ValueError("model comparison requires paper-experiment-v2 or paper-experiment-v3")
     assert manifest.experiment_group_digest is not None
     return manifest.experiment_group_digest
 
@@ -141,8 +165,10 @@ def model_comparison_identity(manifest: ExperimentManifest) -> str:
 def model_comparison_group_digest(manifest: ExperimentManifest) -> str:
     """Calculate the deterministic group digest before the full manifest digest is assigned."""
 
-    if manifest.protocol_version != MODEL_EXPERIMENT_PROTOCOL_VERSION:
-        raise ValueError("model comparison group digest requires paper-experiment-v2")
+    if manifest.protocol_version not in _MODEL_COMPARISON_PROTOCOLS:
+        raise ValueError(
+            "model comparison group digest requires paper-experiment-v2 or paper-experiment-v3"
+        )
     _validate_model_experiment_metadata(manifest, allow_zero_group_digest=True)
     return canonical_experiment_digest(_model_comparison_payload(manifest))
 
@@ -167,18 +193,22 @@ def _manifest_digest_payload(manifest: ExperimentManifest) -> dict[str, object]:
     exclude = {"experiment_digest"}
     if manifest.protocol_version == EXPERIMENT_PROTOCOL_VERSION:
         exclude.update(_MODEL_EXPERIMENT_FIELDS)
+        exclude.update(_MULTI_MARKET_EXPERIMENT_FIELDS)
+    elif manifest.protocol_version == MODEL_EXPERIMENT_PROTOCOL_VERSION:
+        exclude.update(_MULTI_MARKET_EXPERIMENT_FIELDS)
     return manifest.model_dump(exclude=exclude)
 
 
 def _model_comparison_payload(manifest: ExperimentManifest) -> dict[str, object]:
-    return manifest.model_dump(
-        exclude={
-            "experiment_digest",
-            "experiment_group_digest",
-            "llm_model",
-            "replicate_index",
-        }
-    )
+    exclude = {
+        "experiment_digest",
+        "experiment_group_digest",
+        "llm_model",
+        "replicate_index",
+    }
+    if manifest.protocol_version == MODEL_EXPERIMENT_PROTOCOL_VERSION:
+        exclude.update(_MULTI_MARKET_EXPERIMENT_FIELDS)
+    return manifest.model_dump(exclude=exclude)
 
 
 def _validate_model_experiment_metadata(
@@ -187,17 +217,17 @@ def _validate_model_experiment_metadata(
     allow_zero_group_digest: bool = False,
 ) -> None:
     if manifest.comparison_variable is not ExperimentVariable.LLM_MODEL:
-        raise ValueError("paper-experiment-v2 comparison_variable must be LLM_MODEL")
+        raise ValueError("model comparison comparison_variable must be LLM_MODEL")
     if manifest.experiment_group_digest is None:
-        raise ValueError("paper-experiment-v2 requires experiment_group_digest")
+        raise ValueError("model comparison requires experiment_group_digest")
     if not allow_zero_group_digest and manifest.experiment_group_digest == "0" * 64:
-        raise ValueError("paper-experiment-v2 requires a finalized group digest")
+        raise ValueError("model comparison requires a finalized group digest")
     if manifest.replicate_index is None or manifest.replicate_count is None:
-        raise ValueError("paper-experiment-v2 requires replicate metadata")
+        raise ValueError("model comparison requires replicate metadata")
     if manifest.replicate_index > manifest.replicate_count:
         raise ValueError("replicate_index cannot exceed replicate_count")
     if manifest.source_digest is None:
-        raise ValueError("paper-experiment-v2 requires a frozen source_digest")
+        raise ValueError("model comparison requires a frozen source_digest")
 
 
 def _jsonable(value: object) -> object:

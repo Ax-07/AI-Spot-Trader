@@ -19,12 +19,18 @@ Un batch est **intégré** uniquement après validation locale, commit et push c
 - Batch 18.2 : sélection causale du marché exécutable par le même Agent, univers PAPER typé, routeur SPOT/PERPETUAL, persistance/API multi-marchés, migration `0004_multi_market_selection` et analytics causal v3.
 - Batch 18.3 : validation comportementale PAPER multi-marchés/cross-symbol et correction du parsing des `marginSchedules` Kraken Derivatives imbriqués.
 
-Référence intégrée actuelle :
+Référence GitHub auditée au démarrage du Batch 18.5 :
 
 ```text
-main = 4042e0b0e6394de788009229e3dae5924cd732d7
+HEAD réel main = 5cc2e2897d9a1dccba325f8a543b208360c6120d
+docs: record batch 18.3 behavioral validation
+
+dernier commit code validé = 4042e0b0e6394de788009229e3dae5924cd732d7
 fix: support nested Kraken derivative margin schedules
 ```
+
+`4042e0b...` n'est donc pas le HEAD GitHub courant ; il reste la référence du dernier commit code
+validé avant le Batch 18.5.
 
 ## Batch 18.2 — intégré
 
@@ -115,15 +121,42 @@ Les deux warnings Starlette/AnyIO restent non bloquants.
 Ces limites ne remettent pas en cause les branches validées, mais elles restent des axes de
 robustesse/expérimentation à mesurer au lieu d'être déclarées résolues.
 
-## Prochain vrai batch — candidats à auditer
+## Batch 18.5 — patch proposé
+
+### Objectif
+
+Versionner scientifiquement l'environnement Agent/tools/sélection déjà utilisé par le pipeline
+multi-marché, sans modifier la stratégie de trading.
+
+### Décisions du patch
+
+- nouvelle identité `paper-experiment-v3` pour les **nouveaux** manifestes multi-marchés ;
+- conservation stricte de `paper-experiment-v1` et `paper-experiment-v2` comme identités
+  historiques ;
+- univers contrôlé v3 = tuple déterministe de `ExecutableMarket(symbol, market_type)` ;
+- protocole de sélection causal explicitement identifié ;
+- tools exposés pendant la sélection et interdits pendant la décision finale canonique ;
+- identité tools = digest des définitions OpenAI effectives, pas simple version manuelle ;
+- bornes contrôlées = max calls, timeout, taille résultat et maximum `list_markets.limit` ;
+- tous ces facteurs entrent dans le `experiment_group_digest` v3 ; `llm_model` et
+  `replicate_index` restent les seules exclusions volontaires pour les comparaisons modèle ;
+- contrôles provider/runner avant appel Agent lorsqu'un manifeste v3 est fourni ;
+- aucune migration PostgreSQL, le JSON persistant existant restant suffisant ;
+- `experiment_manifest=None` reste valide pour le PAPER normal.
+
+### Statut
+
+Le Batch 18.5 ne devient **intégré** qu'après extraction du ZIP, validation locale complète,
+commit et push sur `main`. Aucun HEAD futur n'est anticipé dans cette documentation.
+
+## Prochains candidats après 18.5
 
 Aucune priorité architecturale n'est décidée ici. Candidats :
 
-- protocole expérimental versionné Agent/tools/sélection dans `ExperimentManifest` ;
 - recovery/restart durable du ledger PAPER multi-actifs ;
 - robustesse réseau et observabilité bornée des erreurs transitoires Market/LLM ;
 - enrichissement mesuré des données de recherche : order book, trades, funding historique, news ;
-- campagnes Luna/Sol sur univers multi-marché ;
+- campagnes Luna/Sol sur univers multi-marché sous `paper-experiment-v3` ;
 - valorisation multi-quote avec FX explicite seulement si le besoin est mesuré ;
 - FUTURE daté seulement si le domaine correspondant est réellement implémenté ;
 - LIVE toujours dans un batch séparé.

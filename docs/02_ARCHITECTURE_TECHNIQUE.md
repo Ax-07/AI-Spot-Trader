@@ -2,46 +2,51 @@
 
 ## 1. Référence
 
-État intégré actuel :
-`main = 4042e0b0e6394de788009229e3dae5924cd732d7`
-(`fix: support nested Kraken derivative margin schedules`).
+Base GitHub auditée au démarrage du Batch 18.5 :
 
-Les Batches 18.1, 18.2 et 18.3 sont intégrés ; l'architecture décrite ci-dessous correspond au
-chemin PAPER multi-marché validé comportementalement en Batch 18.3.
+```text
+HEAD réel main = 5cc2e2897d9a1dccba325f8a543b208360c6120d
+docs: record batch 18.3 behavioral validation
+
+dernier commit code validé = 4042e0b0e6394de788009229e3dae5924cd732d7
+fix: support nested Kraken derivative margin schedules
+```
+
+Les Batches 18.1, 18.2 et 18.3 sont intégrés. Le Batch 18.5 est un patch proposé jusqu'à validation,
+commit et push ; il ne doit pas être présenté comme un HEAD GitHub déjà intégré.
 
 ## 2. Modules concernés
 
 ```text
 backend/src/ai_spot_trader/
   agent/
-    provider.py            # même Agent : select_market() puis generate_decision()
+    provider.py            # même Agent + validation runtime des manifestes v3
     prompt.py              # contrat à deux phases, toujours agent-strategy-v4
   domain/
-    models.py              # ExecutableMarket / MarketSelectionInput / MarketSelection
+    models.py              # ExperimentAgentProtocolSnapshot + univers typé v3
+    experiments.py         # digests version-aware v1/v2/v3
     ports.py               # MarketSelectingLLMProvider / ExecutableMarketDataSource
+  experiments/
+    protocol.py            # builders v1/v2/v3 et snapshot effectif Agent/tools
+    comparison.py          # comparaisons Luna/Sol v2 ou v3, sans ranking
+  tools/
+    read_only.py           # digest des définitions OpenAI + bornes introspectables
   market/
     execution.py           # routeur typé SPOT/PERPETUAL, fail-closed
   trading/
-    engine.py              # orchestration causale sélection -> marché -> décision -> Risk
+    engine.py              # univers v3 vérifié avant le premier appel Agent
   core/
-    config.py              # PAPER_EXECUTABLE_MARKETS et validation de l'univers
+    config.py              # PAPER_EXECUTABLE_MARKETS et bornes tools existantes
   integrations/kraken/
-    derivatives.py         # normalisation Derivatives + schedules de marge imbriqués fail-closed
+    derivatives.py         # normalisation Derivatives fail-closed
   persistence/
-    models.py              # nouveaux payloads + execution_universe_payload
-    runs.py                # run singleton ou multi-marchés honnête
-    repository.py          # persistance/digest sélection
-    query.py               # lecture/API de la sélection
+    ...                    # persistance JSON existante, aucune migration 18.5
   analytics/
-    paper.py               # replay multi-marchés causal v3
+    paper.py               # paper-analytics-v3 multi-marchés causal
   composition.py           # sources research et execution distinctes
 ```
 
-Migration :
-
-```text
-backend/alembic/versions/0004_multi_market_selection.py
-```
+Aucune migration Alembic n'est ajoutée par 18.5.
 
 ## 3. Flux runtime causal
 
@@ -89,87 +94,48 @@ PortfolioLedger ------------------------>| recapture complète
 
 ## 4. Un seul Agent, deux phases
 
-`OpenAIDecisionProvider` implémente deux méthodes stratégiques :
+`OpenAIDecisionProvider` implémente :
 
 ```text
 select_market(MarketSelectionInput) -> MarketSelection
 generate_decision(AgentInput)       -> DecisionCandidate
 ```
 
-Il s'agit du **même objet Agent**, du même modèle Luna/Sol et du même rôle stratégique. Le backend
-ne crée pas un scanner Agent puis un trader Agent.
-
-La phase sélection peut utiliser la Responses API avec function calling borné. La phase finale est
-un appel structuré direct : les résultats de recherche sont déjà présents dans
-`AgentInput.market_selection.tool_traces`.
-
-`store=false` reste inchangé côté OpenAI.
+Il s'agit du **même objet Agent**, du même modèle Luna/Sol et du même rôle stratégique. La phase
+sélection peut utiliser le function calling borné. Le chemin causal final est un appel structuré
+direct sans nouveaux tools ; il réutilise les traces de sélection.
 
 ## 5. Univers typé
 
-`ExecutableMarket` est un contrat immuable :
+`ExecutableMarket` est immuable :
 
 ```text
 symbol: BASE/QUOTE
 market_type: SPOT | PERPETUAL
 ```
 
-`FUTURE` est refusé dès ce contrat. L'univers est trié et dédupliqué de façon déterministe.
-
-`risk_allowed_pairs` reste une whitelist de symboles. L'univers exécutable est plus précis car il
-porte aussi le type du marché.
+`FUTURE` est refusé. L'univers est trié et dédupliqué de façon déterministe. En v3, ce tuple exact
+fait partie de l'identité expérimentale ; deux univers ayant les mêmes symboles mais des types de
+marché différents ne sont pas comparables.
 
 ## 6. Routeur d'exécution
 
 `RoutedExecutableMarketDataSource` ne fait aucune sélection stratégique. Il reçoit le marché déjà
-choisi et vérifie :
-
-1. format canonique ;
-2. appartenance exacte à l'univers ;
-3. type supporté ;
-4. routage vers la source d'exécution correcte ;
-5. cohérence du snapshot retourné ;
-6. pour PERPETUAL : instrument perpetual linéaire réellement représenté.
-
-Erreurs principales :
-
-```text
-MarketOutsideExecutableUniverseError
-UnsupportedExecutableMarketError
-ExecutableMarketSnapshotMismatchError
-```
-
-Toutes provoquent un échec technique du cycle, jamais un HOLD artificiel.
+choisi et vérifie format, appartenance exacte, type supporté, cohérence du snapshot et, pour les
+PERPETUAL, contrat linéaire réellement représenté. Une erreur provoque un échec technique, jamais
+un HOLD artificiel.
 
 ## 7. Séparation research / execution
 
-Quatre objets réseau peuvent coexister :
-
-```text
-research_spot
-research_derivatives      # sans market_sink
-execution_spot
-execution_derivatives     # market_sink = PaperPortfolioLedger
-```
-
-Les deux premiers alimentent uniquement les tools. Les deux derniers ne sont appelés qu'après
-`MarketSelection`.
-
-Ainsi une exploration PERPETUAL ne marque jamais une position et n'accumule jamais de funding.
+Les sources research n'ont aucun `market_sink`; les sources execution sont appelées seulement après
+`MarketSelection`. Une exploration PERPETUAL ne peut donc ni marquer le ledger ni accumuler du
+funding.
 
 ## 8. Portfolio et Derivatives
 
-Avant sélection, le runner capture un portefeuille complet pour le contexte stratégique.
-Après acquisition du marché choisi, il le recapture.
-
-Pourquoi : `KrakenDerivativesMarketDataSource` d'exécution peut appeler le `market_sink` lors du
-snapshot pour mettre à jour mark price, unrealized P&L et funding d'une position existante.
-Agent final et Risk doivent voir cet état, pas l'état antérieur à l'acquisition.
-
-Le catalogue public Derivatives peut exposer des schedules de marge directs ou imbriqués par
-région/profil. Le parser aplatit uniquement les feuilles de marge reconnues et les valide toutes
-fail-closed. Comme aucun tier privé n'est prouvé par cette API publique, le runtime conserve les
-taux publics les plus stricts observés pour `initial_margin_rate` et `maintenance_margin_rate`.
+Le runner capture un portefeuille complet avant la sélection puis le recapture après acquisition du
+marché choisi. Cela garantit que mark, unrealized P&L et funding causaux d'une position dérivée
+existante sont visibles par l'Agent final et Risk.
 
 ## 9. Artefact MarketSelection
 
@@ -184,104 +150,118 @@ tool_traces[]
 selection_digest
 ```
 
-Le digest couvre aussi la rationale et les traces. Toute altération de l'artefact rend le modèle
-invalide.
+Le digest couvre rationale et traces. Les traces viennent du registre contrôlé par l'application,
+pas du LLM.
 
-Les traces ne sont pas fournies par le LLM : elles viennent du registre read-only contrôlé par
-l'application.
+## 10. Protocole expérimental v3
 
-## 10. TradingCycleResult et échecs
+`ExperimentManifest` conserve son identité historique pour v1/v2 et reçoit un champ optionnel
+`agent_protocol`, omis de la sérialisation lorsqu'il est absent. Cela évite d'altérer les payloads
+historiques.
 
-Nouveaux stages :
-
-```text
-SELECTION_INPUT
-MARKET_SELECTION
-```
-
-Les stages historiques restent présents.
-
-Exemples :
-
-- tool/LLM échoue avant sélection valide -> `MARKET_SELECTION`, traces partielles conservées ;
-- sélection valide mais Kraken execution indisponible -> `MARKET`, sélection conservée ;
-- snapshot valide mais décision finale incohérente -> `AGENT`, sélection + AgentInput conservés.
-
-## 11. Persistance
-
-`audit_cycles` reçoit :
+Pour `paper-experiment-v3`, `agent_protocol` contient :
 
 ```text
-market_selection_input_payload JSONB NULL
-market_selection_payload       JSONB NULL
+executable_markets
+market_selection_protocol_version
+selection_phase.tools_enabled
+selection_phase.max_tool_calls
+final_decision_phase.tools_enabled
+final_decision_phase.max_tool_calls
+tool_definitions_digest
+tool_timeout_seconds
+tool_max_result_bytes
+list_markets_max_limit
 ```
 
-Ces colonnes sont nullable pour les cycles historiques. Le `result_digest` inclut les deux.
+Le chemin v3 canonique impose `final_decision_phase.tools_enabled = false`.
 
-Le détail API expose les deux objets. Le résumé de cycle dérive `symbol + market_type` de la
-sélection quand aucune décision finale n'existe encore.
+## 11. Identité de la capacité tools
 
-## 12. `paper_runs`
+`ReadOnlyToolRegistry.openai_tools` reste la source de définition réellement transmise au LLM.
+Le registre expose désormais `openai_tools_digest`, calculé avec le JSON canonique des définitions
+triées. Une modification de nom, description ou schéma modifie donc automatiquement l'identité.
 
-`execution_universe_payload JSONB NOT NULL` est ajouté. Migration des anciennes rows :
+Les bornes qui affectent la recherche sont aussi persistées séparément :
+
+- budget maximal de calls ;
+- timeout ;
+- taille maximale de résultat ;
+- maximum de `list_markets.limit`, introspecté dans le schéma effectif.
+
+Cela évite de dépendre d'un simple numéro manuel pouvant diverger silencieusement du contrat
+présenté au modèle.
+
+## 12. Digests et groupes contrôlés
+
+v1 et v2 continuent d'utiliser leurs payloads historiques. Le champ v3 est explicitement exclu des
+digests historiques et, lorsqu'il vaut `None`, de leur sérialisation normale.
+
+En v3, le digest du groupe exclut seulement :
 
 ```text
-[{"symbol": ancien_symbol, "market_type": ancien_market_type}]
+llm_model
+replicate_index
 ```
 
-Après backfill :
+Il inclut le protocole v3 lui-même, l'univers typé, le prompt versionné, Risk/coûts/analytics/source,
+la politique de sélection, la capacité tools et ses bornes. Une dérive sur un de ces facteurs
+produit un autre `experiment_group_digest`.
+
+## 13. Validation avant appel LLM
+
+Lorsqu'un manifeste v3 est présent :
+
+1. le runner vérifie avant le cycle que son univers `ExecutableMarket[]` est exactement celui du
+   manifeste ;
+2. le provider valide le digest, le modèle et `agent-strategy-v4` ;
+3. il vérifie la version active du protocole de sélection ;
+4. il compare présence/budget des tools au runtime ;
+5. si les tools sont actifs, il compare digest des définitions, timeout, taille résultat et limite
+   `list_markets` ;
+6. la décision finale v3 exige le chemin causal avec `MarketSelection` et aucun tool final.
+
+Une incohérence lève une erreur avant l'appel LLM concerné.
+
+## 14. Persistance et compatibilité
+
+Le manifeste est déjà inclus dans les payloads JSON durables de `AgentInput` et
+`MarketSelectionInput`. La v3 n'ajoute donc aucune colonne PostgreSQL.
+
+Compatibilité :
 
 ```text
-paper_runs.market_type nullable
-paper_runs.symbol      nullable
+experiment_manifest = None  -> PAPER normal inchangé
+paper-experiment-v1         -> lecture/digest historique
+paper-experiment-v2         -> lecture/digest historique Luna/Sol
+paper-experiment-v3         -> nouveau contrat multi-marché
 ```
 
-Le modèle applique :
+Le runner conserve aussi le mode legacy `market_data + symbol`; v3 est réservé au chemin causal de
+sélection typée.
+
+## 15. Analytics et causalité
+
+`paper-analytics-v3` reste le défaut des nouvelles expériences multi-marchés. Aucun calcul de
+performance, aucune règle Risk/Broker et aucun mécanisme de valorisation ne sont modifiés par ce
+batch.
+
+L'ordre causal demeure :
 
 ```text
-singleton -> projection historique réelle
-multi     -> market_type = NULL, symbol = NULL
+MarketSelectionInput
+-> tools éventuels
+-> MarketSelection
+-> MarketState execution
+-> AgentInput final
+-> DecisionCandidate
+-> RiskAssessment
+-> ExecutionIntent éventuel
+-> Fill éventuel
 ```
 
-## 13. Analytics v3
+## 16. Hors périmètre 18.5
 
-Le replay maintient un dictionnaire causal :
-
-```text
-spot_prices["BTC/USD"] = dernier MarketState SPOT BTC/USD déjà rencontré
-spot_prices["ETH/USD"] = dernier MarketState SPOT ETH/USD déjà rencontré
-```
-
-Lorsqu'une position SPOT est valorisée, le dernier mark déjà présent dans le journal est utilisé.
-Aucune donnée externe/current-time n'est consultée.
-
-Toutes les quotes doivent rester égales au `paper_settlement_asset`, ce qui évite d'introduire une
-conversion FX non auditée.
-
-## 14. Compatibilité
-
-`TradingCycleRunner` garde deux modes exclusifs :
-
-```text
-legacy    : market_data + symbol
-selection : executable_market_data + executable_markets
-```
-
-Le chemin canonique composé utilise le second. Le premier évite de casser les tests et surfaces
-mono-marché existants pendant la transition.
-
-## 15. Validation comportementale Batch 18.3
-
-Le smoke réel a confirmé : cross-symbol SPOT, univers mixte chargé, research SPOT + PERPETUAL dans
-un même cycle, cycles mixtes SPOT terminés et branche PERPETUAL réelle validée séparément jusqu'à
-la décision et Risk. Il n'a pas confirmé une sélection PERPETUAL spontanée depuis l'univers mixte
-ni un fill réel.
-
-Un timeout ponctuel de la source SPOT d'exécution au stage `MARKET` a été suivi de plusieurs
-cycles `COMPLETED`. Un `LLMTransportError` ponctuel au stage `MARKET_SELECTION` a également été
-observé. Ces incidents restent des observations de robustesse, pas des changements d'architecture.
-
-## 16. Ressources et fermeture
-
-Les quatre sources réseau sont enregistrées comme ressources owned du runtime et dédupliquées par
-identité avant fermeture. Le routeur lui-même ne possède pas de connexion réseau.
+Pas de recovery/restart ledger, retries réseau/LLM, nouvelle donnée research, campagne Luna/Sol,
+scanner/ranking/opportunity score, multi-quote/FX, FUTURE daté, LIVE, changement de prompt
+stratégique ni modification des règles Risk/Broker.

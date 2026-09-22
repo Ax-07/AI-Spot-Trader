@@ -109,6 +109,37 @@ class ReadOnlyToolRegistry:
     def openai_tools(self) -> tuple[dict[str, Any], ...]:
         return tuple(self._tools[name].openai_definition() for name in sorted(self._tools))
 
+    @property
+    def openai_tools_digest(self) -> str:
+        """Digest the exact ordered function definitions exposed to the LLM."""
+
+        return canonical_json_digest(cast(JsonValue, list(self.openai_tools)))
+
+    @property
+    def timeout_seconds(self) -> float:
+        return self._timeout_seconds
+
+    @property
+    def max_result_bytes(self) -> int:
+        return self._max_result_bytes
+
+    def integer_parameter_maximum(self, tool_name: str, parameter_name: str) -> int | None:
+        """Read an integer maximum directly from one effective OpenAI function schema."""
+
+        tool = self._tools.get(tool_name)
+        if tool is None:
+            return None
+        properties = tool.parameters.get("properties")
+        if not isinstance(properties, dict):
+            return None
+        parameter = properties.get(parameter_name)
+        if not isinstance(parameter, dict):
+            return None
+        maximum = parameter.get("maximum")
+        if isinstance(maximum, bool) or not isinstance(maximum, int):
+            return None
+        return maximum
+
     async def execute(
         self,
         *,
@@ -186,4 +217,3 @@ class ReadOnlyToolRegistry:
 
 def _canonical_json(value: JsonValue) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
