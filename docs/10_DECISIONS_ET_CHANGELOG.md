@@ -10,8 +10,8 @@ SPOT sans short/levier, Derivatives avec protections déterministes, audit durab
 backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE séparé.
 
 Référence intégrée actuelle :
-`e19255df2ff0f2d432034808abeacca88832d403`
-(`feat: add causal executable market selection`).
+`4042e0b0e6394de788009229e3dae5924cd732d7`
+(`fix: support nested Kraken derivative margin schedules`).
 
 ## Statut du Batch 18.1
 
@@ -110,6 +110,19 @@ Si un actif n'a pas de mark causal, le calcul échoue explicitement.
 `OpenAIDecisionProvider.generate_decision()` conserve le comportement 18.1 en l'absence de
 `MarketSelection`. La composition PAPER canonique utilise néanmoins le nouveau chemin.
 
+## Décision Batch 18.3 — intégrée
+
+### ADR-147 — Normaliser récursivement les schedules de marge publics Kraken sans relâcher le fail-closed
+
+**INTÉGRÉE au commit `4042e0b`.** `marginSchedules` peut être une map de feuilles directes ou une
+structure imbriquée par région/profil contenant des listes de tiers. Le parser aplatit uniquement
+les feuilles qui portent des clés de marge reconnues et continue de rejeter les noms, types ou
+feuilles incohérents.
+
+La politique de marge n'est pas rendue plus agressive : l'API publique ne permettant pas de
+prouver le tier privé applicable, le runtime conserve les `initialMargin` et `maintenanceMargin`
+publics les plus stricts observés. Aucun tier de compte n'est deviné.
+
 ## Changelog — 2026-09-22 — Batch 18.2 intégré
 
 Audit de départ :
@@ -143,13 +156,49 @@ git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 Les deux warnings de dépendances Starlette/AnyIO sont non bloquants et ne constituent pas un
 échec du batch.
 
-Le smoke PAPER multi-marchés / cross-symbol n'est pas confirmé comme exécuté dans les validations
-fournies.
+## Changelog — 2026-09-23 — Batch 18.3 intégré
 
-## À décider après 18.2
+Validation comportementale réelle :
+
+- cross-symbol SPOT confirmé avec sélection d'un symbole différent du bootstrap ;
+- univers mixte SPOT/PERPETUAL confirmé avec projection historique `NULL/NULL` dans `paper_runs` ;
+- research de `PERPETUAL:ETH/USD` et `SPOT:BTC/USD` confirmé dans un même cycle ;
+- plusieurs cycles mixtes sélectionnant SPOT ont terminé `COMPLETED / HOLD` ;
+- branche `PERPETUAL:ETH/USD` validée en singleton jusqu'au `MarketState`, à la décision `HOLD`
+  puis à `Risk=ALLOW/HOLD_NO_EXECUTION` ;
+- les snapshots de recherche n'ont pas été promus en snapshots d'exécution.
+
+Défaut découvert pendant le smoke :
+
+- Kraken renvoie actuellement des `marginSchedules` imbriqués par région/profil ;
+- l'ancien parser interprétait un conteneur comme une ligne de marge et échouait sur
+  `initialMargin is invalid` ;
+- correctif intégré au commit `4042e0b0e6394de788009229e3dae5924cd732d7` ;
+- après correctif, 296 instruments publics Derivatives ont été parsés lors du diagnostic réel.
+
+Validation locale opérateur après correctif :
+
+```text
+27 tests Kraken Derivatives ciblés : passed
+pytest backend : 449 passed, 2 warnings
+ruff check backend : All checks passed!
+mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
+git diff --check : aucune erreur, uniquement warnings LF -> CRLF avant commit
+```
+
+Observations non transformées en garanties :
+
+- aucune sélection PERPETUAL spontanée depuis l'univers mixte n'a été observée ;
+- aucun fill réel n'a été produit pendant les smokes ;
+- un timeout SPOT au stage `MARKET` a été observé une fois puis non reproduit sur plusieurs cycles ;
+- un `LLMTransportError` au stage `MARKET_SELECTION` a été observé isolément.
+
+## À décider après 18.3
 
 - intégrer la politique de sélection/tools dans le protocole expérimental versionné ;
 - recovery durable du ledger multi-actifs ;
+- renforcer si nécessaire l'observabilité bornée et la robustesse face aux erreurs réseau/LLM
+  transitoires, après mesure ;
 - éventuel multi-quote avec conversion explicite ;
 - FUTURE daté et contrats supplémentaires seulement après implémentation réelle ;
 - LIVE dans un batch séparé.

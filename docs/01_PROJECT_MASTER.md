@@ -7,8 +7,9 @@ Agent IA stratégique**. Le backend est l'application de trading ; le frontend e
 contrôle et de visualisation.
 
 Référence intégrée actuelle : GitHub `main` au commit
-`e19255df2ff0f2d432034808abeacca88832d403` (`feat: add causal executable market selection`).
-Les Batches 18.1 et 18.2 y sont intégrés.
+`4042e0b0e6394de788009229e3dae5924cd732d7`
+(`fix: support nested Kraken derivative margin schedules`). Les Batches 18.1, 18.2 et 18.3 y sont
+intégrés.
 
 ## 2. Invariants fonctionnels
 
@@ -37,14 +38,17 @@ Les Batches 18.1 et 18.2 y sont intégrés.
 
 ### Derivatives
 
-- Batch 18.2 exécute uniquement les `PERPETUAL` linéaires supportés ;
+- uniquement les `PERPETUAL` linéaires supportés sont exécutables ;
 - LONG/SHORT permis sous contrôle Risk ;
 - levier déterministe/configuré, jamais choisi par le LLM ;
 - Risk contrôle marge, exposition, liquidation, `reduce_only` et anti-reversal ;
 - marge `ISOLATED` ;
-- futures datés, contrats inverses et CROSS restent non exécutables.
+- futures datés, contrats inverses et CROSS restent non exécutables ;
+- les métadonnées publiques Kraken sont normalisées fail-closed, y compris les
+  `marginSchedules` imbriqués ; faute de tier privé prouvable, les marges publiques les plus
+  strictes restent la référence conservatrice.
 
-## 3. Pipeline de confiance Batch 18.2
+## 3. Pipeline de confiance Batch 18.2+
 
 ```text
 PortfolioState complet
@@ -95,7 +99,7 @@ univers Kraken découvert
 capacité de recherche factuelle. Aucun résultat de tool ne devient automatiquement un marché de
 trading.
 
-Le nouvel univers exécutable est un tuple de `ExecutableMarket(symbol, market_type)` limité à :
+L'univers exécutable est un tuple de `ExecutableMarket(symbol, market_type)` limité à :
 
 - `SPOT` ;
 - `PERPETUAL` linéaire.
@@ -104,7 +108,7 @@ Le nouvel univers exécutable est un tuple de `ExecutableMarket(symbol, market_t
 
 ## 5. Configuration de l'univers
 
-Nouvelle variable :
+Variable :
 
 ```text
 AI_SPOT_TRADER_PAPER_EXECUTABLE_MARKETS=["SPOT:BTC/USD","PERPETUAL:ETH/USD"]
@@ -122,8 +126,7 @@ Contraintes :
 - quote commune égale à `paper_settlement_asset` ;
 - présence d'un PERPETUAL => configuration Derivatives complète obligatoire.
 
-La quote commune est une limitation explicite du Batch 18.2 : aucune conversion FX implicite
-n'est introduite.
+La quote commune reste une limitation explicite : aucune conversion FX implicite n'est introduite.
 
 ## 6. Sélection stratégique explicite
 
@@ -135,8 +138,8 @@ n'est introduite.
 - univers exécutable typé ;
 - agressivité et contexte expérimental éventuel.
 
-Le même `OpenAIDecisionProvider` exécute `select_market()`. Il peut appeler les tools read-only du
-Batch 18.1 ou sélectionner directement un marché dans l'univers fourni.
+Le même `OpenAIDecisionProvider` exécute `select_market()`. Il peut appeler les tools read-only ou
+sélectionner directement un marché dans l'univers fourni.
 
 Le résultat `MarketSelection` persiste :
 
@@ -184,9 +187,9 @@ Le même Agent reçoit ensuite `AgentInput` contenant :
 - le `MarketSelection`, donc aussi les recherches causales ;
 - l'agressivité et le contexte expérimental.
 
-Dans le chemin 18.2, la phase finale ne relance pas de tools : elle raisonne sur les recherches de
-sélection déjà enregistrées et le nouveau `MarketState` canonique. Cela évite qu'un contexte de
-recherche postérieur au snapshot d'exécution soit mélangé implicitement au cycle.
+Dans le chemin multi-marché, la phase finale ne relance pas de tools : elle raisonne sur les
+recherches de sélection déjà enregistrées et le nouveau `MarketState` canonique. Cela évite qu'un
+contexte de recherche postérieur au snapshot d'exécution soit mélangé implicitement au cycle.
 
 Contraintes finales :
 
@@ -220,7 +223,7 @@ Aucun prix ou tool call postérieur à la décision finale n'est utilisable comm
 
 ## 12. Audit durable
 
-`TradingCycleResult` porte désormais aussi :
+`TradingCycleResult` porte aussi :
 
 ```text
 market_selection_input
@@ -261,12 +264,19 @@ faite pendant le replay et aucun look-ahead n'est possible.
 ## 15. Compatibilité
 
 Le runner conserve le mode historique `market_data + symbol` pour les tests/consommateurs
-existants. Le provider conserve aussi le chemin Batch 18.1 sans `MarketSelection`, y compris sa
+existants. Le provider conserve aussi le chemin historique sans `MarketSelection`, y compris sa
 boucle de tools optionnelle.
 
-La composition PAPER canonique utilise, elle, le nouveau chemin multi-marché.
+La composition PAPER canonique utilise le chemin multi-marché.
 
-## 16. LIVE
+## 16. Validation comportementale connue
+
+Le Batch 18.3 a confirmé le cross-symbol SPOT, le chargement/research d'un univers mixte
+SPOT/PERPETUAL et la branche PERPETUAL réelle en singleton jusqu'à la décision et Risk. Il n'a pas
+observé de sélection PERPETUAL spontanée depuis l'univers mixte ni de fill réel ; ces absences ne
+sont pas transformées en validation.
+
+## 17. LIVE
 
 LIVE reste hors périmètre. Il nécessitera un batch séparé avec adaptateur privé, permissions
 minimales sans retrait, idempotence, réconciliation, recovery et activation explicite.

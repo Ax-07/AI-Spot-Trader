@@ -12,12 +12,13 @@ seul composant autorisé à créer un `ExecutionIntent`.
 ```text
 repository : Ax-07/AI-Spot-Trader
 branche    : main
-HEAD       : e19255df2ff0f2d432034808abeacca88832d403
-commit     : feat: add causal executable market selection
+HEAD       : 4042e0b0e6394de788009229e3dae5924cd732d7
+commit     : fix: support nested Kraken derivative margin schedules
 ```
 
-Les **Batches 18.1 et 18.2 sont intégrés** sur `main`. Le Batch 18.2 apporte la sélection causale
-du marché exécutable par le même Agent stratégique avant acquisition du `MarketState` final.
+Les **Batches 18.1, 18.2 et 18.3 sont intégrés** sur `main`. Le Batch 18.3 a validé en PAPER le
+pipeline multi-marchés/cross-symbol et la branche PERPETUAL réelle, puis corrigé le parsing
+fail-closed des `marginSchedules` publics Kraken lorsqu'ils sont imbriqués par région/profil.
 
 ## Principes
 
@@ -38,7 +39,7 @@ du marché exécutable par le même Agent stratégique avant acquisition du `Mar
 
 Principe : **l'Agent cherche, sélectionne et propose ; Risk autorise, modifie ou refuse.**
 
-## Architecture intégrée — Batch 18.2
+## Architecture intégrée — Batch 18.2, validée en Batch 18.3
 
 ```text
 PortfolioState complet
@@ -168,6 +169,14 @@ Les positions Derivatives continuent d'utiliser leurs marks/P&L durables dans `P
 Si un actif détenu ne possède aucun mark causal disponible, l'analytics échoue explicitement au
 lieu d'inventer une valorisation.
 
+## Kraken Derivatives public
+
+Le parser des instruments accepte les formes publiques observées de `marginLevels`,
+`retailMarginLevels` et `marginSchedules`, y compris les schedules imbriqués par région/profil.
+Chaque feuille reste validée fail-closed. Comme le runtime public ne connaît pas le tier privé du
+compte, il conserve une politique volontairement conservatrice : le taux de marge public le plus
+strict disponible est retenu.
+
 ## Migrations PostgreSQL
 
 La migration `0004_multi_market_selection` est intégrée. Elle a été appliquée avec succès sur
@@ -185,22 +194,33 @@ Chaîne intégrée :
 Le downgrade de `0004` refuse de s'exécuter si des runs multi-marchés existent, car les anciennes
 colonnes singleton ne pourraient pas les représenter honnêtement.
 
-## Validation du Batch 18.2 intégré
+## Validation jusqu'au Batch 18.3
 
-Validation locale confirmée avant intégration :
+Validation locale confirmée :
 
 ```text
-pytest backend : 447 passed, 2 warnings
+pytest backend : 449 passed, 2 warnings
 ruff check backend : All checks passed!
 mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
-Alembic 0003_agent_tool_traces -> 0004_multi_market_selection sur PostgreSQL : OK
-git diff --check : aucune erreur, uniquement warnings LF -> CRLF
+git diff --check : aucune erreur, uniquement warnings LF -> CRLF avant commit
 ```
 
-Les deux warnings de dépendances Starlette/AnyIO ne constituent pas un échec du batch.
+Validation comportementale PAPER confirmée :
 
-Le smoke PAPER multi-marchés / cross-symbol n'est **pas confirmé comme exécuté** dans les
-validations fournies. Il reste à exécuter s'il est toujours retenu comme validation comportementale.
+- sélection cross-symbol SPOT réelle ;
+- univers mixte `SPOT:BTC/USD + PERPETUAL:ETH/USD` réellement chargé et recherché ;
+- plusieurs cycles mixtes SPOT terminés `COMPLETED` ;
+- branche `PERPETUAL:ETH/USD` validée séparément de la sélection au `MarketState`, puis décision
+  `HOLD` et Risk `ALLOW` ;
+- catalogue public Kraken Derivatives parsé après correction (296 instruments lors du smoke).
+
+Deux incidents ponctuels ont été observés sans reproduction durable : un timeout de reacquisition
+SPOT au stage `MARKET` et un `LLMTransportError` au stage `MARKET_SELECTION`.
+
+Non revendiqué : aucune sélection PERPETUAL spontanée depuis l'univers mixte n'a été observée et
+aucun fill réel n'a été produit pendant ces smokes (`HOLD` reste une décision valide).
+
+Les deux warnings Starlette/AnyIO sont non bloquants.
 
 ## Sécurité / LIVE
 

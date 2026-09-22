@@ -3,11 +3,11 @@
 ## 1. Référence
 
 État intégré actuel :
-`main = e19255df2ff0f2d432034808abeacca88832d403`
-(`feat: add causal executable market selection`).
+`main = 4042e0b0e6394de788009229e3dae5924cd732d7`
+(`fix: support nested Kraken derivative margin schedules`).
 
-Les Batches 18.1 et 18.2 sont intégrés ; l'architecture décrite ci-dessous correspond au chemin
-PAPER multi-marché intégré.
+Les Batches 18.1, 18.2 et 18.3 sont intégrés ; l'architecture décrite ci-dessous correspond au
+chemin PAPER multi-marché validé comportementalement en Batch 18.3.
 
 ## 2. Modules concernés
 
@@ -25,6 +25,8 @@ backend/src/ai_spot_trader/
     engine.py              # orchestration causale sélection -> marché -> décision -> Risk
   core/
     config.py              # PAPER_EXECUTABLE_MARKETS et validation de l'univers
+  integrations/kraken/
+    derivatives.py         # normalisation Derivatives + schedules de marge imbriqués fail-closed
   persistence/
     models.py              # nouveaux payloads + execution_universe_payload
     runs.py                # run singleton ou multi-marchés honnête
@@ -164,6 +166,11 @@ Pourquoi : `KrakenDerivativesMarketDataSource` d'exécution peut appeler le `mar
 snapshot pour mettre à jour mark price, unrealized P&L et funding d'une position existante.
 Agent final et Risk doivent voir cet état, pas l'état antérieur à l'acquisition.
 
+Le catalogue public Derivatives peut exposer des schedules de marge directs ou imbriqués par
+région/profil. Le parser aplatit uniquement les feuilles de marge reconnues et les valide toutes
+fail-closed. Comme aucun tier privé n'est prouvé par cette API publique, le runtime conserve les
+taux publics les plus stricts observés pour `initial_margin_rate` et `maintenance_margin_rate`.
+
 ## 9. Artefact MarketSelection
 
 ```text
@@ -212,7 +219,7 @@ market_selection_payload       JSONB NULL
 Ces colonnes sont nullable pour les cycles historiques. Le `result_digest` inclut les deux.
 
 Le détail API expose les deux objets. Le résumé de cycle dérive `symbol + market_type` de la
-sélection quand aucune décision finale n'existe pas encore.
+sélection quand aucune décision finale n'existe encore.
 
 ## 12. `paper_runs`
 
@@ -263,7 +270,18 @@ selection : executable_market_data + executable_markets
 Le chemin canonique composé utilise le second. Le premier évite de casser les tests et surfaces
 mono-marché existants pendant la transition.
 
-## 15. Ressources et fermeture
+## 15. Validation comportementale Batch 18.3
+
+Le smoke réel a confirmé : cross-symbol SPOT, univers mixte chargé, research SPOT + PERPETUAL dans
+un même cycle, cycles mixtes SPOT terminés et branche PERPETUAL réelle validée séparément jusqu'à
+la décision et Risk. Il n'a pas confirmé une sélection PERPETUAL spontanée depuis l'univers mixte
+ni un fill réel.
+
+Un timeout ponctuel de la source SPOT d'exécution au stage `MARKET` a été suivi de plusieurs
+cycles `COMPLETED`. Un `LLMTransportError` ponctuel au stage `MARKET_SELECTION` a également été
+observé. Ces incidents restent des observations de robustesse, pas des changements d'architecture.
+
+## 16. Ressources et fermeture
 
 Les quatre sources réseau sont enregistrées comme ressources owned du runtime et dédupliquées par
 identité avant fermeture. Le routeur lui-même ne possède pas de connexion réseau.

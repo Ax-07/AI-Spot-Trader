@@ -2,7 +2,12 @@
 
 Backend Python/FastAPI autonome d'AI Spot Trader. Le frontend Next.js est uniquement un cockpit : fermer ou recharger le frontend ne stoppe jamais le moteur backend.
 
-Le runtime exécutable reste strictement **SPOT + PAPER** : Kraken public fournit le marché, l'Agent Luna/Sol propose BUY/SELL/HOLD, le Risk Engine déterministe autorise/modifie/refuse, le Paper Broker exécute seulement un `ExecutionIntent` Risk, et chaque résultat de cycle est persisté dans PostgreSQL.
+Le runtime exécutable est **PAPER** et supporte un univers typé composé de marchés **SPOT** et de
+**PERPETUAL linéaires** autorisés. Kraken public fournit les données de marché ; le même Agent
+Luna/Sol sélectionne le marché puis propose BUY/SELL/HOLD ; le Risk Engine déterministe
+autorise/modifie/refuse ; le Paper Broker exécute seulement un `ExecutionIntent` créé par Risk ;
+et chaque résultat de cycle est persisté dans PostgreSQL. Aucun endpoint Kraken privé d'ordre
+n'est utilisé.
 
 ## Développement
 
@@ -25,12 +30,13 @@ L'API est disponible par défaut sur `http://127.0.0.1:8000` et le healthcheck s
 
 Copier `backend/.env.example` vers `backend/.env`, puis renseigner localement les valeurs explicitement requises :
 
-- paire PAPER et devise de règlement ;
+- marché bootstrap PAPER, univers exécutable typé et devise de règlement ;
 - capital initial ;
 - cadence et agressivité ;
 - timeouts Market/Agent/Broker ;
 - max order notional, whitelist Risk et politique de réduction ;
 - fee rate, spread et slippage ;
+- paramètres Derivatives/Risk requis si un `PERPETUAL` appartient à l'univers ;
 - `AI_SPOT_TRADER_DATABASE_URL` PostgreSQL/asyncpg ;
 - `AI_SPOT_TRADER_OPENAI_API_KEY` ;
 - modèle Luna/Sol selon le run.
