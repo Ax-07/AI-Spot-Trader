@@ -86,7 +86,7 @@ L'audit a montré que `market_state.context` était `null` pour cette source Der
 
 ## Batch 16.5 — Contexte marché PERPETUAL pour l'Agent
 
-**État : intégré sur GitHub `main` au commit `595bd2c8b4311ac255db927515207f10875b1505` (`feat: enrich perpetual paper market context`).**
+**État : intégré sur GitHub `main` au commit fonctionnel `595bd2c8b4311ac255db927515207f10875b1505` (`feat: enrich perpetual paper market context`), clôture documentaire au commit `84272713b66439a16e7769da83eccc1514aa64f7`.**
 
 Objectif : réutiliser le `MarketStateBuilder` canonique avec les bougies publiques Kraken Futures **mark 1 minute** afin de fournir à l'Agent les mêmes statistiques descriptives causales que sur SPOT : fraîcheur, fenêtres 5 min / 30 min, rendement, range et volatilité réalisée.
 
@@ -109,11 +109,33 @@ mypy --config-file backend\pyproject.toml ... : Success, 107 source files
 git diff --check                               : aucune erreur
 ```
 
-Smoke réel : `paper_run_id = 8bbfe6a5-a5d5-4c32-96dc-eb9c5e4113d2`, cycle `c097f3fc-4954-4985-a364-f6ffe99b24e6` `COMPLETED`, `AgentInput.market_state.context` non nul, fenêtres 5m/30m complètes avec 6/31 observations, mark/index/funding conservés.
+Cycle réel de référence : `paper_run_id = 8bbfe6a5-a5d5-4c32-96dc-eb9c5e4113d2`, cycle `c097f3fc-4954-4985-a364-f6ffe99b24e6` `COMPLETED`, `AgentInput.market_state.context` non nul, fenêtres 5m/30m complètes avec 6/31 observations, mark/index/funding conservés.
+
+## Batch 16.6 — Validation comportementale GPT-5.6 Luna avec contexte enrichi
+
+**État : validé localement le 22 septembre 2026 ; documentation de clôture à intégrer sur `main`. Aucun changement de code.**
+
+Run propre `paper_run_id = c9443243-57ca-43de-9356-adc1e6fe3226` sur `BTC/USD / PF_XBTUSD`, `PERPETUAL`, `ISOLATED`, levier `1x`, capital `1000 USD`, agressivité `2`, composition normale et GPT-5.6 Luna :
+
+- 8 cycles `COMPLETED`, 0 `FAILED` ;
+- 8/8 contextes PERPETUAL non nuls ;
+- fenêtres 5m/30m complètes sur les 8 cycles avec 6/31 observations ;
+- causalité vérifiée sur les 8 cycles ;
+- fraîcheur comprise entre `1.021449 s` et `1.110151 s` ;
+- 8 HOLD naturels, aucun BUY/SELL forcé ;
+- rationales cohérentes avec les faits présents : rendements 5m/30m, absence de position et funding positif lorsqu'il est mentionné ;
+- 8 Risk `ALLOW`, 0 intent, 0 fill, 0 trade ;
+- analytics finaux : `1000 -> 1000 USD`, P&L brut/net `0`, coûts `0`, funding `0`, exposition `0`, drawdown `0` ;
+- isolation : 8 cycles dans le run 16.6, 0 `cycle_id` commun avec le run Batch 16.5 ;
+- run fermé proprement avec `ended_at = 2026-09-22 08:41:03.924351 UTC`.
+
+Un premier essai a réutilisé le run Batch 16.5 parce que le backend n'avait pas encore été redémarré. Ces cycles ont été conservés dans l'audit, mais exclus comme preuve du Batch 16.6. La validation finale repose uniquement sur le nouveau run isolé `c9443243-57ca-43de-9356-adc1e6fe3226`.
+
+L'absence de BUY/SELL naturel ne constitue pas un échec et ne justifie aucune modification destinée à provoquer un trade.
 
 ## Batch 17 — Robustesse Derivatives
 
-**Proposé après le Batch 16.5 intégré, à partir de nouveaux runs Agent PERPETUAL PAPER exploitant le contexte enrichi.**
+**Proposé après clôture et intégration documentaire du Batch 16.6.**
 
 Pistes : validation des schémas publics Kraken sur davantage d'instruments, tiers de marge par taille, liquidation PAPER plus fidèle, cockpit dédié dérivés, reprise/réconciliation du ledger mémoire, scénarios multi-position/multi-instrument, puis éventuel enrichissement public supplémentaire (funding historique, liquidité/volume) uniquement si son utilité est mesurée.
 

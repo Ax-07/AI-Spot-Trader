@@ -99,6 +99,14 @@ Les anciennes mentions **SPOT uniquement / aucun future-perpetual** sont supers�
 ### ADR-116 — Pas d'enrichissement public supplémentaire sans besoin mesuré
 **ACCEPTÉE ET INTÉGRÉE au commit `595bd2c8b4311ac255db927515207f10875b1505`.** Le Batch 16.5 n'ajoute pas encore volume, order book, funding historique ou analytics de liquidité. Le mark/index/funding courant déjà intégré est conservé ; le batch se limite au manque confirmé : un historique causal pour `MarketState.context`.
 
+## Décisions Batch 16.6
+
+### ADR-117 — Un HOLD naturel reste une observation valide
+**ACCEPTÉE LOCALEMENT.** Le Batch 16.6 ne modifie ni prompt, ni agressivité, ni stratégie pour provoquer BUY/SELL. Huit HOLD naturels consécutifs sur le run isolé final sont conservés comme résultat expérimental valide.
+
+### ADR-118 — Un essai non isolé n'est pas utilisé comme preuve d'isolation
+**ACCEPTÉE LOCALEMENT.** Un premier essai 16.6 a continué le run Batch 16.5 faute de redémarrage complet du backend. Les cycles restent dans l'audit durable mais sont exclus de la preuve finale 16.6. La validation repose sur le run neuf `c9443243-57ca-43de-9356-adc1e6fe3226`.
+
 ## Changelog — 2026-09-21 — Batch 16.1 Smoke PERPETUAL PAPER
 
 Smoke réel : `BTC/USD / PF_XBTUSD`, cycle `COMPLETED`, Agent `HOLD`, Risk `ALLOW / HOLD_NO_EXECUTION`, analytics `1000 -> 1000`, `trade_count=0`, `hold_count=1`.
@@ -174,7 +182,7 @@ L'audit du vrai `AgentInput` a confirmé `market_state.context = null`. Les rati
 
 ## Changelog — 2026-09-22 — Batch 16.5 Contexte marché PERPETUAL
 
-Patch développé à partir du HEAD GitHub `0b7303c9e0737f39ac81a5af2517f2f7953c133c`, validé localement puis intégré sur `main` au commit `595bd2c8b4311ac255db927515207f10875b1505` :
+Patch développé à partir du HEAD GitHub `0b7303c9e0737f39ac81a5af2517f2f7953c133c`, validé localement puis intégré sur `main` au commit fonctionnel `595bd2c8b4311ac255db927515207f10875b1505`. La clôture documentaire est intégrée au commit `84272713b66439a16e7769da83eccc1514aa64f7`.
 
 - réutilisation de `MarketStateBuilder` pour Derivatives ;
 - récupération publique des bougies mark Kraken Futures Charts en `1m` ;
@@ -194,7 +202,7 @@ mypy --config-file backend\pyproject.toml ... : Success, 107 source files
 git diff --check                               : aucune erreur ; avertissements LF -> CRLF uniquement
 ```
 
-Smoke réel via la composition normale après redémarrage complet du backend :
+Cycle réel de référence via la composition normale après redémarrage complet du backend :
 
 - `paper_run_id = 8bbfe6a5-a5d5-4c32-96dc-eb9c5e4113d2` ;
 - `cycle_id = c097f3fc-4954-4985-a364-f6ffe99b24e6`, `COMPLETED` ;
@@ -205,11 +213,47 @@ Smoke réel via la composition normale après redémarrage complet du backend :
 - fraîcheur `0.773542 s` ;
 - index `86622.3` et funding `0.00001373689662899510173815517115` conservés.
 
-Le premier essai effectué avant redémarrage du backend avait encore `context = null` parce que le processus FastAPI utilisait l'ancien module chargé en mémoire. Après redémarrage complet, le nouveau `paper_run_id` et le contexte non nul ont confirmé le chemin runtime 16.5.
+Le premier essai effectué avant redémarrage du backend avait encore `context = null` parce que le processus FastAPI utilisait l'ancien module chargé en mémoire. Après redémarrage complet, le cycle de référence a confirmé le chemin runtime 16.5.
+
+## Changelog — 2026-09-22 — Batch 16.6 Validation comportementale Luna PERPETUAL PAPER
+
+**État : validé localement ; documentation de clôture à intégrer. Aucun changement de code.**
+
+Audit effectué depuis GitHub `main` au HEAD `84272713b66439a16e7769da83eccc1514aa64f7`.
+
+Run final propre : `paper_run_id = c9443243-57ca-43de-9356-adc1e6fe3226`.
+
+Configuration conservée : `BTC/USD / PF_XBTUSD`, `PERPETUAL`, `ISOLATED`, levier déterministe `1x`, capital PAPER `1000 USD`, agressivité `2`, GPT-5.6 Luna, `agent-strategy-v3`, Risk inchangé.
+
+Résultats complets :
+
+- 8 cycles `COMPLETED`, 0 `FAILED` ;
+- 8/8 `market_state.context != null` ;
+- 8/8 fenêtres 5m complètes, 6 observations ;
+- 8/8 fenêtres 30m complètes, 31 observations ;
+- causalité vérifiée sur les 8 cycles ;
+- fraîcheur entre `1.021449 s` et `1.110151 s` ;
+- rendements 5m observés entre `0.001382112552274408121158548` et `0.004277054732762370494098960` ;
+- rendements 30m observés entre `0.000595245832287674415770980` et `0.004189253453471024976633082` ;
+- funding courant positif dans les 8 snapshots affichés ;
+- 8 décisions naturelles `HOLD` ;
+- rationales cohérentes avec les données réellement présentes : rendements 5m/30m, absence de position et funding lorsqu'il est cité ; aucun indicateur absent observé ;
+- 8 Risk `ALLOW` ;
+- 0 `ExecutionIntent`, 0 fill, 0 trade ;
+- capital `1000 -> 1000 USD` ;
+- P&L brut/net `0` ; frais, spread, slippage, funding P&L `0` ;
+- exposition et drawdown `0` ;
+- isolation : 8 cycles propres au run final et 0 `cycle_id` commun avec le run Batch 16.5 ;
+- `started_at = 2026-09-22 08:35:12.561639 UTC` ;
+- `ended_at = 2026-09-22 08:41:03.924351 UTC`.
+
+Un premier essai 16.6 a continué le run Batch 16.5 parce que le backend n'avait pas été redémarré. Le préflight a ensuite conduit à créer un nouveau run. Les cycles de l'essai initial sont conservés dans le journal et ne sont ni supprimés ni sélectionnés comme preuve du Batch 16.6.
+
+Conclusion : le contexte enrichi est systématiquement transmis dans le run final, la causalité est respectée, les rationales observées n'inventent pas d'indicateurs absents, Risk reste l'autorité finale, les analytics run-scoped restent cohérents et l'isolation est confirmée. Aucun BUY/SELL naturel n'est apparu ; ce résultat n'est pas un échec et ne déclenche aucune optimisation de stratégie.
 
 ## Prochaine étape
 
-Le Batch 16.5 est intégré sur `main`. Les expérimentations suivantes peuvent mesurer les décisions naturelles de Luna avec le contexte enrichi ; HOLD reste un résultat valide. Le prochain travail doit être lancé dans un batch distinct.
+Le Batch 16.6 est validé localement. Après revue, commit et push explicite de cette clôture documentaire, toute nouvelle expérimentation ou évolution Derivatives doit être lancée dans un batch distinct.
 
 ## LIVE
 

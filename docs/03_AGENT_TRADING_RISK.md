@@ -68,7 +68,7 @@ Règles causales :
 
 Ces observations peuvent éclairer Luna, mais elles ne produisent jamais elles-mêmes BUY, SELL ou HOLD.
 
-Validation réelle Batch 16.5 : le run `8bbfe6a5-a5d5-4c32-96dc-eb9c5e4113d2` a produit le cycle `c097f3fc-4954-4985-a364-f6ffe99b24e6` en statut `COMPLETED` avec un vrai `AgentInput.market_state.context` non nul. Les fenêtres 5 min et 30 min étaient complètes, avec 6 et 31 observations, et le contexte dérivé mark/index/funding restait présent.
+Validation réelle Batch 16.5 : le cycle `c097f3fc-4954-4985-a364-f6ffe99b24e6` du run `8bbfe6a5-a5d5-4c32-96dc-eb9c5e4113d2` est `COMPLETED` avec un vrai `AgentInput.market_state.context` non nul. Les fenêtres 5 min et 30 min étaient complètes, avec 6 et 31 observations, et le contexte dérivé mark/index/funding restait présent.
 
 ---
 
@@ -179,7 +179,35 @@ L'audit du vrai `AgentInput` a montré `market_state.context = null`. Les ration
 
 ---
 
-## 11. Funding, P&L et marge
+## 11. Validation comportementale Luna — Batch 16.6
+
+Le run final du Batch 16.6 utilise la composition normale, GPT-5.6 Luna et le contexte PERPETUAL enrichi, sans harness, sans décision forcée, sans modification du prompt et sans augmentation artificielle de l'agressivité.
+
+Run : `c9443243-57ca-43de-9356-adc1e6fe3226`, `BTC/USD / PF_XBTUSD`, `ISOLATED`, levier `1x`, agressivité `2`, capital `1000 USD`.
+
+Résultats :
+
+- 8 cycles `COMPLETED`, 0 `FAILED` ;
+- `market_state.context` non nul sur les 8 cycles ;
+- fenêtre 5 min complète sur les 8 cycles, 6 observations ;
+- fenêtre 30 min complète sur les 8 cycles, 31 observations ;
+- fraîcheur comprise entre `1.021449 s` et `1.110151 s` ;
+- vérification causale `true` sur les 8 cycles : aucune dernière observation statistique n'est égale ou postérieure au timestamp Derivatives courant ;
+- rendements 5m observés allant de `0.001382112552274408121158548` à `0.004277054732762370494098960` ;
+- rendements 30m observés allant de `0.000595245832287674415770980` à `0.004189253453471024976633082` ;
+- funding courant positif sur les 8 cycles affichés ;
+- 8 décisions naturelles `HOLD`, sans quantité proposée ;
+- 8 Risk `ALLOW`, aucun `ExecutionIntent`, fill ou trade.
+
+Les rationales Luna restent alignées avec les faits présents dans l'`AgentInput` : posture très conservatrice liée à l'agressivité `2`, rendements 5m/30m positifs mais jugés insuffisants, absence de position existante et, lorsqu'il est cité, funding positif. Aucun indicateur technique, news, carnet d'ordres ou autre donnée absente n'a été observé dans ces rationales.
+
+Le run n'a produit aucun BUY ou SELL naturel. Ce résultat est conservé tel quel : il ne justifie ni changement de prompt, ni hausse artificielle de l'agressivité, ni règle déterministe destinée à provoquer un trade.
+
+Risk conserve bien l'autorité finale : chaque HOLD a été évalué `ALLOW` sans intent, conformément au contrat canonique.
+
+---
+
+## 12. Funding, P&L et marge
 
 Le market source dérivés marque le ledger avant le snapshot portefeuille du cycle.
 
@@ -189,9 +217,11 @@ Lors d'une réduction/fermeture, la marge isolée est libérée au prorata et le
 
 Les coûts PAPER incluent frais, spread et slippage.
 
+Sur le run 16.6, aucune position n'ayant été ouverte : capital initial/final `1000 USD`, P&L brut/net `0`, frais `0`, spread `0`, slippage `0`, funding P&L `0`, exposition `0`, drawdown `0`, `trade_count=0`.
+
 ---
 
-## 12. paper_run_id et audit
+## 13. paper_run_id et audit
 
 Chaque expérience PAPER moderne possède un `paper_run_id` durable.
 
@@ -206,9 +236,13 @@ Les deux runs ont été fermés proprement avec `ended_at`. Le contrôle `verify
 
 Le run Luna 16.4 `36fe73e0-f52f-4e27-995b-c5c848f46da2` a lui aussi été clôturé durablement.
 
+Pour le Batch 16.6, le run propre `c9443243-57ca-43de-9356-adc1e6fe3226` contient exactement 8 cycles et n'a aucun `cycle_id` commun avec le run de référence Batch 16.5. Il a été clôturé avec `ended_at = 2026-09-22 08:41:03.924351 UTC`.
+
+Un essai précédent a réutilisé le run Batch 16.5 faute de redémarrage complet du backend. Les lignes créées restent dans l'audit durable et ne sont pas supprimées ; elles ne sont pas utilisées comme preuve de l'isolation du Batch 16.6.
+
 ---
 
-## 13. Manifestes expérimentaux
+## 14. Manifestes expérimentaux
 
 `paper-experiment-v1` reste le protocole agressivité. `paper-experiment-v2` reste le protocole Luna/Sol avec `comparison_variable = LLM_MODEL`, `experiment_group_digest`, `experiment_digest`, `replicate_index`, `replicate_count` et `source_digest` obligatoire.
 
@@ -216,7 +250,7 @@ Les manifestes sont inclus dans `AgentInput` et persistés avec le cycle. Le `pa
 
 ---
 
-## 14. Chat opérateur
+## 15. Chat opérateur
 
 Le chat est une interface vers le même modèle/persona configuré, mais pas un deuxième agent stratégique.
 
@@ -226,17 +260,19 @@ Le chat ne peut pas activer le harness 16.3.
 
 ---
 
-## 15. No-look-ahead et anti cherry-picking
+## 16. No-look-ahead et anti cherry-picking
 
 Les règles d'expérimentation restent inchangées : mêmes faits, même prompt, même Risk/coûts/univers/source pour les comparaisons contrôlées, répétitions complètes, aucune suppression post-hoc.
 
-Le contexte PERPETUAL du Batch 16.5 respecte la même causalité : une bougie mark n'est statistiquement visible qu'après sa clôture. Le timestamp du ticker courant borne explicitement l'historique admissible.
+Le contexte PERPETUAL respecte la même causalité : une bougie mark n'est statistiquement visible qu'après sa clôture. Le timestamp du ticker courant borne explicitement l'historique admissible.
+
+Le Batch 16.6 conserve les 8 HOLD naturels et l'essai initial non isolé dans l'audit au lieu de sélectionner uniquement des cycles favorables. Le run propre final a été évalué intégralement.
 
 Le chat ou l'opérateur ne doivent jamais réécrire rétroactivement une décision ou utiliser un prix futur comme justification causale.
 
 ---
 
-## 16. Invariants conservés
+## 17. Invariants conservés
 
 - un seul agent IA stratégique ;
 - Luna/Sol derrière le même provider stratégique ;
@@ -258,6 +294,6 @@ Le chat ou l'opérateur ne doivent jamais réécrire rétroactivement une décis
 
 ---
 
-## 17. Prochain jalon
+## 18. Prochain jalon
 
-Le Batch 16.5 est intégré sur `main` au commit `595bd2c8b4311ac255db927515207f10875b1505` : le vrai `AgentInput` PERPETUAL reçoit désormais un contexte causal 5 min / 30 min non nul. Les prochaines expérimentations peuvent mesurer les décisions naturelles de GPT-5.6 Luna avec ce contexte sans forcer BUY/SELL et sans ajouter de règle stratégique déterministe. Tout enrichissement de données doit rester un batch séparé et justifié par une mesure.
+Le Batch 16.6 confirme le fonctionnement naturel de GPT-5.6 Luna avec le contexte PERPETUAL enrichi sur un run isolé de 8 cycles, sans changement de code. Aucun BUY/SELL n'a été observé et aucun mécanisme ne doit être ajouté pour en provoquer un. Toute nouvelle expérimentation, robustesse Derivatives ou enrichissement de données doit rester un batch distinct et être justifié par un besoin mesuré.

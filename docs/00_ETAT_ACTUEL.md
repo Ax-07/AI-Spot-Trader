@@ -6,62 +6,56 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub actuel : `595bd2c8b4311ac255db927515207f10875b1505` (`feat: enrich perpetual paper market context`).
-- Le Batch 16.5 est intégré sur `main` depuis le 22 septembre 2026.
-
-## Batch 16.4 — Run Agent réel PERPETUAL PAPER confirmé
-
-Premier run réel GPT-5.6 Luna via la composition normale, sans harness ni décision forcée :
-
-- `paper_run_id = 36fe73e0-f52f-4e27-995b-c5c848f46da2` ;
-- `BTC/USD / PF_XBTUSD`, perpetual linéaire, `ISOLATED`, levier déterministe `1x` ;
-- capital `1000 USD`, agressivité `2` ;
-- 4 cycles `COMPLETED`, 0 `FAILED` ;
-- 4 décisions Luna naturelles `HOLD` ;
-- 4 Risk `ALLOW / HOLD_NO_EXECUTION` ;
-- 0 intent, fill ou trade ;
-- exposition et P&L finaux nuls ;
-- run durablement clôturé avec `ended_at`.
-
-L'audit du vrai `AgentInput` a confirmé que la source Kraken Derivatives fournissait mark/index/funding/instrument mais `market_state.context = null`.
+- Référence fonctionnelle Batch 16.5 : `595bd2c8b4311ac255db927515207f10875b1505` (`feat: enrich perpetual paper market context`).
+- Clôture documentaire Batch 16.5 intégrée sur `main` : `84272713b66439a16e7769da83eccc1514aa64f7` (`docs: finalize Batch 16.5 integration`).
+- Batch 16.6 validé localement le 22 septembre 2026 ; documentation de clôture à intégrer.
 
 ## Batch 16.5 — Contexte PERPETUAL intégré
 
-Le contexte PERPETUAL réutilise désormais le pipeline canonique `MarketStateBuilder` :
+Le contexte PERPETUAL réutilise le pipeline canonique `MarketStateBuilder` avec bougies publiques Kraken Futures Charts `mark` en `1m`, fenêtres descriptives 5 min / 30 min, rendement, range, volatilité réalisée et fraîcheur sans look-ahead. Mark/index/funding restent dans `DerivativeMarketContext`. Aucun indicateur ne produit directement BUY/SELL/HOLD.
 
-- bougies publiques Kraken Futures Charts `mark` en résolution `1m` ;
-- normalisation en `MarketObservation` ;
-- fenêtres descriptives 5 min / 30 min déjà utilisées en SPOT ;
-- rendement, range, volatilité réalisée et fraîcheur calculés sans look-ahead ;
-- seules les bougies clôturées strictement avant le ticker courant entrent dans les statistiques ;
-- mark/index/funding/instrument restent inchangés dans `DerivativeMarketContext` ;
-- aucune donnée privée Kraken et aucun LIVE ;
-- aucun indicateur ne produit directement BUY/SELL/HOLD.
-
-Validation réelle après redémarrage complet du backend :
+Cycle de référence Batch 16.5 :
 
 - `paper_run_id = 8bbfe6a5-a5d5-4c32-96dc-eb9c5e4113d2` ;
-- `cycle_id = c097f3fc-4954-4985-a364-f6ffe99b24e6`, statut `COMPLETED` ;
-- vrai `AgentInput` PERPETUAL avec `market_state.context != null` ;
-- fenêtre 5 min complète : 6 observations, rendement `-0.0008283458359064427`, volatilité réalisée `0.0003195517675049489` ;
-- fenêtre 30 min complète : 31 observations, rendement `0.002818639241644028`, volatilité réalisée `0.0004142619704073510` ;
+- `cycle_id = c097f3fc-4954-4985-a364-f6ffe99b24e6` ;
+- `COMPLETED`, contexte non nul ;
+- fenêtres 5 min / 30 min complètes avec 6 / 31 observations ;
 - fraîcheur observée `0.773542 s` ;
-- mark/index/funding toujours présents dans `DerivativeMarketContext`.
+- mark/index/funding présents.
 
-Le critère principal du Batch 16.5 est donc satisfait. BUY, SELL ou HOLD restent tous des résultats stratégiques valides.
+## Batch 16.6 — Validation comportementale Luna PERPETUAL PAPER
+
+Run propre via composition normale, sans harness ni décision forcée :
+
+- `paper_run_id = c9443243-57ca-43de-9356-adc1e6fe3226` ;
+- `BTC/USD / PF_XBTUSD`, `PERPETUAL`, `ISOLATED`, levier déterministe `1x` ;
+- capital `1000 USD`, agressivité `2`, GPT-5.6 Luna ;
+- 8 cycles `COMPLETED`, 0 `FAILED` ;
+- 8/8 `AgentInput.market_state.context != null` ;
+- fenêtres 5 min / 30 min complètes sur les 8 cycles avec 6 / 31 observations ;
+- causalité vérifiée sur les 8 cycles ; fraîcheur observée entre `1.021449 s` et `1.110151 s` ;
+- 8 décisions Luna naturelles `HOLD` ;
+- rationales cohérentes avec les rendements 5m/30m, l'absence de position et le funding positif réellement fournis ; aucun indicateur absent n'a été observé dans les rationales ;
+- 8 Risk `ALLOW`, 0 `ExecutionIntent`, 0 fill, 0 trade ;
+- analytics : capital final `1000 USD`, P&L brut/net `0`, frais/spread/slippage/funding `0`, exposition `0`, drawdown `0` ;
+- isolation confirmée : 8 cycles propres au run, 0 `cycle_id` commun avec le run Batch 16.5 ;
+- run clôturé proprement : `started_at = 2026-09-22 08:35:12.561639 UTC`, `ended_at = 2026-09-22 08:41:03.924351 UTC`.
+
+Aucun BUY/SELL naturel n'est apparu. Ce n'est pas un échec du batch et aucune modification du prompt, de l'agressivité ou de Risk n'est justifiée pour provoquer un trade.
 
 ## Invariants
 
-Un seul Agent stratégique. GPT-5.6 Luna pour les tests actuels. PAPER uniquement. Risk garde l'autorité finale. Levier `1x` et `ISOLATED` déterministes. Aucun LLM -> Broker direct. Aucun look-ahead. Aucun secret ni clé Kraken privée nécessaire.
+Un seul Agent stratégique. PAPER uniquement. Risk garde l'autorité finale. Levier `1x` et `ISOLATED` déterministes pour ce protocole. Aucun LLM -> Broker direct. Aucun look-ahead. Aucun secret ni clé Kraken privée nécessaire. HOLD reste un résultat stratégique valide.
 
-## Validation Batch 16.5 confirmée
+## Validation
+
+Aucun changement de code n'a été nécessaire au Batch 16.6. La dernière validation complète du code reste celle du Batch 16.5 :
 
 ```text
 pytest backend                                  : 357 passed, 2 warnings externes
 ruff check backend                             : All checks passed
 mypy --config-file backend\pyproject.toml ... : Success, 107 source files
 git diff --check                               : aucune erreur ; avertissements LF -> CRLF uniquement
-smoke Luna PERPETUAL PAPER                     : COMPLETED, context 5m/30m non nul
 ```
 
-Le Batch 16.5 est intégré. Prochaine étape : nouveaux runs GPT-5.6 Luna PERPETUAL PAPER exploitant le contexte enrichi, sans décision forcée.
+Prochaine étape : toute nouvelle expérimentation ou évolution Derivatives doit être lancée dans un batch distinct, sans forcer BUY/SELL à partir du résultat 16.6.
