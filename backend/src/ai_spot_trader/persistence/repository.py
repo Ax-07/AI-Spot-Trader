@@ -140,6 +140,7 @@ class SqlAlchemyCycleAuditRepository:
                     portfolio_after.as_of if portfolio_after is not None else None
                 ),
                 agent_input_payload=_model_payload(agent_input),
+                agent_tool_traces_payload=_tool_trace_payload(result),
                 portfolio_after_payload=_model_payload(portfolio_after),
             )
         )
@@ -203,6 +204,10 @@ def _model_payload(model: Any | None) -> dict[str, object] | None:
     return dict(model.model_dump(mode="json"))
 
 
+def _tool_trace_payload(result: TradingCycleResult) -> list[dict[str, object]]:
+    return [dict(trace.model_dump(mode="json")) for trace in result.agent_tool_traces]
+
+
 def _result_digest(
     result: TradingCycleResult,
     *,
@@ -221,6 +226,7 @@ def _result_digest(
             else None
         ),
         "agent_input": _model_payload(result.agent_input),
+        "agent_tool_traces": _tool_trace_payload(result),
         "decision": _model_payload(result.decision),
         "risk_assessment": _model_payload(result.risk_assessment),
         "execution_intent": _model_payload(result.execution_intent),

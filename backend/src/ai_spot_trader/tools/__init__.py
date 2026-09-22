@@ -1,1 +1,1 @@
-"""Explicit operator/development tools kept outside the normal application composition."""
+"""Bounded application tools, including Agent read-only research and dev harnesses."""

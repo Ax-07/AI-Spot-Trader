@@ -94,6 +94,7 @@ class CycleAuditDetail:
     fills: tuple[FillAuditItem, ...]
     portfolio_state_after: JsonObject | None
     paper_run_id: UUID | None = None
+    agent_tool_traces: tuple[JsonObject, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -688,6 +689,14 @@ def _json(value: dict[str, object] | None) -> JsonObject | None:
     return None if value is None else dict(value)
 
 
+def _json_list(value: list[dict[str, object]] | None) -> tuple[JsonObject, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise AuditDataIntegrityError("agent tool traces payload must be an array of objects")
+    return tuple(dict(item) for item in value)
+
+
 def _failure(record: CycleRecord) -> CycleFailureView | None:
     if record.failure_stage is None and record.failure_error_type is None:
         return None
@@ -755,6 +764,7 @@ def _cycle_detail(record: CycleRecord) -> CycleAuditDetail:
         portfolio_before_as_of=_utc(record.portfolio_before_as_of),
         portfolio_after_as_of=_utc(record.portfolio_after_as_of),
         agent_input=_json(record.agent_input_payload),
+        agent_tool_traces=_json_list(record.agent_tool_traces_payload),
         decision=_json(record.decision.payload) if record.decision is not None else None,
         risk_assessment=(
             _json(record.risk_assessment.payload)

@@ -2,227 +2,76 @@
 
 ## Règle de lecture
 
-Un batch n'est **intégré** qu'après validation locale, commit et push confirmés sur `main`.
+Un batch est **intégré** uniquement après validation locale, commit et push confirmés sur GitHub `main`. Un ZIP livré par ChatGPT reste un patch proposé tant que ces étapes ne sont pas réalisées.
 
-## Batches 00 à 15.3 — intégrés
+## Historique intégré synthétique
 
-Les étapes historiques suivantes sont intégrées : documentation/bootstrap, contrats domaine, Kraken Spot public, Market State, Portfolio/Paper Broker, Risk Engine, Agent Luna/Sol, boucle autonome, persistance PostgreSQL, API FastAPI, cockpit Next.js, analytics, expérimentation agressivité, comparaison Luna/Sol, chat opérateur, composition runtime PAPER, contexte marché multi-horizon et découplage contexte/cadence.
+- Batches 00–15.3 : socle SPOT PAPER, Agent, Risk, Broker, PostgreSQL, API/cockpit, analytics et expériences.
+- Batch 16 : Kraken Derivatives PAPER, LONG/SHORT, marge ISOLATED, levier déterministe, funding, P&L et anti-reversal.
+- Batch 16.2 : isolation durable par `paper_run_id`.
+- Batch 16.3 : smokes LONG/SHORT contrôlés.
+- Batch 16.5 : contexte PERPETUAL causal via `MarketStateBuilder` et bougies mark publiques.
+- Batch 16.6 : validation comportementale Luna sans forcer BUY/SELL.
+- Prompt `agent-strategy-v4` : localisation française.
+- Batch 17 : durcissement fail-closed de la frontière Kraken Derivatives publique.
 
-Référence fonctionnelle Batch 15.3 : `d0f6d46b9adb37117051a7a497a8d55075c41d32`.
+Référence intégrée actuelle avant Batch 18.1 : `main = ca5077af00293ccca9794132ee0dd53a5b339911`; `baseline-batch17` pointe sur ce commit.
 
-## Batch 16 — Kraken Derivatives PAPER
+## Batch 18.1 — Socle Agent tools read-only et tool loop OpenAI bornée
 
-**État : intégré sur `main` au commit fonctionnel `06e3185c8a8c638263427842ab6591a2397810e0` (`feat: add Kraken derivatives paper trading`).**
+**État : patch proposé, non intégré.**
 
-Le support intégré couvre le domaine `SPOT | PERPETUAL | FUTURE`, l'exécution PAPER des perpetuals linéaires en marge ISOLATED, LONG/SHORT, levier déterministe, P&L, funding, reduce-only, protections Risk, API/analytics étendus, sans API Kraken privée ni LIVE.
+### Objectif
 
-## Batch 16.1 — Smoke test PERPETUAL PAPER
+Permettre au même Agent stratégique de rechercher des faits marché de façon volontaire et bornée avant sa décision, sans déplacer l'autorité de Risk et sans encore rendre un autre symbole exécutable.
 
-**État : intégré.**
+### Périmètre proposé
 
-Le correctif accepte les valeurs négatives de `contractValueTradePrecision`. Le smoke réel `BTC/USD / PF_XBTUSD` a terminé `COMPLETED`, Agent `HOLD`, Risk `ALLOW / HOLD_NO_EXECUTION`, analytics `1000 -> 1000`, `trade_count=0`, `hold_count=1`.
+- `MarketResearchService` provider-agnostic ;
+- tools `list_markets` et `get_market_snapshot` uniquement ;
+- sources Kraken de recherche séparées des sources de trading ;
+- SPOT + PERPETUAL snapshots ; catalogue pouvant inclure FUTURE ;
+- Responses API `store=false`, strict functions, `parallel_tool_calls=false` ;
+- max calls, timeout et taille de résultat configurables ;
+- erreurs fournisseur sanitizées ;
+- traces causales complètes avec digest ;
+- migration `0003_agent_tool_traces` ;
+- persistance des traces même lors d'un échec Agent avant décision finale ;
+- digest de cycle intégrant les traces.
 
-Ce smoke initial ne validait pas encore les branches d'exécution LONG/SHORT.
+### Ce que 18.1 ne fait pas
 
-## Batch 16.2 — Isolation durable des runs PAPER
+- pas de ranking/scanner/momentum score ;
+- pas de second Agent ;
+- pas d'order tool ;
+- pas de LIVE/private Kraken ;
+- pas de remplacement du `MarketState` de Risk/Broker par un snapshot recherché ;
+- pas de décision exécutable sur un symbole différent du `paper_symbol`.
 
-**État : intégré sur GitHub `main` au commit fonctionnel `003bbadd7ae2f8288ccde049433832046f066957` (`feat: add durable paper run isolation`).**
+### Critère de sortie
 
-Implémentation intégrée :
+Après validation locale complète : l'Agent peut décider sans tool, appeler un ou plusieurs tools, recevoir des résultats bornés/auditables, puis produire un `DecisionCandidate` toujours limité au symbole initial du cycle.
 
-- table durable `paper_runs` ;
-- FK nullable `audit_cycles.paper_run_id` ;
-- décisions, Risk, intents et fills rattachés indirectement par leur cycle ;
-- migration PostgreSQL `0002_paper_runs` sans backfill trompeur ;
-- anciennes lignes conservées à `NULL` et exclues des analytics run-scoped ;
-- même mécanisme pour SPOT et PERPETUAL ;
-- analytics d'un run strictement filtrés par `paper_run_id` ;
-- filtres run-scoped disponibles pour audit ;
-- endpoints de découverte/sélection des runs ;
-- aucun changement frontend requis.
+## Batch 18.2 — Vrai choix de marché exécutable
 
-## Batch 16.3 — Smokes d'exécution Derivatives contrôlés
+**À concevoir séparément après intégration/validation de 18.1.**
 
-**État : intégré sur GitHub `main` au commit fonctionnel `520b016eb501f1a208bcb6d0e90eb1df947e1d0b` (`test: add controlled perpetual paper smoke harness`).**
+Le problème à résoudre n'est pas seulement d'autoriser `DecisionCandidate.symbol != AgentInput.market_state.symbol`. Il faut réorganiser causalement le cycle pour que :
 
-Le harness de validation est séparé du runtime normal et ne force jamais l'Agent de production.
+1. l'Agent choisisse un marché à partir de faits disponibles ;
+2. le backend acquière/valide le `MarketState` exact de ce marché ;
+3. le portefeuille complet reste visible ;
+4. Risk évalue la bonne paire/le bon type ;
+5. Broker utilise exactement le snapshot autorisé ;
+6. l'audit relie sélection, snapshot final, décision, Risk et fill sans look-ahead.
 
-Validation locale :
+Aucun raccourci consistant à réutiliser le `MarketState` du `paper_symbol` pour une autre décision n'est acceptable.
 
-```text
-pytest               : suite complète OK, 2 warnings externes FastAPI/Starlette
-ruff check .          : All checks passed
-mypy .                : Success: no issues found in 109 source files
-git diff --check      : aucune erreur
-```
+## Après 18.2 — pistes à décider
 
-Smokes réels contrôlés `BTC/USD / PF_XBTUSD`, levier `1x`, `ISOLATED` :
-
-- LONG : ouverture, HOLD/mark, funding, réduction `reduce_only`, fermeture oversize bornée par Risk, position finale vide ;
-- SHORT : scénario symétrique validé ;
-- 4 cycles `COMPLETED` et 3 exécutions par run ;
-- aucun cycle `FAILED` ;
-- P&L, marge, frais/spread/slippage et funding valorisés ;
-- aucune inversion accidentelle ;
-- deux `paper_run_id` distincts fermés proprement ;
-- contrôle `verify-isolation` : `isolation_verified=true`.
-
-## Batch 16.4 — Premier run Agent réel GPT-5.6 Luna PERPETUAL PAPER
-
-**État : résultat réel confirmé et documenté sur `main` via le commit `595bd2c8b4311ac255db927515207f10875b1505` du Batch 16.5.**
-
-Run `36fe73e0-f52f-4e27-995b-c5c848f46da2` sur `BTC/USD / PF_XBTUSD`, `ISOLATED`, levier déterministe `1x`, capital `1000 USD`, agressivité `2` :
-
-- 4 cycles `COMPLETED` ;
-- 4 décisions Luna réelles `HOLD` ;
-- 0 cycle `FAILED` ;
-- 4 Risk `ALLOW / HOLD_NO_EXECUTION` ;
-- 0 `ExecutionIntent`, fill ou trade ;
-- portefeuille final `1000 USD`, exposition `0`, P&L `0` ;
-- run clôturé durablement avec `ended_at` ;
-- aucune décision forcée et aucun recours au harness 16.3.
-
-L'audit a montré que `market_state.context` était `null` pour cette source Derivatives : les HOLD ne constituent donc pas un échec stratégique.
-
-## Batch 16.5 — Contexte marché PERPETUAL pour l'Agent
-
-**État : intégré sur GitHub `main` au commit fonctionnel `595bd2c8b4311ac255db927515207f10875b1505` (`feat: enrich perpetual paper market context`), clôture documentaire au commit `84272713b66439a16e7769da83eccc1514aa64f7`.**
-
-Objectif : réutiliser le `MarketStateBuilder` canonique avec les bougies publiques Kraken Futures **mark 1 minute** afin de fournir à l'Agent les mêmes statistiques descriptives causales que sur SPOT : fraîcheur, fenêtres 5 min / 30 min, rendement, range et volatilité réalisée.
-
-Principes du batch :
-
-- aucune seconde implémentation d'indicateurs ;
-- ticker Derivatives courant conservé pour mark/index/funding ;
-- historique mark public uniquement, sans clé Kraken privée ;
-- bougies non clôturées au moment du ticker exclues ;
-- aucune métrique déterministe ne produit BUY/SELL/HOLD ;
-- `AgentInput.market_state.context` devient non nul en PERPETUAL quand le snapshot est construit normalement ;
-- Risk conserve l'autorité finale et LIVE reste hors périmètre.
-
-Validation confirmée :
-
-```text
-pytest backend                                  : 357 passed, 2 warnings externes
-ruff check backend                             : All checks passed
-mypy --config-file backend\pyproject.toml ... : Success, 107 source files
-git diff --check                               : aucune erreur
-```
-
-Cycle réel de référence : `paper_run_id = 8bbfe6a5-a5d5-4c32-96dc-eb9c5e4113d2`, cycle `c097f3fc-4954-4985-a364-f6ffe99b24e6` `COMPLETED`, `AgentInput.market_state.context` non nul, fenêtres 5m/30m complètes avec 6/31 observations, mark/index/funding conservés.
-
-## Batch 16.6 — Validation comportementale GPT-5.6 Luna avec contexte enrichi
-
-**État : intégré sur GitHub `main` au commit `251d530ad12951605068c1c8eb8cbeb313c36b49` (`docs: validate Batch 16.6 Luna perpetual behavior`). Aucun changement de code pour le batch.**
-
-Run propre `paper_run_id = c9443243-57ca-43de-9356-adc1e6fe3226` sur `BTC/USD / PF_XBTUSD`, `PERPETUAL`, `ISOLATED`, levier `1x`, capital `1000 USD`, agressivité `2`, composition normale et GPT-5.6 Luna :
-
-- 8 cycles `COMPLETED`, 0 `FAILED` ;
-- 8/8 contextes PERPETUAL non nuls ;
-- fenêtres 5m/30m complètes sur les 8 cycles avec 6/31 observations ;
-- causalité vérifiée sur les 8 cycles ;
-- fraîcheur comprise entre `1.021449 s` et `1.110151 s` ;
-- 8 HOLD naturels, aucun BUY/SELL forcé ;
-- rationales cohérentes avec les faits présents : rendements 5m/30m, absence de position et funding positif lorsqu'il est mentionné ;
-- 8 Risk `ALLOW`, 0 intent, 0 fill, 0 trade ;
-- analytics finaux : `1000 -> 1000 USD`, P&L brut/net `0`, coûts `0`, funding `0`, exposition `0`, drawdown `0` ;
-- isolation : 8 cycles dans le run 16.6, 0 `cycle_id` commun avec le run Batch 16.5 ;
-- run fermé proprement avec `ended_at = 2026-09-22 08:41:03.924351 UTC`.
-
-Un premier essai a réutilisé le run Batch 16.5 parce que le backend n'avait pas encore été redémarré. Ces cycles ont été conservés dans l'audit, mais exclus comme preuve du Batch 16.6. La validation finale repose uniquement sur le nouveau run isolé `c9443243-57ca-43de-9356-adc1e6fe3226`.
-
-L'absence de BUY/SELL naturel ne constitue pas un échec et ne justifie aucune modification destinée à provoquer un trade.
-
-## Prompt Agent `agent-strategy-v4` — localisation française
-
-**État : intégré sur GitHub `main` au commit `bacf29c83b4f29477ee9e35a1a65756a866ba250` (`feat: localize agent strategy prompt to French`).**
-
-Évolution ciblée hors Batch 17 :
-
-- instructions humaines du prompt stratégique en français ;
-- valeurs contractuelles `BUY/SELL/HOLD`, `SPOT/PERPETUAL/FUTURE`, `LONG/SHORT` inchangées ;
-- `rationale` demandé en français ;
-- aucun changement du schéma structuré ni du chemin `Agent -> Risk -> Broker` ;
-- test ciblé Agent : `30 passed` ;
-- Ruff ciblé : `All checks passed!` ;
-- `git diff --check` : aucune erreur de contenu.
-
-## Batch 17 — Robustesse Derivatives
-
-**État : intégré sur GitHub `main` au commit `25efe21194a61140c426a47c261f74f76799e4ea` (`fix: harden Kraken derivatives paper metadata`).**
-
-Base d’audit du batch : `b859b5f813e458ca26633406a557462953d39e5e`.
-
-### Audit
-
-**Confirmé :**
-
-- le parser public supportait `marginLevels` et `retailMarginLevels`, mais pas la forme publique `marginSchedules` ;
-- les seuils de marge par taille étaient perdus dans un couple de taux conservateurs ;
-- `contractValueTradePrecision` absent tombait silencieusement sur une quantité minimale `1` ;
-- certaines entrées de marge malformed pouvaient être ignorées au lieu d'échouer ;
-- le ticker pouvait utiliser `last` si `markPrice` était absent ;
-- les états `suspended` / `postOnly` n'étaient pas bloquants dans le modèle PAPER full-fill ;
-- le ledger PAPER reste process-local ; la persistance du `paper_run_id` ne constitue pas une reprise durable du portefeuille ;
-- le domaine peut porter plusieurs positions dérivées par symbole et Risk somme l'exposition totale, mais la composition canonique reste centrée sur un `paper_symbol` à la fois ;
-- la liquidation actuelle est une estimation isolée à taux de maintenance constant, pas une reproduction complète du moteur Kraken.
-
-**Obsolète :**
-
-- considérer `marginLevels` / `retailMarginLevels` comme les seules formes possibles de marge publique ;
-- considérer `last` comme substitut acceptable au mark pour le chemin Derivatives PAPER.
-
-**Manquant mais volontairement hors périmètre de ce patch :**
-
-- modèle de tiers de marge appliqué dynamiquement à la taille projetée ;
-- reprise/réconciliation durable du ledger PAPER après redémarrage ;
-- orchestration multi-instrument simultanée validée de bout en bout ;
-- liquidation fidèle aux procédures/fees privées de Kraken ;
-- cockpit Derivatives dédié.
-
-**À décider ultérieurement :**
-
-- représentation provider-agnostic des tiers de marge dans le domaine ;
-- politique de sélection d'un barème quand plusieurs schedules publics existent et qu'aucun contexte privé ne prouve celui du compte ;
-- format durable d'un snapshot/recovery de portefeuille PAPER ;
-- utilité mesurée de funding historique, volume, liquidité ou order book.
-
-### Périmètre retenu
-
-Le patch Batch 17 durcit uniquement la frontière Kraken publique :
-
-- support de `marginSchedules` en plus de `marginLevels` / `retailMarginLevels` ;
-- validation stricte des structures de marge, des seuils et de la relation `maintenanceMargin <= initialMargin <= 1` ;
-- `contractValueTradePrecision` obligatoire pour un instrument tradeable ;
-- validation `maxPositionSize >= min_order_quantity` lorsqu'elle est disponible ;
-- drapeau `tradeable` strictement booléen ;
-- `markPrice` obligatoire dans le ticker, sans fallback vers `last` ;
-- fail-closed sur `suspended`, `postOnly`, flags malformed ou alias conflictuels ;
-- conservation du choix conservateur account-agnostic existant pour les taux de marge : maximum public observé, sans inventer un tier applicable.
-
-Aucun changement Agent/Risk/Broker/ledger/frontend/LIVE. Aucun nouveau signal déterministe et aucun enrichissement public supplémentaire.
-
-### Validation
-
-ChatGPT a exécuté dans l'environnement de livraison :
-
-```text
-python -m py_compile derivatives.py + test_kraken_derivatives.py : OK
-pytest ciblé isolé test_kraken_derivatives.py                     : 17 passed
-harness isolé du parser production modifié                       : OK
-```
-
-Validation locale finale :
-
-```text
-pytest backend                                  : 371 passed, 2 warnings externes
-ruff check backend                             : All checks passed
-mypy --config-file backend\pyproject.toml ... : Success, 74 source files
-git diff --check                               : aucune erreur ; warnings LF -> CRLF uniquement
-```
-
-La première suite complète a également révélé un digest de fixture resté figé sur `agent-strategy-v3` dans `test_experiments.py`. Le digest attendu a été recalé sur l'identité `agent-strategy-v4` déjà intégrée (`831b95456aa5612d2762e567c0e65579c8776dad753913e40750178c985c3d09`), puis le test ciblé et la suite complète ont passé. Ce correctif ne change pas le calcul du digest ; il remet seulement à jour la fixture attendue.
-
-## LIVE — toujours séparé
-
-Le LIVE n'est pas une suite automatique. Il nécessitera une décision explicite et un batch séparé couvrant : adaptateur privé Kraken, permissions minimales sans retrait, idempotence, réconciliation, recovery, limites renforcées, activation opérateur et observabilité.
+- protocole expérimental versionnant explicitement la politique de tools ;
+- univers multi-marché configurable et politique de coûts/cache ;
+- snapshots FUTURE génériques si l'exécution datée devient réellement supportée ;
+- enrichissements mesurés : order book, volume, recent trades ou funding historique uniquement si un besoin empirique le justifie ;
+- recovery durable du ledger PAPER ;
+- LIVE toujours en batch séparé.

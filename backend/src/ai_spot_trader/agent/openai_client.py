@@ -5,6 +5,12 @@ from pydantic import SecretStr
 
 from ai_spot_trader.agent.errors import LLMProviderError, LLMTransportError
 from ai_spot_trader.domain.enums import LLMModel
+from ai_spot_trader.domain.models import AgentToolTrace
+from ai_spot_trader.tools.read_only import (
+    ReadOnlyToolRegistry,
+    ToolCallBudgetExceededError,
+    ToolLoopResult,
+)
 
 
 class OpenAIResponsesClient:
@@ -21,11 +27,18 @@ class OpenAIResponsesClient:
         if not api_key.get_secret_value():
             raise ValueError("OpenAI API key cannot be empty")
         if timeout_seconds <= 0:
-            raise ValueError("OpenAI timeout must be positive")
+            raise ValueError("OpenAI timeout_seconds must be positive")
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
         self._http_client = http_client
+        self._last_tool_traces: tuple[AgentToolTrace, ...] = ()
+
+    @property
+    def last_tool_traces(self) -> tuple[AgentToolTrace, ...]:
+        """Tool traces completed by the latest strategic tool loop, including partial failure."""
+
+        return self._last_tool_traces
 
     async def generate_structured_decision(
         self,
@@ -35,10 +48,108 @@ class OpenAIResponsesClient:
         input_text: str,
         schema: dict[str, Any],
     ) -> str:
+        request = self._structured_request(
+            model=model,
+            instructions=instructions,
+            input_value=input_text,
+            schema=schema,
+        )
+        response = await self._responses(request)
+        return _extract_output_text(response)
+
+    async def generate_structured_decision_with_tools(
+        self,
+        *,
+        model: LLMModel,
+        instructions: str,
+        input_text: str,
+        schema: dict[str, Any],
+        tool_registry: ReadOnlyToolRegistry,
+        max_tool_calls: int,
+    ) -> ToolLoopResult:
+        if isinstance(max_tool_calls, bool) or max_tool_calls <= 0:
+            raise ValueError("max_tool_calls must be a positive integer")
+
+        self._last_tool_traces = ()
+        input_items: list[dict[str, Any]] = [
+            {"role": "user", "content": input_text}
+        ]
+        traces: list[AgentToolTrace] = []
+        seen_call_ids: set[str] = set()
+
+        while True:
+            request = self._structured_request(
+                model=model,
+                instructions=instructions,
+                input_value=input_items,
+                schema=schema,
+            )
+            request["tools"] = list(tool_registry.openai_tools)
+            request["parallel_tool_calls"] = False
+            response = await self._responses(request)
+            output_items = _extract_output_items(response)
+            function_calls = _extract_function_calls(output_items)
+            if not function_calls:
+                return ToolLoopResult(
+                    output_text=_extract_output_text(response),
+                    traces=tuple(traces),
+                )
+
+            if len(traces) + len(function_calls) > max_tool_calls:
+                raise ToolCallBudgetExceededError(
+                    "OpenAI response exceeded the configured read-only tool-call budget"
+                )
+
+            # store=false is kept. The causal conversation is explicitly replayed using
+            # the prior Responses output items plus our function_call_output items.
+            input_items.extend(dict(item) for item in output_items)
+            for call_id, name, arguments_json in function_calls:
+                if call_id in seen_call_ids:
+                    raise LLMProviderError("OpenAI returned a duplicate function call_id")
+                seen_call_ids.add(call_id)
+                execution = await tool_registry.execute(
+                    call_id=call_id,
+                    name=name,
+                    arguments_json=arguments_json,
+                )
+                traces.append(execution.trace)
+                self._last_tool_traces = tuple(traces)
+                input_items.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": execution.function_output,
+                    }
+                )
+
+    async def generate_text_response(
+        self,
+        *,
+        model: LLMModel,
+        instructions: str,
+        input_text: str,
+    ) -> str:
         request = {
             "model": model.value,
             "instructions": instructions,
             "input": input_text,
+            "store": False,
+        }
+        response = await self._responses(request)
+        return _extract_output_text(response)
+
+    def _structured_request(
+        self,
+        *,
+        model: LLMModel,
+        instructions: str,
+        input_value: str | list[dict[str, Any]],
+        schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "model": model.value,
+            "instructions": instructions,
+            "input": input_value,
             "store": False,
             "text": {
                 "format": {
@@ -49,84 +160,89 @@ class OpenAIResponsesClient:
                 }
             },
         }
-        response = await self._responses(request)
-        return _extract_output_text(response)
-
-    async def generate_text_response(
-        self,
-        *,
-        model: LLMModel,
-        instructions: str,
-        input_text: str,
-    ) -> str:
-        """Generate plain text without tools, persistence, or structured trading output."""
-
-        request = {
-            "model": model.value,
-            "instructions": instructions,
-            "input": input_text,
-            "store": False,
-        }
-        response = await self._responses(request)
-        return _extract_output_text(response)
 
     async def _responses(self, request: dict[str, Any]) -> dict[str, Any]:
         headers = {
             "Authorization": f"Bearer {self._api_key.get_secret_value()}",
             "Content-Type": "application/json",
         }
-        return await self._post(request=request, headers=headers)
+        response = await self._post(
+            f"{self._base_url}/responses",
+            headers=headers,
+            json=request,
+        )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise LLMProviderError("OpenAI response body is not valid JSON") from exc
+        if not isinstance(payload, dict):
+            raise LLMProviderError("OpenAI response body must be a JSON object")
+        return cast(dict[str, Any], payload)
 
     async def _post(
         self,
+        url: str,
         *,
-        request: dict[str, Any],
         headers: dict[str, str],
-    ) -> dict[str, Any]:
+        json: dict[str, Any],
+    ) -> httpx.Response:
         try:
             if self._http_client is not None:
                 response = await self._http_client.post(
-                    f"{self._base_url}/responses",
-                    json=request,
+                    url,
                     headers=headers,
+                    json=json,
                     timeout=self._timeout_seconds,
                 )
             else:
                 async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
-                    response = await client.post(
-                        f"{self._base_url}/responses",
-                        json=request,
-                        headers=headers,
-                    )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            status_code = exc.response.status_code
-            raise LLMTransportError(
-                f"OpenAI Responses API returned HTTP {status_code}"
-            ) from None
-        except httpx.HTTPError:
-            raise LLMTransportError("OpenAI Responses API request failed") from None
+                    response = await client.post(url, headers=headers, json=json)
+        except httpx.HTTPError as exc:
+            raise LLMTransportError("OpenAI request failed") from exc
+        if response.is_error:
+            raise LLMTransportError(f"OpenAI request failed with HTTP {response.status_code}")
+        return response
 
-        try:
-            data = response.json()
-        except ValueError:
-            raise LLMProviderError("OpenAI Responses API returned invalid JSON") from None
-        if not isinstance(data, dict):
-            raise LLMProviderError("OpenAI Responses API returned an invalid response envelope")
-        return cast(dict[str, Any], data)
+
+def _extract_output_items(response: dict[str, Any]) -> list[dict[str, Any]]:
+    if response.get("status") != "completed":
+        raise LLMProviderError("OpenAI response did not complete")
+    output = response.get("output")
+    if not isinstance(output, list) or not output:
+        raise LLMProviderError("OpenAI response contains no output items")
+    items: list[dict[str, Any]] = []
+    for item in output:
+        if not isinstance(item, dict):
+            raise LLMProviderError("OpenAI output item must be an object")
+        items.append(cast(dict[str, Any], item))
+    return items
+
+
+def _extract_function_calls(
+    output_items: list[dict[str, Any]],
+) -> tuple[tuple[str, str, str], ...]:
+    calls: list[tuple[str, str, str]] = []
+    for item in output_items:
+        if item.get("type") != "function_call":
+            continue
+        call_id = item.get("call_id")
+        name = item.get("name")
+        arguments = item.get("arguments")
+        if not isinstance(call_id, str) or not call_id.strip():
+            raise LLMProviderError("OpenAI function_call is missing call_id")
+        if not isinstance(name, str) or not name.strip():
+            raise LLMProviderError("OpenAI function_call is missing name")
+        if not isinstance(arguments, str):
+            raise LLMProviderError("OpenAI function_call arguments must be JSON text")
+        calls.append((call_id, name, arguments))
+    return tuple(calls)
 
 
 def _extract_output_text(response: dict[str, Any]) -> str:
-    if response.get("status") != "completed":
-        raise LLMProviderError("OpenAI Responses API response is incomplete")
-
-    output = response.get("output")
-    if not isinstance(output, list):
-        raise LLMProviderError("OpenAI Responses API response has no output list")
-
+    output = _extract_output_items(response)
     texts: list[str] = []
     for item in output:
-        if not isinstance(item, dict) or item.get("type") != "message":
+        if item.get("type") != "message":
             continue
         content = item.get("content")
         if not isinstance(content, list):
@@ -135,13 +251,12 @@ def _extract_output_text(response: dict[str, Any]) -> str:
             if not isinstance(part, dict):
                 continue
             if part.get("type") == "refusal":
-                raise LLMProviderError("OpenAI Responses API refused the request")
+                raise LLMProviderError("OpenAI refused the request")
+            if part.get("type") != "output_text":
+                continue
             text = part.get("text")
-            if part.get("type") == "output_text" and isinstance(text, str):
+            if isinstance(text, str) and text.strip():
                 texts.append(text)
-
-    if len(texts) != 1 or not texts[0].strip():
-        raise LLMProviderError(
-            "OpenAI Responses API must return exactly one non-empty output_text"
-        )
+    if len(texts) != 1:
+        raise LLMProviderError("OpenAI response must contain exactly one output_text")
     return texts[0]

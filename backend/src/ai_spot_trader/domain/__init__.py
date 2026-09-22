@@ -24,6 +24,7 @@ from ai_spot_trader.domain.experiments import (
 )
 from ai_spot_trader.domain.models import (
     AgentInput,
+    AgentToolTrace,
     AggressivenessContext,
     AssetBalance,
     AssetPosition,
@@ -42,6 +43,7 @@ from ai_spot_trader.domain.models import (
     MarketWindowStats,
     PortfolioState,
     RiskAssessment,
+    canonical_json_digest,
 )
 from ai_spot_trader.domain.ports import (
     Broker,
@@ -56,6 +58,7 @@ __all__ = [
     "EXPERIMENT_PROTOCOL_VERSION",
     "MODEL_EXPERIMENT_PROTOCOL_VERSION",
     "AgentInput",
+    "AgentToolTrace",
     "AggressivenessContext",
     "AssetBalance",
     "AssetPosition",
@@ -90,6 +93,7 @@ __all__ = [
     "RiskReason",
     "TradingAction",
     "aggressiveness_context",
+    "canonical_json_digest",
     "comparison_identity",
     "model_comparison_identity",
     "parse_canonical_symbol",

@@ -47,6 +47,10 @@ class PaperRunConfiguration:
     max_total_derivative_exposure: Decimal | None = None
     derivative_liquidation_buffer_ratio: Decimal | None = None
     derivative_margin_mode: MarginMode = MarginMode.ISOLATED
+    agent_tool_max_calls: int = 6
+    agent_tool_timeout_seconds: float = 5.0
+    agent_tool_max_result_bytes: int = 32768
+    agent_tool_list_markets_max_limit: int = 50
 
     @classmethod
     def from_settings(cls, settings: "Settings") -> "PaperRunConfiguration":
@@ -54,7 +58,6 @@ class PaperRunConfiguration:
 
         if settings.execution_mode is not ExecutionMode.PAPER:
             raise PaperRuntimeConfigurationError("the executable runtime only supports PAPER")
-
         required = {
             "paper_symbol": settings.paper_symbol,
             "paper_initial_capital": settings.paper_initial_capital,
@@ -111,7 +114,6 @@ class PaperRunConfiguration:
         slippage_bps = settings.paper_slippage_bps
         database_url = settings.database_url
         openai_api_key = settings.openai_api_key
-
         assert symbol is not None
         assert initial_capital is not None
         assert settlement_asset is not None
@@ -154,7 +156,6 @@ class PaperRunConfiguration:
             raise PaperRuntimeConfigurationError(
                 "paper_symbol must be present in risk_allowed_pairs"
             )
-
         if settings.paper_market_type is MarketType.FUTURE:
             raise PaperRuntimeConfigurationError(
                 "Batch 16 discovers dated futures metadata but executes PERPETUAL only"
@@ -173,7 +174,6 @@ class PaperRunConfiguration:
                 raise PaperRuntimeConfigurationError(
                     "paper_derivative_leverage cannot exceed risk_max_derivative_leverage"
                 )
-
         database_value = database_url.get_secret_value().strip()
         if not database_value:
             raise PaperRuntimeConfigurationError("database_url cannot be empty")
@@ -215,6 +215,10 @@ class PaperRunConfiguration:
                 settings.risk_derivative_liquidation_buffer_ratio
             ),
             derivative_margin_mode=settings.paper_derivative_margin_mode,
+            agent_tool_max_calls=settings.agent_tool_max_calls,
+            agent_tool_timeout_seconds=settings.agent_tool_timeout_seconds,
+            agent_tool_max_result_bytes=settings.agent_tool_max_result_bytes,
+            agent_tool_list_markets_max_limit=settings.agent_tool_list_markets_max_limit,
         )
 
 
@@ -227,7 +231,6 @@ class Settings(BaseSettings):
         env_prefix="AI_SPOT_TRADER_",
         extra="ignore",
     )
-
     app_name: str = "AI Spot Trader"
     environment: Environment = "development"
     api_host: str = "127.0.0.1"
@@ -236,7 +239,6 @@ class Settings(BaseSettings):
     execution_mode: ExecutionMode = ExecutionMode.PAPER
     llm_model: LLMModel = LLMModel.LUNA
     aggressiveness: int | None = Field(default=None, ge=1, le=10)
-
     paper_symbol: str | None = None
     paper_market_type: MarketType = MarketType.SPOT
     paper_initial_capital: Decimal | None = Field(default=None, gt=0)
@@ -253,17 +255,17 @@ class Settings(BaseSettings):
     risk_max_derivative_leverage: Decimal | None = Field(default=Decimal(1), ge=1)
     risk_max_derivative_position_notional: Decimal | None = Field(default=None, gt=0)
     risk_max_total_derivative_exposure: Decimal | None = Field(default=None, gt=0)
-    risk_derivative_liquidation_buffer_ratio: Decimal | None = Field(
-        default=Decimal("1.10"),
-        ge=1,
-    )
+    risk_derivative_liquidation_buffer_ratio: Decimal | None = Field(default=Decimal("1.10"), ge=1)
     paper_fee_rate: Decimal | None = Field(default=None, ge=0, lt=1)
     paper_spread_bps: Decimal | None = Field(default=None, ge=0)
     paper_slippage_bps: Decimal | None = Field(default=None, ge=0)
-
     openai_api_key: SecretStr | None = None
     openai_base_url: str = "https://api.openai.com/v1"
     openai_timeout_seconds: float = Field(default=30.0, gt=0)
+    agent_tool_max_calls: int = Field(default=6, ge=0, le=32)
+    agent_tool_timeout_seconds: float = Field(default=5.0, gt=0)
+    agent_tool_max_result_bytes: int = Field(default=32768, ge=1024, le=262144)
+    agent_tool_list_markets_max_limit: int = Field(default=50, ge=1, le=200)
     kraken_rest_url: str = "https://api.kraken.com"
     kraken_ws_url: str = "wss://ws.kraken.com/v2"
     kraken_derivatives_rest_url: str = "https://futures.kraken.com/derivatives/api/v3"
@@ -278,5 +280,4 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     """Return the process-wide settings instance."""
-
     return Settings()

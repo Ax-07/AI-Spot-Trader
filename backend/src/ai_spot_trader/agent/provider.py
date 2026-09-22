@@ -2,7 +2,7 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Annotated, Any, Literal, Protocol
+from typing import Annotated, Any, Literal, Protocol, cast
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -18,8 +18,9 @@ from ai_spot_trader.domain.experiments import (
     aggressiveness_context,
     validate_experiment_manifest_digest,
 )
-from ai_spot_trader.domain.models import AgentInput, DecisionCandidate
+from ai_spot_trader.domain.models import AgentInput, AgentToolTrace, DecisionCandidate
 from ai_spot_trader.domain.symbols import parse_canonical_symbol
+from ai_spot_trader.tools.read_only import ReadOnlyToolRegistry, ToolLoopResult
 
 DecisionIdFactory = Callable[[], UUID]
 PositiveDecimal = Annotated[Decimal, Field(gt=0)]
@@ -51,6 +52,21 @@ class StructuredDecisionClient(Protocol):
     ) -> str: ...
 
 
+class ToolStructuredDecisionClient(StructuredDecisionClient, Protocol):
+    """Optional Responses function-calling extension used by the same strategic Agent."""
+
+    async def generate_structured_decision_with_tools(
+        self,
+        *,
+        model: LLMModel,
+        instructions: str,
+        input_text: str,
+        schema: dict[str, Any],
+        tool_registry: ReadOnlyToolRegistry,
+        max_tool_calls: int,
+    ) -> ToolLoopResult: ...
+
+
 class _StrategicDecisionPayload(BaseModel):
     """Provider-only schema; the canonical business contract remains DecisionCandidate."""
 
@@ -72,7 +88,7 @@ class _StrategicDecisionPayload(BaseModel):
 
 
 class OpenAIDecisionProvider:
-    """Canonical Luna/Sol strategic provider producing validated DecisionCandidate values."""
+    """Canonical Luna/Sol Agent with optional bounded read-only market research."""
 
     def __init__(
         self,
@@ -81,22 +97,61 @@ class OpenAIDecisionProvider:
         model: LLMModel = LLMModel.LUNA,
         clock: Clock | None = None,
         decision_id_factory: DecisionIdFactory = uuid4,
+        tool_registry: ReadOnlyToolRegistry | None = None,
+        max_tool_calls: int = 0,
     ) -> None:
+        if isinstance(max_tool_calls, bool) or max_tool_calls < 0:
+            raise ValueError("max_tool_calls must be a non-negative integer")
+        if tool_registry is None and max_tool_calls != 0:
+            raise ValueError("max_tool_calls requires a read-only tool registry")
         self._client = client
         self._model = model
         self._clock = clock or SystemClock()
         self._decision_id_factory = decision_id_factory
+        self._tool_registry = tool_registry
+        self._max_tool_calls = max_tool_calls
+        self._last_tool_traces: tuple[AgentToolTrace, ...] = ()
+
+    @property
+    def last_tool_traces(self) -> tuple[AgentToolTrace, ...]:
+        """Read-only research completed in the latest Agent call, even if it failed later."""
+
+        return self._last_tool_traces
 
     async def generate_decision(self, agent_input: AgentInput) -> DecisionCandidate:
-        """Generate one strict strategic decision without executing or enriching it."""
+        """Generate one strict strategic decision; tools can only add read-only facts."""
 
         normalized_input = _normalize_agent_input(agent_input, model=self._model)
-        raw_output = await self._client.generate_structured_decision(
-            model=self._model,
-            instructions=AGENT_SYSTEM_PROMPT,
-            input_text=normalized_input.model_dump_json(),
-            schema=STRATEGIC_DECISION_SCHEMA,
-        )
+        traces: tuple[AgentToolTrace, ...] = ()
+        self._last_tool_traces = ()
+        if self._tool_registry is not None and self._max_tool_calls > 0:
+            tool_client = cast(ToolStructuredDecisionClient, self._client)
+            try:
+                loop_result = await tool_client.generate_structured_decision_with_tools(
+                    model=self._model,
+                    instructions=AGENT_SYSTEM_PROMPT,
+                    input_text=normalized_input.model_dump_json(),
+                    schema=STRATEGIC_DECISION_SCHEMA,
+                    tool_registry=self._tool_registry,
+                    max_tool_calls=self._max_tool_calls,
+                )
+            except Exception:
+                partial = getattr(tool_client, "last_tool_traces", ())
+                if isinstance(partial, tuple) and all(
+                    isinstance(trace, AgentToolTrace) for trace in partial
+                ):
+                    self._last_tool_traces = partial
+                raise
+            raw_output = loop_result.output_text
+            traces = loop_result.traces
+            self._last_tool_traces = traces
+        else:
+            raw_output = await self._client.generate_structured_decision(
+                model=self._model,
+                instructions=AGENT_SYSTEM_PROMPT,
+                input_text=normalized_input.model_dump_json(),
+                schema=STRATEGIC_DECISION_SCHEMA,
+            )
         payload = _parse_strategic_output(raw_output)
 
         expected_symbol = normalized_input.market_state.symbol
@@ -110,7 +165,12 @@ class OpenAIDecisionProvider:
             raise AgentContractViolationError(
                 "decision clock cannot precede AgentInput.created_at"
             )
+        if any(trace.completed_at > created_at for trace in traces):
+            raise AgentContractViolationError(
+                "tool trace cannot contain data completed after the final decision"
+            )
 
+        self._last_tool_traces = traces
         return DecisionCandidate(
             decision_id=self._decision_id_factory(),
             cycle_id=normalized_input.cycle_id,
@@ -120,6 +180,7 @@ class OpenAIDecisionProvider:
             proposed_quantity=payload.proposed_quantity,
             rationale=payload.rationale,
             market_type=normalized_input.market_state.market_type,
+            tool_traces=traces,
         )
 
 

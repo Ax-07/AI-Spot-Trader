@@ -53,13 +53,12 @@ def _reader(request: Request) -> CycleAuditReader:
     return reader
 
 
-
-
 def _resolved_run_id(request: Request, paper_run_id: UUID | None) -> UUID | None:
     if paper_run_id is not None:
         return paper_run_id
     runtime = cast(AppRuntime, request.app.state.runtime)
     return runtime.current_paper_run_id
+
 
 def _scoped_reader(request: Request) -> RunScopedCycleAuditReader:
     reader = _reader(request)
@@ -135,6 +134,7 @@ def _cycle_detail(value: CycleAuditDetail) -> CycleDetailResponse:
         portfolio_before_as_of=value.portfolio_before_as_of,
         portfolio_after_as_of=value.portfolio_after_as_of,
         agent_input=value.agent_input,
+        agent_tool_traces=value.agent_tool_traces,
         decision=value.decision,
         risk_assessment=value.risk_assessment,
         execution_intent=value.execution_intent,

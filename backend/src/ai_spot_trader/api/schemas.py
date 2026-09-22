@@ -54,6 +54,7 @@ class CycleDetailResponse(ApiModel):
     portfolio_before_as_of: datetime | None = None
     portfolio_after_as_of: datetime | None = None
     agent_input: JsonObject | None = None
+    agent_tool_traces: tuple[JsonObject, ...] = ()
     decision: JsonObject | None = None
     risk_assessment: JsonObject | None = None
     execution_intent: JsonObject | None = None

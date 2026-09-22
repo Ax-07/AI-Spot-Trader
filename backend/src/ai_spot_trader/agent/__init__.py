@@ -1,4 +1,4 @@
-"""Single-agent strategic LLM boundary for PAPER SPOT decisions."""
+"""Single-agent strategic LLM boundary for PAPER SPOT and Derivatives decisions."""
 
 from ai_spot_trader.agent.errors import (
     AgentContractViolationError,
@@ -13,6 +13,7 @@ from ai_spot_trader.agent.provider import (
     STRATEGIC_DECISION_SCHEMA,
     OpenAIDecisionProvider,
     StructuredDecisionClient,
+    ToolStructuredDecisionClient,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "OpenAIResponsesClient",
     "STRATEGIC_DECISION_SCHEMA",
     "StructuredDecisionClient",
+    "ToolStructuredDecisionClient",
 ]

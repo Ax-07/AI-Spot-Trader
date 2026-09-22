@@ -1,6 +1,8 @@
+import hashlib
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import (
@@ -9,6 +11,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    JsonValue,
     StringConstraints,
     model_validator,
 )
@@ -41,6 +44,16 @@ def _normalize_utc(value: datetime) -> datetime:
 
 
 UtcDateTime = Annotated[AwareDatetime, AfterValidator(_normalize_utc)]
+
+
+def canonical_json_digest(value: JsonValue) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 class DomainModel(BaseModel):
@@ -468,6 +481,32 @@ class AgentInput(DomainModel):
         return self
 
 
+class AgentToolTrace(DomainModel):
+    """Sanitized durable trace of one Agent-visible read-only tool execution."""
+
+    call_id: NonEmptyText
+    tool_name: NonEmptyText
+    arguments: dict[str, JsonValue]
+    started_at: UtcDateTime
+    completed_at: UtcDateTime
+    status: Literal["SUCCESS", "ERROR"]
+    error_type: NonEmptyText | None = None
+    result: dict[str, JsonValue]
+    result_digest: Sha256Digest
+
+    @model_validator(mode="after")
+    def validate_trace(self) -> "AgentToolTrace":
+        if self.completed_at < self.started_at:
+            raise ValueError("tool trace completed_at cannot precede started_at")
+        if self.status == "SUCCESS" and self.error_type is not None:
+            raise ValueError("successful tool traces cannot carry error_type")
+        if self.status == "ERROR" and self.error_type is None:
+            raise ValueError("error tool traces require a sanitized error_type")
+        if self.result_digest != canonical_json_digest(self.result):
+            raise ValueError("tool trace result_digest must match the normalized result")
+        return self
+
+
 class DecisionCandidate(DomainModel):
     """Strategic action and proposed size before deterministic risk review."""
 
@@ -479,6 +518,7 @@ class DecisionCandidate(DomainModel):
     proposed_quantity: PositiveDecimal | None = None
     rationale: str | None = None
     market_type: MarketType = MarketType.SPOT
+    tool_traces: tuple[AgentToolTrace, ...] = ()
 
     @model_validator(mode="after")
     def validate_proposed_quantity(self) -> "DecisionCandidate":
@@ -487,6 +527,11 @@ class DecisionCandidate(DomainModel):
                 raise ValueError("HOLD cannot propose an execution quantity")
         elif self.proposed_quantity is None:
             raise ValueError("BUY and SELL decisions require proposed_quantity")
+        call_ids = tuple(trace.call_id for trace in self.tool_traces)
+        if len(call_ids) != len(set(call_ids)):
+            raise ValueError("tool_traces must have unique call_id values")
+        if any(trace.completed_at > self.created_at for trace in self.tool_traces):
+            raise ValueError("tool trace data cannot be newer than the final decision")
         return self
 
 

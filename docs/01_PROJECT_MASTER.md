@@ -2,348 +2,195 @@
 
 ## 1. Rôle
 
-Ce document est la spécification fonctionnelle et architecturale principale d'**AI Spot Trader**. Depuis le Batch 16, le projet couvre **SPOT + Kraken Derivatives**, sans changer le principe d'un agent stratégique unique ni l'autorité finale du Risk Engine.
+AI Spot Trader est une application expérimentale de trading crypto PAPER pilotée par **un seul Agent IA stratégique**. Le backend est l'application de trading ; le frontend est un cockpit de contrôle et de visualisation.
 
-Référence fonctionnelle Batch 16.5 : `595bd2c8b4311ac255db927515207f10875b1505` (`feat: enrich perpetual paper market context`). Clôture documentaire Batch 16.5 intégrée sur `main` : `84272713b66439a16e7769da83eccc1514aa64f7` (`docs: finalize Batch 16.5 integration`). Validation comportementale Batch 16.6 intégrée sur `main` : `251d530ad12951605068c1c8eb8cbeb313c36b49` (`docs: validate Batch 16.6 Luna perpetual behavior`).
+Référence intégrée au début du Batch 18.1 : GitHub `main` au commit `ca5077af00293ccca9794132ee0dd53a5b339911`. Le Batch 18.1 décrit ci-dessous est un **patch proposé non intégré** tant qu'il n'a pas été validé localement, commité et poussé.
 
-## 2. Vision et invariants
+## 2. Invariants fonctionnels
 
-### Invariants globaux
+### Globaux
 
-- un seul agent IA stratégique ;
+- un seul Agent IA stratégique ;
 - Kraken comme exchange initial ;
-- premières versions exclusivement en PAPER ;
-- actions stratégiques : `BUY`, `SELL`, `HOLD` ;
-- GPT-5.6 Luna pour les premiers essais, Sol sélectionnable par configuration ;
+- PAPER uniquement ;
+- décisions `BUY`, `SELL`, `HOLD` ;
+- GPT-5.6 Luna par défaut, Sol sélectionnable ;
+- cible expérimentale +4 %/jour = métrique de recherche, jamais garantie ni obligation de trader ;
 - Risk Engine déterministe avec autorité finale ;
-- seul Risk peut produire un `ExecutionIntent` ;
-- aucune sortie LLM ne déclenche directement un Broker ou un ordre Kraken ;
-- frais, spread, slippage et, pour les perpetuals, funding pris en compte ;
-- toutes les décisions, y compris HOLD/REJECT, sont auditables ;
+- seul Risk produit un `ExecutionIntent` ;
+- aucune sortie LLM ni aucun tool ne déclenche directement Broker/Kraken ;
+- frais, spread, slippage et funding Derivatives restent pris en compte ;
+- toutes les décisions et recherches causales sont auditables ;
 - aucun secret dans prompts, logs ou fichiers versionnés ;
 - aucun look-ahead ;
-- backend = application de trading ; frontend = cockpit uniquement ;
-- un seul cycle à la fois ;
-- cible expérimentale +4 %/jour = métrique de recherche, jamais une garantie.
+- backend indépendant du frontend.
 
-### Invariants SPOT
+### SPOT
 
 - aucun short ;
 - aucun levier/margin ;
-- impossible de vendre un actif non détenu ;
-- `AssetPosition` reste le modèle de détention SPOT.
+- `SELL` ne peut réduire qu'un actif effectivement détenu.
 
-### Invariants Derivatives
+### Derivatives
 
-- `LONG` et `SHORT` sont autorisés uniquement pour les instruments dérivés ;
-- `BUY` peut ouvrir/augmenter LONG ou réduire SHORT ;
-- `SELL` peut ouvrir/augmenter SHORT ou réduire LONG ;
+- LONG/SHORT uniquement sur instruments compatibles ;
 - le levier est déterministe/configuré, jamais choisi par le LLM ;
-- Risk impose le plafond de levier, les caps de notionnel/exposition et la marge ;
-- `reduce_only` appartient au domaine d'exécution/Risk ;
-- aucun retournement accidentel de position par dépassement ;
-- funding, marge, maintenance margin et risque de liquidation font partie du modèle PAPER ;
-- Batch 16 exécute uniquement des **perpetuals linéaires en marge ISOLATED** ;
-- contrats inverses, futures datés et CROSS sont fail-closed à l'exécution PAPER.
+- Risk contrôle marge, exposition, liquidation, `reduce_only` et anti-reversal ;
+- exécution PAPER actuelle : perpetual linéaire, marge ISOLATED ;
+- futures datés, contrats inverses et CROSS restent non exécutables dans le runtime actuel.
 
-## 3. Architecture
-
-Le flux de confiance canonique reste unique :
+## 3. Pipeline de confiance
 
 ```text
 Kraken public data
       |
-      v
- MarketState -----------------+
-                              |
- PortfolioState --------------+--> AgentInput --> Agent
-                                                   |
-                                            BUY/SELL/HOLD
-                                                   |
-                                                   v
-                                              Risk Engine
-                                       ALLOW/MODIFY/REJECT
-                                                   |
-                                                   v
-                                           ExecutionIntent
-                                                   |
-                                                   v
-                                             Paper Broker
-                                                   |
-                                             Fill + ledger
-                                                   |
-                                                   v
-                                          TradingCycleResult
-                                                   |
-                                      audit PostgreSQL / analytics
-                                                   |
-                                             FastAPI / cockpit
+      +-------------------------> MarketResearchService
+      |                                   |
+      |                              read-only tools
+      |                                   |
+      v                                   v
+ MarketState -----------------------> AgentInput --> Agent
+      ^                                              |
+      |                                        BUY/SELL/HOLD
+ PortfolioState complet                              |
+                                                     v
+                                                Risk Engine
+                                         ALLOW/MODIFY/REJECT
+                                                     |
+                                              ExecutionIntent
+                                                     |
+                                                     v
+                                               Paper Broker
+                                                     |
+                                                Fill + ledger
+                                                     |
+                                                     v
+                                            TradingCycleResult
+                                                     |
+                                        audit PostgreSQL / analytics
 ```
 
-L'ajout Derivatives, l'isolation des runs, le harness 16.3, le contexte PERPETUAL 16.5 et la validation comportementale 16.6 ne créent ni second agent, ni second runner, ni voie parallèle d'exécution.
+Le chemin d'exécution reste unique : `Market -> Agent -> Risk -> PaperBroker`. La recherche est une source de faits supplémentaire pour le même Agent, pas une stratégie parallèle.
 
-Le harness 16.3 est un outil de validation explicite. Il injecte des décisions déterministes au niveau de la frontière stratégique afin de tester les composants aval. Il n'est pas appelé par la composition normale et ne constitue pas une stratégie de production.
+## 4. Contrats de marché
 
-## 4. Contrats de domaine
+`MarketState` est le snapshot canonique utilisé par le cycle et par Risk/Broker. `MarketStateBuilder` calcule les statistiques descriptives multi-horizon déjà existantes : fraîcheur, min/max, range, rendement et volatilité réalisée.
 
-### Marché
+Le Batch 18.1 introduit `MarketResearchService`, qui expose ces faits sans dupliquer les calculs. Il reçoit un backend provider-specific mais renvoie des modèles provider-agnostic bornés.
 
-`MarketState` porte explicitement `market_type = SPOT | PERPETUAL | FUTURE`, les champs historiques `symbol`, `last_price`, `context`, et un `DerivativeMarketContext` optionnel pour les dérivés.
+### `list_markets`
 
-`MarketContext` est provider-agnostique et contient la fraîcheur et les fenêtres descriptives multi-horizon. `MarketStateBuilder` calcule les mêmes statistiques pour SPOT et, depuis le Batch 16.5, PERPETUAL : nombre d'observations, complétude, prix de début/fin, min/max, range, rendement et volatilité réalisée.
+- catalogue factuel, tri déterministe ;
+- pagination par `cursor` + `limit` ;
+- SPOT depuis `KrakenPairRegistry` ;
+- Derivatives depuis les instruments publics normalisés ;
+- aucun score, ranking, top-N stratégique ou filtre momentum.
 
-`DerivativeMarketContext` contient l'instrument normalisé, mark, index optionnel, funding rate optionnel et timestamp d'observation.
+### `get_market_snapshot`
 
-`DerivativeInstrument` expose notamment : symbole canonique/venue, type de marché, famille `LINEAR|INVERSE`, underlying/quote, contract size, tick size, taille minimale, limite de position éventuelle, taux de marge initiale/maintenance, levier public dérivé et funding interval.
+- symbole + type de marché explicites ;
+- SPOT/PERPETUAL dans Batch 18.1 ;
+- réutilisation des sources canoniques et du `MarketStateBuilder` ;
+- retourne prix, timestamps, fraîcheur, fenêtres descriptives et, pour PERPETUAL, instrument/mark/index/funding ;
+- aucune donnée postérieure à la décision ne peut être retenue dans la trace causale.
 
-### Portefeuille
+`FUTURE` peut apparaître dans le catalogue, mais son snapshot n'est pas exposé en 18.1 car le source Derivatives exécutable actuel résout volontairement les collisions canoniques en faveur du perpetual linéaire.
 
-`PortfolioState` conserve `balances`, positions SPOT et `derivative_positions` séparées.
+## 5. Agent et tool loop
 
-Une `DerivativePosition` est one-way par symbole et porte : `LONG|SHORT`, quantité, prix moyen, mark, contract size, notionnel, P&L réalisé/non réalisé, levier, marge utilisée, maintenance margin, funding cumulé, prix de liquidation estimé et mode de marge.
+Le prompt reste identifié `agent-strategy-v4` et les rationales restent en français. L'Agent peut :
 
-Le ledger PAPER reste actuellement **process-local**. Un redémarrage backend recrée le portefeuille au capital initial et ne peut donc pas reprendre honnêtement un run précédent.
+- décider immédiatement sans tool ;
+- appeler un tool ;
+- enchaîner plusieurs recherches ;
+- choisir les symboles examinés ;
+- arrêter lui-même ses recherches et produire sa décision finale.
 
-### Agent
+Les contraintes de boucle sont **non stratégiques** : elles bornent coût, latence et taille, mais ne disent pas à l'Agent quel marché préférer.
 
-Le schéma de sortie LLM reste simple : `action = BUY | SELL | HOLD`, `symbol`, `proposed_quantity?`, `rationale?`.
+La Responses API conserve `store=false`. Quand un `function_call` est reçu, l'application :
 
-Le provider applicatif copie `market_type` depuis le `MarketState` dans `DecisionCandidate`. Le LLM ne choisit jamais le type de marché ni le levier. Le prompt stratégique courant est versionné `agent-strategy-v4` : les instructions humaines sont en français, les valeurs contractuelles `BUY`, `SELL`, `HOLD`, `SPOT`, `PERPETUAL`, `FUTURE`, `LONG` et `SHORT` restent inchangées, et le champ `rationale` doit être rédigé en français.
+1. valide strictement le nom et les arguments ;
+2. exécute le tool read-only sous timeout ;
+3. normalise et borne le résultat ;
+4. crée une trace causale ;
+5. rejoue explicitement les éléments de sortie précédents avec un `function_call_output` portant le même `call_id`.
 
-Le `paper_run_id` est une identité d'audit/exécution et n'est pas ajouté au contrat stratégique LLM : il n'influence pas la décision de marché.
+`parallel_tool_calls=false` évite les appels concurrents dans un même tour. Les tools sont déclarés `strict=true` avec `additionalProperties=false`.
 
-### Risk / execution
+## 6. Limitation volontaire du Batch 18.1
 
-`DecisionCandidate` et `ExecutionIntent` portent `market_type` avec défaut SPOT pour compatibilité historique. En dérivés, l'intent ajoute `leverage` et `reduce_only`, produits par Risk.
-
-`Fill` conserve les champs historiques et ajoute de manière rétrocompatible les métadonnées dérivés : contract size, reduce-only, realized P&L, margin delta et funding payment.
-
-## 5. Kraken
-
-La séparation provider reste claire :
-
-- Spot : API publique historique `api.kraken.com` + WebSocket Spot ;
-- Derivatives : REST public `https://futures.kraken.com/derivatives/api/v3` pour instruments/ticker ;
-- Derivatives Charts public : `https://futures.kraken.com/api/charts/v1` pour les bougies mark historiques.
-
-Le client Derivatives n'expose aucun endpoint privé. Les instruments sont découverts via l'API publique et normalisés en `BASE/QUOTE`, avec alias `XBT -> BTC`.
-
-### `contractValueTradePrecision`
-
-Le parser traite `contractValueTradePrecision` comme un exposant décimal entier signé :
+L'Agent peut rechercher `ETH/USD`, `SOL/USD` ou un autre marché, mais la décision finale doit toujours respecter :
 
 ```text
-min_order_quantity = 10 ^ (-contractValueTradePrecision)
+DecisionCandidate.symbol == AgentInput.market_state.symbol
 ```
 
-Une valeur `4` donne `0.0001`. Une valeur `-3` donne `1000`.
+Le runner continue donc à acquérir un seul `MarketState` causal pour son `paper_symbol`, qui reste le seul symbole pouvant atteindre Risk/Broker. Le Batch 18.2 devra déplacer le choix de marché **avant** la construction du `MarketState` exécutable afin de garder une causalité correcte.
 
-### Historique PERPETUAL — Batch 16.5
+## 7. PortfolioState
 
-La source Derivatives récupère des bougies publiques `mark` en résolution `1m`. Le timestamp Kraken est interprété comme début de bougie ; l'observation statistique est datée à la clôture (`started_at + 1 minute`).
+`PortfolioState` reste complet dans `AgentInput` : balances, positions SPOT et toutes les `derivative_positions`. Une recherche sur un autre symbole ne filtre ni ne réécrit le portefeuille.
 
-Le ticker courant reste la source du `last_price`, de la fraîcheur, du mark, de l'index et du funding courant. Les bougies historiques alimentent uniquement les fenêtres descriptives du `MarketStateBuilder`.
+## 8. Erreurs et fail-closed
 
-Aucune bougie dont la clôture est égale ou postérieure au timestamp du ticker n'est admise dans les statistiques. Cette règle interdit le look-ahead et évite d'utiliser une bougie encore ouverte.
+Les pannes de données au sein d'un tool (réseau, payload fournisseur, symbole inconnu, timeout, résultat trop volumineux) deviennent un résultat d'outil sanitizé et auditable que l'Agent peut constater. Les détails sensibles/raw ne sont jamais renvoyés.
 
-Le Batch 16.6 a vérifié cette causalité sur les huit cycles du run final : chaque contrôle `causal` est `true`.
+En revanche, un tool non enregistré, des arguments malformed ou un dépassement du budget global constituent une violation technique de la boucle et font échouer le stade Agent. Ce type d'échec n'est jamais converti en HOLD.
 
-## 6. PAPER Derivatives
+## 9. Audit causal des tools
 
-Les ouvertures/augmentations passent par Risk, calculent notionnel et marge initiale, bloquent marge + frais puis recalculent prix moyen, mark, unrealized P&L, maintenance margin et liquidation price.
+Chaque recherche terminée produit un `AgentToolTrace` :
 
-Une action opposée devient `reduce_only`. La quantité autorisée ne peut pas dépasser la position existante. La marge est libérée au prorata, le P&L est réalisé et le funding correspondant est transféré au cash.
+- `call_id` ;
+- nom du tool ;
+- arguments validés/sanitizés ;
+- `started_at` / `completed_at` ;
+- statut `SUCCESS|ERROR` ;
+- type d'erreur sanitizé ;
+- résultat normalisé borné ;
+- SHA-256 déterministe du résultat canonique.
 
-Le market source dérivés marque le ledger avant le snapshot portefeuille du cycle. Le funding perpetual est accumulé en fonction du notional marqué et du temps écoulé. Un funding positif débite un LONG et crédite un SHORT dans le modèle PAPER.
+Les traces d'une décision sont aussi attachées à `DecisionCandidate`. Pour couvrir un échec **après** des recherches mais **avant** une décision valide, elles existent également au niveau de `TradingCycleResult` et sont persistées sur `audit_cycles.agent_tool_traces_payload` via la migration `0003_agent_tool_traces`.
 
-## 7. Risk Engine
+Le digest global du cycle inclut explicitement les traces. Deux cycles identiques hors recherches mais ayant des traces différentes n'ont donc pas la même identité durable.
 
-Les règles SPOT existantes restent inchangées. Pour les dérivés, Risk ajoute : cohérence `market_type`, contrat exécutable `PERPETUAL + LINEAR`, quantité minimale/max instrument, `ISOLATED` uniquement, levier configuré <= plafond Risk <= limite instrument, max order notional, max derivative position notional, max total derivative exposure, marge disponible, buffer maintenance/liquidation, réduction/fermeture et interdiction du retournement accidentel.
+## 10. Séparation research/trading Kraken
 
-Le Batch 16.3 a confirmé en smoke réel que la fermeture opposée surdimensionnée est réduite à la quantité détenue avec `MODIFY / DERIVATIVE_REDUCE_ONLY_LIMIT`, sans retournement de position.
+La composition construit des sources de recherche dédiées séparées des sources de trading. Cela évite qu'une recherche :
 
-Le Batch 16.5 n'a modifié aucune règle Risk. Le Batch 16.6 confirme sur 8 décisions naturelles HOLD que Risk produit systématiquement `ALLOW` sans `ExecutionIntent`, conformément au contrat canonique.
+- modifie l'état/cache du source de marché canonique du cycle ;
+- marque un ledger Derivatives ;
+- accumule du funding dans le portefeuille ;
+- affecte un futur `MarketState` de trading par effet de bord.
 
-## 8. Persistance des runs PAPER
+Le source Derivatives de recherche est construit sans `market_sink`. Aucune clé Kraken privée n'est nécessaire.
 
-### Définition
+## 11. Risk et Broker
 
-Un run PAPER est une expérience durable associée à une initialisation cohérente du ledger PAPER. Il possède :
+Aucun tool du registry n'importe ou n'appelle `RiskEngine`, `PaperBroker` ou `ExecutionIntent`. Les tools ne peuvent donc ni autoriser, ni modifier, ni exécuter une position.
 
-- `paper_run_id` UUID ;
-- `started_at` ;
-- `ended_at` optionnel ;
-- `market_type` ;
-- `symbol`.
+Risk conserve toutes les règles SPOT/Derivatives existantes. En particulier, un HOLD reste `ALLOW` sans intent, le SPOT reste sans short et l'anti-reversal Derivatives reste déterministe.
 
-La table canonique est `paper_runs`.
+## 12. Persistance et migration
 
-### Rattachement des données
-
-`audit_cycles.paper_run_id` est la FK de rattachement. Les sous-objets du journal restent normalisés :
+La chaîne de migrations devient :
 
 ```text
-paper_runs
-    |
-    +--> audit_cycles
-            |
-            +--> audit_decisions
-            +--> audit_risk_assessments
-            +--> audit_execution_intents
-                    |
-                    +--> audit_fills
+0001_audit_journal
+  -> 0002_paper_runs
+  -> 0003_agent_tool_traces
 ```
 
-### Cycle de vie
+`0003` ajoute une colonne JSONB nullable `audit_cycles.agent_tool_traces_payload`. Le nullable conserve la compatibilité avec les cycles historiques qui n'avaient aucune notion de tools.
 
-- le run est créé au démarrage de la composition backend PAPER ;
-- le lifecycle est persisté avant d'accepter les cycles ;
-- `engine stop/start` dans le même processus conserve le run ;
-- arrêt backend propre : le moteur s'arrête puis `ended_at` est persisté ;
-- un run fermé refuse de nouveaux cycles ;
-- crash : `ended_at` peut rester `NULL` ;
-- redémarrage backend : nouveau `paper_run_id`, car le ledger mémoire est réinitialisé.
+## 13. Dette / décisions futures
 
-Aucune rotation à chaud n'est autorisée tant que le ledger ne sait pas être reset/repris durablement.
+- Batch 18.2 : sélection causale du symbole exécutable et construction du bon `MarketState` avant décision/Risk ;
+- décider si une version explicite de politique de tools doit entrer dans `ExperimentManifest` avant toute comparaison expérimentale pré/post tools ;
+- ne pas ajouter order book, recent trades ou funding historique sans besoin mesuré ;
+- ne pas prétendre supporter des snapshots FUTURE génériques tant que le mapping provider/exécution n'est pas séparé proprement.
 
-### Migration / legacy
+## 14. LIVE
 
-La migration `0002_paper_runs` crée `paper_runs` et ajoute `audit_cycles.paper_run_id` nullable.
-
-Les anciennes lignes restent **NULL**. Aucun backfill en pseudo-run historique n'est autorisé.
-
-## 9. Analytics / API
-
-Les analytics PAPER valorisent exposition SPOT, exposition dérivés notionnelle, marge isolée, unrealized/realized P&L, funding, equity et drawdown combinés.
-
-Depuis le Batch 16.2, le replay est run-scoped : equity initiale/finale, drawdown, trade/hold counts, coûts, exposition et P&L sont calculés uniquement sur les cycles portant exactement le même `paper_run_id`.
-
-API de run :
-
-```text
-GET /api/v1/paper-runs
-GET /api/v1/paper-runs/current
-GET /api/v1/paper-runs/{paper_run_id}
-GET /api/v1/analytics?paper_run_id={paper_run_id}
-```
-
-Les endpoints audit `cycles`, `decisions`, `risk-assessments`, `executions`, `errors/latest` et `market/latest` supportent une sélection explicite par run.
-
-Le Batch 16.3 a confirmé sur deux smokes distincts que les analytics et cycles peuvent être relus séparément sans mélange.
-
-Le Batch 16.6 confirme sur le run `c9443243-57ca-43de-9356-adc1e6fe3226` : 8 cycles propres, 0 chevauchement de `cycle_id` avec le run Batch 16.5, analytics `1000 -> 1000 USD`, P&L brut/net `0`, coûts `0`, funding P&L `0`, exposition `0`, drawdown `0` et `trade_count=0`.
-
-## 10. Configuration
-
-SPOT reste le défaut (`PAPER_MARKET_TYPE=SPOT`). Pour PERPETUAL : `PAPER_MARKET_TYPE=PERPETUAL`, `PAPER_DERIVATIVE_LEVERAGE` (défaut sécurité 1), `PAPER_DERIVATIVE_MARGIN_MODE=ISOLATED`, `RISK_MAX_DERIVATIVE_LEVERAGE` (défaut 1), caps explicites de position/exposition et buffer liquidation configurable. `FUTURE` reste rejeté par la composition exécutable actuelle.
-
-Le `paper_run_id` n'est pas un paramètre opérateur : il est généré par le backend afin d'éviter les collisions/reprises manuelles ambiguës.
-
-Aucun nouveau secret ou réglage d'authentification n'est nécessaire aux Batches 16.5/16.6 : Kraken Futures Charts est public.
-
-## 11. Validation et intégration
-
-### Batch 16.1 intégré
-
-Le smoke réel Batch 16.1 sur `BTC/USD / PF_XBTUSD` a terminé `COMPLETED`, Agent `HOLD`, Risk `ALLOW / HOLD_NO_EXECUTION`.
-
-### Batch 16.2 intégré
-
-L'isolation durable multi-runs est intégrée au commit `003bbadd7ae2f8288ccde049433832046f066957`. La migration PostgreSQL `0002_paper_runs` a été appliquée et Alembic confirme `0002_paper_runs (head)`.
-
-### Batch 16.3 intégré
-
-Commit fonctionnel : `520b016eb501f1a208bcb6d0e90eb1df947e1d0b`.
-
-Validation locale :
-
-```text
-pytest          : suite complète OK, 2 warnings externes FastAPI/Starlette
-ruff check .    : All checks passed
-mypy .          : Success: no issues found in 109 source files
-git diff --check: aucune erreur
-```
-
-Smokes réels contrôlés :
-
-```text
-LONG  : 9523ec8c-7dd1-4706-bf07-47ef9669d56b
-SHORT : b75f6e86-4724-41de-8d63-e8132d212530
-```
-
-Les deux runs ont validé ouverture, mark/HOLD, funding observé, réduction `reduce_only`, fermeture complète sans reversal, P&L/marge/coûts PAPER et audit durable. `verify-isolation` a retourné `isolation_verified=true`.
-
-Ces décisions étaient déterministes et réservées au harness : elles ne valident pas la qualité stratégique de Luna. Elles valident le chemin d'exécution aval.
-
-### Batch 16.4 confirmé localement
-
-Run réel Luna : `36fe73e0-f52f-4e27-995b-c5c848f46da2`.
-
-- composition normale ;
-- GPT-5.6 Luna ;
-- 4 cycles `COMPLETED` ;
-- 4 HOLD naturels ;
-- zéro erreur, intent, fill ou trade ;
-- Risk `ALLOW / HOLD_NO_EXECUTION` ;
-- exposition finale et P&L nuls ;
-- `ended_at` renseigné.
-
-Le vrai `AgentInput` avait `market_state.context = null`, ce qui motive directement le Batch 16.5.
-
-### Batch 16.5 intégré
-
-Commit fonctionnel : `595bd2c8b4311ac255db927515207f10875b1505`. Clôture documentaire : `84272713b66439a16e7769da83eccc1514aa64f7`.
-
-Le patch ajoute le contexte PERPETUAL en réutilisant le builder existant et des tests ciblés : causalité/no-look-ahead, déterminisme, fraîcheur/fail-closed, sérialisation `AgentInput`, conservation mark/index/funding et absence d'authentification privée pour l'historique public.
-
-Validation locale :
-
-```text
-pytest backend                                  : 357 passed, 2 warnings externes
-ruff check backend                             : All checks passed
-mypy --config-file backend\pyproject.toml ... : Success, 107 source files
-git diff --check                               : aucune erreur ; avertissements LF -> CRLF uniquement
-```
-
-Cycle réel de référence via la composition normale après redémarrage backend :
-
-- `paper_run_id = 8bbfe6a5-a5d5-4c32-96dc-eb9c5e4113d2` ;
-- `cycle_id = c097f3fc-4954-4985-a364-f6ffe99b24e6`, `COMPLETED` ;
-- `AgentInput.market_state.context` non nul ;
-- fenêtres 5 min et 30 min complètes avec respectivement 6 et 31 observations ;
-- rendements observés `-0.0008283458359064427` et `0.002818639241644028` ;
-- volatilités réalisées `0.0003195517675049489` et `0.0004142619704073510` ;
-- fraîcheur du snapshot `0.773542 s` ;
-- mark/index/funding conservés.
-
-### Batch 16.6 validé localement
-
-Aucun changement de code n'a été nécessaire.
-
-Run final : `c9443243-57ca-43de-9356-adc1e6fe3226`.
-
-- composition normale, GPT-5.6 Luna, `agent-strategy-v3` ;
-- `BTC/USD / PF_XBTUSD`, `PERPETUAL`, `ISOLATED`, levier `1x`, capital `1000 USD`, agressivité `2` ;
-- 8 cycles `COMPLETED`, 0 `FAILED` ;
-- 8/8 `AgentInput.market_state.context` non nuls ;
-- fenêtres 5m/30m complètes sur les 8 cycles avec 6/31 observations ;
-- causalité vérifiée sur les 8 cycles ;
-- fraîcheur `1.021449 s` à `1.110151 s` ;
-- 8 HOLD naturels ;
-- rationales cohérentes avec les rendements 5m/30m, l'absence de position et le funding positif lorsqu'il est cité ; aucun indicateur absent observé ;
-- 8 Risk `ALLOW`, 0 intent, fill ou trade ;
-- analytics : `1000 -> 1000 USD`, P&L brut/net `0`, frais/spread/slippage/funding `0`, exposition/drawdown `0` ;
-- isolation confirmée : 0 `cycle_id` commun avec le run Batch 16.5 ;
-- run clôturé proprement avec `ended_at = 2026-09-22 08:41:03.924351 UTC`.
-
-Un essai initial a continué le run Batch 16.5 parce que le backend n'avait pas encore été redémarré. Ses cycles sont conservés dans l'audit durable mais ne sont pas utilisés comme preuve de l'isolation du Batch 16.6.
-
-Aucun BUY/SELL naturel n'a été observé. Cela ne constitue pas un échec et ne justifie aucune modification de stratégie destinée à provoquer une action.
-
-## 12. Prochaine expérimentation
-
-Le Batch 16.6 est intégré sur `main` au commit `251d530ad12951605068c1c8eb8cbeb313c36b49`. Le prompt stratégique courant est désormais `agent-strategy-v4`, localisé en français sans modification du schéma de sortie ni des responsabilités Agent/Risk. Toute nouvelle expérimentation doit rester un batch distinct. Il ne faut pas modifier le prompt, l'agressivité ou Risk uniquement pour obtenir un BUY/SELL. Les pistes de robustesse Derivatives restent celles du futur Batch 17 ou d'un batch explicitement défini.
-
-## 13. LIVE
-
-LIVE reste hors périmètre. Il nécessitera un batch séparé : auth/permissions, adaptateur privé Kraken, réconciliation, idempotence, recovery, garde-fous opérateur, clés sans retrait et activation explicite.
+LIVE reste hors périmètre. Il nécessitera un batch séparé avec adaptateur privé, permissions minimales sans retrait, idempotence, réconciliation, recovery et activation explicite.

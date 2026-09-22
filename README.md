@@ -1,215 +1,135 @@
 # AI Spot Trader
 
-AI Spot Trader est une application expérimentale de trading crypto **SPOT + Kraken Derivatives** pilotée par **un agent IA unique**. L'agent conserve la décision stratégique (`BUY`, `SELL`, `HOLD`) tandis qu'un **Risk Engine déterministe** garde l'autorité finale avant toute exécution.
+AI Spot Trader est une application expérimentale de trading crypto **SPOT + Kraken Derivatives** en mode **PAPER**, pilotée par **un seul Agent IA stratégique**. L'Agent propose `BUY`, `SELL` ou `HOLD`; un **Risk Engine déterministe** garde l'autorité finale et seul Risk peut créer un `ExecutionIntent`.
 
-> **État Batch 16.3 : commit fonctionnel intégré sur GitHub `main` : `520b016eb501f1a208bcb6d0e90eb1df947e1d0b` (`test: add controlled perpetual paper smoke harness`). Validation locale et smokes réels contrôlés confirmés le 21 septembre 2026 : suite `pytest` complète OK, Ruff OK, mypy OK sur 109 fichiers, `git diff --check` OK, smoke LONG OK, smoke SHORT OK et isolation durable des deux `paper_run_id` vérifiée.**
+## Référence de développement
+
+La base intégrée auditée avant le Batch 18.1 est GitHub `main` au commit :
+
+```text
+ca5077af00293ccca9794132ee0dd53a5b339911
+```
+
+Le tag annoté `baseline-batch17` pointe sur ce même commit. Le Batch 18.1 livré sous forme de ZIP est un **patch proposé non intégré** tant que sa validation locale, son commit et son push ne sont pas confirmés.
 
 ## Principes
 
-- Exchange initial : **Kraken**.
-- Marchés : **SPOT** et **Kraken Derivatives**.
-- SPOT : aucun short, aucun levier ; `SELL` reste impossible sans actif détenu.
-- Derivatives : `LONG`/`SHORT` autorisés uniquement dans le domaine dérivés.
-- Exécution PAPER dérivés : perpetuals linéaires en marge ISOLATED ; futures datés, contrats inverses et CROSS restent fail-closed.
-- Levier dérivés : déterministe, borné par Risk, jamais choisi par le LLM.
-- Aucune sortie LLM ne déclenche directement un ordre Kraken.
-- Frais, spread, slippage et funding sont pris en compte.
-- Toutes les décisions, y compris `HOLD` et `REJECT`, restent auditables.
-- Aucun secret dans prompts, logs ou fichiers versionnés.
-- Le frontend reste un cockpit ; fermer le frontend n'arrête jamais le moteur backend.
+- Kraken comme exchange initial ;
+- PAPER uniquement ;
+- SPOT sans short, levier ou marge ;
+- Derivatives avec LONG/SHORT seulement sur produits compatibles ;
+- levier et `reduce_only` déterministes, jamais choisis par le LLM ;
+- aucune sortie LLM ni aucun tool ne déclenche directement un ordre ;
+- frais, spread, slippage et funding pris en compte ;
+- audit durable des décisions, HOLD, erreurs et recherches causales ;
+- aucun secret dans prompts/logs/Git ;
+- backend indépendant du frontend ;
+- cible +4 %/jour = objectif expérimental, jamais garantie.
 
-Principe central : **l'IA propose. Le Risk Engine autorise, modifie ou refuse.**
+Principe : **l'Agent cherche et propose ; Risk autorise, modifie ou refuse.**
 
-## Architecture canonique
-
-```text
-Kraken public Spot / Derivatives
-        |
-        v
-   MarketState
-        |
-        +----------------+
-        |                |
-        v                v
- PortfolioState      AgentInput
-        |                |
-        +-------> Agent IA
-                    BUY/SELL/HOLD
-                         |
-                         v
-                    Risk Engine
-             ALLOW / MODIFY / REJECT
-                         |
-             HOLD/REJECT|tradable
-                         v
-                  ExecutionIntent
-                         |
-                         v
-                   Paper Broker
-                         |
-                  Fill(s) + ledger
-                         |
-                         v
-                TradingCycleResult
-                         |
-                         v
-              PostgreSQL audit/analytics
-                         |
-                         v
-                 FastAPI / cockpit
-```
-
-Le chemin reste unique : `Market -> Agent -> DecisionCandidate -> Risk -> ExecutionIntent -> Paper Broker`.
-
-## Sémantique SPOT / PERPETUAL
-
-### SPOT
-
-`BUY` augmente un actif détenu. `SELL` ne peut vendre qu'une quantité réellement disponible. Aucun short, levier ou marge n'est appliqué au SPOT.
-
-### PERPETUAL
-
-Le même vocabulaire stratégique `BUY / SELL / HOLD` est conservé :
-
-- `BUY` sans position ouvre/augmente un `LONG` ;
-- `SELL` sans position ouvre/augmente un `SHORT` ;
-- une action opposée réduit/ferme la position existante ;
-- le Risk Engine produit `reduce_only` lorsque nécessaire ;
-- un dépassement ne peut pas retourner silencieusement une position `LONG` en `SHORT` ou inversement.
-
-Le portefeuille dérivés conserve notamment : side, quantité, prix moyen, mark, notionnel, P&L réalisé/non réalisé, levier, marge utilisée, maintenance margin, funding cumulé et prix de liquidation estimé.
-
-## Kraken Derivatives public
-
-Le client public Derivatives est séparé de Kraken Spot et utilise :
+## Architecture Batch 18.1
 
 ```text
-https://futures.kraken.com/derivatives/api/v3
+Kraken public data
+      |
+      +--> sources research dédiées --> MarketResearchService
+      |                                  |
+      |                        list_markets / get_market_snapshot
+      |                                  |
+      v                                  v
+Trading MarketState + PortfolioState --> AgentInput --> Agent
+                                                   BUY/SELL/HOLD
+                                                         |
+                                                         v
+                                                    Risk Engine
+                                                         |
+                                                   ExecutionIntent
+                                                         |
+                                                         v
+                                                    Paper Broker
 ```
 
-Les symboles Kraken sont normalisés vers `BASE/QUOTE` (`XBT -> BTC`). Aucune clé privée Kraken n'est utilisée.
+Les sources de recherche sont isolées des sources de trading. En Derivatives elles n'ont aucun `market_sink`, donc explorer un marché ne modifie pas le ledger.
 
-`contractValueTradePrecision` est traité comme un exposant décimal entier signé : `min_order_quantity = 10^-precision`. Exemples validés : `PF_XBTUSD = 4 -> 0.0001` et plusieurs contrats à `-3 -> 1000`.
+## Tools read-only
 
-## Risk Engine dérivés
+Le socle 18.1 expose seulement :
 
-Risk contrôle notamment : type de marché/contrat, quantité minimale/limite instrument, levier, marge disponible, notionnel maximal par ordre/position, exposition dérivés totale, buffer de liquidation, `reduce_only` et interdiction de retournement accidentel.
+- `list_markets` : catalogue factuel, tri/pagination déterministes, aucun classement stratégique ;
+- `get_market_snapshot` : snapshot SPOT/PERPETUAL normalisé, réutilisant le contexte et les calculs canoniques existants.
 
-## Funding et marge PAPER
+L'Agent peut décider sans tool, effectuer une ou plusieurs recherches et choisir lui-même quand conclure. Les budgets de tool sont uniquement techniques.
 
-Le market source dérivés marque les positions avant l'`AgentInput`. Le funding perpetual est accumulé dans le ledger à partir du taux public normalisé, du mark et du temps écoulé. Les ouvertures bloquent une marge isolée ; les réductions/fermetures libèrent la marge au prorata en réalisant P&L et funding.
+### Limitation volontaire
 
-## Isolation durable des runs PAPER — Batch 16.2
-
-Le Batch 16.2 ajoute une identité durable d'expérience PAPER afin que plusieurs essais puissent partager la même base PostgreSQL sans mélanger leurs analytics.
+La recherche peut examiner d'autres symboles, mais l'exécution reste liée au symbole initial du cycle :
 
 ```text
-paper_runs
-    |
-    +--> audit_cycles.paper_run_id
-            |
-            +--> decisions / risk / intents / fills
+DecisionCandidate.symbol == AgentInput.market_state.symbol
 ```
 
-Principes :
+Le vrai choix multi-symbole exécutable est réservé au Batch 18.2 afin de conserver une corrélation causale correcte entre sélection, `MarketState`, Risk et Broker.
 
-- un run est créé au démarrage du backend PAPER ;
-- `engine stop/start` dans le même processus conserve le même run ;
-- un arrêt backend propre clôt le run avec `ended_at` ;
-- un redémarrage backend crée un nouveau run, car le ledger PAPER reste en mémoire et repart du capital initial ;
-- les anciens cycles antérieurs à la migration restent `paper_run_id = NULL` et ne sont jamais regroupés artificiellement ;
-- les analytics d'un run filtrent strictement sur son identifiant ;
-- SPOT et PERPETUAL utilisent le même mécanisme.
+## Audit des recherches
 
-API associée :
+Chaque appel conserve : nom, arguments validés, timestamps, statut, type d'erreur sanitizé, résultat borné et digest SHA-256. Les traces sont persistées au niveau du cycle, y compris si l'Agent échoue après une recherche et avant sa décision finale.
+
+Le digest global du cycle inclut les traces.
+
+## Configuration technique des tools
+
+Valeurs par défaut proposées :
 
 ```text
-GET /api/v1/paper-runs
-GET /api/v1/paper-runs/current
-GET /api/v1/paper-runs/{paper_run_id}
-GET /api/v1/analytics?paper_run_id={paper_run_id}
+AI_SPOT_TRADER_AGENT_TOOL_MAX_CALLS=6
+AI_SPOT_TRADER_AGENT_TOOL_TIMEOUT_SECONDS=5
+AI_SPOT_TRADER_AGENT_TOOL_MAX_RESULT_BYTES=32768
+AI_SPOT_TRADER_AGENT_TOOL_LIST_MARKETS_MAX_LIMIT=50
 ```
 
-Les endpoints audit acceptent aussi une sélection explicite `paper_run_id`. Dans la composition normale, le run courant reste le défaut ; aucune modification frontend n'est nécessaire pour continuer à afficher le run actif.
+Mettre `AI_SPOT_TRADER_AGENT_TOOL_MAX_CALLS=0` désactive la boucle et conserve le chemin direct historique.
 
-Aucun endpoint de rotation à chaud n'est ajouté : tant que le ledger ne dispose pas d'un reset/recovery durable, démarrer une nouvelle expérience signifie arrêter proprement puis redémarrer le backend.
+## Migrations PostgreSQL
 
-## Batch 16.3 — Smokes PERPETUAL PAPER contrôlés
+Après extraction du patch et configuration de `AI_SPOT_TRADER_DATABASE_URL` :
 
-Le Batch 16.3 ajoute un outil CLI explicitement réservé à la validation technique. Il réutilise les composants canoniques (`TradingCycleRunner`, Risk Engine, Paper Broker, ledger, audit PostgreSQL et lifecycle de run) mais injecte des décisions déterministes de smoke. **Ces décisions ne sont pas des décisions Luna/Sol et ne modifient pas la stratégie normale de l'application.**
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m alembic upgrade head
+```
 
-Smokes réels contrôlés sur `BTC/USD / PF_XBTUSD`, levier `1x`, marge `ISOLATED` :
-
-- LONG : ouverture `BUY 0.0002`, mark/HOLD, réduction `SELL 0.0001`, fermeture oversize demandée `SELL 0.0002` ramenée par Risk à `0.0001` avec `MODIFY / DERIVATIVE_REDUCE_ONLY_LIMIT` ;
-- SHORT : ouverture `SELL 0.0002`, mark/HOLD, réduction `BUY 0.0001`, fermeture oversize demandée `BUY 0.0002` ramenée par Risk à `0.0001` avec le même garde-fou ;
-- `reduce_only=true` confirmé sur les réductions/fermetures ;
-- funding réellement observé sur position ouverte dans les deux sens ;
-- P&L réalisé/non réalisé, marge et coûts PAPER effectivement valorisés ;
-- exposition finale nulle et aucune inversion accidentelle de position ;
-- chaque smoke produit 4 cycles `COMPLETED`, 3 exécutions et 0 cycle `FAILED` ;
-- deux runs distincts, fermés proprement avec `ended_at`, ont été relus séparément avec `isolation_verified=true`.
-
-Runs de preuve locaux :
+La chaîne devient :
 
 ```text
-LONG  : 9523ec8c-7dd1-4706-bf07-47ef9669d56b
-SHORT : b75f6e86-4724-41de-8d63-e8132d212530
+0001_audit_journal -> 0002_paper_runs -> 0003_agent_tool_traces
 ```
 
-Les fichiers JSON complets de preuve restent hors Git.
+La migration 0003 ajoute un JSONB nullable pour les traces Agent ; les cycles historiques restent compatibles.
 
-## Configuration
+## Validation du patch
 
-SPOT reste le défaut. Pour activer le chemin PERPETUAL PAPER :
+Exécuté par ChatGPT dans l'environnement de livraison partiel :
 
 ```text
-AI_SPOT_TRADER_PAPER_MARKET_TYPE=PERPETUAL
-AI_SPOT_TRADER_PAPER_DERIVATIVE_LEVERAGE=1
-AI_SPOT_TRADER_PAPER_DERIVATIVE_MARGIN_MODE=ISOLATED
-AI_SPOT_TRADER_RISK_MAX_DERIVATIVE_LEVERAGE=1
-AI_SPOT_TRADER_RISK_MAX_DERIVATIVE_POSITION_NOTIONAL=<positive-decimal>
-AI_SPOT_TRADER_RISK_MAX_TOTAL_DERIVATIVE_EXPOSURE=<positive-decimal>
-AI_SPOT_TRADER_RISK_DERIVATIVE_LIQUIDATION_BUFFER_RATIO=1.10
+47 tests ciblés/non-régression : passés
+compileall code/test/migration    : OK
 ```
 
-Le `paper_run_id` est généré par le backend ; il n'est pas configuré manuellement.
-
-## Migration Batch 16.2
-
-Avec `AI_SPOT_TRADER_DATABASE_URL` défini dans l'environnement ou dans `backend/.env` :
-
-```text
-alembic upgrade head
-```
-
-La migration `0002_paper_runs` crée `paper_runs` puis ajoute une FK nullable sur `audit_cycles`. Aucun backfill historique n'est effectué.
-
-## Validation
-
-Validation locale du commit fonctionnel Batch 16.3 confirmée le 21 septembre 2026 :
-
-```text
-pytest               : suite complète OK, 2 warnings externes FastAPI/Starlette
-ruff check .          : All checks passed
-mypy .                : Success: no issues found in 109 source files
-git diff --check      : aucune erreur
-git status --short    : propre après commit/push fonctionnel
-```
-
-Smokes réels contrôlés : LONG OK, SHORT OK, funding observé, `reduce_only` OK, fermeture sans reversal, analytics run-scoped cohérentes et isolation entre les deux `paper_run_id` vérifiée.
-
-## Prochaine étape
-
-Le chemin d'exécution PERPETUAL PAPER est maintenant validé techniquement au-delà de `HOLD`. La prochaine étape est un **premier run expérimental avec l'Agent réel GPT-5.6 Luna en PERPETUAL PAPER**, sans décision forcée. Un `HOLD` naturel restera un résultat valide.
+Ruff, mypy, la suite complète du repository, Alembic sur votre PostgreSQL et les contrôles Git restent à exécuter localement.
 
 ## Sécurité / LIVE
 
-- PAPER uniquement.
-- Aucun endpoint Kraken Derivatives privé d'ordre n'est implémenté.
-- Aucun secret Kraken requis.
-- Une future clé Kraken ne devra jamais disposer du droit de retrait.
-- Le passage au LIVE restera une décision séparée et explicite.
+- aucune API Kraken privée nécessaire ;
+- aucune clé avec droit de retrait ;
+- aucun tool d'ordre ;
+- LIVE reste un batch séparé avec permissions minimales, idempotence, réconciliation, recovery et activation explicite.
 
-## Avertissement
+## Documentation
 
-AI Spot Trader est un projet expérimental de recherche et développement. Il ne constitue pas un conseil financier et ne garantit aucun rendement. La cible expérimentale de +4 %/jour reste une métrique de recherche, jamais une promesse.
+- `docs/00_ETAT_ACTUEL.md` : reprise courte ;
+- `docs/01_PROJECT_MASTER.md` : spécification principale ;
+- `docs/02_ARCHITECTURE_TECHNIQUE.md` : architecture ;
+- `docs/03_AGENT_TRADING_RISK.md` : responsabilités Agent/Risk ;
+- `docs/09_ROADMAP_DEVELOPPEMENT.md` : roadmap ;
+- `docs/10_DECISIONS_ET_CHANGELOG.md` : ADR/changelog.

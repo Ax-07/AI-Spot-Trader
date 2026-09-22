@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
 from ai_spot_trader.core.clock import Clock, SystemClock
@@ -16,6 +17,7 @@ from ai_spot_trader.domain.experiments import (
 )
 from ai_spot_trader.domain.models import (
     AgentInput,
+    AgentToolTrace,
     DecisionCandidate,
     ExecutionIntent,
     ExperimentManifest,
@@ -30,6 +32,14 @@ from ai_spot_trader.portfolio.ledger import PaperPortfolioLedger
 from ai_spot_trader.risk.engine import RiskEngine, RiskResult
 
 CycleIdFactory = Callable[[], UUID]
+
+
+@runtime_checkable
+class AgentToolTraceSource(Protocol):
+    """Optional Agent surface exposing completed read-only research from its latest call."""
+
+    @property
+    def last_tool_traces(self) -> tuple[AgentToolTrace, ...]: ...
 
 
 class TradingCycleStatus(StrEnum):
@@ -93,8 +103,14 @@ class TradingCycleResult:
     execution_intent: ExecutionIntent | None = None
     fills: tuple[Fill, ...] = ()
     portfolio_state_after: PortfolioState | None = None
+    agent_tool_traces: tuple[AgentToolTrace, ...] = ()
 
     def __post_init__(self) -> None:
+        call_ids = tuple(trace.call_id for trace in self.agent_tool_traces)
+        if len(set(call_ids)) != len(call_ids):
+            raise ValueError("cycle Agent tool traces must have unique call_id values")
+        if self.decision is not None and self.decision.tool_traces != self.agent_tool_traces:
+            raise ValueError("cycle Agent tool traces must match DecisionCandidate traces")
         if self.status is TradingCycleStatus.FAILED:
             if self.failure is None:
                 raise ValueError("FAILED cycle results require failure metadata")
@@ -215,6 +231,7 @@ class TradingCycleRunner:
                 TradingCycleStage.AGENT,
                 exc,
                 agent_input=agent_input,
+                agent_tool_traces=self._agent_tool_traces(),
             )
 
         try:
@@ -242,6 +259,7 @@ class TradingCycleRunner:
                 agent_input=agent_input,
                 decision=decision,
                 risk_assessment=assessment,
+                agent_tool_traces=decision.tool_traces,
             )
 
         try:
@@ -287,6 +305,7 @@ class TradingCycleRunner:
             execution_intent=intent,
             fills=fills,
             portfolio_state_after=portfolio_after,
+            agent_tool_traces=decision.tool_traces,
         )
 
     def _validate_decision(
@@ -364,6 +383,14 @@ class TradingCycleRunner:
         if total_quantity != intent.quantity:
             raise TradingCycleInvariantError("Fill quantities must equal the authorized intent")
 
+    def _agent_tool_traces(self) -> tuple[AgentToolTrace, ...]:
+        if not isinstance(self._agent, AgentToolTraceSource):
+            return ()
+        traces = self._agent.last_tool_traces
+        if any(not isinstance(trace, AgentToolTrace) for trace in traces):
+            raise TradingCycleInvariantError("Agent returned invalid tool traces")
+        return traces
+
     def _now(self) -> datetime:
         value = self._clock.now()
         if value.tzinfo is None or value.utcoffset() is None:
@@ -381,7 +408,13 @@ class TradingCycleRunner:
         risk_assessment: RiskAssessment | None = None,
         execution_intent: ExecutionIntent | None = None,
         fills: tuple[Fill, ...] = (),
+        agent_tool_traces: tuple[AgentToolTrace, ...] | None = None,
     ) -> TradingCycleResult:
+        traces = (
+            agent_tool_traces
+            if agent_tool_traces is not None
+            else decision.tool_traces if decision is not None else ()
+        )
         return TradingCycleResult(
             cycle_id=cycle_id,
             status=TradingCycleStatus.FAILED,
@@ -395,6 +428,7 @@ class TradingCycleRunner:
             risk_assessment=risk_assessment,
             execution_intent=execution_intent,
             fills=fills,
+            agent_tool_traces=traces,
         )
 
 

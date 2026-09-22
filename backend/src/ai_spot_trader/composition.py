@@ -20,7 +20,12 @@ from ai_spot_trader.integrations.kraken.derivatives import (
     KrakenDerivativesMarketDataSource,
     KrakenDerivativesPublicClient,
 )
-from ai_spot_trader.integrations.kraken.market_data import build_kraken_market_data_source
+from ai_spot_trader.integrations.kraken.market_data import (
+    KrakenMarketDataSource,
+    build_kraken_market_data_source,
+)
+from ai_spot_trader.integrations.kraken.research import KrakenMarketResearchBackend
+from ai_spot_trader.market.research import MarketResearchService
 from ai_spot_trader.persistence.analytics import SqlAlchemyPaperAnalyticsQueryService
 from ai_spot_trader.persistence.audit import AuditedTradingCycleRunner, RunBoundCycleAuditWriter
 from ai_spot_trader.persistence.db import Database
@@ -33,6 +38,8 @@ from ai_spot_trader.persistence.runs import (
 from ai_spot_trader.portfolio.ledger import PaperPortfolioLedger
 from ai_spot_trader.risk.engine import RiskEngine
 from ai_spot_trader.risk.policy import RiskPolicy
+from ai_spot_trader.tools.market_research import build_market_research_tool_registry
+from ai_spot_trader.tools.read_only import ReadOnlyToolRegistry
 from ai_spot_trader.trading.engine import (
     TradingCycleRunner,
     TradingCycleTimeouts,
@@ -53,6 +60,8 @@ class PaperRuntimeComposition:
     runtime: AppRuntime
     chat_service: OperatorChatService
     market_data: RuntimeMarketDataSource
+    market_research: MarketResearchService
+    agent_tools: ReadOnlyToolRegistry
     portfolio: PaperPortfolioLedger
     agent: OpenAIDecisionProvider
     risk_engine: RiskEngine
@@ -63,6 +72,27 @@ class PaperRuntimeComposition:
     trading_engine: TradingEngine
     paper_run_lifecycle: SqlAlchemyPaperRunLifecycle
     paper_run_reader: SqlAlchemyPaperRunQueryService
+
+
+def _derivatives_source(
+    settings: Settings,
+    *,
+    clock: SystemClock,
+    market_sink: PaperPortfolioLedger | None,
+) -> KrakenDerivativesMarketDataSource:
+    return KrakenDerivativesMarketDataSource(
+        KrakenDerivativesPublicClient(
+            settings.kraken_derivatives_rest_url,
+            timeout_seconds=settings.kraken_rest_timeout_seconds,
+        ),
+        clock=clock,
+        market_sink=market_sink,
+        stale_after=(
+            timedelta(seconds=settings.kraken_stale_after_seconds)
+            if settings.kraken_stale_after_seconds is not None
+            else None
+        ),
+    )
 
 
 def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
@@ -83,17 +113,6 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
     )
     paper_run_reader = SqlAlchemyPaperRunQueryService(database.sessions)
 
-    openai_client = OpenAIResponsesClient(
-        api_key=run.openai_api_key,
-        base_url=settings.openai_base_url,
-        timeout_seconds=settings.openai_timeout_seconds,
-    )
-    agent = OpenAIDecisionProvider(
-        client=openai_client,
-        model=run.llm_model,
-        clock=clock,
-    )
-
     initial_portfolio = PortfolioState(
         portfolio_state_id=uuid4(),
         as_of=clock.now(),
@@ -106,23 +125,60 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
     )
     portfolio = PaperPortfolioLedger(initial_state=initial_portfolio, clock=clock)
 
+    research_spot: KrakenMarketDataSource = build_kraken_market_data_source(
+        settings, clock=clock
+    )
+    research_derivatives_client = KrakenDerivativesPublicClient(
+        settings.kraken_derivatives_rest_url,
+        timeout_seconds=settings.kraken_rest_timeout_seconds,
+    )
+    research_derivatives = KrakenDerivativesMarketDataSource(
+        research_derivatives_client,
+        clock=clock,
+        stale_after=(
+            timedelta(seconds=settings.kraken_stale_after_seconds)
+            if settings.kraken_stale_after_seconds is not None
+            else None
+        ),
+    )
+    market_research = MarketResearchService(
+        KrakenMarketResearchBackend(
+            spot=research_spot,
+            derivatives=research_derivatives,
+            derivatives_catalog=research_derivatives_client,
+        ),
+        max_list_limit=run.agent_tool_list_markets_max_limit,
+        clock=clock,
+    )
+    agent_tools = build_market_research_tool_registry(
+        market_research,
+        timeout_seconds=run.agent_tool_timeout_seconds,
+        max_result_bytes=run.agent_tool_max_result_bytes,
+        clock=clock,
+    )
+
+    openai_client = OpenAIResponsesClient(
+        api_key=run.openai_api_key,
+        base_url=settings.openai_base_url,
+        timeout_seconds=settings.openai_timeout_seconds,
+    )
+    agent = OpenAIDecisionProvider(
+        client=openai_client,
+        model=run.llm_model,
+        clock=clock,
+        tool_registry=agent_tools,
+        max_tool_calls=run.agent_tool_max_calls,
+    )
+
     if run.market_type is MarketType.SPOT:
         market_data: RuntimeMarketDataSource = build_kraken_market_data_source(
             settings, clock=clock
         )
     else:
-        market_data = KrakenDerivativesMarketDataSource(
-            KrakenDerivativesPublicClient(
-                settings.kraken_derivatives_rest_url,
-                timeout_seconds=settings.kraken_rest_timeout_seconds,
-            ),
+        market_data = _derivatives_source(
+            settings,
             clock=clock,
             market_sink=portfolio,
-            stale_after=(
-                timedelta(seconds=settings.kraken_stale_after_seconds)
-                if settings.kraken_stale_after_seconds is not None
-                else None
-            ),
         )
 
     cost_model = PaperExecutionCostModel(
@@ -180,6 +236,11 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         cadence_seconds=run.cadence_seconds,
     )
 
+    resources: list[RuntimeMarketDataSource] = [market_data]
+    for resource in (research_spot, research_derivatives):
+        if all(resource is not owned for owned in resources):
+            resources.append(resource)
+
     runtime = AppRuntime(
         trading_engine=trading_engine,
         portfolio=portfolio,
@@ -188,7 +249,7 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         paper_run_lifecycle=paper_run_lifecycle,
         paper_run_reader=paper_run_reader,
         owned_database=database,
-        owned_resources=(market_data,),
+        owned_resources=tuple(resources),
     )
     chat_service = OperatorChatService(
         provider=OpenAIChatProvider(client=openai_client, model=run.llm_model),
@@ -199,6 +260,8 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         runtime=runtime,
         chat_service=chat_service,
         market_data=market_data,
+        market_research=market_research,
+        agent_tools=agent_tools,
         portfolio=portfolio,
         agent=agent,
         risk_engine=risk_engine,
