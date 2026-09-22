@@ -1,11 +1,16 @@
+from copy import deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
+
 from ai_spot_trader.domain.enums import DerivativeContractKind, MarketType
+from ai_spot_trader.domain.models import DerivativeInstrument
 from ai_spot_trader.integrations.kraken.derivatives import (
     parse_kraken_derivatives_instruments,
     parse_kraken_derivatives_ticker,
 )
+from ai_spot_trader.integrations.kraken.errors import KrakenPayloadError
 
 
 def instruments_payload() -> dict[str, object]:
@@ -107,6 +112,108 @@ def test_parse_negative_contract_value_trade_precision() -> None:
     assert bitcoin.min_order_quantity == Decimal("0.0001")
 
 
+def test_parse_margin_schedules_mapping_without_guessing_account_tier() -> None:
+    payload = {
+        "result": "success",
+        "instruments": [
+            {
+                "symbol": "PF_ETHUSD",
+                "base": "ETH",
+                "quote": "USD",
+                "type": "flexible_futures",
+                "tickSize": "0.1",
+                "contractSize": 1,
+                "tradeable": True,
+                "maxPositionSize": 50000,
+                "contractValueTradePrecision": 3,
+                "marginSchedules": {
+                    "standard": {
+                        "contracts": 0,
+                        "initialMargin": "0.02",
+                        "maintenanceMargin": "0.01",
+                    },
+                    "retail": {
+                        "numNonContractUnits": 0,
+                        "initialMargin": "0.10",
+                        "maintenanceMargin": "0.05",
+                    },
+                },
+            }
+        ],
+    }
+
+    (instrument,) = parse_kraken_derivatives_instruments(payload)
+
+    assert instrument.symbol == "ETH/USD"
+    assert instrument.min_order_quantity == Decimal("0.001")
+    assert instrument.initial_margin_rate == Decimal("0.10")
+    assert instrument.maintenance_margin_rate == Decimal("0.05")
+    assert instrument.max_leverage == Decimal("10")
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        ("missing_precision", "contractValueTradePrecision is missing"),
+        ("malformed_margin_entry", "marginLevels contains an invalid margin level"),
+        ("maintenance_above_initial", "maintenanceMargin cannot exceed initialMargin"),
+        ("negative_margin_threshold", "numNonContractUnits cannot be negative"),
+        ("invalid_tradeable", "tradeable flag is invalid"),
+        ("max_position_below_minimum", "maxPositionSize cannot be smaller"),
+    ],
+)
+def test_instrument_parser_fails_closed_on_incoherent_public_metadata(
+    mutation: str,
+    match: str,
+) -> None:
+    payload = instruments_payload()
+    instruments = payload["instruments"]
+    assert isinstance(instruments, list)
+    raw = instruments[0]
+    assert isinstance(raw, dict)
+
+    if mutation == "missing_precision":
+        raw.pop("contractValueTradePrecision")
+    elif mutation == "malformed_margin_entry":
+        raw["marginLevels"] = ["bad-row"]
+    elif mutation == "maintenance_above_initial":
+        raw["marginLevels"] = [
+            {"numNonContractUnits": 0, "initialMargin": 0.02, "maintenanceMargin": 0.03}
+        ]
+    elif mutation == "negative_margin_threshold":
+        raw["marginLevels"] = [
+            {"numNonContractUnits": -1, "initialMargin": 0.02, "maintenanceMargin": 0.01}
+        ]
+    elif mutation == "invalid_tradeable":
+        raw["tradeable"] = "true"
+    elif mutation == "max_position_below_minimum":
+        raw["maxPositionSize"] = "0.00001"
+    else:  # pragma: no cover - guards the test table itself.
+        raise AssertionError(f"unknown mutation {mutation}")
+
+    with pytest.raises(KrakenPayloadError, match=match):
+        parse_kraken_derivatives_instruments(payload)
+
+
+def test_non_tradeable_instrument_is_ignored_before_optional_metadata_validation() -> None:
+    payload = instruments_payload()
+    instruments = payload["instruments"]
+    assert isinstance(instruments, list)
+    raw = deepcopy(instruments[0])
+    assert isinstance(raw, dict)
+    raw["symbol"] = "PF_DISABLEDUSD"
+    raw["base"] = "DISABLED"
+    raw["tradeable"] = False
+    raw.pop("contractValueTradePrecision")
+    raw.pop("marginLevels")
+    raw.pop("retailMarginLevels")
+    instruments.insert(0, raw)
+
+    parsed = parse_kraken_derivatives_instruments(payload)
+
+    assert all(item.venue_symbol != "PF_DISABLEDUSD" for item in parsed)
+
+
 def test_ticker_normalizes_mark_index_and_per_contract_funding() -> None:
     instrument = next(
         item
@@ -121,6 +228,8 @@ def test_ticker_normalizes_mark_index_and_per_contract_funding() -> None:
             "markPrice": 65000,
             "indexPrice": 64990,
             "fundingRate": 6.5,
+            "suspended": False,
+            "postOnly": False,
         },
     }
     observed_at, mark, index, funding = parse_kraken_derivatives_ticker(
@@ -131,3 +240,63 @@ def test_ticker_normalizes_mark_index_and_per_contract_funding() -> None:
     assert mark == Decimal("65000")
     assert index == Decimal("64990")
     assert funding == Decimal("0.0001")
+
+
+def _ticker_payload(**ticker_overrides: object) -> dict[str, object]:
+    ticker: dict[str, object] = {
+        "symbol": "PF_XBTUSD",
+        "markPrice": 65000,
+        "indexPrice": 64990,
+        "fundingRate": 6.5,
+    }
+    ticker.update(ticker_overrides)
+    return {
+        "result": "success",
+        "serverTime": "2026-09-21T12:00:01Z",
+        "ticker": ticker,
+    }
+
+
+def _linear_instrument() -> DerivativeInstrument:
+    return next(
+        item
+        for item in parse_kraken_derivatives_instruments(instruments_payload())
+        if item.venue_symbol == "PF_XBTUSD"
+    )
+
+
+def test_ticker_does_not_fallback_to_last_when_mark_price_is_missing() -> None:
+    payload = _ticker_payload(last=64950)
+    ticker = payload["ticker"]
+    assert isinstance(ticker, dict)
+    ticker.pop("markPrice")
+
+    with pytest.raises(KrakenPayloadError, match="markPrice is invalid"):
+        parse_kraken_derivatives_ticker(payload, instrument=_linear_instrument())
+
+
+@pytest.mark.parametrize(
+    ("flag", "value", "match"),
+    [
+        ("suspended", True, "ticker is suspended"),
+        ("postOnly", True, "ticker is post-only"),
+        ("suspended", "false", "ticker suspended flag is invalid"),
+        ("postOnly", 0, "ticker postOnly flag is invalid"),
+    ],
+)
+def test_ticker_fails_closed_on_non_executable_or_malformed_status(
+    flag: str,
+    value: object,
+    match: str,
+) -> None:
+    payload = _ticker_payload(**{flag: value})
+
+    with pytest.raises(KrakenPayloadError, match=match):
+        parse_kraken_derivatives_ticker(payload, instrument=_linear_instrument())
+
+
+def test_ticker_rejects_conflicting_post_only_aliases() -> None:
+    payload = _ticker_payload(postOnly=False, post_only=True)
+
+    with pytest.raises(KrakenPayloadError, match="ticker postOnly aliases conflict"):
+        parse_kraken_derivatives_ticker(payload, instrument=_linear_instrument())

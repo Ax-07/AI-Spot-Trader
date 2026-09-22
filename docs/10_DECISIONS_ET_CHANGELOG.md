@@ -112,6 +112,31 @@ Les anciennes mentions **SPOT uniquement / aucun future-perpetual** sont supers�
 ### ADR-119 — Prompt Agent `agent-strategy-v4` en français
 **ACCEPTÉE.** Le prompt stratégique est localisé en français et le champ `rationale` doit être rédigé en français. Les valeurs contractuelles `BUY`, `SELL`, `HOLD`, `SPOT`, `PERPETUAL`, `FUTURE`, `LONG` et `SHORT`, le schéma structuré, la séparation Agent/Risk et le chemin d'exécution restent inchangés. Le changement de version rend l'évolution traçable dans les manifestes expérimentaux.
 
+## Décisions Batch 17 — validées localement
+
+> Ces décisions décrivent le Batch 17 validé localement depuis le HEAD `b859b5f813e458ca26633406a557462953d39e5e`. Elles ne doivent pas être qualifiées d'intégrées tant que le commit et le push sur `main` ne sont pas confirmés.
+
+### ADR-120 — La frontière Kraken Derivatives publique doit échouer fermée sur les métadonnées critiques
+**VALIDÉE LOCALEMENT.** Un instrument `tradeable` exige des valeurs cohérentes pour `contractSize`, `tickSize`, `contractValueTradePrecision` et ses schedules de marge. Une structure malformed, un seuil négatif, un taux incohérent ou un `maxPositionSize` inférieur à la taille minimale provoque une erreur de payload au lieu d'une hypothèse implicite.
+
+### ADR-121 — Supporter les trois formes publiques de schedules de marge sans prétendre connaître le tier privé
+**VALIDÉE LOCALEMENT.** Le parser accepte `marginLevels`, `retailMarginLevels` et `marginSchedules`. Les seuils sont validés mais ne sont pas encore appliqués dynamiquement à la taille de position. Sans contexte privé prouvant le barème du compte, le runtime conserve le choix account-agnostic existant : prendre les taux publics les plus conservateurs observés.
+
+### ADR-122 — `contractValueTradePrecision` absent n'a plus de valeur par défaut
+**VALIDÉE LOCALEMENT.** La valeur est requise pour un instrument tradeable. Le défaut historique `None -> 1` est supprimé afin d'éviter une taille minimale inventée.
+
+### ADR-123 — Le mark est obligatoire pour le chemin Derivatives PAPER
+**VALIDÉE LOCALEMENT.** `markPrice` ou son alias historique `mark_price` est requis. `last` n'est plus utilisé comme substitut silencieux, car le mark alimente le P&L, la marge et la liquidation PAPER.
+
+### ADR-124 — Un ticker suspendu ou post-only n'est pas exécutable par le PaperBroker full-fill
+**VALIDÉE LOCALEMENT.** Si le ticker public indique `suspended=true` ou `postOnly=true`, le snapshot échoue fermé. Les flags non booléens ou des aliases contradictoires sont également rejetés. Cette décision évite de simuler un fill immédiat dans un état de marché où ce comportement ne représente pas l'exécution disponible.
+
+### ADR-125 — Pas de faux modèle tier-aware ou de faux recovery dans Batch 17
+**VALIDÉE LOCALEMENT.** Le Batch 17 n'étend pas le domaine pour des tiers de marge dynamiques et ne reconstruit pas un ledger à partir du journal. Ces sujets exigent des contrats explicites et un batch séparé. Un redémarrage backend continue donc de créer un nouveau run/ledger, sans fausse continuité.
+
+### ADR-126 — Aucun enrichissement supplémentaire sans besoin mesuré
+**VALIDÉE LOCALEMENT.** Funding historique, volume, liquidité, order book et cockpit Derivatives dédié restent hors périmètre. Le patch vise la robustesse d'une frontière existante, pas l'ajout de nouveaux signaux ou d'une seconde stratégie.
+
 ## Changelog — 2026-09-21 — Batch 16.1 Smoke PERPETUAL PAPER
 
 Smoke réel : `BTC/USD / PF_XBTUSD`, cycle `COMPLETED`, Agent `HOLD`, Risk `ALLOW / HOLD_NO_EXECUTION`, analytics `1000 -> 1000`, `trade_count=0`, `hold_count=1`.
@@ -264,9 +289,27 @@ Conclusion : le contexte enrichi est systématiquement transmis dans le run fina
 - mêmes invariants PAPER, Agent unique, Risk autorité finale et absence d'exécution directe LLM ;
 - test du contrat de prompt mis à jour pour `agent-strategy-v4`.
 
+## Changelog — 2026-09-22 — Batch 17 Robustesse Derivatives — validé localement
+
+Audit démarré depuis le HEAD GitHub `b859b5f813e458ca26633406a557462953d39e5e`.
+
+Le patch validé localement :
+
+- étend le parsing de marge à `marginSchedules` en plus des listes historiques ;
+- valide strictement les structures et cohérences de marge publiques ;
+- supprime la taille minimale implicite lorsque `contractValueTradePrecision` manque ;
+- exige le `markPrice` pour le ticker Derivatives PAPER ;
+- refuse les états `suspended` et `postOnly` incompatibles avec un full-fill PAPER ;
+- conserve le modèle conservateur account-agnostic actuel au lieu d'inventer un tier privé ;
+- n'ajoute ni signal stratégique, ni changement Risk/Broker/ledger, ni API privée, ni LIVE.
+
+Validation exécutée par ChatGPT dans l'environnement de livraison : compilation Python des deux fichiers code/test modifiés, `17 passed` sur le fichier de tests ciblé dans un shell de dépendances isolé exécutant le parser production modifié, et harness isolé complémentaire.
+
+Validation locale finale confirmée : `pytest backend = 371 passed, 2 warnings externes`, Ruff `All checks passed`, mypy `Success: no issues found in 74 source files`, `git diff --check` sans erreur de contenu hors warnings LF -> CRLF. La première suite complète avait révélé un test de digest obsolète resté sur `agent-strategy-v3`; la fixture attendue a été mise à jour pour `agent-strategy-v4` vers `831b95456aa5612d2762e567c0e65579c8776dad753913e40750178c985c3d09`, sans modification de l'algorithme de digest.
+
 ## Prochaine étape
 
-Le Batch 16.6 est intégré sur `main` au commit `251d530ad12951605068c1c8eb8cbeb313c36b49`. La localisation v4 ne constitue pas un nouveau batch fonctionnel ; toute nouvelle expérimentation ou évolution Derivatives doit être lancée dans un batch distinct.
+Le Batch 17 est validé localement. Il reste à commit puis push explicitement sur `main` avant de le déclarer intégré. Les sujets tiers de marge dynamiques, recovery durable du ledger, multi-instrument orchestré et liquidation Kraken plus fidèle restent des batches séparés à décider.
 
 ## LIVE
 

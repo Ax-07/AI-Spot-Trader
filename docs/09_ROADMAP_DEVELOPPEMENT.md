@@ -149,11 +149,77 @@ L'absence de BUY/SELL naturel ne constitue pas un échec et ne justifie aucune m
 
 ## Batch 17 — Robustesse Derivatives
 
-**Prochain batch proposé. À lancer dans une nouvelle discussion après resynchronisation avec `main`.**
+**État : validé localement depuis le HEAD GitHub `b859b5f813e458ca26633406a557462953d39e5e`. Non intégré tant que le commit et le push sur `main` ne sont pas confirmés.**
 
-Pistes à auditer avant implémentation : validation des schémas publics Kraken sur davantage d'instruments, tiers de marge par taille, liquidation PAPER plus fidèle, cockpit dédié dérivés, reprise/réconciliation du ledger mémoire, scénarios multi-position/multi-instrument, puis éventuel enrichissement public supplémentaire (funding historique, liquidité/volume) uniquement si son utilité est mesurée.
+### Audit
 
-Le périmètre exact du Batch 17 doit être limité et décidé après audit de l'existant ; ces pistes ne constituent pas encore toutes des décisions architecturales.
+**Confirmé :**
+
+- le parser public supportait `marginLevels` et `retailMarginLevels`, mais pas la forme publique `marginSchedules` ;
+- les seuils de marge par taille étaient perdus dans un couple de taux conservateurs ;
+- `contractValueTradePrecision` absent tombait silencieusement sur une quantité minimale `1` ;
+- certaines entrées de marge malformed pouvaient être ignorées au lieu d'échouer ;
+- le ticker pouvait utiliser `last` si `markPrice` était absent ;
+- les états `suspended` / `postOnly` n'étaient pas bloquants dans le modèle PAPER full-fill ;
+- le ledger PAPER reste process-local ; la persistance du `paper_run_id` ne constitue pas une reprise durable du portefeuille ;
+- le domaine peut porter plusieurs positions dérivées par symbole et Risk somme l'exposition totale, mais la composition canonique reste centrée sur un `paper_symbol` à la fois ;
+- la liquidation actuelle est une estimation isolée à taux de maintenance constant, pas une reproduction complète du moteur Kraken.
+
+**Obsolète :**
+
+- considérer `marginLevels` / `retailMarginLevels` comme les seules formes possibles de marge publique ;
+- considérer `last` comme substitut acceptable au mark pour le chemin Derivatives PAPER.
+
+**Manquant mais volontairement hors périmètre de ce patch :**
+
+- modèle de tiers de marge appliqué dynamiquement à la taille projetée ;
+- reprise/réconciliation durable du ledger PAPER après redémarrage ;
+- orchestration multi-instrument simultanée validée de bout en bout ;
+- liquidation fidèle aux procédures/fees privées de Kraken ;
+- cockpit Derivatives dédié.
+
+**À décider ultérieurement :**
+
+- représentation provider-agnostic des tiers de marge dans le domaine ;
+- politique de sélection d'un barème quand plusieurs schedules publics existent et qu'aucun contexte privé ne prouve celui du compte ;
+- format durable d'un snapshot/recovery de portefeuille PAPER ;
+- utilité mesurée de funding historique, volume, liquidité ou order book.
+
+### Périmètre retenu
+
+Le patch Batch 17 durcit uniquement la frontière Kraken publique :
+
+- support de `marginSchedules` en plus de `marginLevels` / `retailMarginLevels` ;
+- validation stricte des structures de marge, des seuils et de la relation `maintenanceMargin <= initialMargin <= 1` ;
+- `contractValueTradePrecision` obligatoire pour un instrument tradeable ;
+- validation `maxPositionSize >= min_order_quantity` lorsqu'elle est disponible ;
+- drapeau `tradeable` strictement booléen ;
+- `markPrice` obligatoire dans le ticker, sans fallback vers `last` ;
+- fail-closed sur `suspended`, `postOnly`, flags malformed ou alias conflictuels ;
+- conservation du choix conservateur account-agnostic existant pour les taux de marge : maximum public observé, sans inventer un tier applicable.
+
+Aucun changement Agent/Risk/Broker/ledger/frontend/LIVE. Aucun nouveau signal déterministe et aucun enrichissement public supplémentaire.
+
+### Validation
+
+ChatGPT a exécuté dans l'environnement de livraison :
+
+```text
+python -m py_compile derivatives.py + test_kraken_derivatives.py : OK
+pytest ciblé isolé test_kraken_derivatives.py                     : 17 passed
+harness isolé du parser production modifié                       : OK
+```
+
+Validation locale finale :
+
+```text
+pytest backend                                  : 371 passed, 2 warnings externes
+ruff check backend                             : All checks passed
+mypy --config-file backend\pyproject.toml ... : Success, 74 source files
+git diff --check                               : aucune erreur ; warnings LF -> CRLF uniquement
+```
+
+La première suite complète a également révélé un digest de fixture resté figé sur `agent-strategy-v3` dans `test_experiments.py`. Le digest attendu a été recalé sur l'identité `agent-strategy-v4` déjà intégrée (`831b95456aa5612d2762e567c0e65579c8776dad753913e40750178c985c3d09`), puis le test ciblé et la suite complète ont passé. Ce correctif ne change pas le calcul du digest ; il remet seulement à jour la fixture attendue.
 
 ## LIVE — toujours séparé
 

@@ -334,8 +334,14 @@ def parse_kraken_derivatives_instruments(payload: object) -> tuple[DerivativeIns
 
     parsed: list[DerivativeInstrument] = []
     for raw in rows:
-        if not isinstance(raw, Mapping) or raw.get("tradeable") is False:
+        if not isinstance(raw, Mapping):
+            raise KrakenPayloadError("Kraken Derivatives instruments contain an invalid entry")
+        tradeable = raw.get("tradeable")
+        if not isinstance(tradeable, bool):
+            raise KrakenPayloadError("derivative instrument tradeable flag is invalid")
+        if not tradeable:
             continue
+
         venue_symbol = _non_empty_text(raw.get("symbol"), "instrument symbol").upper()
         market_type, contract_kind = _contract_classification(
             venue_symbol,
@@ -346,6 +352,10 @@ def parse_kraken_derivatives_instruments(payload: object) -> tuple[DerivativeIns
         tick_size = _positive_decimal(raw.get("tickSize"), "tickSize")
         min_order_quantity = _minimum_order_quantity(raw.get("contractValueTradePrecision"))
         max_position = _optional_positive_decimal(raw.get("maxPositionSize"))
+        if max_position is not None and max_position < min_order_quantity:
+            raise KrakenPayloadError(
+                "maxPositionSize cannot be smaller than the minimum order quantity"
+            )
         initial_margin, maintenance_margin = _conservative_margin_rates(raw)
         max_leverage = Decimal(1) / initial_margin
         expires_at = None
@@ -411,10 +421,15 @@ def parse_kraken_derivatives_ticker(
     if raw_symbol != instrument.venue_symbol:
         raise KrakenPayloadError("Kraken Derivatives ticker symbol mismatch")
 
-    mark_price = _positive_decimal(
-        raw.get("markPrice", raw.get("mark_price", raw.get("last"))),
-        "markPrice",
-    )
+    suspended = _optional_boolean_alias(raw, ("suspended",), "ticker suspended")
+    post_only = _optional_boolean_alias(raw, ("postOnly", "post_only"), "ticker postOnly")
+    if suspended is True:
+        raise KrakenPayloadError("Kraken Derivatives ticker is suspended")
+    if post_only is True:
+        raise KrakenPayloadError("Kraken Derivatives ticker is post-only")
+
+    raw_mark_price = raw.get("markPrice") if "markPrice" in raw else raw.get("mark_price")
+    mark_price = _positive_decimal(raw_mark_price, "markPrice")
     index_price = _optional_positive_decimal(raw.get("indexPrice", raw.get("index")))
     observed_at = _datetime(root.get("serverTime"), "serverTime")
 
@@ -430,28 +445,72 @@ def parse_kraken_derivatives_ticker(
 
 
 def _conservative_margin_rates(raw: Mapping[str, Any]) -> tuple[Decimal, Decimal]:
-    schedules: list[Mapping[str, Any]] = []
+    schedule_groups: list[tuple[str, tuple[Mapping[str, Any], ...]]] = []
     for key in ("marginLevels", "retailMarginLevels"):
         value = raw.get(key)
-        if isinstance(value, list):
-            schedules.extend(item for item in value if isinstance(item, Mapping))
+        if value is None:
+            continue
+        if not isinstance(value, list):
+            raise KrakenPayloadError(f"{key} must be an array")
+        rows: list[Mapping[str, Any]] = []
+        for item in value:
+            if not isinstance(item, Mapping):
+                raise KrakenPayloadError(f"{key} contains an invalid margin level")
+            rows.append(item)
+        schedule_groups.append((key, tuple(rows)))
+
+    named = raw.get("marginSchedules")
+    if named is not None:
+        if not isinstance(named, Mapping):
+            raise KrakenPayloadError("marginSchedules must be an object")
+        named_rows: list[Mapping[str, Any]] = []
+        for schedule_name, item in named.items():
+            if not isinstance(schedule_name, str) or not schedule_name.strip():
+                raise KrakenPayloadError("marginSchedules contains an invalid schedule name")
+            if not isinstance(item, Mapping):
+                raise KrakenPayloadError("marginSchedules contains an invalid margin level")
+            named_rows.append(item)
+        schedule_groups.append(("marginSchedules", tuple(named_rows)))
+
+    schedules = [item for _, rows in schedule_groups for item in rows]
     if not schedules:
         raise KrakenPayloadError("derivative instrument has no public margin levels")
-    initials = [
-        _positive_decimal(item.get("initialMargin"), "initialMargin") for item in schedules
-    ]
-    maintenance = [
-        _positive_decimal(item.get("maintenanceMargin"), "maintenanceMargin")
-        for item in schedules
-    ]
-    # Public metadata cannot tell us which account/regulatory schedule applies. Batch 16
-    # therefore chooses the most conservative public rates instead of guessing the user's tier.
+
+    initials: list[Decimal] = []
+    maintenance: list[Decimal] = []
+    for item in schedules:
+        _validate_margin_threshold(item, "contracts")
+        _validate_margin_threshold(item, "numNonContractUnits")
+        initial = _positive_decimal(item.get("initialMargin"), "initialMargin")
+        maintenance_rate = _positive_decimal(
+            item.get("maintenanceMargin"),
+            "maintenanceMargin",
+        )
+        if initial > Decimal(1):
+            raise KrakenPayloadError("initialMargin cannot exceed 1")
+        if maintenance_rate > initial:
+            raise KrakenPayloadError("maintenanceMargin cannot exceed initialMargin")
+        initials.append(initial)
+        maintenance.append(maintenance_rate)
+
+    # Public metadata can expose multiple account/regulatory schedules and position-size
+    # tiers, but this public-only runtime cannot prove which private account schedule applies.
+    # Keep the existing conservative semantics: use the strictest public rates and preserve
+    # the full tier-aware model as a separate architectural decision instead of guessing it.
     return max(initials), max(maintenance)
+
+
+def _validate_margin_threshold(item: Mapping[str, Any], key: str) -> None:
+    if key not in item:
+        return
+    threshold = _decimal(item.get(key), key)
+    if threshold < 0:
+        raise KrakenPayloadError(f"{key} cannot be negative")
 
 
 def _minimum_order_quantity(value: object) -> Decimal:
     if value is None:
-        return Decimal(1)
+        raise KrakenPayloadError("contractValueTradePrecision is missing")
     precision = _decimal(value, "contractValueTradePrecision")
     if precision != precision.to_integral_value() or precision < -18 or precision > 18:
         raise KrakenPayloadError("contractValueTradePrecision is invalid")
@@ -538,6 +597,26 @@ def _optional_text(value: object) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise KrakenPayloadError("Kraken Derivatives text field is invalid")
     return value.strip()
+
+
+def _optional_boolean_alias(
+    raw: Mapping[str, Any],
+    keys: tuple[str, ...],
+    label: str,
+) -> bool | None:
+    values: list[bool] = []
+    for key in keys:
+        if key not in raw:
+            continue
+        value = raw.get(key)
+        if not isinstance(value, bool):
+            raise KrakenPayloadError(f"{label} flag is invalid")
+        values.append(value)
+    if not values:
+        return None
+    if len(set(values)) != 1:
+        raise KrakenPayloadError(f"{label} aliases conflict")
+    return values[0]
 
 
 def _decimal(value: object, label: str) -> Decimal:
