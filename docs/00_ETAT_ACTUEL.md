@@ -6,14 +6,15 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub vérifié au démarrage du Batch 17 : `b859b5f813e458ca26633406a557462953d39e5e` (`docs: sync current state after agent prompt v4`).
+- HEAD GitHub courant après intégration du Batch 17 : `25efe21194a61140c426a47c261f74f76799e4ea` (`fix: harden Kraken derivatives paper metadata`).
+- Base d’audit du Batch 17 : `b859b5f813e458ca26633406a557462953d39e5e` (`docs: sync current state after agent prompt v4`).
 - Référence fonctionnelle Batch 16.5 : `595bd2c8b4311ac255db927515207f10875b1505` (`feat: enrich perpetual paper market context`).
 - Validation comportementale Batch 16.6 : `251d530ad12951605068c1c8eb8cbeb313c36b49`.
 - Prompt stratégique courant : `agent-strategy-v4`, intégré au commit `bacf29c83b4f29477ee9e35a1a65756a866ba250`.
 
 ## Batch 17 — Robustesse Derivatives
 
-**État : Batch 17 validé localement depuis le HEAD GitHub `b859b5f813e458ca26633406a557462953d39e5e`, non intégré tant que le commit et le push sur `main` ne sont pas confirmés.**
+**État : intégré sur GitHub `main` au commit `25efe21194a61140c426a47c261f74f76799e4ea` (`fix: harden Kraken derivatives paper metadata`).**
 
 L'audit du support Kraken Derivatives PAPER a confirmé que l'architecture canonique reste saine : un seul pipeline `Market -> Agent -> Risk -> PaperBroker`, ledger multi-position one-way par symbole, Risk globalisant l'exposition dérivés et modèle de liquidation isolée cohérent sous l'hypothèse d'un taux de maintenance constant.
 
@@ -88,4 +89,4 @@ git diff --check                               : aucune erreur ; warnings LF -> 
 
 La première exécution complète a détecté un unique test obsolète dans `backend/tests/test_experiments.py` : le digest figé correspondait encore à `agent-strategy-v3`. Comme `prompt_version` fait partie de l'identité expérimentale et que `agent-strategy-v4` est déjà intégré sur `main`, la valeur attendue a été mise à jour vers `831b95456aa5612d2762e567c0e65579c8776dad753913e40750178c985c3d09`. Le test ciblé a ensuite passé, puis la suite complète a confirmé `371 passed`.
 
-Le Batch 17 est validé localement mais ne doit pas être qualifié d'intégré avant commit et push confirmés sur `main`.
+Le Batch 17 est intégré sur GitHub `main` au commit `25efe21194a61140c426a47c261f74f76799e4ea`. Le working tree était propre immédiatement après le push.

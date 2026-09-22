@@ -149,7 +149,9 @@ L'absence de BUY/SELL naturel ne constitue pas un échec et ne justifie aucune m
 
 ## Batch 17 — Robustesse Derivatives
 
-**État : validé localement depuis le HEAD GitHub `b859b5f813e458ca26633406a557462953d39e5e`. Non intégré tant que le commit et le push sur `main` ne sont pas confirmés.**
+**État : intégré sur GitHub `main` au commit `25efe21194a61140c426a47c261f74f76799e4ea` (`fix: harden Kraken derivatives paper metadata`).**
+
+Base d’audit du batch : `b859b5f813e458ca26633406a557462953d39e5e`.
 
 ### Audit
 
