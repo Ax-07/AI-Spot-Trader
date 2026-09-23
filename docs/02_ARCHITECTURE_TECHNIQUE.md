@@ -2,16 +2,22 @@
 
 ## 1. Référence
 
-Commit d'intégration code du Batch 18.6 :
+HEAD GitHub vérifié au démarrage du Batch 18.7 :
+
+```text
+c5ddd2c6c1df74c2166a758cfb1cdf02d665d8d2
+docs: record batch 18.6 integration
+```
+
+Dernier commit code intégré :
 
 ```text
 9642ec394357fe1e1807b538a2353bdc6d062f46
 feat: add durable PAPER ledger recovery
 ```
 
-Le Batch 18.6 est intégré. Sa base de démarrage était
-`70457125c5a238fe9b798463081c8769d8879d5e`, avec `84548d23...` comme dernier commit code intégré à
-ce moment-là.
+Le Batch 18.6 est intégré. Le Batch 18.7 décrit ci-dessous reste un patch proposé tant que la
+validation locale, le commit et le push ne sont pas confirmés.
 
 ## 2. Modules concernés
 
@@ -19,7 +25,10 @@ ce moment-là.
 backend/src/ai_spot_trader/
   agent/
     provider.py            # même Agent + validation runtime des manifestes v3
+    openai_client.py       # Responses API + retry transport pré-décision borné
     prompt.py              # contrat à deux phases, toujours agent-strategy-v4
+  core/
+    retry.py               # politique générique bornée, backoff + logs sanitaires
   domain/
     models.py              # contrats Agent/portfolio/expériences existants
   experiments/
@@ -38,10 +47,14 @@ backend/src/ai_spot_trader/
     audit.py               # checkpoint/rollback mémoire autour de l'audit durable
     analytics.py           # replay chain-aware des runs liés par recovery
   integrations/kraken/
-    derivatives.py         # mark/funding sur source execution uniquement
+    rest.py                # client SPOT public brut
+    derivatives.py         # client Derivatives public brut + mark/funding execution
+    websocket.py           # reconnect SPOT borné existant
+    resilience.py          # retry REST read-only + classification transitoire/permanente
+    market_data.py         # injecte le wrapper REST SPOT
   analytics/
     paper.py               # paper-analytics-v3 multi-marchés causal
-  composition.py           # injecte le même ledger dans recovery, Risk/Broker et runtime
+  composition.py           # wrappers REST Derivatives + ledger/Risk/Broker/runtime
 backend/alembic/versions/
   0005_paper_run_recovery.py
 ```
@@ -90,7 +103,8 @@ PortfolioLedger ------------------------>| recapture complète
                                     PaperBroker
 ```
 
-Le Batch 18.6 ne modifie pas ce pipeline stratégique.
+Le Batch 18.7 ne modifie pas ce pipeline stratégique. Il agit uniquement sous les frontières
+réseau read-only ou pré-décision.
 
 ## 4. Un seul Agent, deux phases
 
@@ -123,6 +137,10 @@ fait partie de l'identité expérimentale.
 choisi et vérifie format, appartenance exacte, type supporté, cohérence du snapshot et, pour les
 PERPETUAL, contrat linéaire réellement représenté. Une erreur provoque un échec technique, jamais
 un HOLD artificiel.
+
+Le routeur n'est pas une frontière de retry : rejouer un `snapshot()` PERPETUAL complet pourrait
+répéter une mutation de mark/funding après un premier succès réseau. Les retries 18.7 restent donc
+plus bas, sur les seules lectures REST publiques.
 
 ## 7. Séparation research / execution
 
@@ -162,7 +180,8 @@ pas du LLM.
 `agent_protocol`, omis de la sérialisation lorsqu'il est absent.
 
 Pour `paper-experiment-v3`, `agent_protocol` contient l'univers typé, la version de sélection, les
-phases tools et les bornes effectives. Le Batch 18.6 ne modifie aucun de ces contrats.
+phases tools et les bornes effectives. Le transport/retry 18.7 n'altère ni le contrat stratégique,
+ni les digests historiques.
 
 ## 11. Identité de la capacité tools
 
@@ -172,18 +191,21 @@ Le digest et les bornes introduits par 18.5 restent inchangés.
 ## 12. Digests et groupes contrôlés
 
 v1 et v2 continuent d'utiliser leurs payloads historiques. En v3, le digest du groupe exclut
-seulement `llm_model` et `replicate_index`. Le recovery n'entre pas dans la stratégie Agent et ne
-réinterprète pas les manifestes historiques.
+seulement `llm_model` et `replicate_index`. Le recovery et la politique de retry transport ne
+réinterprètent pas les manifestes historiques.
 
 ## 13. Validation avant appel LLM
 
 Les contrôles v3 du runner et du provider restent inchangés. Le recovery se produit au démarrage du
 runtime, avant tout cycle et donc avant tout nouvel appel stratégique.
 
+Un retry Responses API est autorisé uniquement avant qu'une réponse exploitable n'ait produit une
+`MarketSelection` ou un `DecisionCandidate`. Dans la boucle tools, chaque requête HTTP est retryée
+individuellement ; les tools demeurent read-only et aucun retry n'entoure l'ensemble Agent/Risk.
+
 ## 14. Persistance de cycle et état de ledger
 
-Avant 18.6, le graphe de cycle était durable mais le ledger PAPER courant restait uniquement en
-mémoire. La migration intégrée `0005_paper_run_recovery` ajoute :
+La migration intégrée `0005_paper_run_recovery` ajoute :
 
 ```text
 paper_runs.resumed_from_paper_run_id UUID NULL UNIQUE
@@ -225,6 +247,8 @@ Ainsi :
 - une mutation Broker dont l'audit n'est pas durable est annulée en mémoire ;
 - un replay idempotent ne double pas l'exposition ;
 - un cycle `COMPLETED` durable est l'unique frontière qui fait avancer l'état de reprise.
+
+Le Batch 18.7 ne modifie pas cette frontière et n'ajoute aucun retry autour de l'audit.
 
 ## 16. Handoff de restart
 
@@ -305,13 +329,15 @@ experiment_manifest = None
 paper-experiment-v1
 paper-experiment-v2
 paper-experiment-v3
+agent-strategy-v4
+paper-ledger-recovery-v1
 mode mono-marché legacy du TradingCycleRunner
 composition PAPER multi-marché canonique
 ```
 
-Le démarrage est refusé si l'état durable est invalide, incomplet ou incompatible. Le Batch 18.6
-ne crée aucune architecture stratégique parallèle et ne change ni `agent-strategy-v4`, ni
-RiskPolicy, ni les règles de PaperBroker.
+Le démarrage est refusé si l'état durable est invalide, incomplet ou incompatible. Le Batch 18.7
+ne crée aucune architecture stratégique parallèle et ne change ni RiskPolicy, ni les règles de
+PaperBroker.
 
 ## 21. Validation intégrée 18.6
 
@@ -324,7 +350,76 @@ mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
 git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 ```
 
-## 22. Hors périmètre 18.6
+## 22. Politique de retry proposée par 18.7
 
-Pas de retries réseau/LLM génériques, nouvelles données research, campagne Luna/Sol,
-scanner/ranking/opportunity score, multi-quote/FX, FUTURE daté, LIVE ou changement de stratégie.
+### Kraken public REST
+
+Les seules opérations retryées sont les lectures publiques :
+
+```text
+SPOT        : AssetPairs, OHLC
+Derivatives : instruments, ticker, mark history
+```
+
+Politique : 3 tentatives maximum, backoff exponentiel `0.25s -> 0.5s` borné à `1s`.
+
+Retryable : timeout/transport, HTTP 408, HTTP 429, HTTP 5xx.
+
+Non retryable : autre HTTP 4xx, JSON invalide, payload Kraken invalide, symbole/stale/invariant.
+
+Le WebSocket SPOT conserve son mécanisme existant de reconnexion bornée ; il n'est pas enveloppé
+par cette nouvelle politique.
+
+### Responses API
+
+Chaque POST `/responses` dispose de 2 tentatives maximum, backoff `0.5s`, uniquement pour
+transport/timeout, 408, 429 ou 5xx. `store=false` reste utilisé. Une réponse HTTP reçue avec JSON ou
+contrat provider invalide échoue sans retry.
+
+Cette frontière est avant toute décision durable et ne permet jamais au LLM de déclencher Risk ou
+Broker directement.
+
+### Timeouts et deadline de stage
+
+Les timeouts transport existants restent configurables (`kraken_rest_timeout_seconds=10s` et
+`openai_timeout_seconds=30s` par défaut). Le runner conserve en parallèle ses deadlines de stage
+`MARKET`, `AGENT` et `BROKER`. La deadline de stage est le plafond absolu : un retry ne la prolonge
+jamais. Si une configuration fixe un timeout de stage inférieur ou égal au timeout transport, une
+attente longue peut donc être interrompue par le runner avant qu'un retry transport soit possible.
+C'est un fail-closed volontaire ; pour tester/rendre utile le retry de timeout, le timeout transport
+doit être strictement inférieur au budget de stage disponible.
+
+### Jitter
+
+Aucun jitter n'est ajouté dans 18.7. Le runtime courant est mono-Agent et séquentiel ; un backoff
+déterministe est suffisant et rend les tests strictement reproductibles. Une réévaluation pourra
+être faite si plusieurs runtimes concurrents sont réellement déployés.
+
+## 23. Observabilité proposée par 18.7
+
+Les erreurs réseau finales sont classées sans corps de réponse ni secret :
+
+```text
+KrakenTimeoutError / LLMTimeoutError
+KrakenNetworkError / LLMNetworkError
+KrakenRateLimitError / LLMRateLimitError
+KrakenServerError / LLMServerError
+KrakenHTTPError / LLMHTTPError
+```
+
+Ces types remontent jusqu'à `TradingCycleFailure.error_type`, déjà persisté par l'audit. Les types
+Timeout héritent aussi de `TimeoutError`, donc `failure_timed_out` reste vrai sans migration.
+
+Les retries journalisent uniquement : opération logique, tentative, budget, type d'erreur, statut
+HTTP éventuel et délai. Aucun prompt, payload Kraken/OpenAI, URL avec paramètres, token ou secret
+n'est écrit par cette couche.
+
+Il n'existe pas encore de backend métriques dédié dans le repository ; 18.7 n'introduit donc pas
+Prometheus/OpenTelemetry en parallèle. Les logs structurés et les failures durables constituent la
+surface d'observabilité de ce batch.
+
+## 24. Hors périmètre 18.7
+
+Pas de retry Risk/Broker/persistance, pas de retry du `snapshot()` exécutable complet, pas de
+scanner/ranking/opportunity score, pas de nouvelle donnée research, pas de changement de stratégie,
+pas de migration, pas de multi-quote/FX, pas de FUTURE daté et pas de LIVE.

@@ -24,6 +24,7 @@ from ai_spot_trader.integrations.kraken.market_data import (
     build_kraken_market_data_source,
 )
 from ai_spot_trader.integrations.kraken.research import KrakenMarketResearchBackend
+from ai_spot_trader.integrations.kraken.resilience import RetryingKrakenDerivativesRestSource
 from ai_spot_trader.market.execution import RoutedExecutableMarketDataSource
 from ai_spot_trader.market.research import MarketResearchService
 from ai_spot_trader.persistence.analytics import SqlAlchemyPaperAnalyticsQueryService
@@ -81,9 +82,11 @@ def _derivatives_source(
     market_sink: PaperPortfolioLedger | None,
 ) -> KrakenDerivativesMarketDataSource:
     return KrakenDerivativesMarketDataSource(
-        KrakenDerivativesPublicClient(
-            settings.kraken_derivatives_rest_url,
-            timeout_seconds=settings.kraken_rest_timeout_seconds,
+        RetryingKrakenDerivativesRestSource(
+            KrakenDerivativesPublicClient(
+                settings.kraken_derivatives_rest_url,
+                timeout_seconds=settings.kraken_rest_timeout_seconds,
+            )
         ),
         clock=clock,
         market_sink=market_sink,
@@ -131,9 +134,11 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
     research_spot: KrakenMarketDataSource = build_kraken_market_data_source(
         settings, clock=clock
     )
-    research_derivatives_client = KrakenDerivativesPublicClient(
-        settings.kraken_derivatives_rest_url,
-        timeout_seconds=settings.kraken_rest_timeout_seconds,
+    research_derivatives_client = RetryingKrakenDerivativesRestSource(
+        KrakenDerivativesPublicClient(
+            settings.kraken_derivatives_rest_url,
+            timeout_seconds=settings.kraken_rest_timeout_seconds,
+        )
     )
     research_derivatives = KrakenDerivativesMarketDataSource(
         research_derivatives_client,

@@ -6,14 +6,14 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub vérifié après intégration du Batch 18.6 : `9642ec394357fe1e1807b538a2353bdc6d062f46`
-- Commit HEAD/code : `feat: add durable PAPER ledger recovery`
-- Batch 18.6 : **intégré** après migration PostgreSQL, validation locale complète, commit et push.
-- Prompt stratégique : `agent-strategy-v4`, inchangé par 18.6.
-
-Référence de démarrage du Batch 18.6 : `70457125c5a238fe9b798463081c8769d8879d5e`
-(`docs: record batch 18.5 integration`), avec `84548d23...` comme dernier commit code intégré à ce
-moment-là.
+- HEAD GitHub vérifié au démarrage du Batch 18.7 : `c5ddd2c6c1df74c2166a758cfb1cdf02d665d8d2`
+- Commit HEAD : `docs: record batch 18.6 integration`
+- Dernier commit code intégré : `9642ec394357fe1e1807b538a2353bdc6d062f46`
+  (`feat: add durable PAPER ledger recovery`).
+- Batch 18.6 : **intégré**.
+- Batch 18.7 : **validé localement, non intégré** tant que le commit et le push ne sont pas
+  confirmés.
+- Prompt stratégique : `agent-strategy-v4`, inchangé par 18.7.
 
 ## État intégré
 
@@ -21,37 +21,69 @@ Le même Agent stratégique sélectionne un marché dans l'univers PAPER typé, 
 `MarketState` canonique exact, puis propose `BUY`, `SELL` ou `HOLD`. Risk garde l'autorité finale et
 le Broker n'est appelé qu'après `ExecutionIntent`.
 
-Le runtime supporte désormais aussi le recovery/restart durable du ledger PAPER multi-actifs via
-`paper-ledger-recovery-v1` :
+Le recovery/restart durable du ledger PAPER multi-actifs reste `paper-ledger-recovery-v1` :
 
-- un nouveau `paper_run_id` reste créé pour chaque lifetime backend ;
-- `resumed_from_paper_run_id` relie explicitement une session reprise à sa précédente ;
+- un nouveau `paper_run_id` par lifetime backend ;
+- `resumed_from_paper_run_id` relie explicitement une reprise à sa session précédente ;
 - `initial_portfolio_payload` et `current_portfolio_payload` rendent l'état du ledger durable ;
-- le snapshot courant est mis à jour dans la **même transaction** que le cycle durable ;
-- au restart, le ledger est restauré depuis le dernier `PortfolioState` durable sans rejouer LLM,
-  Risk, `ExecutionIntent` ni `Fill` ;
-- SPOT détenu, cash, positions PERPETUAL, marge, P&L et funding sont restaurés ;
 - un cycle `FAILED`, une erreur d'audit ou un replay idempotent restaure le checkpoint mémoire ;
-- l'analytics suit la lignée `resumed_from_paper_run_id` pour préserver P&L, frais, funding,
-  drawdown et compteurs cumulés à travers les restarts ;
-- univers incompatible, payload invalide ou état legacy terminal ambigu => démarrage fail-closed.
+- aucune décision, Risk, intent ou fill historique n'est rejoué au restart ;
+- univers incompatible, payload invalide ou état terminal ambigu => fail-closed.
 
 Migration intégrée : `0005_paper_run_recovery`.
 
-## Validation Batch 18.6
+## Batch 18.7 — validé localement, non intégré
 
-Validation locale opérateur confirmée avant intégration :
+L'audit réseau confirme trois frontières différentes :
+
+- Kraken WebSocket SPOT possède déjà un reconnect borné et ne doit pas recevoir une seconde boucle
+  de retry ;
+- les appels REST publics Kraken SPOT/Derivatives sont read-only et peuvent être réessayés avant
+  toute mutation du ledger ;
+- les appels Responses API peuvent être réessayés uniquement au niveau transport avant qu'une
+  `MarketSelection` ou un `DecisionCandidate` durable n'existe.
+
+Le patch validé localement ajoute :
+
+- une politique de retry commune bornée avec backoff exponentiel déterministe ;
+- 3 tentatives maximum pour les lectures REST publiques Kraken ;
+- 2 tentatives maximum pour un appel Responses API ;
+- retry uniquement sur timeout/transport, HTTP 408, HTTP 429 et HTTP 5xx ;
+- aucun retry sur 4xx permanent, JSON/payload invalide ou contrat provider invalide ;
+- sous-types d'erreurs sans données sensibles pour distinguer timeout, réseau, rate-limit, 5xx et HTTP permanent
+  dans `failure_error_type` sans persister de payload ni secret ;
+- logs de retry structurés contenant opération, tentative, type d'erreur, statut HTTP et délai,
+  sans corps de réponse, URL sensible ou clé ;
+- wrappers Kraken placés sur les méthodes REST read-only, pas autour de `snapshot()`, afin de ne
+  jamais répéter `mark_derivative_market()` ou un accrual funding ;
+- aucun retry autour de Risk, Broker, persistance ou recovery.
+
+Les deadlines `MARKET`/`AGENT` du runner restent les plafonds absolus : les retries ne prolongent
+jamais un cycle. Un timeout de stage peut donc couper le budget de retry si le timeout transport
+configuré est plus long.
+
+Aucun jitter n'est introduit dans ce batch : un seul runtime/Agent est actuellement visé et le
+backoff déterministe simplifie les tests. À réévaluer uniquement si une contention concurrente
+réelle est mesurée.
+
+## Validation du Batch 18.7
+
+Validation locale opérateur confirmée après application du correctif statique :
 
 ```text
-Alembic 0004_multi_market_selection -> 0005_paper_run_recovery sur PostgreSQL : OK
-pytest ciblé recovery/persistence/trading/broker : 75 passed
-pytest backend : 468 passed, 2 warnings
+pytest backend/tests/test_network_resilience.py backend/tests/test_openai_client.py : 27 passed
+pytest backend/tests/test_trading_engine.py backend/tests/test_market_selection_runner.py backend/tests/test_paper_recovery.py : 55 passed
+pytest backend : 487 passed, 2 warnings de dépréciation dépendances
 ruff check backend : All checks passed!
-mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
+mypy --config-file backend/pyproject.toml backend/src : Success, 81 source files
 git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 ```
 
-Les deux warnings Starlette/AnyIO sont les warnings de dépendances non bloquants déjà connus.
+Les deux warnings pytest proviennent de `fastapi/starlette` et de leurs dépendances `httpx/anyio` ;
+ils ne signalent pas un échec du batch. Aucune migration PostgreSQL n'est introduite par 18.7.
+
+Les validations ChatGPT antérieures sur harness déterministes restent complémentaires, mais la
+validation de référence avant intégration est désormais la suite locale ci-dessus.
 
 ## Frontières conservées
 
@@ -60,15 +92,16 @@ Les deux warnings Starlette/AnyIO sont les warnings de dépendances non bloquant
 - PERPETUAL linéaire seulement, marge ISOLATED et protections déterministes ;
 - aucune présélection algorithmique stratégique ;
 - aucun tool -> Broker/Risk ; aucun LLM -> Broker ;
+- aucune panne réseau n'est convertie silencieusement en `HOLD` ;
 - aucune décision historique n'est régénérée au restart ;
 - causalité/no-look-ahead ; décisions, HOLD et sélections auditables ;
-- `paper-experiment-v1/v2/v3` et `experiment_manifest=None` restent compatibles ;
+- `paper-experiment-v1/v2/v3`, `agent-strategy-v4` et `paper-ledger-recovery-v1` restent compatibles ;
 - LIVE séparé et ultérieur.
 
 Principe : **l'Agent cherche, sélectionne et propose ; le Risk Engine autorise, modifie ou refuse.**
 
-## Suite à auditer
+## Suite après intégration de 18.7
 
-Après 18.6 : robustesse réseau/observabilité bornée des erreurs transitoires, enrichissement mesuré
-des données de recherche puis campagnes Luna/Sol multi-marchés sous protocole v3. Multi-quote/FX,
-FUTURE daté et LIVE restent séparés et non décidés sans besoin mesuré.
+Après commit/push du batch : mesurer les taux réels de retries/erreurs sur plusieurs
+cycles PAPER avant d'ajuster les budgets ou d'introduire du jitter. L'enrichissement des données de
+recherche et les campagnes Luna/Sol multi-marchés restent des travaux séparés.

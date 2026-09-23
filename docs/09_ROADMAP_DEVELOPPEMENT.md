@@ -21,18 +21,18 @@ Un batch est **intégré** uniquement après validation locale, commit et push c
 - Batch 18.5 : protocole expérimental `paper-experiment-v3` pour versionner univers typé, sélection et capacité tools sans modifier la stratégie.
 - Batch 18.6 : recovery/restart durable du ledger PAPER multi-actifs, migration `0005_paper_run_recovery`, handoff de runs et rollback mémoire fail-closed.
 
-Commit d'intégration code du Batch 18.6 :
+HEAD GitHub vérifié au démarrage du Batch 18.7 :
+
+```text
+c5ddd2c6c1df74c2166a758cfb1cdf02d665d8d2
+docs: record batch 18.6 integration
+```
+
+Dernier commit code intégré :
 
 ```text
 9642ec394357fe1e1807b538a2353bdc6d062f46
 feat: add durable PAPER ledger recovery
-```
-
-Base auditée au démarrage du Batch 18.6 :
-
-```text
-70457125c5a238fe9b798463081c8769d8879d5e
-docs: record batch 18.5 integration
 ```
 
 ## Batch 18.2 — intégré
@@ -224,11 +224,61 @@ commit : 9642ec394357fe1e1807b538a2353bdc6d062f46
 
 Le commit a été poussé sur `origin/main` et le working tree opérateur était propre après push.
 
-## Prochains candidats après 18.6
+## Batch 18.7 — validé localement, en attente d’intégration
 
-Aucune priorité architecturale n'est décidée ici. Candidats :
+### Objectif
 
-- robustesse réseau et observabilité bornée des erreurs transitoires Market/LLM ;
+Durcir les pannes transitoires observées sur Kraken public et Responses API sans modifier la
+stratégie, sans masquer les erreurs et sans introduire de double exécution.
+
+### Audit retenu
+
+- le WebSocket SPOT possède déjà un reconnect borné ;
+- les clients REST publics SPOT/Derivatives n'avaient aucun retry ;
+- le client Responses API n'avait aucun retry ;
+- les erreurs HTTP/transport étaient agrégées en types trop génériques pour diagnostiquer 429,
+  5xx, timeout et connectivité depuis l'audit ;
+- le runner transforme déjà toute panne technique en cycle `FAILED`, jamais en `HOLD` ;
+- `AuditedTradingCycleRunner` 18.6 restaure déjà le checkpoint ledger pour tout cycle `FAILED` ;
+- le Broker est state-mutating et ne doit recevoir aucun retry générique.
+
+### Patch validé localement
+
+- `core/retry.py` : budget borné + backoff exponentiel + logs sanitaires ;
+- REST Kraken public : 3 tentatives max uniquement sur timeout/transport, 408, 429 et 5xx ;
+- Responses API : 2 tentatives max sur les mêmes classes transitoires avant décision durable ;
+- 4xx permanent, JSON/payload invalide et contrat provider invalide : échec immédiat ;
+- wrappers REST placés avant toute mutation de `MarketState`/ledger, jamais autour du snapshot
+  PERPETUAL complet ;
+- types d'erreur dédiés pour timeout, réseau, rate-limit, 5xx et HTTP permanent ;
+- aucun retry Risk, Broker, audit DB ou recovery ;
+- aucun jitter dans ce batch, afin de conserver des tests déterministes sur le runtime mono-Agent.
+
+### Compatibilité visée
+
+Aucun bump de `agent-strategy-v4`, `paper-experiment-v1/v2/v3` ou
+`paper-ledger-recovery-v1`. Aucune migration PostgreSQL.
+
+### Validation locale confirmée avant intégration
+
+```text
+pytest backend/tests/test_network_resilience.py backend/tests/test_openai_client.py : 27 passed
+pytest backend/tests/test_trading_engine.py backend/tests/test_market_selection_runner.py backend/tests/test_paper_recovery.py : 55 passed
+pytest backend : 487 passed, 2 warnings de dépréciation dépendances
+ruff check backend : All checks passed!
+mypy --config-file backend/pyproject.toml backend/src : Success, 81 source files
+git diff --check : aucune erreur, uniquement warnings LF -> CRLF
+```
+
+Aucune migration PostgreSQL n'est ajoutée par ce batch. Le commit/push reste nécessaire avant de
+classer 18.7 comme intégré.
+
+## Prochains candidats après intégration de 18.7
+
+Aucune priorité architecturale nouvelle n'est décidée ici. Candidats :
+
+- mesurer le taux réel de retries, 429, 5xx et timeouts sur plusieurs cycles PAPER avant tout
+  ajustement de budget ou ajout de jitter ;
 - enrichissement mesuré des données de recherche : order book, trades, funding historique, news ;
 - campagnes Luna/Sol sur univers multi-marché sous `paper-experiment-v3` ;
 - valorisation multi-quote avec FX explicite seulement si le besoin est mesuré ;

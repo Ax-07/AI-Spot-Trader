@@ -12,6 +12,7 @@ from ai_spot_trader.agent import (
     LLMTransportError,
     OpenAIResponsesClient,
 )
+from ai_spot_trader.core.retry import RetryPolicy
 from ai_spot_trader.domain.enums import LLMModel
 
 API_KEY = "test-only-openai-secret"
@@ -108,7 +109,7 @@ def test_http_failure_does_not_expose_secret() -> None:
     asyncio.run(scenario())
 
 
-def test_transport_error_is_explicit_and_has_no_retry() -> None:
+def test_transport_error_is_explicit_and_retries_within_bounded_budget() -> None:
     calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -116,11 +117,20 @@ def test_transport_error_is_explicit_and_has_no_retry() -> None:
         calls += 1
         raise httpx.ConnectError("offline", request=request)
 
+    async def no_sleep(_: float) -> None:
+        return None
+
     async def scenario() -> None:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
             client = OpenAIResponsesClient(
                 api_key=SecretStr(API_KEY),
                 http_client=http_client,
+                retry_policy=RetryPolicy(
+                    max_attempts=2,
+                    base_delay_seconds=0,
+                    max_delay_seconds=0,
+                ),
+                sleep=no_sleep,
             )
             with pytest.raises(LLMTransportError):
                 await client.generate_structured_decision(
@@ -131,7 +141,7 @@ def test_transport_error_is_explicit_and_has_no_retry() -> None:
                 )
 
     asyncio.run(scenario())
-    assert calls == 1
+    assert calls == 2
 
 
 @pytest.mark.parametrize(

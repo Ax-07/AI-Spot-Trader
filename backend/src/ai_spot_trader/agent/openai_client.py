@@ -1,9 +1,25 @@
+import asyncio
 from typing import Any, cast
 
 import httpx
 from pydantic import SecretStr
 
-from ai_spot_trader.agent.errors import LLMProviderError, LLMTransportError
+from ai_spot_trader.agent.errors import (
+    LLMHTTPError,
+    LLMNetworkError,
+    LLMProviderError,
+    LLMRateLimitError,
+    LLMServerError,
+    LLMTimeoutError,
+    LLMTransientError,
+    LLMTransportError,
+)
+from ai_spot_trader.core.retry import (
+    LLM_PRE_DECISION_RETRY_POLICY,
+    RetryPolicy,
+    Sleep,
+    retry_async,
+)
 from ai_spot_trader.domain.enums import LLMModel
 from ai_spot_trader.domain.models import AgentToolTrace
 from ai_spot_trader.tools.read_only import (
@@ -23,6 +39,8 @@ class OpenAIResponsesClient:
         base_url: str = "https://api.openai.com/v1",
         timeout_seconds: float = 30.0,
         http_client: httpx.AsyncClient | None = None,
+        retry_policy: RetryPolicy = LLM_PRE_DECISION_RETRY_POLICY,
+        sleep: Sleep = asyncio.sleep,
     ) -> None:
         if not api_key.get_secret_value():
             raise ValueError("OpenAI API key cannot be empty")
@@ -32,6 +50,8 @@ class OpenAIResponsesClient:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
         self._http_client = http_client
+        self._retry_policy = retry_policy
+        self._sleep = sleep
         self._last_tool_traces: tuple[AgentToolTrace, ...] = ()
 
     @property
@@ -186,22 +206,52 @@ class OpenAIResponsesClient:
         headers: dict[str, str],
         json: dict[str, Any],
     ) -> httpx.Response:
-        try:
-            if self._http_client is not None:
-                response = await self._http_client.post(
-                    url,
-                    headers=headers,
-                    json=json,
-                    timeout=self._timeout_seconds,
-                )
-            else:
-                async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
-                    response = await client.post(url, headers=headers, json=json)
-        except httpx.HTTPError as exc:
-            raise LLMTransportError("OpenAI request failed") from exc
-        if response.is_error:
-            raise LLMTransportError(f"OpenAI request failed with HTTP {response.status_code}")
-        return response
+        async def operation() -> httpx.Response:
+            try:
+                if self._http_client is not None:
+                    response = await self._http_client.post(
+                        url,
+                        headers=headers,
+                        json=json,
+                        timeout=self._timeout_seconds,
+                    )
+                else:
+                    async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+                        response = await client.post(url, headers=headers, json=json)
+            except httpx.TimeoutException as exc:
+                raise LLMTimeoutError("OpenAI request timed out") from exc
+            except httpx.TransportError as exc:
+                raise LLMNetworkError("OpenAI network request failed") from exc
+            except httpx.HTTPError as exc:
+                raise LLMTransportError("OpenAI request failed") from exc
+
+            error = _http_error(response.status_code)
+            if error is not None:
+                raise error
+            return response
+
+        return await retry_async(
+            operation,
+            policy=self._retry_policy,
+            operation_name="openai_responses",
+            is_retryable=lambda exc: isinstance(exc, LLMTransientError),
+            sleep=self._sleep,
+        )
+
+
+def _http_error(status_code: int) -> LLMTransportError | None:
+    if status_code < 400:
+        return None
+    if status_code == 408:
+        return LLMTimeoutError("OpenAI request timed out", status_code=status_code)
+    if status_code == 429:
+        return LLMRateLimitError("OpenAI request was rate limited", status_code=status_code)
+    if 500 <= status_code <= 599:
+        return LLMServerError("OpenAI request returned a server error", status_code=status_code)
+    return LLMHTTPError(
+        "OpenAI request returned a permanent HTTP error",
+        status_code=status_code,
+    )
 
 
 def _extract_output_items(response: dict[str, Any]) -> list[dict[str, Any]]:

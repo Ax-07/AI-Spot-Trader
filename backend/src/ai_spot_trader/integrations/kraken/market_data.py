@@ -6,6 +6,7 @@ from ai_spot_trader.core.config import Settings
 from ai_spot_trader.domain.models import MarketObservation, MarketState
 from ai_spot_trader.integrations.kraken.errors import KrakenPayloadError, StaleMarketDataError
 from ai_spot_trader.integrations.kraken.models import KrakenOhlcCandle, KrakenTicker
+from ai_spot_trader.integrations.kraken.resilience import RetryingKrakenSpotRestSource
 from ai_spot_trader.integrations.kraken.rest import KrakenPublicRestClient
 from ai_spot_trader.integrations.kraken.symbols import KrakenPairRegistry
 from ai_spot_trader.integrations.kraken.websocket import KrakenTickerWebSocketClient
@@ -183,9 +184,11 @@ def build_kraken_market_data_source(
         else None
     )
     return KrakenMarketDataSource(
-        KrakenPublicRestClient(
-            settings.kraken_rest_url,
-            timeout_seconds=settings.kraken_rest_timeout_seconds,
+        RetryingKrakenSpotRestSource(
+            KrakenPublicRestClient(
+                settings.kraken_rest_url,
+                timeout_seconds=settings.kraken_rest_timeout_seconds,
+            )
         ),
         KrakenTickerWebSocketClient(
             settings.kraken_ws_url,

@@ -259,6 +259,54 @@ des runs parents avant ceux du run demandé. Les faits ne changent pas de propri
 cycle n'est copié ; la lecture devient seulement chain-aware. Cela conserve P&L, frais, funding,
 drawdown et compteurs cumulés après restart tout en gardant un `paper_run_id` distinct par session.
 
+## Décisions Batch 18.7 — validées localement, non intégrées
+
+### ADR-165 — Réessayer uniquement les opérations prouvées répétables
+
+**VALIDÉE LOCALEMENT, NON INTÉGRÉE.** Les retries automatiques sont confinés aux lectures REST publiques Kraken et à un
+appel transport Responses API avant création d'un artefact stratégique durable. Aucun retry n'est
+ajouté autour de Risk, Broker, persistance, recovery ou d'un snapshot PERPETUAL complet.
+
+Pour Kraken Derivatives, la frontière de retry reste sous `KrakenDerivativesMarketDataSource` :
+`fetch_instruments`, `fetch_ticker` et `fetch_mark_history` peuvent être répétés, mais
+`mark_derivative_market()` et l'accrual funding ne le sont jamais.
+
+### ADR-166 — Classer explicitement transitoire et permanent
+
+**VALIDÉE LOCALEMENT, NON INTÉGRÉE.** Timeout/transport, HTTP 408, HTTP 429 et HTTP 5xx sont transitoires sur les frontières
+réessayables. Les autres 4xx sont permanents. Un JSON invalide, un payload Kraken invalide ou un
+contrat provider LLM invalide reste fail-closed et n'est pas rejoué.
+
+Les erreurs finales sont typées sans recopier le corps de réponse : timeout, réseau, rate-limit,
+serveur 5xx ou HTTP permanent. Cette granularité est visible dans `failure_error_type` sans
+migration de schéma.
+
+### ADR-167 — Borner les budgets et conserver un backoff déterministe
+
+**VALIDÉE LOCALEMENT, NON INTÉGRÉE.** Les lectures REST publiques Kraken ont au maximum 3 tentatives, avec backoff
+exponentiel borné à partir de 250 ms. Un appel Responses API a au maximum 2 tentatives, avec un
+premier délai de 500 ms. Aucune boucle infinie n'est possible.
+
+Aucun jitter n'est ajouté dans 18.7 : le runtime visé reste mono-Agent et séquentiel, et les tests
+restent déterministes. Un jitter ne sera envisagé que si une contention concurrente réelle est
+mesurée.
+
+### ADR-168 — Les deadlines de stage restent l'autorité temporelle supérieure
+
+**VALIDÉE LOCALEMENT, NON INTÉGRÉE.** `TradingCycleTimeouts.market_seconds` et `agent_seconds` restent des plafonds absolus.
+La couche de retry n'étend jamais ces deadlines. Un timeout de stage peut donc interrompre le budget
+restant, ce qui préserve le fail-closed et évite qu'une politique transport rallonge silencieusement
+un cycle.
+
+### ADR-169 — Observer sans exposer les causes sensibles
+
+**VALIDÉE LOCALEMENT, NON INTÉGRÉE.** Chaque retry journalise seulement l'opération, le numéro de tentative, le type
+d'erreur, le statut HTTP éventuel et le délai. Le message provider, le corps de réponse, les prompts,
+les clés et autres secrets ne sont pas journalisés par cette couche.
+
+Aucun nouveau backend métrique n'est introduit. Le couple logs + stage/type d'échec durable est la
+surface d'observabilité de 18.7 ; Prometheus/OpenTelemetry reste une décision séparée.
+
 ## Changelog — 2026-09-22 — Batch 18.2 intégré
 
 Audit de départ :
@@ -354,11 +402,38 @@ Intégration confirmée sur `main` au commit
 `9642ec394357fe1e1807b538a2353bdc6d062f46`
 (`feat: add durable PAPER ledger recovery`). Le working tree opérateur était propre après push.
 
-## À décider après 18.6
+## Changelog — 2026-09-23 — Batch 18.7 validé localement, non intégré
 
-- robustesse/observabilité des erreurs réseau/LLM après mesure ;
-- enrichissement research mesuré ;
-- campagnes Luna/Sol multi-marchés sous protocole v3 ;
-- éventuel multi-quote avec conversion explicite ;
-- FUTURE daté seulement après implémentation réelle ;
-- LIVE dans un batch séparé.
+Audit de départ : GitHub `main = c5ddd2c6c1df74c2166a758cfb1cdf02d665d8d2`, commit documentaire
+`docs: record batch 18.6 integration`; dernier commit code intégré `9642ec394357...`.
+
+Constats : REST public Kraken et Responses API n'avaient pas de retry, le WebSocket SPOT avait déjà
+un reconnect borné, le runner produisait déjà `FAILED` sans faux HOLD et le rollback 18.6 protégeait
+le ledger. Le patch propose donc uniquement des retries sous les frontières répétables, une
+classification d'erreurs plus fine et des logs sanitaires, sans migration ni changement de
+stratégie.
+
+Validation locale opérateur confirmée après application du correctif statique :
+
+```text
+pytest réseau/LLM ciblé : 27 passed
+pytest trading/market-selection/recovery ciblé : 55 passed
+pytest backend : 487 passed, 2 warnings de dépréciation dépendances
+ruff check backend : All checks passed!
+mypy --config-file backend/pyproject.toml backend/src : Success, 81 source files
+git diff --check : aucune erreur, uniquement warnings LF -> CRLF
+```
+
+Les validations ChatGPT antérieures incluent en complément un harness transport déterministe de
+8 tests, compilation Python, contrôle whitespace et scan de motifs de secrets. Aucune migration
+PostgreSQL n'est introduite. Le batch est prêt à être commité/poussé mais n'est pas encore intégré
+tant que ce commit/push n'est pas confirmé.
+
+## À décider après intégration de 18.7
+
+- mesure réelle des taux de retry, 429, 5xx, timeout et erreurs réseau ;
+- ajout éventuel de jitter si une contention concurrente réelle apparaît ;
+- exposition éventuelle des budgets de retry dans `Settings` si un besoin opératoire est mesuré ;
+- backend métrique dédié (Prometheus/OpenTelemetry ou autre) seulement si justifié ;
+- enrichissement research mesuré et campagnes Luna/Sol multi-marchés restent séparés ;
+- multi-quote/FX, FUTURE daté et LIVE restent hors de ce batch.
