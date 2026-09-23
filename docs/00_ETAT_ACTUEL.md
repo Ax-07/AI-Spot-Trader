@@ -6,13 +6,12 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub vérifié au démarrage du Batch 18.7 : `c5ddd2c6c1df74c2166a758cfb1cdf02d665d8d2`
-- Commit HEAD : `docs: record batch 18.6 integration`
-- Dernier commit code intégré : `9642ec394357fe1e1807b538a2353bdc6d062f46`
-  (`feat: add durable PAPER ledger recovery`).
+- HEAD GitHub vérifié après intégration du Batch 18.7 : `0886216324106d941c3df0e30f074e24dbe1d33a`
+- Commit HEAD : `feat: add bounded network retry resilience`
+- Dernier commit code intégré : `0886216324106d941c3df0e30f074e24dbe1d33a`
+  (`feat: add bounded network retry resilience`).
 - Batch 18.6 : **intégré**.
-- Batch 18.7 : **validé localement, non intégré** tant que le commit et le push ne sont pas
-  confirmés.
+- Batch 18.7 : **intégré**.
 - Prompt stratégique : `agent-strategy-v4`, inchangé par 18.7.
 
 ## État intégré
@@ -32,7 +31,7 @@ Le recovery/restart durable du ledger PAPER multi-actifs reste `paper-ledger-rec
 
 Migration intégrée : `0005_paper_run_recovery`.
 
-## Batch 18.7 — validé localement, non intégré
+## Batch 18.7 — intégré
 
 L'audit réseau confirme trois frontières différentes :
 
@@ -43,15 +42,15 @@ L'audit réseau confirme trois frontières différentes :
 - les appels Responses API peuvent être réessayés uniquement au niveau transport avant qu'une
   `MarketSelection` ou un `DecisionCandidate` durable n'existe.
 
-Le patch validé localement ajoute :
+Le Batch 18.7 intégré ajoute :
 
 - une politique de retry commune bornée avec backoff exponentiel déterministe ;
 - 3 tentatives maximum pour les lectures REST publiques Kraken ;
 - 2 tentatives maximum pour un appel Responses API ;
 - retry uniquement sur timeout/transport, HTTP 408, HTTP 429 et HTTP 5xx ;
 - aucun retry sur 4xx permanent, JSON/payload invalide ou contrat provider invalide ;
-- sous-types d'erreurs sans données sensibles pour distinguer timeout, réseau, rate-limit, 5xx et HTTP permanent
-  dans `failure_error_type` sans persister de payload ni secret ;
+- sous-types d'erreurs sans données sensibles pour distinguer timeout, réseau, rate-limit, 5xx
+  et HTTP permanent dans `failure_error_type` sans persister de payload ni secret ;
 - logs de retry structurés contenant opération, tentative, type d'erreur, statut HTTP et délai,
   sans corps de réponse, URL sensible ou clé ;
 - wrappers Kraken placés sur les méthodes REST read-only, pas autour de `snapshot()`, afin de ne
@@ -100,8 +99,8 @@ validation de référence avant intégration est désormais la suite locale ci-d
 
 Principe : **l'Agent cherche, sélectionne et propose ; le Risk Engine autorise, modifie ou refuse.**
 
-## Suite après intégration de 18.7
+## Suite
 
-Après commit/push du batch : mesurer les taux réels de retries/erreurs sur plusieurs
+Après intégration de 18.7 : mesurer les taux réels de retries/erreurs sur plusieurs
 cycles PAPER avant d'ajuster les budgets ou d'introduire du jitter. L'enrichissement des données de
 recherche et les campagnes Luna/Sol multi-marchés restent des travaux séparés.

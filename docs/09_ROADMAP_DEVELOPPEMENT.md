@@ -20,19 +20,21 @@ Un batch est **intégré** uniquement après validation locale, commit et push c
 - Batch 18.3 : validation comportementale PAPER multi-marchés/cross-symbol et correction du parsing des `marginSchedules` Kraken Derivatives imbriqués.
 - Batch 18.5 : protocole expérimental `paper-experiment-v3` pour versionner univers typé, sélection et capacité tools sans modifier la stratégie.
 - Batch 18.6 : recovery/restart durable du ledger PAPER multi-actifs, migration `0005_paper_run_recovery`, handoff de runs et rollback mémoire fail-closed.
+- Batch 18.7 : retries réseau bornés sur lectures Kraken publiques et Responses API
+  pré-décision, classification d’erreurs et observabilité sanitizée sans retry des mutations.
 
-HEAD GitHub vérifié au démarrage du Batch 18.7 :
+HEAD GitHub vérifié après intégration du Batch 18.7 :
 
 ```text
-c5ddd2c6c1df74c2166a758cfb1cdf02d665d8d2
-docs: record batch 18.6 integration
+0886216324106d941c3df0e30f074e24dbe1d33a
+feat: add bounded network retry resilience
 ```
 
 Dernier commit code intégré :
 
 ```text
-9642ec394357fe1e1807b538a2353bdc6d062f46
-feat: add durable PAPER ledger recovery
+0886216324106d941c3df0e30f074e24dbe1d33a
+feat: add bounded network retry resilience
 ```
 
 ## Batch 18.2 — intégré
@@ -224,7 +226,7 @@ commit : 9642ec394357fe1e1807b538a2353bdc6d062f46
 
 Le commit a été poussé sur `origin/main` et le working tree opérateur était propre après push.
 
-## Batch 18.7 — validé localement, en attente d’intégration
+## Batch 18.7 — intégré
 
 ### Objectif
 
@@ -242,7 +244,7 @@ stratégie, sans masquer les erreurs et sans introduire de double exécution.
 - `AuditedTradingCycleRunner` 18.6 restaure déjà le checkpoint ledger pour tout cycle `FAILED` ;
 - le Broker est state-mutating et ne doit recevoir aucun retry générique.
 
-### Patch validé localement
+### Implémentation intégrée
 
 - `core/retry.py` : budget borné + backoff exponentiel + logs sanitaires ;
 - REST Kraken public : 3 tentatives max uniquement sur timeout/transport, 408, 429 et 5xx ;
@@ -259,7 +261,7 @@ stratégie, sans masquer les erreurs et sans introduire de double exécution.
 Aucun bump de `agent-strategy-v4`, `paper-experiment-v1/v2/v3` ou
 `paper-ledger-recovery-v1`. Aucune migration PostgreSQL.
 
-### Validation locale confirmée avant intégration
+### Validation locale et intégration
 
 ```text
 pytest backend/tests/test_network_resilience.py backend/tests/test_openai_client.py : 27 passed
@@ -270,10 +272,11 @@ mypy --config-file backend/pyproject.toml backend/src : Success, 81 source files
 git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 ```
 
-Aucune migration PostgreSQL n'est ajoutée par ce batch. Le commit/push reste nécessaire avant de
-classer 18.7 comme intégré.
+Aucune migration PostgreSQL n'est ajoutée par ce batch. Intégration confirmée sur `main` au commit
+`0886216324106d941c3df0e30f074e24dbe1d33a`
+(`feat: add bounded network retry resilience`). Le working tree opérateur était propre après push.
 
-## Prochains candidats après intégration de 18.7
+## Prochains candidats après 18.7
 
 Aucune priorité architecturale nouvelle n'est décidée ici. Candidats :
 

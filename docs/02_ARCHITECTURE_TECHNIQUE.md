@@ -2,22 +2,21 @@
 
 ## 1. Référence
 
-HEAD GitHub vérifié au démarrage du Batch 18.7 :
+HEAD GitHub vérifié après intégration du Batch 18.7 :
 
 ```text
-c5ddd2c6c1df74c2166a758cfb1cdf02d665d8d2
-docs: record batch 18.6 integration
+0886216324106d941c3df0e30f074e24dbe1d33a
+feat: add bounded network retry resilience
 ```
 
 Dernier commit code intégré :
 
 ```text
-9642ec394357fe1e1807b538a2353bdc6d062f46
-feat: add durable PAPER ledger recovery
+0886216324106d941c3df0e30f074e24dbe1d33a
+feat: add bounded network retry resilience
 ```
 
-Le Batch 18.6 est intégré. Le Batch 18.7 décrit ci-dessous reste un patch proposé tant que la
-validation locale, le commit et le push ne sont pas confirmés.
+Les Batches 18.6 et 18.7 sont intégrés sur `main`.
 
 ## 2. Modules concernés
 
@@ -350,7 +349,7 @@ mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
 git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 ```
 
-## 22. Politique de retry proposée par 18.7
+## 22. Politique de retry intégrée par 18.7
 
 ### Kraken public REST
 
@@ -395,7 +394,7 @@ Aucun jitter n'est ajouté dans 18.7. Le runtime courant est mono-Agent et séqu
 déterministe est suffisant et rend les tests strictement reproductibles. Une réévaluation pourra
 être faite si plusieurs runtimes concurrents sont réellement déployés.
 
-## 23. Observabilité proposée par 18.7
+## 23. Observabilité intégrée par 18.7
 
 Les erreurs réseau finales sont classées sans corps de réponse ni secret :
 
