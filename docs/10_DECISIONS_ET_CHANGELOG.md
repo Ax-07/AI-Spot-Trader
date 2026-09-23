@@ -9,134 +9,99 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 Broker/Risk, SPOT sans short/levier, PERPETUAL avec protections déterministes, audit durable,
 no-look-ahead, backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE séparé.
 
-## Référence code intégrée — Batch 18.9A
+## Référence de départ Batch 18.9B
 
 ```text
-Code intégré : 11a04be33bf209552e6337e28318d039b775b264
-Commit       : feat: add PAPER control plane
+HEAD GitHub : efe5a0f162a69e50bd6e5f5cd7aa61039792e911
+Code intégré: 11a04be33bf209552e6337e28318d039b775b264
 ```
 
-Le Batch 18.9A est **intégré et validé**.
+18.9A est intégré. 18.9B est un patch frontend non intégré tant que l'opérateur ne l'a pas validé,
+committé et poussé.
 
-## Décisions historiques toujours actives
+## Décisions Batch 18.9A toujours actives
 
-Les ADR 136 à 172 restent applicables : sélection et décision avec le même Agent, univers typé,
-séparation research/execution, audit multi-marchés, analytics causal, protocoles v1/v2/v3,
-recovery sans replay, retries uniquement sur frontières répétables et deadlines de stage comme
-plafond absolu.
+ADR-173 à ADR-181 restent applicables : StrategyRevision immuable, contrat Agent protégé séparé,
+digest prompt déterministe, Campaign snapshot non sensible, `paper-experiment-v4`, distinction
+Campaign/paper_run, ownership runtime backend, preview canonique et lineage recovery exposé.
 
-## Décisions Batch 18.9A — intégrées
+## Décisions Batch 18.9B — patch proposé
 
-### ADR-173 — StrategyRevision est immuable
+### ADR-182 — Le frontend reste un client du Control Plane
 
-**INTÉGRÉE.** `Strategy` porte l'identité et le nom. Tout changement du texte stratégique crée une
-nouvelle `(strategy_id, strategy_revision)`. Les Campaigns référencent une révision exacte et son
-digest. Renommer une Strategy ne modifie aucune révision.
+**PATCH PROPOSÉ.** Le cockpit ne possède ni TradingEngine, ni RiskEngine, ni Broker, ni logique de
+sélection d'opportunité. Il envoie des commandes aux routes canoniques et affiche leurs réponses.
+Fermer ou redémarrer le frontend n'arrête pas le moteur backend.
 
-### ADR-174 — Séparer contrat Agent protégé et stratégie opérateur
+### ADR-183 — Étendre le client API existant
 
-**INTÉGRÉE.** Le contrat `agent-contract-v1` protège PAPER, les schémas BUY/SELL/HOLD,
-SPOT/PERPETUAL, les inputs structurés, l'absence d'appel direct Broker/Risk et l'autorité finale de
-Risk. La StrategyRevision est ajoutée comme couche subordonnée et ne peut modifier ce contrat via
-l'API.
+**PATCH PROPOSÉ.** Les routes Strategy/Campaign/prompt-preview/paper-runs et `run-cycle` sont ajoutées
+à `frontend/src/lib/api/client.ts`, derrière le rewrite `/backend` déjà utilisé. Aucun second client,
+SDK ou proxy métier n'est créé.
 
-Le texte historique `AGENT_SYSTEM_PROMPT`/`agent-strategy-v4` est conservé pour ne pas modifier les
-manifestes v1/v2/v3.
+### ADR-184 — Ne pas dupliquer CampaignConfiguration dans une logique métier frontend
 
-### ADR-175 — Utiliser un digest déterministe du prompt opérateur
+**PATCH PROPOSÉ.** Le TypeScript décrit le payload pour la sûreté de compilation, mais les
+validators métier restent Pydantic/backend : univers, quote/règlement, whitelist, FUTURE,
+ISOLATED, levier et limites PERPETUAL, spread/slippage. L'UI affiche les refus 409/422/503 au lieu
+de les contourner.
 
-**INTÉGRÉE.** `strategy-prompt-sha256-v1` normalise CRLF/CR en LF, retire les espaces de fin de
-ligne, retire les blancs extérieurs puis calcule SHA-256 sur UTF-8. Les motifs usuels de secret sont
-refusés avant persistence sans réafficher leur valeur.
+### ADR-185 — Charger les révisions via le contrat unitaire existant
 
-### ADR-176 — Campaign est un snapshot opérateur non sensible
+**PATCH PROPOSÉ.** 18.9A n'expose pas de route de listing des révisions. Comme les révisions sont
+créées séquentiellement de 1 à `latest_revision`, le cockpit lit chaque révision avec le GET
+canonique existant. Aucun endpoint backend parallèle n'est ajouté pour 18.9B.
 
-**INTÉGRÉE.** `CampaignConfiguration` est une whitelist stricte. Elle snapshotte modèle,
-agressivité, cadence, capital, univers, coûts, levier/marge, Risk et deadlines. Les paramètres
-réseau/tools restent serveur. Aucun `OPENAI_API_KEY`, `DATABASE_URL` ou futur secret privé n'entre
-dans Campaign.
+### ADR-186 — Le preview visuel ne recompose pas le prompt
 
-### ADR-177 — `paper-experiment-v4` est une identité de Campaign additive
+**PATCH PROPOSÉ.** Le frontend consomme `instructions` renvoyé par `/prompt-preview` et ne génère
+aucune instruction stratégique. Le découpage visuel s'appuie sur les marqueurs de la composition
+canonique ; en cas d'écart, le contenu retourné est affiché sans inventer de données. L'input futur
+reste explicitement `dynamic_input=null`.
 
-**INTÉGRÉE.** V4 dépend de `strategy_id`, `strategy_revision`, `strategy_prompt_digest`,
-`base_agent_contract_version` et `configuration_digest`. Le digest de configuration couvre aussi
-tous les paramètres PERPETUAL/Risk effectifs.
+### ADR-187 — Ne pas persister les drafts Control Plane dans le navigateur
 
-`paper-experiment-v1/v2/v3` restent inchangés ; aucun champ v4 n'est injecté rétroactivement dans
-leurs anciens payloads/digests.
+**PATCH PROPOSÉ.** StrategyPrompt, CampaignConfiguration et paramètres Risk restent uniquement dans
+l'état React avant envoi. Le nouveau cockpit n'utilise ni `localStorage` ni `sessionStorage` pour
+ces données. Les secrets serveur ne sont ni demandés ni exposés.
 
-### ADR-178 — Distinguer Campaign et paper_run
+### ADR-188 — Rendre l'activation et la reprise visiblement distinctes
 
-**INTÉGRÉE.** `campaign_id` identifie un environnement immuable. `paper_run_id` identifie un
-lifetime d'exécution. `paper_runs.campaign_id` est nullable pour les historiques. Une même Campaign
-peut produire plusieurs runs successifs via `paper-ledger-recovery-v1`.
+**PATCH PROPOSÉ.** Chaque Campaign propose deux actions distinctes : activation fraîche et reprise
+explicite. Le cockpit ne déduit pas silencieusement laquelle utiliser ; le backend conserve les
+règles de conflit/recovery et l'autorité fail-closed.
 
-Une reprise ne cherche que le dernier run de la même Campaign, vérifie l'univers et restaure le
-snapshot durable. Une nouvelle configuration/stratégie est une autre Campaign, jamais une reprise.
+## Changelog — 2026-09-23 — Batch 18.9B patch frontend
 
-### ADR-179 — Le Control Plane possède le runtime, il ne remplace pas le moteur
+Audit confirmé :
 
-**INTÉGRÉE.** `CampaignRuntimeManager` détient au plus un runtime actif et délègue aux primitives
-existantes. `build_campaign_runtime()` assemble `TradingCycleRunner`, `AuditedTradingCycleRunner`,
-`TradingEngine`, `RiskEngine` et `PaperBroker` existants.
+- GitHub `main = efe5a0f162a69e50bd6e5f5cd7aa61039792e911` ;
+- dernier code `11a04be33bf209552e6337e28318d039b775b264` ;
+- l'écart est documentaire et finalise l'intégration 18.9A ;
+- Control Plane 18.9A fournit tous les contrats indispensables au cockpit ;
+- aucun patch backend requis.
 
-Activation/reprise pendant `RUNNING` => conflit. Un runtime STOPPED peut être fermé proprement avant
-remplacement. Les routes `/api/v1/engine/run-cycle|start|stop` restent canoniques.
+Implémentation proposée :
 
-### ADR-180 — Le preview utilise exactement la composition live
+- types API frontend remis au niveau des contrats backend actuels ;
+- client API étendu ;
+- hook `use-control-plane` ;
+- panneau Control Plane complet ;
+- montage dans la page principale ;
+- documentation 18.9B.
 
-**INTÉGRÉE.** `compose_agent_instructions()` est appelée par l'adapter live
-`StrategyInstructionsClient` et par `/api/v1/prompt-preview`. Le preview n'invente pas le futur
-`MarketSelectionInput`/`AgentInput` : il indique seulement son type et retourne `dynamic_input=null`.
-
-### ADR-181 — Exposer le lineage recovery déjà durable
-
-**INTÉGRÉE.** `/api/v1/paper-runs` expose `campaign_id`, `resumed_from_paper_run_id` et
-`recovery_version`. Les anciens runs restent compatibles avec `campaign_id=null`.
-
-## Changelog — 2026-09-23 — Batch 18.9A intégré
-
-Implémentation intégrée :
-
-- migration `0006_paper_control_plane` ;
-- modèles/store Strategy/Revision/Campaign ;
-- prompt protégé + stratégie versionnée + digest ;
-- CampaignConfiguration et v4 ;
-- lifecycle campaign-scoped ;
-- composition/runtime manager canoniques ;
-- routes API Control Plane ;
-- champs recovery/campaign sur paper-runs ;
-- tests ciblés ;
-- documentation 18.9A.
-
-Validation ChatGPT initiale :
+Validation ChatGPT réellement exécutée :
 
 ```text
-py_compile des fichiers Python du patch : OK
-pytest unitaires prompt/config/v4/adapter : 11 passed
+harness source : 50 assertions passées
+node --experimental-strip-types --check types.ts : OK
+node --experimental-strip-types --check client.ts : OK
+node --experimental-strip-types --check use-control-plane.ts : OK
+tsc ciblé avec stubs de dépendances : OK
 ```
 
-Validation opérateur finale après Correctif 1 :
+Les commandes `pnpm lint`, `pnpm typecheck` et `pnpm build` restent à exécuter localement : pnpm
+n'est pas disponible dans l'environnement ChatGPT et Corepack ne peut pas accéder au registre.
 
-```text
-pytest ciblé persistence : 1 passed
-ruff check backend : All checks passed!
-pytest backend : 504 passed, 2 warnings
-mypy --config-file backend/pyproject.toml backend/src : Success, 89 source files
-Alembic 0005_paper_run_recovery -> 0006_paper_control_plane sur PostgreSQL : OK
-git diff --check : aucune erreur, uniquement warnings LF -> CRLF
-```
-
-Le Correctif 1 remplace la désérialisation Python stricte de `CampaignConfiguration` par une
-validation JSON stricte adaptée aux payloads JSONB (`model_validate_json`) et corrige trois écarts
-Ruff mécaniques. Aucun changement de schéma, migration, Risk, digest ou moteur n'est introduit par
-ce correctif.
-
-Commit d'intégration :
-
-```text
-11a04be33bf209552e6337e28318d039b775b264
-feat: add PAPER control plane
-```
-
-Prochaine étape : Batch 18.9B dans une nouvelle discussion, dédié au cockpit frontend.
+Aucun fichier backend n'est modifié par 18.9B ; `pytest backend`, Ruff et mypy ne sont donc pas
+rejoués pour ce patch.

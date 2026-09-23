@@ -1,4 +1,7 @@
 import type {
+  CampaignActivationResponse,
+  CampaignConfiguration,
+  CampaignResponse,
   ChatExchangeResponse,
   ChatHistoryResponse,
   CycleDetailResponse,
@@ -10,8 +13,16 @@ import type {
   LatestErrorResponse,
   MarketStateResponse,
   PaperAnalyticsResponse,
+  PaperRunPageResponse,
+  PaperRunResponse,
   PortfolioResponse,
+  PromptPreviewPhase,
+  PromptPreviewResponse,
   RiskAssessmentPageResponse,
+  StrategyCreateResponse,
+  StrategyResponse,
+  StrategyRevisionComparisonResponse,
+  StrategyRevisionResponse,
 } from "@/lib/api/types";
 
 const API_PREFIX = "/backend";
@@ -31,16 +42,28 @@ function apiPath(path: string) {
   return `${API_PREFIX}${path}`;
 }
 
+function pydanticDetail(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const message = typeof record.msg === "string" ? record.msg : null;
+  const location = Array.isArray(record.loc)
+    ? record.loc.filter((item) => typeof item === "string" || typeof item === "number").join(".")
+    : "";
+  if (!message) return null;
+  return location ? `${location}: ${message}` : message;
+}
+
 function extractDetail(payload: unknown): string | null {
-  if (
-    typeof payload === "object" &&
-    payload !== null &&
-    "detail" in payload &&
-    typeof payload.detail === "string"
-  ) {
-    return payload.detail;
+  if (typeof payload !== "object" || payload === null || !("detail" in payload)) {
+    return null;
   }
-  return null;
+  const detail = (payload as { detail?: unknown }).detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail.map(pydanticDetail).filter((item): item is string => Boolean(item));
+    return messages.length ? messages.join(" · ") : null;
+  }
+  return pydanticDetail(detail);
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -75,6 +98,13 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
+function jsonBody(value: unknown): Pick<RequestInit, "headers" | "body"> {
+  return {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(value),
+  };
+}
+
 export const api = {
   health: () => requestJson<HealthResponse>("/health"),
   engine: () => requestJson<EngineStatusResponse>("/api/v1/engine"),
@@ -82,6 +112,8 @@ export const api = {
     requestJson<EngineStatusResponse>("/api/v1/engine/start", { method: "POST" }),
   stopEngine: () =>
     requestJson<EngineStatusResponse>("/api/v1/engine/stop", { method: "POST" }),
+  runCycle: () =>
+    requestJson<EngineStatusResponse>("/api/v1/engine/run-cycle", { method: "POST" }),
   portfolio: () => requestJson<PortfolioResponse>("/api/v1/portfolio"),
   latestMarket: () => requestJson<MarketStateResponse>("/api/v1/market/latest"),
   latestError: () => requestJson<LatestErrorResponse>("/api/v1/errors/latest"),
@@ -101,6 +133,84 @@ export const api = {
       `/api/v1/executions?limit=${limit}&offset=0&order=desc`,
     ),
   analytics: () => requestJson<PaperAnalyticsResponse>("/api/v1/analytics"),
+  paperRuns: (limit = 100, offset = 0) =>
+    requestJson<PaperRunPageResponse>(
+      `/api/v1/paper-runs?limit=${limit}&offset=${offset}&order=desc`,
+    ),
+  currentPaperRun: () => requestJson<PaperRunResponse>("/api/v1/paper-runs/current"),
+  paperRun: (paperRunId: string) =>
+    requestJson<PaperRunResponse>(`/api/v1/paper-runs/${encodeURIComponent(paperRunId)}`),
+
+  strategies: () => requestJson<StrategyResponse[]>("/api/v1/strategies"),
+  strategy: (strategyId: string) =>
+    requestJson<StrategyResponse>(`/api/v1/strategies/${encodeURIComponent(strategyId)}`),
+  createStrategy: (payload: { strategy_name: string; strategy_prompt: string }) =>
+    requestJson<StrategyCreateResponse>("/api/v1/strategies", {
+      method: "POST",
+      ...jsonBody(payload),
+    }),
+  renameStrategy: (strategyId: string, strategyName: string) =>
+    requestJson<StrategyResponse>(`/api/v1/strategies/${encodeURIComponent(strategyId)}`, {
+      method: "PATCH",
+      ...jsonBody({ strategy_name: strategyName }),
+    }),
+  archiveStrategy: (strategyId: string) =>
+    requestJson<StrategyResponse>(
+      `/api/v1/strategies/${encodeURIComponent(strategyId)}/archive`,
+      { method: "POST" },
+    ),
+  createStrategyRevision: (strategyId: string, strategyPrompt: string) =>
+    requestJson<StrategyRevisionResponse>(
+      `/api/v1/strategies/${encodeURIComponent(strategyId)}/revisions`,
+      {
+        method: "POST",
+        ...jsonBody({ strategy_prompt: strategyPrompt }),
+      },
+    ),
+  strategyRevision: (strategyId: string, revision: number) =>
+    requestJson<StrategyRevisionResponse>(
+      `/api/v1/strategies/${encodeURIComponent(strategyId)}/revisions/${revision}`,
+    ),
+  compareStrategyRevisions: (strategyId: string, left: number, right: number) =>
+    requestJson<StrategyRevisionComparisonResponse>(
+      `/api/v1/strategies/${encodeURIComponent(strategyId)}/compare?left=${left}&right=${right}`,
+    ),
+
+  campaigns: () => requestJson<CampaignResponse[]>("/api/v1/campaigns"),
+  activeCampaign: () => requestJson<CampaignActivationResponse>("/api/v1/campaigns/active"),
+  campaign: (campaignId: string) =>
+    requestJson<CampaignResponse>(`/api/v1/campaigns/${encodeURIComponent(campaignId)}`),
+  createCampaign: (payload: {
+    strategy_id: string;
+    strategy_revision: number;
+    configuration: CampaignConfiguration;
+  }) =>
+    requestJson<CampaignResponse>("/api/v1/campaigns", {
+      method: "POST",
+      ...jsonBody(payload),
+    }),
+  activateCampaign: (campaignId: string) =>
+    requestJson<CampaignActivationResponse>(
+      `/api/v1/campaigns/${encodeURIComponent(campaignId)}/activate`,
+      { method: "POST" },
+    ),
+  resumeCampaign: (campaignId: string) =>
+    requestJson<CampaignActivationResponse>(
+      `/api/v1/campaigns/${encodeURIComponent(campaignId)}/resume`,
+      { method: "POST" },
+    ),
+
+  promptPreview: (payload: {
+    strategy_id: string;
+    strategy_revision: number;
+    aggressiveness: number;
+    phase: PromptPreviewPhase;
+  }) =>
+    requestJson<PromptPreviewResponse>("/api/v1/prompt-preview", {
+      method: "POST",
+      ...jsonBody(payload),
+    }),
+
   sendChatMessage: (payload: {
     session_id: string | null;
     message: string;
@@ -108,8 +218,7 @@ export const api = {
   }) =>
     requestJson<ChatExchangeResponse>("/api/v1/chat/messages", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      ...jsonBody(payload),
     }),
   chatHistory: (sessionId: string) =>
     requestJson<ChatHistoryResponse>(

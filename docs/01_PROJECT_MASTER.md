@@ -6,12 +6,14 @@ AI Spot Trader est une application expérimentale de trading crypto PAPER pilot�
 Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement
 un cockpit de contrôle et de visualisation.
 
-Référence intégrée auditée au départ du Batch 18.9A :
+Base GitHub auditée pour le patch Batch 18.9B :
 
 ```text
-main = 2b0d227454f2bf894b075b8deef3378e2fe823b4
-last code = 0886216324106d941c3df0e30f074e24dbe1d33a
+HEAD main : efe5a0f162a69e50bd6e5f5cd7aa61039792e911
+last code : 11a04be33bf209552e6337e28318d039b775b264
 ```
+
+Le patch 18.9B n'est pas intégré à GitHub tant que l'opérateur ne l'a pas validé puis committé/poussé.
 
 ## 2. Invariants fonctionnels
 
@@ -21,13 +23,13 @@ last code = 0886216324106d941c3df0e30f074e24dbe1d33a
 - Kraken ;
 - PAPER uniquement ; LIVE reste séparé et ultérieur ;
 - actions finales `BUY`, `SELL`, `HOLD` ;
-- Luna par défaut, Sol configurable ;
+- Luna configurable par défaut dans les profils opérateur, Sol sélectionnable ;
 - Risk Engine déterministe avec autorité finale ;
 - seul Risk crée un `ExecutionIntent` ;
 - aucune sortie LLM ni aucun tool ne déclenche Broker/Kraken ;
 - coûts PAPER et funding pris en compte ;
 - audit causal de toutes les décisions, `HOLD` inclus ;
-- aucun secret dans les artefacts opérateur, prompts, logs ou Git ;
+- aucun secret dans les artefacts opérateur, prompts, logs, navigateur ou Git ;
 - aucun look-ahead ;
 - frontend non nécessaire au fonctionnement du moteur.
 
@@ -42,7 +44,7 @@ last code = 0886216324106d941c3df0e30f074e24dbe1d33a
 - contrats linéaires uniquement ;
 - LONG/SHORT ;
 - marge `ISOLATED` ;
-- levier déterministe/configuré ;
+- levier déterministe/configuré, jamais choisi par le LLM ;
 - Risk contrôle marge, exposition, liquidation, `reduce_only` et anti-reversal ;
 - contrats inverses, CROSS et futures datés restent non exécutables.
 
@@ -62,7 +64,7 @@ PortfolioState
 -> audit + ledger durable
 ```
 
-Aucun composant déterministe ne choisit l'opportunité à la place de l'Agent.
+Aucun composant déterministe ni frontend ne choisit l'opportunité à la place de l'Agent.
 
 ## 4. Univers exécutable
 
@@ -84,31 +86,17 @@ n'est jamais promu silencieusement en `MarketState` d'exécution.
 - aucun replay de MarketSelection, décision, Risk, Broker ou Fill ;
 - validation fail-closed de l'état restauré.
 
-## 6. Control Plane — Batch 18.9A
+## 6. Control Plane backend — Batch 18.9A
 
-### Strategy
+### Strategy / StrategyRevision
 
-`Strategy` est une identité durable nommable/archivable. Le renommage ne modifie aucune expérience
-historique.
-
-### StrategyRevision
-
-Chaque révision est immuable et contient :
-
-```text
-strategy_id
-strategy_revision
-strategy_prompt
-strategy_prompt_digest
-base_agent_contract_version
-created_at
-```
-
-Une modification de prompt crée obligatoirement une nouvelle révision.
+`Strategy` est une identité durable nommable/archivable. Chaque `StrategyRevision` est immuable et
+contient le texte opérateur, son digest, la version du contrat Agent protégé et son timestamp. Une
+modification du texte crée obligatoirement une nouvelle révision.
 
 ### Contrat protégé
 
-Le texte éditable n'est pas le contrat technique de l'application. La composition canonique est :
+La composition canonique est :
 
 ```text
 PROTECTED_AGENT_CONTRACT
@@ -116,22 +104,18 @@ PROTECTED_AGENT_CONTRACT
 + AggressivenessContext canonique
 ```
 
-Le contrat protégé impose les invariants PAPER/Risk/Broker/SPOT/PERP et la sortie structurée. Il
-n'est exposé à aucune mutation API.
+Le contrat protégé impose PAPER, les sémantiques SPOT/PERP, les sorties structurées et l'autorité
+finale de Risk. Il n'est exposé à aucune mutation API.
 
 ### Campaign
 
-Une campagne snapshotte stratégie/révision et configuration structurelle non sensible. Elle ne
-contient aucun secret serveur. Sa configuration inclut modèle, agressivité, cadence, capital,
-univers, coûts, levier/marge, limites Risk et deadlines de cycle.
-
-Une campagne est immuable après création. Modifier un paramètre structurel crée une nouvelle
-campagne.
+Une Campaign snapshotte stratégie/révision et configuration structurelle non sensible. Elle inclut
+modèle, agressivité, cadence, capital, univers, coûts, levier/marge, limites Risk et deadlines de
+cycle. Une Campaign est immuable : modifier un paramètre structurel crée une nouvelle Campaign.
 
 ## 7. Identité expérimentale v4
 
-`paper-experiment-v4` est une identité de campagne, pas une réinterprétation du JSON
-`ExperimentManifest` historique. Son `experiment_digest` dépend de :
+`paper-experiment-v4` est une identité de Campaign. Son digest dépend de :
 
 ```text
 strategy_id
@@ -141,10 +125,7 @@ base_agent_contract_version
 configuration_digest
 ```
 
-Le `configuration_digest` encode tous les paramètres effectifs de la Campaign, y compris les
-limites Risk PERPETUAL absentes du vieux `ExperimentRiskPolicySnapshot` v3.
-
-`paper-experiment-v1`, `v2` et `v3` restent inchangés et validés avec leur logique historique.
+Les protocoles v1/v2/v3 restent historiques et inchangés.
 
 ## 8. Campaign vs paper_run
 
@@ -153,27 +134,45 @@ Campaign : environnement opérateur/expérimental immuable
 paper_run : session d'exécution/recovery
 ```
 
-Une campagne peut posséder plusieurs runs liés par recovery. Une reprise ne peut utiliser qu'un
+Une Campaign peut posséder plusieurs runs liés par recovery. Une reprise ne peut utiliser qu'un
 run ayant le même `campaign_id`. Une autre stratégie/révision/configuration produit une autre
-campagne et ne peut donc pas être reprise comme si elle était identique.
+Campaign.
 
 ## 9. Runtime dynamique
 
 Le Control Plane ne crée pas de second moteur. `build_campaign_runtime()` assemble les mêmes
-composants canoniques :
+composants canoniques : `TradingCycleRunner`, `AuditedTradingCycleRunner`, `TradingEngine`,
+`RiskEngine` et `PaperBroker`.
 
-```text
-TradingCycleRunner
-AuditedTradingCycleRunner
-TradingEngine
-RiskEngine
-PaperBroker
-```
+Activation/reprise est refusée pendant `RUNNING`. Un runtime `STOPPED` peut être fermé proprement
+avant passage vers une autre Campaign.
 
-L'activation/reprise est refusée pendant qu'un moteur actif est `RUNNING`. Un runtime `STOPPED`
-peut être fermé proprement avant le passage vers une autre campagne.
+## 10. Cockpit frontend — Batch 18.9B
 
-## 10. Secrets
+Le cockpit 18.9B est un client HTTP du Control Plane, pas un runtime de trading. Il réutilise le
+rewrite Next.js `/backend` et le client `frontend/src/lib/api/client.ts` existants.
+
+Il permet :
+
+- Strategy : créer, lister, renommer, archiver ;
+- StrategyRevision : charger les révisions séquentielles jusqu'à `latest_revision`, créer une
+  nouvelle révision immuable et comparer deux révisions via l'API ;
+- prompt preview : visualiser les instructions canoniques et rappeler que l'input dynamique futur
+  est `null` avant le cycle ;
+- Campaign : créer des snapshots SPOT/PERPETUAL avec tous les champs de `CampaignConfiguration` ;
+- sélectionner Luna/Sol, agressivité, cadence, capital, coûts et paramètres Risk ;
+- fixer le levier PERPETUAL déterministe et la marge `ISOLATED` ;
+- activer frais ou reprendre explicitement une Campaign ;
+- envoyer uniquement les commandes moteur canoniques `run-cycle`, `start`, `stop` ;
+- observer la Campaign active et le lineage des `paper_run`.
+
+Le frontend ne reproduit pas les validators métier de `CampaignConfiguration`. Les réponses 409,
+422 et 503 sont affichées comme refus/conflits backend. Fermer le frontend n'envoie jamais `stop`.
+
+Le nouveau Control Plane UI ne persiste ni prompt, ni Campaign, ni secret dans `localStorage` ou
+`sessionStorage`. Le stockage local historique du chat reste limité à un identifiant de session.
+
+## 11. Secrets
 
 Secrets serveur uniquement :
 
@@ -183,29 +182,21 @@ DATABASE_URL
 futures clés privées Kraken/LIVE
 ```
 
-Ils ne sont jamais champs de `CampaignConfiguration`. Les modèles API sont `extra="forbid"` et
-les StrategyRevision refusent des motifs usuels de secret dans le texte opérateur.
+Ils ne sont jamais champs de `CampaignConfiguration` ni envoyés au cockpit.
 
-## 11. Persistence
+## 12. Persistence
 
-`0006_paper_control_plane` crée :
+`0006_paper_control_plane` crée `strategies`, `strategy_revisions`, `campaigns` et
+`paper_runs.campaign_id` nullable. Les anciennes rows restent valides avec `campaign_id=NULL`.
 
-```text
-strategies
-strategy_revisions
-campaigns
-paper_runs.campaign_id (nullable FK)
-```
+## 13. API
 
-Les anciennes rows restent valides avec `campaign_id=NULL`.
+Le Control Plane expose Strategy/Revision, Campaign, activation/reprise et prompt preview. Les
+commandes de trading restent exclusivement `/api/v1/engine/*`. `/api/v1/paper-runs` expose
+`campaign_id`, `resumed_from_paper_run_id` et `recovery_version`.
 
-## 12. API
+## 14. Périmètre suivant
 
-Le Control Plane expose les CRUDs limités Strategy/Revision, la création/lecture Campaign,
-l'activation/reprise et le prompt preview. Les commandes de trading restent exclusivement les
-routes historiques `/api/v1/engine/*`.
-
-## 13. Périmètre suivant
-
-Le Batch 18.9B construira le cockpit frontend à partir de ces contrats backend. Il ne doit pas
-introduire de logique de trading frontend ni arrêter le moteur lorsque l'UI se ferme.
+Après intégration et validation statique du Batch 18.9B, le Batch 18.9C exercera les parcours réels
+via navigateur : création de stratégies/révisions, campagnes SPOT/PERPETUAL, activation/reprise,
+cycles et observation des décisions naturelles de l'Agent.

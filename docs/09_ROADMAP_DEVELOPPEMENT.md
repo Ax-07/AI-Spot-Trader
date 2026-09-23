@@ -1,10 +1,10 @@
 # 09 — Roadmap de développement
 
-## Référence code intégrée
+## Référence auditée
 
 ```text
-11a04be33bf209552e6337e28318d039b775b264
-feat: add PAPER control plane
+HEAD main : efe5a0f162a69e50bd6e5f5cd7aa61039792e911
+Code      : 11a04be33bf209552e6337e28318d039b775b264
 ```
 
 ## Jalons intégrés
@@ -16,89 +16,70 @@ feat: add PAPER control plane
 - Batch 18.6 : recovery `paper-ledger-recovery-v1`, migration `0005` ;
 - Batch 18.7 : retries réseau bornés ;
 - Batch 18.8 : validation réelle recovery/réseau, 20/20 cycles `COMPLETED`, tous `HOLD` ;
-- Batch 18.9A : Control Plane backend, stratégies versionnées, campagnes persistantes,
-  `paper-experiment-v4`, migration `0006`, runtime canonique par campagne.
+- Batch 18.9A : Control Plane backend, stratégies versionnées, Campaigns persistantes,
+  `paper-experiment-v4`, migration `0006`, runtime canonique par Campaign.
 
-## Batch 18.9 — découpage décidé
+## Batch 18.9 — découpage
 
 ```text
 18.9A — Control Plane + persistence + stratégie/prompt backend      INTÉGRÉ
-18.9B — Cockpit de configuration + PERPETUAL UI                    PROCHAIN
-18.9C — validation comportementale via cockpit                     APRÈS 18.9B
+18.9B — Cockpit de configuration + PERPETUAL UI                    PATCH PRÉPARÉ / À VALIDER
+18.9C — validation comportementale via cockpit                     APRÈS INTÉGRATION 18.9B
 ```
 
-Ne pas fusionner ces trois périmètres.
+## Batch 18.9B — patch livré
 
-## Batch 18.9A — intégré
+Périmètre frontend :
 
-### Périmètre livré
-
-- Strategy + StrategyRevision immuable ;
-- normalisation/digest prompt ;
-- rejet des motifs de secret dans les prompts opérateur ;
-- contrat Agent protégé séparé du texte stratégique ;
-- CampaignConfiguration whitelistée et sans secret ;
-- `paper-experiment-v4` au niveau Campaign ;
-- couverture complète des paramètres Risk PERPETUAL par `configuration_digest` ;
-- migration `0006_paper_control_plane` ;
-- FK `paper_runs.campaign_id` ;
-- lifecycle recovery par campagne ;
-- CampaignRuntimeManager avec un runtime actif maximum ;
-- activation/reprise refusée pendant `RUNNING` ;
-- prompt preview canonique ;
-- API Strategy/Campaign ;
-- recovery lineage exposée dans `/api/v1/paper-runs` ;
-- aucun frontend 18.9B.
-
-### Validation finale
-
-```text
-pytest backend/tests/test_control_plane_persistence.py::test_strategy_revisions_are_immutable_and_campaign_snapshots_revision : 1 passed
-ruff check backend : All checks passed!
-pytest backend : 504 passed, 2 warnings
-mypy --config-file backend/pyproject.toml backend/src : Success, 89 source files
-Alembic 0005_paper_run_recovery -> 0006_paper_control_plane sur PostgreSQL : OK
-git diff --check : aucune erreur, uniquement warnings LF -> CRLF
-```
-
-Commit d'intégration :
-
-```text
-11a04be33bf209552e6337e28318d039b775b264
-feat: add PAPER control plane
-```
-
-## Batch 18.9B — prochain batch
-
-Cockpit frontend uniquement, à partir des contrats backend 18.9A stabilisés :
-
-- liste/création/renommage/archivage des stratégies ;
-- édition via création d'une nouvelle révision ;
-- comparaison de révisions ;
+- extension du client API existant, sans seconde couche transport ;
+- types TS alignés sur les réponses backend 18.9A et sur le lineage `paper_run` ;
+- création/liste/renommage/archivage Strategy ;
+- lecture des révisions séquentielles, création d'une nouvelle StrategyRevision, comparaison ;
+- prompt preview canonique avec sections visuelles ;
 - builder Campaign SPOT/PERPETUAL ;
-- sélection Luna/Sol ;
-- agressivité, cadence, capital initial ;
+- Luna/Sol, agressivité, cadence, capital, règlement ;
 - frais, spread, slippage ;
-- paramètres Risk ;
-- levier PERPETUAL déterministe et marge isolée ;
-- preview du prompt ;
-- activation fraîche / reprise explicite ;
-- contrôle `run-cycle`, Start, Stop ;
-- visualisation `campaign_id`, `paper_run_id`, lineage recovery ;
-- état moteur et campagne active ;
-- aucune responsabilité de trading déplacée dans le frontend.
+- limites Risk SPOT/PERPETUAL ;
+- levier déterministe, marge `ISOLATED` ;
+- activation fraîche et reprise explicite ;
+- `run-cycle`, Start, Stop via les routes moteur canoniques ;
+- vue Campaign active, `campaign_id`, `paper_run_id`, `resumed_from_paper_run_id`,
+  `recovery_version` et digests ;
+- rendu explicite des 409/422/503 backend ;
+- aucun stockage local de prompt/Campaign, aucun secret, aucune logique Risk/Trading frontend.
 
-Le frontend ne devient jamais l'application de trading et sa fermeture ne doit pas arrêter le
-backend.
+Validation exécutée par ChatGPT :
 
-## Batch 18.9C — après 18.9B
+```text
+harness source : 50 assertions passées
+Node strip-types syntax checks : OK
+TypeScript ciblé avec stubs de dépendances : OK
+```
 
-Validation comportementale réelle via cockpit :
+Non exécuté dans l'environnement ChatGPT :
 
-- création stratégie/révision ;
-- campagnes SPOT et PERPETUAL ;
-- reprise après restart ;
-- campagne modifiée => nouvelle identité ;
+```text
+pnpm lint
+pnpm typecheck
+pnpm build
+```
+
+Cause : pnpm absent et Corepack ne peut pas joindre le registre. Le backend n'a pas été modifié ;
+la suite backend n'est donc pas rejouée dans ce batch.
+
+## Batch 18.9C — après validation/intégration 18.9B
+
+Validation comportementale réelle via navigateur :
+
+- création Strategy puis nouvelles révisions ;
+- comparaison et preview ;
+- Campaign SPOT ;
+- Campaign PERPETUAL avec limites obligatoires ;
+- activation fraîche ;
+- run-cycle réel ;
+- Start/Stop ;
+- restart backend puis reprise explicite et vérification du lineage ;
+- changement structurel => nouvelle Campaign, jamais resume ;
 - observation de BUY/SELL naturels si le marché/Agent en produit, sans forcer artificiellement une
   décision stratégique ;
 - comparaison Luna/Sol et audit des digests ;

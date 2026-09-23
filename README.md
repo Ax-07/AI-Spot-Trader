@@ -8,27 +8,20 @@ Risk peut produire un `ExecutionIntent`, ensuite exécuté par le `PaperBroker`.
 > Objectif expérimental : rechercher une performance élevée, avec une cible de travail de +4 %/jour.
 > Ce n'est ni une promesse ni une garantie de rendement.
 
-## Référence code intégrée — Batch 18.9A
+## Référence auditée — Batch 18.9B
 
 ```text
 repository : Ax-07/AI-Spot-Trader
 branche    : main
+HEAD       : efe5a0f162a69e50bd6e5f5cd7aa61039792e911
 code       : 11a04be33bf209552e6337e28318d039b775b264
-commit     : feat: add PAPER control plane
 ```
 
-Le Batch 18.9A — **Control Plane PAPER backend + stratégies éditables + campagnes persistantes** —
-est intégré sur `main`.
+Le HEAD `efe5a0f` finalise documentairement le Batch 18.9A ; le dernier commit code intégré reste
+`11a04be` (`feat: add PAPER control plane`).
 
-Validation opérateur du Batch 18.9A :
-
-```text
-pytest backend : 504 passed, 2 warnings de dépréciation dépendances
-ruff check backend : All checks passed!
-mypy --config-file backend/pyproject.toml backend/src : Success, 89 source files
-Alembic 0005_paper_run_recovery -> 0006_paper_control_plane sur PostgreSQL : OK
-git diff --check : aucune erreur, uniquement warnings LF -> CRLF
-```
+Le Batch 18.9B livré avec ce patch ajoute le cockpit frontend du Control Plane. Il n'est pas encore
+intégré à GitHub tant que l'opérateur ne l'a pas extrait, validé, committé et poussé.
 
 ## Invariants
 
@@ -41,7 +34,7 @@ git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 - aucune sortie LLM -> Broker ;
 - aucun tool -> Broker/Risk ;
 - Risk autorise, modifie ou refuse et garde l'autorité finale ;
-- aucun secret dans les prompts, campagnes, réponses API ou fichiers versionnés ;
+- aucun secret dans les prompts, Campaigns, réponses UI ou fichiers versionnés ;
 - aucun replay LLM/Risk/Broker/Fill lors du recovery ;
 - aucun look-ahead ;
 - toutes les décisions, dont `HOLD`, restent auditables ;
@@ -83,32 +76,19 @@ ExecutionIntent éventuel -> PaperBroker -> Fill
 Audit PostgreSQL + ledger PAPER durable
 ```
 
-Il n'existe ni second Agent, ni moteur parallèle, ni scanner déterministe qui choisit
-l'opportunité à la place du LLM.
+Le frontend n'appartient pas à cette chaîne d'exécution.
 
-## Control Plane — Batch 18.9A
-
-Le Control Plane ajoute trois concepts persistants.
+## Control Plane backend — Batch 18.9A
 
 ### Strategy / StrategyRevision
 
-`Strategy` porte l'identité et le nom d'une stratégie. `StrategyRevision` est immuable et contient
-le texte stratégique opérateur, son digest SHA-256, la version du contrat Agent protégé et son
-timestamp.
+`Strategy` porte l'identité et le nom. `StrategyRevision` est immuable et contient le texte
+stratégique opérateur, son digest SHA-256, la version du contrat Agent protégé et son timestamp.
+Modifier le texte crée une nouvelle révision. Renommer la Strategy ne modifie aucune révision.
 
-Le digest du prompt utilise la normalisation `strategy-prompt-sha256-v1` :
+### Contrat Agent protégé
 
-1. CRLF/CR -> LF ;
-2. suppression des espaces de fin de ligne ;
-3. suppression des blancs extérieurs ;
-4. SHA-256 UTF-8 du texte normalisé.
-
-Créer un nouveau texte crée une nouvelle révision. Renommer la stratégie ne change aucun digest.
-Les révisions refusent des motifs de secrets connus au lieu de les recopier dans le prompt.
-
-### Contrat Agent protégé + stratégie opérateur
-
-Les runtimes de campagne composent les instructions dans cet ordre :
+Les runtimes de Campaign composent :
 
 ```text
 contrat applicatif protégé
@@ -116,67 +96,55 @@ contrat applicatif protégé
 + contexte d'agressivité canonique
 ```
 
-L'input dynamique (`MarketSelectionInput` ou `AgentInput`) reste envoyé séparément et n'est jamais
-inventé par l'API de preview.
-
-Le contrat protégé impose toujours PAPER, BUY/SELL/HOLD structurés, les sémantiques SPOT/PERP,
-l'absence d'accès Broker/Risk depuis le LLM/tools, l'autorité finale de Risk et l'interdiction
-d'inventer des faits. Une stratégie « ignore Risk » n'ajoute aucun chemin d'exécution : elle reste
-subordonnée au contrat et le pipeline déterministe demeure inchangé.
+L'input dynamique (`MarketSelectionInput` ou `AgentInput`) est séparé. Le preview ne l'invente pas.
 
 ### Campaign
 
-Une `Campaign` est un snapshot immuable de configuration opérateur non sensible :
-
-- modèle Luna/Sol ;
-- agressivité et cadence ;
-- capital initial, actif de règlement et univers SPOT/PERP ;
-- frais, spread, slippage ;
-- levier/marge PERPETUAL ;
-- limites Risk SPOT et PERPETUAL ;
-- deadlines MARKET/AGENT/BROKER ;
-- stratégie/révision/digest ;
-- `configuration_digest` et `experiment_digest`.
+Une `Campaign` est un snapshot immuable non sensible : modèle, agressivité, cadence, capital,
+univers SPOT/PERP, coûts, levier/marge, limites Risk, deadlines, stratégie/révision et digests.
 
 `OPENAI_API_KEY`, `DATABASE_URL` et les futurs secrets privés Kraken/LIVE restent exclusivement
-dans la configuration serveur et ne font pas partie du modèle Campaign.
+serveur.
 
-## `paper-experiment-v4`
-
-Le Control Plane introduit `paper-experiment-v4` comme identité de campagne. Son digest canonique
-inclut au minimum :
-
-```text
-strategy_id
-strategy_revision
-strategy_prompt_digest
-base_agent_contract_version
-configuration_digest
-```
-
-Le `configuration_digest` couvre les paramètres structurels effectifs, notamment les limites Risk
-PERPETUAL qui n'étaient pas toutes représentées par le snapshot Risk historique v3.
-
-Les protocoles `paper-experiment-v1`, `v2` et `v3` ne sont pas réinterprétés ni migrés. Leur code de
-validation et leurs anciens digests restent leur source de vérité historique.
-
-## Campaign vs `paper_run`
+### Campaign vs paper_run
 
 ```text
 Campaign = identité configuration/stratégie expérimentale
 paper_run = lifetime d'exécution/recovery
 ```
 
-Une même campagne peut produire plusieurs `paper_run_id` successifs. Chaque reprise :
+Une reprise conserve `campaign_id`, crée un nouveau `paper_run_id`, renseigne
+`resumed_from_paper_run_id` et restaure le ledger sans replay historique.
 
-- conserve `campaign_id` ;
-- crée un nouveau `paper_run_id` ;
-- renseigne `resumed_from_paper_run_id` ;
-- conserve `paper-ledger-recovery-v1` ;
-- restaure le snapshot durable sans replay LLM/Risk/Broker/Fill.
+## Cockpit Control Plane — Batch 18.9B
 
-Changer stratégie, révision ou configuration implique une **nouvelle campagne**. Une reprise ne
-cherche que les runs de la campagne demandée et échoue fermée en cas d'incompatibilité.
+Le nouveau panneau frontend permet de :
+
+- créer, lister, renommer et archiver des Strategies ;
+- consulter les révisions jusqu'à `latest_revision` ;
+- créer une nouvelle StrategyRevision immuable ;
+- comparer deux révisions via l'API backend ;
+- prévisualiser le prompt canonique en distinguant contrat Agent protégé, stratégie opérateur,
+  contexte d'agressivité et input dynamique futur ;
+- créer une Campaign PAPER SPOT et/ou PERPETUAL ;
+- choisir GPT-5.6 Luna ou Sol ;
+- configurer agressivité, cadence, capital et actif de règlement ;
+- configurer frais, spread, slippage ;
+- configurer les champs Risk exposés par `CampaignConfiguration` ;
+- configurer le levier PERPETUAL déterministe avec marge `ISOLATED` ;
+- visualiser les digests et identités expérimentales ;
+- déclencher activation fraîche ou reprise explicite ;
+- piloter `run-cycle`, `start`, `stop` via les routes moteur canoniques ;
+- voir Campaign active, `campaign_id`, `paper_run_id`, `resumed_from_paper_run_id` et
+  `recovery_version` ;
+- afficher les refus backend 409/422/503 sans les contourner.
+
+Le cockpit ne calcule aucun signal, aucune décision, aucune autorisation Risk et aucun ordre. Les
+valeurs du builder sont envoyées au modèle Pydantic canonique, qui conserve l'autorité de
+validation.
+
+Le nouveau panneau ne stocke ni prompt, ni Campaign, ni paramètres Risk dans `localStorage` ou
+`sessionStorage`. Fermer le frontend n'envoie jamais `stop` au backend.
 
 ## API Control Plane
 
@@ -202,7 +170,7 @@ POST   /campaigns/{campaign_id}/resume
 POST   /prompt-preview
 ```
 
-Les commandes moteur existantes restent canoniques :
+Commandes moteur :
 
 ```text
 POST /api/v1/engine/run-cycle
@@ -210,12 +178,9 @@ POST /api/v1/engine/start
 POST /api/v1/engine/stop
 ```
 
-L'API `/api/v1/paper-runs` expose aussi `campaign_id`, `resumed_from_paper_run_id` et
-`recovery_version`.
+`/api/v1/paper-runs` expose `campaign_id`, `resumed_from_paper_run_id` et `recovery_version`.
 
 ## Persistence PostgreSQL
-
-Chaîne de migrations :
 
 ```text
 0001_create_audit_journal
@@ -226,29 +191,29 @@ Chaîne de migrations :
 -> 0006_paper_control_plane
 ```
 
-`0006_paper_control_plane` crée `strategies`, `strategy_revisions`, `campaigns` et ajoute le FK
-nullable `paper_runs.campaign_id`. Les anciens runs restent valides avec `campaign_id = NULL`.
+Aucune migration backend n'est ajoutée par le Batch 18.9B.
 
-## Démarrage sans campagne active
+## Validation du patch 18.9B
 
-Avec l'infrastructure serveur configurée (`DATABASE_URL`, migrations appliquées), FastAPI démarre
-le Control Plane sans créer implicitement de campagne ni de run. Le moteur est alors
-`UNAVAILABLE` jusqu'à activation/reprise explicite. `OPENAI_API_KEY` n'entre dans aucune Campaign ;
-il est requis au moment de composer un runtime Agent réel.
+Exécuté par ChatGPT :
 
-## Validation
-
-Commandes de validation de référence sous PowerShell :
-
-```powershell
-pytest backend
-ruff check backend
-mypy --config-file backend/pyproject.toml backend/src
-alembic -c backend/alembic.ini upgrade head
-git diff --check
-git status --short
+```text
+harness source frontend : 50 assertions passées
+Node strip-types syntax checks : OK
+typecheck ciblé avec stubs de dépendances : OK
 ```
 
-Le prochain périmètre est le Batch 18.9B : cockpit frontend de configuration SPOT/PERPETUAL,
-reposant sur les contrats backend 18.9A intégrés. Le frontend reste un cockpit de contrôle ; sa
-fermeture ne doit jamais arrêter le moteur backend.
+À exécuter localement avec les dépendances frontend installées :
+
+```powershell
+cd frontend
+pnpm lint
+pnpm typecheck
+pnpm build
+```
+
+Le backend n'est pas modifié par ce patch ; sa validation intégrée de référence reste celle de
+18.9A (`504 passed`, Ruff OK, mypy OK, migration `0006` OK).
+
+Après intégration de 18.9B, le prochain périmètre est le **Batch 18.9C — validation comportementale
+réelle via frontend**.

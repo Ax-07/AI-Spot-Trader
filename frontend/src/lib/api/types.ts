@@ -36,12 +36,42 @@ export type AssetPositionResponse = {
   available: string;
 };
 
+export type DerivativePositionResponse = {
+  symbol: string;
+  side: "LONG" | "SHORT";
+  quantity: string;
+  average_entry_price: string;
+  mark_price: string;
+  contract_size: string;
+  notional: string;
+  realized_pnl: string;
+  unrealized_pnl: string;
+  leverage: string;
+  margin_used: string;
+  initial_margin_rate: string;
+  maintenance_margin_rate: string;
+  maintenance_margin: string;
+  cumulative_funding: string;
+  liquidation_price: string | null;
+  margin_mode: "ISOLATED" | "CROSS";
+  funding_updated_at: string | null;
+};
+
 export type PortfolioResponse = {
   portfolio_state_id: string;
   as_of: string;
   mode: "PAPER";
   balances: AssetBalanceResponse[];
   positions: AssetPositionResponse[];
+  derivative_positions: DerivativePositionResponse[];
+};
+
+export type ExecutableMarketType = "SPOT" | "PERPETUAL";
+export type HistoricalMarketType = ExecutableMarketType | "FUTURE";
+
+export type ExecutableMarketResponse = {
+  symbol: string;
+  market_type: ExecutableMarketType;
 };
 
 export type MarketStateResponse = {
@@ -49,15 +79,19 @@ export type MarketStateResponse = {
   as_of: string;
   symbol: string;
   last_price: string;
+  market_type: HistoricalMarketType;
   context: JsonObject | null;
+  derivative: JsonObject | null;
 };
 
 export type CycleSummaryResponse = {
   cycle_id: string;
+  paper_run_id: string | null;
   status: string;
   recorded_at: string;
   decision_action: string | null;
   symbol: string | null;
+  market_type: HistoricalMarketType | null;
   risk_status: string | null;
   execution_id: string | null;
   fill_count: number;
@@ -104,6 +138,7 @@ export type ExecutionResponse = {
 
 export type CycleDetailResponse = {
   cycle_id: string;
+  paper_run_id: string | null;
   status: string;
   recorded_at: string;
   failure: CycleFailure | null;
@@ -113,7 +148,10 @@ export type CycleDetailResponse = {
   market_as_of: string | null;
   portfolio_before_as_of: string | null;
   portfolio_after_as_of: string | null;
+  market_selection_input: JsonObject | null;
+  market_selection: JsonObject | null;
   agent_input: JsonObject | null;
+  agent_tool_traces: JsonObject[];
   decision: JsonObject | null;
   risk_assessment: JsonObject | null;
   execution_intent: JsonObject | null;
@@ -135,9 +173,25 @@ export type ExecutionPageResponse = PageResponse<ExecutionResponse>;
 
 export type LatestErrorResponse = {
   cycle_id: string;
+  paper_run_id: string | null;
   recorded_at: string;
   failure: CycleFailure;
 };
+
+export type PaperRunResponse = {
+  paper_run_id: string;
+  campaign_id: string | null;
+  started_at: string;
+  ended_at: string | null;
+  market_type: HistoricalMarketType | null;
+  symbol: string | null;
+  execution_universe: ExecutableMarketResponse[];
+  resumed_from_paper_run_id: string | null;
+  recovery_version: string | null;
+  is_current: boolean;
+};
+
+export type PaperRunPageResponse = PageResponse<PaperRunResponse>;
 
 export type PaperAnalyticsSummaryResponse = {
   initial_equity: string | null;
@@ -147,6 +201,7 @@ export type PaperAnalyticsSummaryResponse = {
   fees: string;
   spread_cost: string;
   slippage_cost: string;
+  funding_pnl: string;
   max_drawdown_value: string;
   max_drawdown_fraction: string | null;
   current_drawdown_value: string;
@@ -180,6 +235,7 @@ export type PaperAnalyticsPointResponse = {
   cumulative_fees: string;
   cumulative_spread_cost: string;
   cumulative_slippage_cost: string;
+  cumulative_funding_pnl: string;
   exposure_value: string;
   exposure_fraction: string | null;
   cumulative_return_fraction: string | null;
@@ -200,10 +256,12 @@ export type PaperDailyPerformanceResponse = {
   fees: string;
   spread_cost: string;
   slippage_cost: string;
+  funding_pnl: string;
   trade_count: number;
 };
 
 export type PaperAnalyticsResponse = {
+  paper_run_id: string | null;
   calculation_version: string;
   timezone: "UTC";
   source_digest: string;
@@ -223,7 +281,7 @@ export type ChatMessageResponse = {
 
 export type ChatExchangeResponse = {
   session_id: string;
-  model: "gpt-5.6-luna" | "gpt-5.6-sol";
+  model: LlmModel;
   historical_cycle_id: string | null;
   operator_message: ChatMessageResponse;
   agent_message: ChatMessageResponse;
@@ -232,7 +290,100 @@ export type ChatExchangeResponse = {
 
 export type ChatHistoryResponse = {
   session_id: string;
-  model: "gpt-5.6-luna" | "gpt-5.6-sol";
+  model: LlmModel;
   messages: ChatMessageResponse[];
   max_messages: number;
+};
+
+export type LlmModel = "gpt-5.6-luna" | "gpt-5.6-sol";
+
+export type StrategyResponse = {
+  strategy_id: string;
+  strategy_name: string;
+  created_at: string;
+  archived_at: string | null;
+  latest_revision: number | null;
+};
+
+export type StrategyRevisionResponse = {
+  strategy_id: string;
+  strategy_revision: number;
+  strategy_prompt: string;
+  strategy_prompt_digest: string;
+  base_agent_contract_version: string;
+  created_at: string;
+};
+
+export type StrategyCreateResponse = {
+  strategy: StrategyResponse;
+  revision: StrategyRevisionResponse;
+};
+
+export type StrategyRevisionComparisonResponse = {
+  strategy_id: string;
+  left_revision: number;
+  right_revision: number;
+  left_digest: string;
+  right_digest: string;
+  identical: boolean;
+  unified_diff: string;
+};
+
+export type CampaignConfiguration = {
+  configuration_version: "paper-control-plane-config-v1";
+  llm_model: LlmModel;
+  aggressiveness: number;
+  trading_cadence_seconds: number;
+  paper_initial_capital: string;
+  paper_settlement_asset: string;
+  paper_executable_markets: ExecutableMarketResponse[];
+  paper_fee_rate: string;
+  paper_spread_bps: string;
+  paper_slippage_bps: string;
+  paper_derivative_leverage: string;
+  paper_derivative_margin_mode: "ISOLATED";
+  risk_max_order_notional: string;
+  risk_allowed_pairs: string[];
+  risk_allow_quantity_reduction: boolean;
+  risk_max_derivative_leverage: string;
+  risk_max_derivative_position_notional: string | null;
+  risk_max_total_derivative_exposure: string | null;
+  risk_derivative_liquidation_buffer_ratio: string;
+  cycle_market_timeout_seconds: number;
+  cycle_agent_timeout_seconds: number;
+  cycle_broker_timeout_seconds: number;
+};
+
+export type CampaignResponse = {
+  campaign_id: string;
+  created_at: string;
+  strategy_id: string;
+  strategy_revision: number;
+  strategy_prompt_digest: string;
+  base_agent_contract_version: string;
+  configuration: CampaignConfiguration;
+  configuration_digest: string;
+  experiment_protocol_version: "paper-experiment-v4";
+  experiment_digest: string;
+};
+
+export type CampaignActivationResponse = {
+  campaign: CampaignResponse;
+  paper_run_id: string | null;
+  engine: EngineStatusResponse;
+};
+
+export type PromptPreviewPhase = "MARKET_SELECTION" | "FINAL_DECISION";
+
+export type PromptPreviewResponse = {
+  strategy_id: string;
+  strategy_revision: number;
+  strategy_prompt_digest: string;
+  base_agent_contract_version: string;
+  aggressiveness: number;
+  phase: PromptPreviewPhase;
+  instructions: string;
+  dynamic_input_model: "MarketSelectionInput" | "AgentInput";
+  dynamic_input: null;
+  note: string;
 };

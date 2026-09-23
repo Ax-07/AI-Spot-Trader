@@ -2,207 +2,209 @@
 
 ## 1. Référence
 
-Base intégrée auditée avant Batch 18.9A :
+Base GitHub auditée au démarrage du Batch 18.9B :
 
 ```text
-HEAD GitHub : 2b0d227454f2bf894b075b8deef3378e2fe823b4
-Dernier code: 0886216324106d941c3df0e30f074e24dbe1d33a
+HEAD GitHub : efe5a0f162a69e50bd6e5f5cd7aa61039792e911
+Dernier code: 11a04be33bf209552e6337e28318d039b775b264
 ```
+
+Le HEAD `efe5a0f` est le commit documentaire finalisant 18.9A ; aucun commit code n'est intervenu
+après `11a04be` au moment de l'audit.
 
 ## 2. Architecture générale
 
 ```text
-FastAPI
+Next.js cockpit
   |
-  +-- Control Plane persistence (PostgreSQL)
-  |     +-- Strategy / StrategyRevision
-  |     +-- Campaign
-  |     +-- campaign_id -> paper_runs
-  |
-  +-- CampaignRuntimeManager (process-local ownership)
+  +-- /backend rewrite -> FastAPI
         |
-        +-- runtime actif optionnel
-              +-- TradingEngine
-              +-- AuditedTradingCycleRunner
-              +-- TradingCycleRunner
-              +-- OpenAIDecisionProvider
-              +-- RiskEngine
-              +-- PaperBroker
-              +-- PaperPortfolioLedger
-              +-- Kraken public research/execution sources
+        +-- Control Plane persistence (PostgreSQL)
+        |     +-- Strategy / StrategyRevision
+        |     +-- Campaign
+        |     +-- campaign_id -> paper_runs
+        |
+        +-- CampaignRuntimeManager
+              |
+              +-- runtime actif optionnel
+                    +-- TradingEngine
+                    +-- AuditedTradingCycleRunner
+                    +-- TradingCycleRunner
+                    +-- OpenAIDecisionProvider
+                    +-- RiskEngine
+                    +-- PaperBroker
+                    +-- PaperPortfolioLedger
+                    +-- Kraken public research/execution sources
 ```
 
-Le manager ne possède aucune implémentation alternative du cycle. Il ne fait qu'assembler,
-activer, fermer et déléguer vers les composants existants.
+Le frontend n'est pas dans la chaîne d'exécution. Le manager backend possède au plus un runtime
+actif et délègue aux composants canoniques existants.
 
-## 3. Nouveaux modules 18.9A
+## 3. Modules backend Control Plane 18.9A
 
 ```text
 agent/prompt.py
-  contrat protégé, normalisation/digest stratégie, composition canonique
 agent/strategy_client.py
-  adapter transport qui remplace les instructions historiques par la composition de campagne
-
 control_plane.py
-  CampaignConfiguration whitelistée + digests v4
 campaign_composition.py
-  assemblage runtime canonique depuis Campaign
 core/control_plane_runtime.py
-  ownership d'un runtime actif maximum
-
-persistence/models.py
-  StrategyRecord, StrategyRevisionRecord, CampaignRecord, paper_runs.campaign_id
 persistence/control_plane.py
-  store async Strategy/Revision/Campaign
 persistence/campaign_runs.py
-  lifecycle recovery limité à une Campaign
-
 api/control_plane_schemas.py
 api/routes/control_plane.py
-  surface REST opérateur
-
 alembic/versions/0006_paper_control_plane.py
-  schéma PostgreSQL
 ```
 
-## 4. Contrat Agent et prompt
+Ces modules restent inchangés dans le patch 18.9B.
 
-### Compatibilité historique
-
-`AGENT_PROMPT_VERSION = agent-strategy-v4` et le texte `AGENT_SYSTEM_PROMPT` historique sont
-conservés pour les manifestes v1/v2/v3.
-
-### Nouveau runtime Campaign
+## 4. Modules frontend 18.9B
 
 ```text
-StrategyInstructionsClient
-  -> lit AggressivenessContext déjà présent dans l'input structuré
-  -> compose_agent_instructions()
-       - PROTECTED_AGENT_CONTRACT / agent-contract-v1
-       - StrategyRevision.strategy_prompt
-       - AggressivenessContext
-  -> délègue au même OpenAIResponsesClient
+frontend/src/lib/api/types.ts
+  miroir TypeScript des réponses Pydantic utiles, incluant Control Plane et lineage recovery
+
+frontend/src/lib/api/client.ts
+  client HTTP canonique existant étendu ; aucune seconde couche API
+
+frontend/src/hooks/use-control-plane.ts
+  orchestration UI, polling read-only et commandes HTTP ; aucun calcul Risk/Trading
+
+frontend/src/components/cockpit/control-plane-panel.tsx
+  UI Strategy/Revision/preview/Campaign/runtime
+
+frontend/src/app/page.tsx
+  montage du nouveau panneau avec le cockpit existant
 ```
 
-Le `MarketSelectionInput`/`AgentInput` JSON est inchangé et reste transmis séparément comme
-`input_text`. Le preview retourne uniquement les instructions statiques réellement composables ;
-`dynamic_input` reste `null` avant un cycle réel.
+Le hook ne persiste aucun draft de Strategy/Campaign dans le navigateur. Les valeurs de formulaire
+restent en mémoire React jusqu'au POST backend.
 
-## 5. Digests
-
-### Prompt
-
-`strategy-prompt-sha256-v1` : LF, trailing spaces par ligne supprimés, blancs extérieurs supprimés,
-SHA-256 UTF-8.
-
-### Configuration
-
-`paper-control-plane-config-v1` sérialise le modèle Pydantic en JSON canonique trié pour calculer
-`configuration_digest`.
-
-### Expérience v4
+## 5. Flux Strategy / Revision
 
 ```text
-SHA256(canonical JSON {
-  experiment_protocol_version = paper-experiment-v4,
-  strategy_id,
-  strategy_revision,
-  strategy_prompt_digest,
-  base_agent_contract_version,
-  configuration_digest
-})
+GET /strategies
+-> sélectionner Strategy
+-> lire latest_revision
+-> GET /strategies/{id}/revisions/1..latest_revision
 ```
 
-Les digests v1/v2/v3 ne sont pas recalculés avec ces nouveaux champs.
+La persistence 18.9A crée les révisions séquentiellement, sans trou. Il n'existe pas de route
+`list revisions` dédiée ; le cockpit réutilise donc les GET unitaires canoniques sans créer un
+contrat parallèle.
 
-## 6. Persistence
+Éditer le texte déclenche uniquement :
 
-Schéma 18.9A :
+```text
+POST /strategies/{id}/revisions
+```
+
+Aucune révision existante n'est mutée.
+
+## 6. Prompt preview
+
+Le cockpit appelle `POST /prompt-preview`. Il ne recompose pas le prompt métier. Il découpe
+uniquement la chaîne `instructions` retournée selon les marqueurs canoniques pour l'affichage :
+
+```text
+contrat Agent protégé
+stratégie opérateur
+contexte d'agressivité
+input dynamique futur = null
+```
+
+Si les marqueurs ne sont pas trouvés, il affiche le contenu canonique sans inventer de section.
+
+## 7. Builder Campaign
+
+Le formulaire mappe les champs vers le modèle backend `CampaignConfiguration` :
+
+```text
+paper-control-plane-config-v1
+llm_model / aggressiveness / trading_cadence_seconds
+paper_initial_capital / paper_settlement_asset
+paper_executable_markets
+paper_fee_rate / paper_spread_bps / paper_slippage_bps
+paper_derivative_leverage / paper_derivative_margin_mode=ISOLATED
+risk_*
+cycle_*_timeout_seconds
+```
+
+Le navigateur n'implémente pas les règles de cohérence : quote/règlement, whitelist Risk,
+unicité, levier, limites PERPETUAL, spread+slippage, FUTURE, etc. Ces règles restent dans Pydantic
+et le Control Plane backend. L'UI n'offre que `SPOT` et `PERPETUAL` et fixe visuellement
+`ISOLATED`, puis affiche les refus 422/409/503 du backend.
+
+Les valeurs préremplies sont un profil de saisie opérateur ; elles ne sont pas présentées comme des
+valeurs par défaut `Settings` serveur, dont la majorité est volontairement `None`.
+
+## 8. Activation / reprise / moteur
+
+```text
+POST /campaigns/{id}/activate   # frais
+POST /campaigns/{id}/resume     # explicite
+POST /engine/run-cycle
+POST /engine/start
+POST /engine/stop
+```
+
+Une activation/reprise pendant `RUNNING`, une activation fraîche d'une Campaign déjà exécutée ou
+une reprise sans run parent restent refusées côté backend. L'UI affiche le conflit ; elle ne le
+contourne pas.
+
+Le polling du cockpit relit toutes les 10 secondes, lorsque l'onglet est visible :
 
 ```text
 strategies
-  PK strategy_id
-
-strategy_revisions
-  PK (strategy_id, strategy_revision)
-  FK strategy_id -> strategies
-
 campaigns
-  PK campaign_id
-  FK (strategy_id, strategy_revision) -> strategy_revisions
-
-paper_runs
-  campaign_id NULLABLE FK -> campaigns
-  resumed_from_paper_run_id UNIQUE FK -> paper_runs
+campaigns/active
+paper-runs (100 derniers)
+engine
 ```
 
-`campaign_id` est nullable afin de préserver les runs historiques 18.x.
+Fermer ou redémarrer Next.js n'envoie jamais `stop` au moteur backend.
 
-## 7. Activation fraîche
+## 9. Identités et recovery visibles
 
-```text
-POST /campaigns/{id}/activate
--> vérifier moteur actif != RUNNING
--> charger Campaign + StrategyRevision
--> vérifier prompt digest + base contract version
--> vérifier absence de run antérieur pour cette campagne
--> fermer l'ancien runtime STOPPED éventuel
--> build_campaign_runtime(..., resume=False)
--> CampaignPaperRunLifecycle.initialize()
--> nouveau paper_run avec campaign_id
-```
-
-## 8. Reprise
+Le cockpit expose les identités fournies par le backend :
 
 ```text
-POST /campaigns/{id}/resume
--> même vérification de campagne/révision
--> exiger un run précédent de la même campaign_id
--> vérifier univers
--> restaurer current_portfolio_payload
--> clôturer parent si nécessaire
--> nouveau run + resumed_from_paper_run_id
-```
-
-Aucune décision, recherche, évaluation Risk, intention ou fill historique n'est réexécuté.
-
-## 9. Ressources et ownership
-
-Le Control Plane garde une `Database` d'infrastructure pour lire Strategy/Campaign et les surfaces
-read-only. Chaque runtime actif possède ses ressources réseau et sa propre `Database`/pool vers la
-même URL pour le cycle/audit. Lors d'un switch, le runtime actif est fermé avant remplacement ; la
-base d'infrastructure reste vivante jusqu'au shutdown FastAPI.
-
-Une activation/reprise pendant `TradingEngine.is_running` est refusée en 409.
-
-## 10. Frontières de sécurité
-
-- CampaignConfiguration : whitelist stricte et `extra=forbid` ;
-- aucune clé API/URL DB dans Campaign ;
-- secret-like StrategyPrompt refusé avant persistence ;
-- erreurs de composition/initialisation retournées sous forme générique 503 ;
-- erreurs de conflict/not-found exposent uniquement une cause opératoire non sensible ;
-- tools restent read-only et n'ont aucune dépendance Risk/Broker ;
-- Risk/Broker ne sont jamais appelés depuis le Control Plane.
-
-## 11. API paper-runs
-
-La réponse expose désormais :
-
-```text
+strategy_prompt_digest
+configuration_digest
+experiment_protocol_version
+experiment_digest
 campaign_id
+paper_run_id
 resumed_from_paper_run_id
 recovery_version
 ```
 
-en plus des champs historiques et de `execution_universe`.
+Aucun digest n'est recalculé dans le navigateur.
 
-## 12. Migration
+## 10. Erreurs et confidentialité
 
-Cible canonique PostgreSQL :
+`ApiError` conserve le statut HTTP et un message opératoire. Pour les erreurs Pydantic, le client
+n'affiche que `loc` + `msg` et n'inclut pas le champ `input`, afin d'éviter de refléter une valeur de
+formulaire potentiellement sensible.
 
-```powershell
-alembic -c backend/alembic.ini upgrade head
+Le panneau Control Plane ne référence ni `localStorage`, ni `sessionStorage`, ni nom de secret
+serveur. Les secrets restent exclusivement dans la configuration backend.
+
+## 11. Persistence backend
+
+Schéma canonique :
+
+```text
+strategies
+strategy_revisions
+campaigns
+paper_runs.campaign_id NULLABLE
+paper_runs.resumed_from_paper_run_id
 ```
 
-Le test réel de migration doit être effectué sur une base PostgreSQL disponible avant intégration.
+Aucune migration n'est ajoutée par 18.9B.
+
+## 12. Validation
+
+Le patch frontend a fait l'objet d'un harness source et d'un typecheck ciblé avec stubs. Les
+commandes canoniques `pnpm lint`, `pnpm typecheck` et `pnpm build` doivent être rejouées dans le
+repository local avec les dépendances installées avant intégration.
