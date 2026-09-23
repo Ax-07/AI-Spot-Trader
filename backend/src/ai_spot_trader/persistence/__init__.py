@@ -13,12 +13,14 @@ from ai_spot_trader.persistence.repository import (
     SqlAlchemyCycleAuditRepository,
 )
 from ai_spot_trader.persistence.runs import (
+    PAPER_LEDGER_RECOVERY_VERSION,
     PaperRunClosedError,
     PaperRunDefinition,
     PaperRunLifecycle,
     PaperRunNotFoundError,
     PaperRunPage,
     PaperRunReader,
+    PaperRunRecoveryError,
     PaperRunSortOrder,
     PaperRunStoreUnavailableError,
     PaperRunView,
@@ -27,6 +29,7 @@ from ai_spot_trader.persistence.runs import (
 )
 
 __all__ = [
+    "PAPER_LEDGER_RECOVERY_VERSION",
     "AuditedTradingCycleRunner",
     "CycleAuditConflictError",
     "CycleAuditUnavailableError",
@@ -38,6 +41,7 @@ __all__ = [
     "PaperRunNotFoundError",
     "PaperRunPage",
     "PaperRunReader",
+    "PaperRunRecoveryError",
     "PaperRunSortOrder",
     "PaperRunStoreUnavailableError",
     "PaperRunView",

@@ -6,12 +6,15 @@ AI Spot Trader est une application expérimentale de trading crypto PAPER pilot�
 Agent IA stratégique**. Le backend est l'application de trading ; le frontend est un cockpit de
 contrôle et de visualisation.
 
-Commit d’intégration code du Batch 18.5 :
+HEAD GitHub vérifié au démarrage du Batch 18.6 :
+`70457125c5a238fe9b798463081c8769d8879d5e`
+(`docs: record batch 18.5 integration`).
+
+Dernier commit code intégré :
 `84548d23efda0b0a8e2c1350bacc830c1de34140`
 (`feat: version multi-market experiment protocol`). Le Batch 18.5 est intégré.
 
-Référence historique de démarrage du Batch 18.5 : `5cc2e289...`, avec `4042e0b...` comme dernier
-commit code validé avant ce batch.
+Le Batch 18.6 décrit ci-dessous un **patch proposé non intégré** de recovery durable du ledger PAPER.
 
 ## 2. Invariants fonctionnels
 
@@ -254,6 +257,18 @@ Le contrat historique `market_type + symbol` ne suffit pas pour un run multi-mar
 
 Les rows existantes sont backfillées vers un univers singleton lors de la migration.
 
+Le patch 18.6 propose en plus :
+
+```text
+resumed_from_paper_run_id
+recovery_version = paper-ledger-recovery-v1
+initial_portfolio_payload
+current_portfolio_payload
+```
+
+Le `paper_run_id` reste une identité de session backend ; un restart crée donc un nouveau run relié
+à son prédécesseur au lieu de réouvrir une ligne historique.
+
 ## 14. Analytics
 
 L'analytics passe à `paper-analytics-v3` lorsque plusieurs marchés distincts apparaissent dans le
@@ -262,6 +277,12 @@ chaque `BASE/settlement_asset`.
 
 Un mark absent provoque une erreur de données explicite. Aucune requête marché actuelle n'est
 faite pendant le replay et aucun look-ahead n'est possible.
+
+Le recovery 18.6 ne rejoue pas les décisions pour reconstruire le runtime : le cash net déjà payé,
+les inventaires SPOT et les champs de position PERPETUAL sont restaurés depuis le `PortfolioState`
+durable. Pour les métriques, `paper_analytics_for_run()` suit explicitement la chaîne
+`resumed_from_paper_run_id` et rejoue les cycles des ancêtres dans l'ordre, ce qui préserve P&L,
+frais, funding, drawdown et compteurs cumulés malgré le changement de `paper_run_id`.
 
 ## 15. Protocole expérimental multi-marché — Batch 18.5
 
@@ -292,8 +313,7 @@ Le provider refuse avant appel LLM un manifeste v3 dont modèle, prompt, protoco
 capacité/bornes tools ou phase active ne correspondent pas au runtime. Le runner refuse avant le
 premier appel Agent un univers typé différent du manifeste.
 
-`experiment_manifest=None` reste valide pour un run PAPER ordinaire. Aucune migration SQL n'est
-requise : l'identité v3 reste imbriquée dans le JSON déjà persisté de l'`AgentInput`.
+`experiment_manifest=None` reste valide pour un run PAPER ordinaire.
 
 ## 16. Compatibilité
 
@@ -316,7 +336,42 @@ sont pas transformées en validation.
 Le Batch 18.5 versionne ce comportement existant ; il ne constitue pas une nouvelle campagne
 Luna/Sol et ne change aucune règle de sélection, Risk ou Broker.
 
-## 18. LIVE
+## 18. Recovery/restart durable PAPER — Batch 18.6 proposé
+
+Le recovery ne rejoue **aucune** décision historique. La frontière durable devient :
+
+```text
+checkpoint ledger mémoire
+-> cycle Agent/Risk/Broker
+-> résultat FAILED : rollback checkpoint, puis audit du failure
+-> résultat COMPLETED : audit graph + current_portfolio_payload dans une transaction
+-> commit PostgreSQL
+-> état mémoire conservé
+```
+
+Si l'écriture durable échoue ou si un replay idempotent n'insère aucun nouveau cycle, le checkpoint
+mémoire est restauré. Ainsi, une mutation Broker/funding non commitée ne survit pas comme état
+runtime.
+
+Au démarrage :
+
+```text
+latest paper_run compatible
+-> current_portfolio_payload (v1)
+   ou migration prudente depuis le dernier cycle COMPLETED legacy
+-> validation PortfolioState + univers
+-> nouveau paper_run lié par resumed_from_paper_run_id
+-> restore PaperPortfolioLedger
+```
+
+Fail-closed : univers différent, snapshot invalide, run legacy sans état reconstructible ou run
+legacy terminant par un cycle `FAILED` ambigu. Aucun fill, intent ou appel LLM historique n'est
+réémis.
+
+Le patch conserve `paper-experiment-v1/v2/v3`, `experiment_manifest=None`, `agent-strategy-v4`, les
+règles Risk et le Broker PAPER existants.
+
+## 19. LIVE
 
 LIVE reste hors périmètre. Il nécessitera un batch séparé avec adaptateur privé, permissions
 minimales sans retrait, idempotence, réconciliation, recovery et activation explicite.

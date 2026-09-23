@@ -54,19 +54,25 @@ class PaperPortfolioLedger:
     ) -> None:
         self._clock = clock or SystemClock()
         self._portfolio_state_id_factory = portfolio_state_id_factory
-        self._balances = {
-            balance.asset: balance.available for balance in initial_state.balances
-        }
-        self._positions = {
+        self.restore(initial_state)
+
+    def restore(self, state: PortfolioState) -> None:
+        """Atomically replace the process-local ledger from one validated durable snapshot."""
+
+        balances = {balance.asset: balance.available for balance in state.balances}
+        positions = {
             position.asset: _PositionAmount(
                 quantity=position.quantity,
                 available=position.available,
             )
-            for position in initial_state.positions
+            for position in state.positions
         }
-        self._derivative_positions = {
-            position.symbol: position for position in initial_state.derivative_positions
+        derivative_positions = {
+            position.symbol: position for position in state.derivative_positions
         }
+        self._balances = balances
+        self._positions = positions
+        self._derivative_positions = derivative_positions
 
     def snapshot(self, *, as_of: datetime | None = None) -> PortfolioState:
         """Return an immutable canonical snapshot with deterministic ordering."""

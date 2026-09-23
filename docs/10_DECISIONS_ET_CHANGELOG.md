@@ -9,16 +9,21 @@ Un seul Agent stratégique, PAPER d'abord, Risk autorité finale, aucun LLM dire
 SPOT sans short/levier, Derivatives avec protections déterministes, audit durable, no-look-ahead,
 backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE séparé.
 
-Commit d’intégration code du Batch 18.5 :
+HEAD GitHub vérifié au démarrage du Batch 18.6 :
+
+```text
+70457125c5a238fe9b798463081c8769d8879d5e
+docs: record batch 18.5 integration
+```
+
+Dernier commit code intégré :
 
 ```text
 84548d23efda0b0a8e2c1350bacc830c1de34140
 feat: version multi-market experiment protocol
 ```
 
-Base historique auditée au démarrage du Batch 18.5 : `5cc2e289...`, avec `4042e0b...` comme dernier
-commit code validé avant ce batch. Le HEAD GitHub réel peut être ultérieur après la synchronisation
-documentaire de clôture et doit être relevé à chaque reprise.
+Le Batch 18.6 ci-dessous est un **patch proposé non intégré**.
 
 ## Statut du Batch 18.1
 
@@ -180,6 +185,82 @@ n'est nécessaire.
 **INTÉGRÉE.** `experiment_manifest=None` reste valide. La v3 est opt-in pour les campagnes qui ont
 besoin d'une identité contrôlée complète.
 
+## Décisions Batch 18.6 — proposées, non intégrées
+
+### ADR-156 — Conserver un nouveau `paper_run_id` par lifetime backend et relier les reprises
+
+**PROPOSÉE.** Le recovery ne réouvre pas une row historique. Le nouveau run porte
+`resumed_from_paper_run_id` vers le run parent. Cela préserve l'isolation analytique historique et
+rend la continuité runtime explicite.
+
+Si le parent était resté ouvert après crash, son `ended_at` est renseigné lors du handoff. Une
+contrainte unique sur `resumed_from_paper_run_id` interdit deux successeurs directs du même run.
+
+### ADR-157 — Persister l'état initial et courant du ledger dans `paper_runs`
+
+**PROPOSÉE.** La migration `0005_paper_run_recovery` ajoute :
+
+- `resumed_from_paper_run_id` ;
+- `recovery_version` ;
+- `initial_portfolio_payload` ;
+- `current_portfolio_payload`.
+
+Les nouveaux runs utilisent `paper-ledger-recovery-v1`. Le snapshot courant contient le
+`PortfolioState` canonique complet : balances, inventaire SPOT et positions PERPETUAL avec marge,
+P&L, funding et timestamps correspondants.
+
+### ADR-158 — Faire avancer le snapshot courant dans la même transaction que le cycle
+
+**PROPOSÉE.** `SqlAlchemyCycleAuditRepository` met à jour `current_portfolio_payload` uniquement
+pour un cycle `COMPLETED`, dans la transaction qui persiste le graphe audit.
+
+Pour un cycle exécuté, la source est `portfolio_state_after`. Pour un cycle sans exécution, la
+source est `AgentInput.portfolio_state`, qui inclut les éventuels mark/funding causaux acquis avant
+la décision.
+
+### ADR-159 — Un cycle `FAILED` n'est pas un commit de ledger
+
+**PROPOSÉE.** `AuditedTradingCycleRunner` capture un checkpoint du ledger avant le cycle. Un
+résultat `FAILED` restaure ce checkpoint avant d'écrire le failure durable.
+
+Cela évite qu'un mark/funding ou une mutation partielle non représentée par un état durable devienne
+silencieusement la nouvelle source de vérité.
+
+### ADR-160 — Rollback mémoire si l'audit durable échoue ou n'insère rien
+
+**PROPOSÉE.** Si l'écriture PostgreSQL échoue après une mutation PAPER, le checkpoint est restauré
+et le runner reste fail-closed. Si `record()` retourne `False` pour un replay exact idempotent, le
+checkpoint est également restauré afin de ne pas doubler l'exposition mémoire.
+
+### ADR-161 — Reprendre depuis le snapshot, jamais depuis un replay de décisions/fills
+
+**PROPOSÉE.** Au restart, le runtime restaure le `PaperPortfolioLedger` depuis
+`current_portfolio_payload`. Il ne relance ni `MarketSelection`, ni LLM, ni Risk, ni Broker et ne
+réapplique aucun `Fill`.
+
+Cette règle empêche toute régénération historique, look-ahead ou double traitement.
+
+### ADR-162 — Migrer les runs legacy uniquement lorsqu'ils sont non ambigus
+
+**PROPOSÉE.** Pour un run antérieur à `paper-ledger-recovery-v1`, le dernier cycle `COMPLETED`
+peut fournir un snapshot terminal durable. En revanche, un run legacy terminant par un cycle
+`FAILED`, un payload invalide ou un état manquant provoque un refus fail-closed.
+
+Aucune reconstruction approximative n'est autorisée.
+
+### ADR-163 — Refuser une reprise incompatible avec l'univers courant
+
+**PROPOSÉE.** Le recovery exige le même `execution_universe`. Les balances de règlement, actifs
+SPOT détenus et symboles PERPETUAL sont validés contre la configuration. Une incohérence bloque le
+démarrage au lieu de créer un ledger partiellement plausible.
+
+### ADR-164 — Faire suivre à l'analytics la lignée de recovery explicite
+
+**PROPOSÉE.** `paper_analytics_for_run()` remonte `resumed_from_paper_run_id` et rejoue les cycles
+des runs parents avant ceux du run demandé. Les faits ne changent pas de propriétaire et aucun
+cycle n'est copié ; la lecture devient seulement chain-aware. Cela conserve P&L, frais, funding,
+drawdown et compteurs cumulés après restart tout en gardant un `paper_run_id` distinct par session.
+
 ## Changelog — 2026-09-22 — Batch 18.2 intégré
 
 Audit de départ :
@@ -190,15 +271,9 @@ Audit de départ :
 - modèle `paper_runs.market_type/symbol` confirmé insuffisant pour un run multi-marché honnête ;
 - séparation research/execution du Batch 18.1 confirmée et conservée.
 
-Implémentation intégrée :
-
-- contrats de sélection et univers typé ;
-- deux phases du même Agent ;
-- routeur d'exécution causal ;
-- configuration multi-marché ;
-- migration/persistance/API ;
-- analytics multi-actifs causal ;
-- tests de fail-closed et compatibilité.
+Implémentation intégrée : contrats de sélection et univers typé, deux phases du même Agent, routeur
+d'exécution causal, configuration multi-marché, migration/persistance/API, analytics multi-actifs
+causal et tests de fail-closed/compatibilité.
 
 Validation locale confirmée avant intégration :
 
@@ -210,30 +285,14 @@ Alembic 0003_agent_tool_traces -> 0004_multi_market_selection sur PostgreSQL : O
 git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 ```
 
-Les deux warnings de dépendances Starlette/AnyIO sont non bloquants et ne constituent pas un
-échec du batch.
-
 ## Changelog — 2026-09-23 — Batch 18.3 intégré
 
-Validation comportementale réelle :
+Validation comportementale réelle : cross-symbol SPOT, univers mixte SPOT/PERPETUAL, research des
+deux familles, plusieurs cycles SPOT `COMPLETED / HOLD` et branche PERPETUAL singleton jusqu'à
+Risk. Le défaut de `marginSchedules` imbriqués a été corrigé au commit
+`4042e0b0e6394de788009229e3dae5924cd732d7`.
 
-- cross-symbol SPOT confirmé avec sélection d'un symbole différent du bootstrap ;
-- univers mixte SPOT/PERPETUAL confirmé avec projection historique `NULL/NULL` dans `paper_runs` ;
-- research de `PERPETUAL:ETH/USD` et `SPOT:BTC/USD` confirmé dans un même cycle ;
-- plusieurs cycles mixtes sélectionnant SPOT ont terminé `COMPLETED / HOLD` ;
-- branche `PERPETUAL:ETH/USD` validée en singleton jusqu'au `MarketState`, à la décision `HOLD`
-  puis à `Risk=ALLOW/HOLD_NO_EXECUTION` ;
-- les snapshots de recherche n'ont pas été promus en snapshots d'exécution.
-
-Défaut découvert pendant le smoke :
-
-- Kraken renvoie actuellement des `marginSchedules` imbriqués par région/profil ;
-- l'ancien parser interprétait un conteneur comme une ligne de marge et échouait sur
-  `initialMargin is invalid` ;
-- correctif intégré au commit `4042e0b0e6394de788009229e3dae5924cd732d7` ;
-- après correctif, 296 instruments publics Derivatives ont été parsés lors du diagnostic réel.
-
-Validation locale opérateur après correctif :
+Validation locale opérateur :
 
 ```text
 27 tests Kraken Derivatives ciblés : passed
@@ -243,22 +302,12 @@ mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
 git diff --check : aucune erreur, uniquement warnings LF -> CRLF avant commit
 ```
 
-Observations non transformées en garanties :
-
-- aucune sélection PERPETUAL spontanée depuis l'univers mixte n'a été observée ;
-- aucun fill réel n'a été produit pendant les smokes ;
-- un timeout SPOT au stage `MARKET` a été observé une fois puis non reproduit sur plusieurs cycles ;
-- un `LLMTransportError` au stage `MARKET_SELECTION` a été observé isolément.
-
 ## Changelog — 2026-09-23 — Batch 18.5 intégré
 
 Audit confirmé : v2 versionnait modèle, prompt, univers symbolique, Risk, coûts, analytics et
-source, mais pas l'univers typé ni l'environnement réel de sélection/tools. Le provider vérifiait
-modèle/prompt/agressivité sans contrôler ces nouveaux facteurs actifs.
-
-Le Batch 18.5 ajoute v3, l'identité tools dérivée des définitions effectives, les bornes runtime,
-les contrôles provider/runner et les tests de compatibilité historique, sans modifier le prompt
-stratégique, Risk, Broker ni le schéma PostgreSQL.
+source, mais pas l'univers typé ni l'environnement réel de sélection/tools. Le Batch 18.5 ajoute
+v3, l'identité tools dérivée des définitions effectives, les bornes runtime et les contrôles
+provider/runner sans modifier le prompt stratégique, Risk, Broker ni le schéma PostgreSQL.
 
 Validation locale opérateur avant intégration :
 
@@ -271,12 +320,40 @@ git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 ```
 
 Intégration confirmée sur `main` au commit
-`84548d23efda0b0a8e2c1350bacc830c1de34140`
-(`feat: version multi-market experiment protocol`).
+`84548d23efda0b0a8e2c1350bacc830c1de34140`.
 
-## À décider après 18.5
+## Changelog — 2026-09-23 — Batch 18.6 patch proposé
 
-- recovery durable du ledger multi-actifs ;
+Audit de départ : GitHub `main = 70457125c5a238fe9b798463081c8769d8879d5e`, commit documentaire
+18.5 ; dernier commit code `84548d23...`.
+
+Constats :
+
+- confirmé : cycle/audit/fills et snapshots sont persistés ;
+- confirmé : le ledger et le Broker partagent un état process-local canonique ;
+- confirmé : un restart recrée actuellement capital initial + nouveau run ;
+- confirmé : l'idempotence du graphe de cycle existe par `cycle_id + digest` ;
+- manquant : snapshot courant durable du ledger et handoff de restart ;
+- manquant : rollback mémoire si mutation PAPER puis panne d'audit ;
+- à décider puis retenu dans le patch : nouveau run lié plutôt que réouverture du même run ;
+- obsolète après patch proposé : « restart => ledger PAPER frais ».
+
+Fichiers code proposés : persistence models/runs/repository/audit, ledger, composition, migration
+`0005_paper_run_recovery` et tests ciblés.
+
+Validation réellement exécutée par ChatGPT :
+
+```text
+python -m py_compile fichiers Python modifiés : OK
+contrôle lignes Python > 100 caractères : OK
+smoke PortfolioState JSON -> validation recovery -> PaperPortfolioLedger.restore : OK
+```
+
+La suite pytest complète, ruff, mypy, Alembic PostgreSQL et `git diff --check` restent à exécuter
+localement avant toute intégration.
+
+## À décider après 18.6
+
 - robustesse/observabilité des erreurs réseau/LLM après mesure ;
 - enrichissement research mesuré ;
 - campagnes Luna/Sol multi-marchés sous protocole v3 ;

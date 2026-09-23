@@ -27,6 +27,18 @@ class PaperRunRecord(Base):
     execution_universe_payload: Mapped[list[dict[str, object]]] = mapped_column(
         JsonType, nullable=False
     )
+    # Batch 18.6 keeps one run per backend lifetime, but records an explicit predecessor and the
+    # exact starting ledger snapshot so restart recovery never depends on replaying Agent output.
+    resumed_from_paper_run_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("paper_runs.paper_run_id", ondelete="RESTRICT"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    recovery_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    initial_portfolio_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
+    current_portfolio_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
 
     cycles: Mapped[list["CycleRecord"]] = relationship(back_populates="paper_run")
 

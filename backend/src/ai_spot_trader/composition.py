@@ -96,7 +96,7 @@ def _derivatives_source(
 
 
 def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
-    """Compose one canonical PAPER runtime with Agent-selected SPOT/PERPETUAL execution."""
+    """Compose one canonical PAPER runtime with durable restart recovery."""
 
     run = PaperRunConfiguration.from_settings(settings)
     clock = SystemClock()
@@ -105,11 +105,6 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
     audit_repository = SqlAlchemyCycleAuditRepository(database.sessions)
     audit_reader = SqlAlchemyCycleAuditQueryService(database.sessions)
     analytics_reader = SqlAlchemyPaperAnalyticsQueryService(database.sessions)
-    paper_run_lifecycle = SqlAlchemyPaperRunLifecycle(
-        database.sessions,
-        execution_universe=run.executable_markets,
-        clock=clock,
-    )
     paper_run_reader = SqlAlchemyPaperRunQueryService(database.sessions)
 
     initial_portfolio = PortfolioState(
@@ -123,6 +118,13 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         ),
     )
     portfolio = PaperPortfolioLedger(initial_state=initial_portfolio, clock=clock)
+    paper_run_lifecycle = SqlAlchemyPaperRunLifecycle(
+        database.sessions,
+        execution_universe=run.executable_markets,
+        initial_portfolio=initial_portfolio,
+        portfolio_sink=portfolio,
+        clock=clock,
+    )
 
     # Research sources are distinct from execution sources. In particular, the research
     # Derivatives source has no market_sink and can never mark positions or accrue funding.
@@ -234,6 +236,7 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
     audited_runner = AuditedTradingCycleRunner(
         delegate=cycle_runner,
         audit_writer=run_bound_writer,
+        portfolio=portfolio,
     )
     trading_engine = TradingEngine(
         runner=cast(TradingCycleRunner, audited_runner),

@@ -38,7 +38,7 @@ class RunScopedPaperAnalyticsReader(PaperAnalyticsReader, Protocol):
 
 
 class SqlAlchemyPaperAnalyticsQueryService:
-    """Replay analytics for one durable PAPER run at a time."""
+    """Replay analytics for one PAPER run and its explicit recovery ancestry."""
 
     def __init__(
         self,
@@ -73,23 +73,27 @@ class SqlAlchemyPaperAnalyticsQueryService:
     async def paper_analytics_for_run(self, paper_run_id: UUID) -> PaperAnalyticsReport:
         try:
             async with self._sessions() as session:
-                if await session.get(PaperRunRecord, paper_run_id) is None:
+                run = await session.get(PaperRunRecord, paper_run_id)
+                if run is None:
                     raise PaperRunNotFoundError(
                         f"paper run {paper_run_id} does not exist"
                     )
-                statement = (
-                    select(CycleRecord)
-                    .where(CycleRecord.paper_run_id == paper_run_id)
-                    .options(
-                        selectinload(CycleRecord.decision),
-                        selectinload(CycleRecord.risk_assessment),
-                        selectinload(CycleRecord.execution_intent).selectinload(
-                            ExecutionIntentRecord.fills
-                        ),
+                lineage = await _paper_run_lineage(session, run)
+                records: list[CycleRecord] = []
+                for run_id in lineage:
+                    statement = (
+                        select(CycleRecord)
+                        .where(CycleRecord.paper_run_id == run_id)
+                        .options(
+                            selectinload(CycleRecord.decision),
+                            selectinload(CycleRecord.risk_assessment),
+                            selectinload(CycleRecord.execution_intent).selectinload(
+                                ExecutionIntentRecord.fills
+                            ),
+                        )
+                        .order_by(CycleRecord.recorded_at.asc(), CycleRecord.cycle_id.asc())
                     )
-                    .order_by(CycleRecord.recorded_at.asc(), CycleRecord.cycle_id.asc())
-                )
-                records = (await session.scalars(statement)).all()
+                    records.extend((await session.scalars(statement)).all())
                 facts = tuple(_fact(record) for record in records)
                 try:
                     return build_paper_analytics_report(facts)
@@ -99,15 +103,44 @@ class SqlAlchemyPaperAnalyticsQueryService:
             raise AuditStoreUnavailableError("audit store unavailable") from exc
 
 
+async def _paper_run_lineage(
+    session: AsyncSession,
+    run: PaperRunRecord,
+) -> tuple[UUID, ...]:
+    """Return explicit recovery ancestry from oldest ancestor to requested run."""
+
+    reverse: list[UUID] = []
+    seen: set[UUID] = set()
+    current = run
+    while True:
+        run_id = current.paper_run_id
+        if run_id in seen:
+            raise AuditDataIntegrityError("PAPER run recovery lineage contains a cycle")
+        seen.add(run_id)
+        reverse.append(run_id)
+        parent_id = current.resumed_from_paper_run_id
+        if parent_id is None:
+            break
+        parent = await session.get(PaperRunRecord, parent_id)
+        if parent is None:
+            raise AuditDataIntegrityError("PAPER run recovery lineage references a missing parent")
+        current = parent
+    return tuple(reversed(reverse))
+
+
 def _fact(record: CycleRecord) -> PaperAnalyticsCycleFact:
     decision = record.decision
     risk = record.risk_assessment
     intent = record.execution_intent
-    fills = () if intent is None else tuple(
-        dict(fill.payload)
-        for fill in sorted(
-            intent.fills,
-            key=lambda item: (item.filled_at, str(item.fill_id)),
+    fills = (
+        ()
+        if intent is None
+        else tuple(
+            dict(fill.payload)
+            for fill in sorted(
+                intent.fills,
+                key=lambda item: (item.filled_at, str(item.fill_id)),
+            )
         )
     )
     return PaperAnalyticsCycleFact(

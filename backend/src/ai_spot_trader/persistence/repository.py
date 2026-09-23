@@ -16,7 +16,7 @@ from ai_spot_trader.persistence.models import (
     RiskAssessmentRecord,
 )
 from ai_spot_trader.persistence.runs import PaperRunClosedError, PaperRunNotFoundError
-from ai_spot_trader.trading.engine import TradingCycleResult
+from ai_spot_trader.trading.engine import TradingCycleResult, TradingCycleStatus
 
 
 class CycleAuditConflictError(RuntimeError):
@@ -48,6 +48,7 @@ class SqlAlchemyCycleAuditRepository:
     async def record(self, result: TradingCycleResult, *, paper_run_id: UUID | None = None) -> bool:
         digest = _result_digest(result, paper_run_id=paper_run_id)
         async with self._sessions() as session, session.begin():
+            run: PaperRunRecord | None = None
             if paper_run_id is not None:
                 run = await session.get(PaperRunRecord, paper_run_id)
                 if run is None:
@@ -62,6 +63,13 @@ class SqlAlchemyCycleAuditRepository:
                     f"cycle_id {result.cycle_id} already exists with different content"
                 )
             self._add_graph(session, result=result, digest=digest, paper_run_id=paper_run_id)
+            if run is not None and result.status is TradingCycleStatus.COMPLETED:
+                committed = _committed_portfolio_payload(result)
+                if committed is None:
+                    raise CycleAuditConflictError(
+                        "completed cycle has no durable committed portfolio snapshot"
+                    )
+                run.current_portfolio_payload = committed
         return True
 
     async def record_for_run(self, paper_run_id: UUID, result: TradingCycleResult) -> bool:
@@ -119,44 +127,60 @@ class SqlAlchemyCycleAuditRepository:
 
         if result.decision is not None:
             decision = result.decision
-            session.add(DecisionRecord(
-                decision_id=decision.decision_id,
-                cycle_id=decision.cycle_id,
-                created_at=decision.created_at,
-                action=decision.action.value,
-                symbol=decision.symbol,
-                payload=decision.model_dump(mode="json"),
-            ))
+            session.add(
+                DecisionRecord(
+                    decision_id=decision.decision_id,
+                    cycle_id=decision.cycle_id,
+                    created_at=decision.created_at,
+                    action=decision.action.value,
+                    symbol=decision.symbol,
+                    payload=decision.model_dump(mode="json"),
+                )
+            )
         if result.risk_assessment is not None:
             assessment = result.risk_assessment
-            session.add(RiskAssessmentRecord(
-                risk_assessment_id=assessment.risk_assessment_id,
-                cycle_id=assessment.cycle_id,
-                decision_id=assessment.decision_id,
-                assessed_at=assessment.assessed_at,
-                status=assessment.status.value,
-                payload=assessment.model_dump(mode="json"),
-            ))
+            session.add(
+                RiskAssessmentRecord(
+                    risk_assessment_id=assessment.risk_assessment_id,
+                    cycle_id=assessment.cycle_id,
+                    decision_id=assessment.decision_id,
+                    assessed_at=assessment.assessed_at,
+                    status=assessment.status.value,
+                    payload=assessment.model_dump(mode="json"),
+                )
+            )
         if result.execution_intent is not None:
             intent = result.execution_intent
-            session.add(ExecutionIntentRecord(
-                execution_id=intent.execution_id,
-                cycle_id=intent.cycle_id,
-                decision_id=intent.decision_id,
-                risk_assessment_id=intent.risk_assessment_id,
-                created_at=intent.created_at,
-                action=intent.action.value,
-                symbol=intent.symbol,
-                payload=intent.model_dump(mode="json"),
-            ))
+            session.add(
+                ExecutionIntentRecord(
+                    execution_id=intent.execution_id,
+                    cycle_id=intent.cycle_id,
+                    decision_id=intent.decision_id,
+                    risk_assessment_id=intent.risk_assessment_id,
+                    created_at=intent.created_at,
+                    action=intent.action.value,
+                    symbol=intent.symbol,
+                    payload=intent.model_dump(mode="json"),
+                )
+            )
         for fill in result.fills:
-            session.add(FillRecord(
-                fill_id=fill.fill_id,
-                execution_id=fill.execution_id,
-                market_state_id=fill.market_state_id,
-                filled_at=fill.filled_at,
-                payload=fill.model_dump(mode="json"),
-            ))
+            session.add(
+                FillRecord(
+                    fill_id=fill.fill_id,
+                    execution_id=fill.execution_id,
+                    market_state_id=fill.market_state_id,
+                    filled_at=fill.filled_at,
+                    payload=fill.model_dump(mode="json"),
+                )
+            )
+
+
+def _committed_portfolio_payload(result: TradingCycleResult) -> dict[str, object] | None:
+    if result.portfolio_state_after is not None:
+        return _model_payload(result.portfolio_state_after)
+    if result.agent_input is not None:
+        return _model_payload(result.agent_input.portfolio_state)
+    return None
 
 
 def _model_payload(model: Any | None) -> dict[str, object] | None:
@@ -179,7 +203,8 @@ def _result_digest(result: TradingCycleResult, *, paper_run_id: UUID | None) -> 
                 "error_type": result.failure.error_type,
                 "timed_out": result.failure.timed_out,
             }
-            if result.failure is not None else None
+            if result.failure is not None
+            else None
         ),
         "market_selection_input": _model_payload(result.market_selection_input),
         "market_selection": _model_payload(result.market_selection),

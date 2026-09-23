@@ -1,7 +1,8 @@
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
-from ai_spot_trader.trading.engine import TradingCycleResult
+from ai_spot_trader.domain.models import PortfolioState
+from ai_spot_trader.trading.engine import TradingCycleResult, TradingCycleStatus
 
 
 @runtime_checkable
@@ -29,6 +30,12 @@ class RunScopedCycleAuditWriter(Protocol):
 class CurrentPaperRunProvider(Protocol):
     @property
     def current_run_id(self) -> UUID | None: ...
+
+
+class MutablePaperPortfolio(Protocol):
+    def snapshot(self) -> PortfolioState: ...
+
+    def restore(self, state: PortfolioState) -> None: ...
 
 
 class RunBoundCycleAuditWriter:
@@ -71,7 +78,7 @@ class CycleAuditUnavailableError(RuntimeError):
 
 
 class AuditedTradingCycleRunner:
-    """Preflight audit availability, persist every result, and fail closed on audit errors."""
+    """Persist each cycle atomically with respect to the process-local PAPER ledger."""
 
     def __init__(
         self,
@@ -79,6 +86,7 @@ class AuditedTradingCycleRunner:
         delegate: CycleRunner,
         audit_writer: CycleAuditWriter | RunScopedCycleAuditWriter,
         paper_run_id: UUID | None = None,
+        portfolio: MutablePaperPortfolio | None = None,
     ) -> None:
         if paper_run_id is not None and not isinstance(
             audit_writer, RunScopedCycleAuditWriter
@@ -89,6 +97,7 @@ class AuditedTradingCycleRunner:
         self._delegate = delegate
         self._audit_writer = audit_writer
         self._paper_run_id = paper_run_id
+        self._portfolio = portfolio
         self._audit_failed = False
 
     @property
@@ -107,13 +116,35 @@ class AuditedTradingCycleRunner:
             self._audit_failed = True
             raise
 
-        result = await self._delegate.run_cycle()
+        checkpoint = self._portfolio.snapshot() if self._portfolio is not None else None
         try:
-            await self._record(result)
+            result = await self._delegate.run_cycle()
         except Exception:
+            self._restore(checkpoint)
             self._audit_failed = True
             raise
+
+        # A FAILED cycle is audit evidence, not a committed ledger transition. This also rolls
+        # back derivative mark/funding side effects produced before a later Agent/Risk failure.
+        if result.status is TradingCycleStatus.FAILED:
+            self._restore(checkpoint)
+
+        try:
+            inserted = await self._record(result)
+        except Exception:
+            self._restore(checkpoint)
+            self._audit_failed = True
+            raise
+        if not inserted:
+            # Exact audit replay is idempotent. It must not apply the same in-memory transition
+            # twice if a deterministic test or caller reuses a cycle identity.
+            self._restore(checkpoint)
         return result
+
+    def _restore(self, checkpoint: PortfolioState | None) -> None:
+        portfolio = self._portfolio
+        if portfolio is not None and checkpoint is not None:
+            portfolio.restore(checkpoint)
 
     async def _ensure_available(self) -> None:
         writer = self._audit_writer
@@ -124,11 +155,10 @@ class AuditedTradingCycleRunner:
         assert isinstance(writer, RunScopedCycleAuditWriter)
         await writer.ensure_available_for_run(self._paper_run_id)
 
-    async def _record(self, result: TradingCycleResult) -> None:
+    async def _record(self, result: TradingCycleResult) -> bool:
         writer = self._audit_writer
         if self._paper_run_id is None:
             assert isinstance(writer, CycleAuditWriter)
-            await writer.record(result)
-            return
+            return await writer.record(result)
         assert isinstance(writer, RunScopedCycleAuditWriter)
-        await writer.record_for_run(self._paper_run_id, result)
+        return await writer.record_for_run(self._paper_run_id, result)

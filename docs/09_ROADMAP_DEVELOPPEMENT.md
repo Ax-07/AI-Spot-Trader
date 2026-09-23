@@ -20,16 +20,19 @@ Un batch est **intégré** uniquement après validation locale, commit et push c
 - Batch 18.3 : validation comportementale PAPER multi-marchés/cross-symbol et correction du parsing des `marginSchedules` Kraken Derivatives imbriqués.
 - Batch 18.5 : protocole expérimental `paper-experiment-v3` pour versionner univers typé, sélection et capacité tools sans modifier la stratégie.
 
-Commit d’intégration code du Batch 18.5 :
+HEAD GitHub vérifié au démarrage du Batch 18.6 :
+
+```text
+70457125c5a238fe9b798463081c8769d8879d5e
+docs: record batch 18.5 integration
+```
+
+Dernier commit code intégré :
 
 ```text
 84548d23efda0b0a8e2c1350bacc830c1de34140
 feat: version multi-market experiment protocol
 ```
-
-Base historique auditée au démarrage du Batch 18.5 : `5cc2e289...`, avec `4042e0b...` comme dernier
-commit code validé avant ce batch. Le HEAD GitHub réel peut être ultérieur après la synchronisation
-documentaire de clôture et doit être relevé à chaque reprise.
 
 ## Batch 18.2 — intégré
 
@@ -156,11 +159,71 @@ commit : 84548d23efda0b0a8e2c1350bacc830c1de34140
 
 Le commit a été poussé sur `origin/main` et le working tree opérateur était propre après push.
 
-## Prochains candidats après 18.5
+## Batch 18.6 — patch proposé, non intégré
 
-Aucune priorité architecturale n'est décidée ici. Candidats :
+### Objectif
 
-- recovery/restart durable du ledger PAPER multi-actifs ;
+Rendre le recovery/restart du ledger PAPER multi-actifs déterministe et durable sans rejouer une
+décision Agent, un `ExecutionIntent` ou un `Fill` historique.
+
+### Audit confirmé
+
+Avant 18.6 :
+
+- `AppRuntime.initialize()` créait systématiquement un run durable neuf ;
+- `build_paper_runtime()` créait systématiquement un `PaperPortfolioLedger` depuis le capital
+  initial configuré ;
+- les cycles, décisions, risk assessments, intents, fills et snapshots de portefeuille étaient
+  durables ;
+- le ledger courant restait process-local ;
+- le Broker pouvait muter le ledger avant que `AuditedTradingCycleRunner` ne committe le graphe ;
+- aucun recovery canonique n'était câblé au restart.
+
+### Design proposé
+
+- conserver un nouveau `paper_run_id` par lifetime backend ;
+- relier le nouveau run avec `resumed_from_paper_run_id` ;
+- persister `initial_portfolio_payload` et `current_portfolio_payload` ;
+- identité de recovery : `paper-ledger-recovery-v1` ;
+- migration `0005_paper_run_recovery` ;
+- mise à jour de `current_portfolio_payload` dans la même transaction que le cycle `COMPLETED` ;
+- checkpoint mémoire avant chaque cycle audité ;
+- rollback du ledger pour les cycles `FAILED`, les erreurs de persistance et les replays
+  idempotents ;
+- restart depuis `current_portfolio_payload` sans replay historique ;
+- analytics du run courant rejouée sur la lignée `resumed_from_paper_run_id` pour conserver les
+  métriques cumulées à travers les restarts ;
+- validation de l'univers, des balances, de l'inventaire SPOT et des positions PERPETUAL ;
+- migration legacy uniquement lorsque l'état terminal est non ambigu ; sinon fail-closed.
+
+### État restauré
+
+- cash disponible ;
+- inventaire SPOT ;
+- positions PERPETUAL LONG/SHORT ;
+- quantité, entry price, mark, notional ;
+- realized/unrealized P&L ;
+- levier, marge et maintenance ;
+- cumulative funding et `funding_updated_at` ;
+- liquidation price portée par le dernier snapshot durable.
+
+Les coûts/frais déjà réalisés restent reflétés dans le cash et auditables dans les fills historiques.
+
+### Validation ChatGPT réellement exécutée
+
+```text
+python -m py_compile fichiers Python modifiés : OK
+contrôle lignes Python > 100 caractères : OK
+smoke PortfolioState JSON -> validation recovery -> PaperPortfolioLedger.restore : OK
+```
+
+Non exécuté ici : suite pytest du repository, ruff, mypy, migration PostgreSQL et `git diff --check`
+du checkout opérateur. Ces validations restent obligatoires avant intégration.
+
+## Prochains candidats après 18.6
+
+Une fois 18.6 validé et intégré localement :
+
 - robustesse réseau et observabilité bornée des erreurs transitoires Market/LLM ;
 - enrichissement mesuré des données de recherche : order book, trades, funding historique, news ;
 - campagnes Luna/Sol sur univers multi-marché sous `paper-experiment-v3` ;
