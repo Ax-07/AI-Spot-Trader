@@ -6,13 +6,13 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub vérifié au démarrage du Batch 18.8 : `c0ae1cc1f424984fb1d50b19bec569ff979c7b30`
-  (`docs: record batch 18.7 integration`).
+- HEAD GitHub vérifié après intégration du Batch 18.8 : `36e6f46dd7c427d40426c98ee57f30ed4fd466c2`
+  (`docs: record batch 18.8 behavioral validation`).
 - Dernier commit code intégré : `0886216324106d941c3df0e30f074e24dbe1d33a`
   (`feat: add bounded network retry resilience`).
 - Batch 18.6 : **intégré**.
 - Batch 18.7 : **intégré**.
-- Batch 18.8 : **validation comportementale locale terminée ; aucun changement code requis**.
+- Batch 18.8 : **intégré** — validation comportementale réelle, sans changement code requis.
 - Prompt stratégique : `agent-strategy-v4`, inchangé.
 - Protocole expérimental : `paper-experiment-v3`, inchangé.
 - Recovery : `paper-ledger-recovery-v1`, inchangé.

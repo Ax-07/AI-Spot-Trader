@@ -25,11 +25,11 @@ Un batch est **intégré** uniquement après validation locale, commit et push c
 - Batch 18.8 : validation comportementale réelle de la résilience 18.7 et du recovery 18.6,
   sans changement code : 20/20 cycles PAPER `COMPLETED`, aucun retry naturel observé.
 
-HEAD GitHub vérifié au démarrage du Batch 18.8 :
+HEAD GitHub vérifié après intégration du Batch 18.8 :
 
 ```text
-c0ae1cc1f424984fb1d50b19bec569ff979c7b30
-docs: record batch 18.7 integration
+36e6f46dd7c427d40426c98ee57f30ed4fd466c2
+docs: record batch 18.8 behavioral validation
 ```
 
 Dernier commit code intégré :
@@ -278,7 +278,7 @@ Aucune migration PostgreSQL n'est ajoutée par ce batch. Intégration confirmée
 `0886216324106d941c3df0e30f074e24dbe1d33a`
 (`feat: add bounded network retry resilience`). Le working tree opérateur était propre après push.
 
-## Batch 18.8 — validation comportementale terminée, clôture documentaire à intégrer
+## Batch 18.8 — intégré
 
 ### Objectif
 
@@ -356,6 +356,10 @@ Dette d'observabilité repérée : `/api/v1/paper-runs` n'expose pas actuellemen
 dans `PaperRunView`. Aucun patch n'est imposé par 18.8.
 
 Aucun test automatisé n'a été rejoué pendant 18.8, le batch ne modifiant pas le code.
+
+Intégration documentaire confirmée sur `main` au commit
+`36e6f46dd7c427d40426c98ee57f30ed4fd466c2`
+(`docs: record batch 18.8 behavioral validation`).
 
 ## Prochains candidats après 18.8
 

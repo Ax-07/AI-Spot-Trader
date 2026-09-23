@@ -517,6 +517,10 @@ déjà persistés. Cette amélioration reste séparée.
 Aucun test automatisé n'a été rejoué spécifiquement pendant 18.8 puisque le batch n'a modifié aucun
 code. La suite locale 18.7 reste la validation automatisée de référence.
 
+Intégration documentaire confirmée sur `main` au commit
+`36e6f46dd7c427d40426c98ee57f30ed4fd466c2`
+(`docs: record batch 18.8 behavioral validation`).
+
 ## À décider après 18.8
 
 - réévaluer les budgets/jitter uniquement après observation réelle de retries/429/5xx/timeouts sur
