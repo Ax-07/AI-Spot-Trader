@@ -16,11 +16,11 @@ Commit d'intégration code du Batch 18.7 :
 feat: add bounded network retry resilience
 ```
 
-Base auditée au démarrage du Batch 18.6 :
+Base auditée au démarrage du Batch 18.8 :
 
 ```text
-70457125c5a238fe9b798463081c8769d8879d5e
-docs: record batch 18.5 integration
+c0ae1cc1f424984fb1d50b19bec569ff979c7b30
+docs: record batch 18.7 integration
 ```
 
 ## Statut du Batch 18.1
@@ -307,6 +307,37 @@ les clés et autres secrets ne sont pas journalisés par cette couche.
 Aucun nouveau backend métrique n'est introduit. Le couple logs + stage/type d'échec durable est la
 surface d'observabilité de 18.7 ; Prometheus/OpenTelemetry reste une décision séparée.
 
+## Décisions Batch 18.8 — validation comportementale, sans changement code
+
+### ADR-170 — Ne pas retuner les retries sans signal réel
+
+**VALIDÉE COMPORTEMENTALEMENT.** Sur 20 cycles PAPER réels, aucun retry, 429, 5xx, timeout transport
+ou échec réseau/LLM naturel n'a été observé. Cette absence ne prouve pas que les retries sont
+inutiles, mais elle ne fournit aucun signal justifiant d'augmenter les budgets, d'ajouter du jitter,
+de rendre les budgets configurables ou d'introduire un backend métrique dédié.
+
+Les politiques 18.7 restent donc inchangées.
+
+### ADR-171 — Conserver les deadlines de stage comme plafond absolu
+
+**VALIDÉE COMPORTEMENTALEMENT.** Les valeurs observées pendant la campagne
+`MARKET=20s`, `AGENT=35s`, Kraken transport `10s`, OpenAI transport `30s` ont permis 20/20 cycles
+`COMPLETED`.
+
+Elles ne permettent toutefois pas d'épuiser les budgets théoriques si chaque tentative atteint son
+timeout transport maximal. Ce comportement reste accepté : le deadline de stage demeure l'autorité
+temporelle supérieure et aucun allongement n'est décidé sans impact réel mesuré.
+
+### ADR-172 — Distinguer observabilité suffisante pour un smoke et métrique durable
+
+**VALIDÉE COMPORTEMENTALEMENT.** Les logs sanitizés ont suffi pour vérifier l'absence de retry et
+de motif de secret dans les campagnes courtes. Un retry récupéré ne devient cependant pas une
+métrique durable du cycle.
+
+Aucune migration ni télémétrie nouvelle n'est ajoutée en 18.8. L'exposition API de
+`resumed_from_paper_run_id` et `recovery_version`, déjà durables dans `PaperRunView`/PostgreSQL,
+reste une amélioration séparée à décider selon le besoin opératoire.
+
 ## Changelog — 2026-09-22 — Batch 18.2 intégré
 
 Audit de départ :
@@ -430,11 +461,67 @@ PostgreSQL n'est introduite. Intégration confirmée sur `main` au commit
 `0886216324106d941c3df0e30f074e24dbe1d33a`
 (`feat: add bounded network retry resilience`) ; le working tree opérateur était propre après push.
 
-## À décider après 18.7
+## Changelog — 2026-09-23 — Batch 18.8 validation comportementale
 
-- mesure réelle des taux de retry, 429, 5xx, timeout et erreurs réseau ;
-- ajout éventuel de jitter si une contention concurrente réelle apparaît ;
-- exposition éventuelle des budgets de retry dans `Settings` si un besoin opératoire est mesuré ;
-- backend métrique dédié (Prometheus/OpenTelemetry ou autre) seulement si justifié ;
+Base auditée : GitHub `main = c0ae1cc1f424984fb1d50b19bec569ff979c7b30`
+(`docs: record batch 18.7 integration`) ; dernier commit code `0886216324106d941c3df0e30f074e24dbe1d33a`.
+
+Validation recovery réelle :
+
+- mismatch d'univers au restart -> `PaperRunRecoveryError` fail-closed ;
+- univers parent restauré -> handoff réel avec
+  `resumed_from_paper_run_id = 9a6bea62-d0c3-425d-b0f8-99229fc5a2ed` ;
+- nouveau run `fc5c87ef-3bb6-41cf-a1de-cd4b820f2b24` ;
+- `recovery_version = paper-ledger-recovery-v1` ;
+- parent clôturé par `ended_at`.
+
+Campagne réelle multi-marché `SPOT:BTC/USD + PERPETUAL:ETH/USD` :
+
+```text
+10/10 COMPLETED, HTTP 200
+7 sélections BTC/USD SPOT
+3 sélections ETH/USD PERPETUAL
+10 HOLD
+~13,0s à ~22,1s ; moyenne ~15,6s ; médiane ~15,0s
+0 retry naturel observé
+0 doublon détecté
+0 motif de secret détecté par le scan ciblé
+```
+
+Campagne réelle mono-marché isolée `PERPETUAL:BTC/USD` :
+
+```text
+base dédiée migrée jusqu'à 0005_paper_run_recovery
+10/10 COMPLETED, HTTP 200
+10 HOLD
+~5,9s à ~10,1s ; moyenne ~7,9s ; médiane ~7,4s
+0 retry naturel observé
+0 doublon détecté
+0 motif de secret détecté par le scan ciblé
+```
+
+Les 20 décisions naturelles étant `HOLD`, aucun nouvel `ExecutionIntent`, appel Broker ou fill n'a
+été exercé. Les campagnes ne revendiquent donc pas une validation Broker réelle ; les branches de
+mutation restent couvertes par les tests déterministes 18.7/recovery.
+
+Configuration temporelle observée : `MARKET=20s`, `AGENT=35s`, Kraken transport `10s`, OpenAI
+transport `30s`. Le nominal est validé, mais les deadlines de stage peuvent couper les retries si
+les transports consomment leurs timeouts complets. Aucun changement de deadline n'est décidé.
+
+Décision : aucun patch code, aucun changement de budget, jitter, `Settings` ou backend métrique.
+Zéro retry naturel ne vaut pas preuve d'inutilité des retries.
+
+Dette d'observabilité constatée : `/api/v1/paper-runs` n'expose pas encore les champs de lineage
+déjà persistés. Cette amélioration reste séparée.
+
+Aucun test automatisé n'a été rejoué spécifiquement pendant 18.8 puisque le batch n'a modifié aucun
+code. La suite locale 18.7 reste la validation automatisée de référence.
+
+## À décider après 18.8
+
+- réévaluer les budgets/jitter uniquement après observation réelle de retries/429/5xx/timeouts sur
+  une campagne plus longue ;
+- exposer éventuellement `resumed_from_paper_run_id` et `recovery_version` dans l'API ;
+- backend métrique dédié seulement si les logs ne suffisent plus au besoin opératoire ;
 - enrichissement research mesuré et campagnes Luna/Sol multi-marchés restent séparés ;
 - multi-quote/FX, FUTURE daté et LIVE restent hors de ce batch.

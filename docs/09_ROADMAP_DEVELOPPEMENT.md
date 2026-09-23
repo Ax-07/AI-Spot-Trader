@@ -22,12 +22,14 @@ Un batch est **intégré** uniquement après validation locale, commit et push c
 - Batch 18.6 : recovery/restart durable du ledger PAPER multi-actifs, migration `0005_paper_run_recovery`, handoff de runs et rollback mémoire fail-closed.
 - Batch 18.7 : retries réseau bornés sur lectures Kraken publiques et Responses API
   pré-décision, classification d’erreurs et observabilité sanitizée sans retry des mutations.
+- Batch 18.8 : validation comportementale réelle de la résilience 18.7 et du recovery 18.6,
+  sans changement code : 20/20 cycles PAPER `COMPLETED`, aucun retry naturel observé.
 
-HEAD GitHub vérifié après intégration du Batch 18.7 :
+HEAD GitHub vérifié au démarrage du Batch 18.8 :
 
 ```text
-0886216324106d941c3df0e30f074e24dbe1d33a
-feat: add bounded network retry resilience
+c0ae1cc1f424984fb1d50b19bec569ff979c7b30
+docs: record batch 18.7 integration
 ```
 
 Dernier commit code intégré :
@@ -276,12 +278,92 @@ Aucune migration PostgreSQL n'est ajoutée par ce batch. Intégration confirmée
 `0886216324106d941c3df0e30f074e24dbe1d33a`
 (`feat: add bounded network retry resilience`). Le working tree opérateur était propre après push.
 
-## Prochains candidats après 18.7
+## Batch 18.8 — validation comportementale terminée, clôture documentaire à intégrer
 
-Aucune priorité architecturale nouvelle n'est décidée ici. Candidats :
+### Objectif
 
-- mesurer le taux réel de retries, 429, 5xx et timeouts sur plusieurs cycles PAPER avant tout
-  ajustement de budget ou ajout de jitter ;
+Mesurer la résilience réseau/LLM ajoutée en 18.7 sur des cycles PAPER réels, confirmer le recovery
+18.6 au restart et décider à partir de données réelles s'il faut modifier budgets, jitter,
+configuration ou observabilité.
+
+### Validation recovery réelle
+
+- changement d'univers entre le dernier run durable et la configuration courante :
+  `PaperRunRecoveryError`, démarrage refusé fail-closed ;
+- restauration de l'univers parent : handoff réel vers un nouveau `paper_run_id` ;
+- lignée confirmée :
+  `9a6bea62-d0c3-425d-b0f8-99229fc5a2ed`
+  -> `fc5c87ef-3bb6-41cf-a1de-cd4b820f2b24` ;
+- `recovery_version = paper-ledger-recovery-v1` sur le successeur ;
+- `ended_at` renseigné sur le parent ;
+- aucun replay de décision/intention/fill nécessaire au handoff.
+
+### Campagne multi-marché réelle
+
+Univers `SPOT:BTC/USD + PERPETUAL:ETH/USD`, modèle `gpt-5.6-luna` :
+
+```text
+10/10 cycles COMPLETED
+HTTP 200 : 10/10
+BTC/USD SPOT sélectionné : 7
+ETH/USD PERPETUAL sélectionné : 3
+décisions naturelles : 10 HOLD
+durée min/max : ~13,0s / ~22,1s
+moyenne : ~15,6s
+médiane : ~15,0s
+network_retry* observé : 0
+doublons détectés : 0
+motif de secret détecté dans le scan ciblé : 0
+```
+
+### Campagne mono-marché réelle
+
+Base PostgreSQL isolée et migrée jusqu'à `0005_paper_run_recovery`, univers
+`PERPETUAL:BTC/USD`, modèle `gpt-5.6-luna` :
+
+```text
+10/10 cycles COMPLETED
+HTTP 200 : 10/10
+décisions naturelles : 10 HOLD
+durée min/max : ~5,9s / ~10,1s
+moyenne : ~7,9s
+médiane : ~7,4s
+network_retry* observé : 0
+doublons détectés : 0
+motif de secret détecté dans le scan ciblé : 0
+```
+
+### Conclusions
+
+- aucune donnée réelle ne justifie d'augmenter les budgets 3 Kraken / 2 Responses ;
+- aucun jitter n'est justifié ;
+- aucune exposition des budgets dans `Settings` n'est justifiée ;
+- aucun backend métrique dédié n'est justifié sur cet échantillon ;
+- les logs suffisent pour une campagne courte, mais un retry récupéré n'est pas persisté comme
+  métrique durable ;
+- les deadlines observées `MARKET=20s`, `AGENT=35s`, transport Kraken `10s`, transport OpenAI
+  `30s` fonctionnent au nominal ;
+- elles ne garantissent pas l'épuisement du budget théorique lors de timeouts transport complets :
+  le deadline de stage reste volontairement l'autorité temporelle supérieure ;
+- zéro retry naturel ne prouve pas que les retries sont inutiles.
+
+Limite : les 20 décisions réelles étaient `HOLD`. Aucun nouveau `ExecutionIntent`, appel Broker ou
+fill n'a donc été exercé par ces campagnes. Les protections anti-duplication de ces branches restent
+couvertes par les tests déterministes 18.7, pas par un BUY/SELL artificiellement forcé.
+
+Dette d'observabilité repérée : `/api/v1/paper-runs` n'expose pas actuellement
+`resumed_from_paper_run_id` et `recovery_version`, bien que ces champs soient durables et présents
+dans `PaperRunView`. Aucun patch n'est imposé par 18.8.
+
+Aucun test automatisé n'a été rejoué pendant 18.8, le batch ne modifiant pas le code.
+
+## Prochains candidats après 18.8
+
+Aucune modification de la politique réseau n'est prioritaire sur la seule base de ces 20 cycles.
+Candidats séparés :
+
+- campagne PAPER plus longue pour mesurer des retries/429/5xx/timeouts naturels avant tout tuning ;
+- exposition de la lignée recovery dans l'API si le besoin opératoire est confirmé ;
 - enrichissement mesuré des données de recherche : order book, trades, funding historique, news ;
 - campagnes Luna/Sol sur univers multi-marché sous `paper-experiment-v3` ;
 - valorisation multi-quote avec FX explicite seulement si le besoin est mesuré ;
