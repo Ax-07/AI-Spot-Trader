@@ -6,49 +6,35 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub vérifié au démarrage du Batch 18.9A :
-  `2b0d227454f2bf894b075b8deef3378e2fe823b4`
-  (`docs: finalize batch 18.8 integration reference`).
-- Dernier commit code intégré : `0886216324106d941c3df0e30f074e24dbe1d33a`
-  (`feat: add bounded network retry resilience`).
+- Dernier commit code intégré 18.9A :
+  `11a04be33bf209552e6337e28318d039b775b264`
+  (`feat: add PAPER control plane`).
+- Le HEAD GitHub peut être un commit documentaire ultérieur ; au démarrage d'une nouvelle discussion,
+  comparer cette référence au HEAD réel puis inspecter l'écart.
+- Batch 18.9A : **intégré et validé**.
 - Batches 18.6, 18.7 et 18.8 : **intégrés**.
-- Batch 18.9A : **patch backend validé localement, non intégré tant que commit/push ne sont pas
-  effectués**.
 
-## État intégré avant 18.9A
+## État intégré
 
-- un seul Agent IA ; Kraken ; PAPER ; SPOT + PERPETUAL linéaire ;
+- un seul Agent IA ; Kraken ; PAPER ;
+- SPOT + PERPETUAL linéaire ;
 - sélection causale multi-marchés puis décision BUY/SELL/HOLD ;
 - Risk autorité finale ; aucun LLM/tool -> Broker/Risk ;
-- `agent-strategy-v4` historique ; `paper-experiment-v1/v2/v3` ;
+- `agent-strategy-v4` historique ; `paper-experiment-v1/v2/v3` préservés ;
+- `paper-experiment-v4` pour l'identité des Campaigns ;
 - recovery `paper-ledger-recovery-v1` ;
 - retry réseau borné ;
-- 20/20 cycles PAPER réels Batch 18.8 `COMPLETED`, tous `HOLD`.
-
-## Patch Batch 18.9A
-
-Le patch ajoute :
-
-- Control Plane backend ;
-- `Strategy` + `StrategyRevision` immuable ;
+- Control Plane backend persistant avec Strategy/StrategyRevision/Campaign ;
 - contrat Agent protégé `agent-contract-v1` séparé du prompt opérateur ;
-- digest prompt déterministe `strategy-prompt-sha256-v1` ;
-- `Campaign` persistante avec whitelist de configuration non sensible ;
-- `paper-experiment-v4` au niveau campagne, sans modifier v1/v2/v3 ;
-- couverture v4 des paramètres Risk/PERPETUAL effectifs via `configuration_digest` ;
-- migration `0006_paper_control_plane` ;
-- lien `campaign_id -> paper_run` ;
-- activation fraîche distincte de la reprise ;
-- reprise limitée à la même campagne, sans replay historique ;
-- preview du prompt via la même composition que le runtime de campagne ;
-- exposition API de `campaign_id`, `resumed_from_paper_run_id`, `recovery_version`.
+- migration PostgreSQL `0006_paper_control_plane` ;
+- lien durable `campaign_id -> paper_run` ;
+- activation fraîche et reprise explicite séparées ;
+- prompt preview canonique ;
+- exposition API du lineage recovery.
 
-Le backend peut démarrer avec son infrastructure DB sans campagne active. Le frontend 18.9B reste
-hors périmètre.
+## Validation Batch 18.9A
 
-## Validation locale 18.9A
-
-Validation opérateur confirmée le 23 septembre 2026 :
+Validation opérateur du 23 septembre 2026 :
 
 ```text
 pytest ciblé persistence : 1 passed
@@ -59,9 +45,15 @@ Alembic 0005_paper_run_recovery -> 0006_paper_control_plane sur PostgreSQL : OK
 git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 ```
 
-Les 2 warnings pytest concernent Starlette/httpx et AnyIO ; ils sont non bloquants pour 18.9A.
+Commit intégré :
+
+```text
+11a04be33bf209552e6337e28318d039b775b264
+feat: add PAPER control plane
+```
 
 ## Suite
 
-Committer et pousser 18.9A. Après intégration confirmée sur `main`, ouvrir un **nouveau
-batch/discussion 18.9B** pour le cockpit de configuration PERPETUAL.
+Ouvrir un **nouveau batch/discussion 18.9B** pour le cockpit frontend de configuration
+SPOT/PERPETUAL. Le frontend reste un cockpit : fermer ou redémarrer le frontend ne doit jamais
+arrêter le moteur backend.

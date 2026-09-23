@@ -1,19 +1,10 @@
 # 09 — Roadmap de développement
 
-## Référence
-
-Base intégrée auditée au démarrage du Batch 18.9A :
+## Référence code intégrée
 
 ```text
-2b0d227454f2bf894b075b8deef3378e2fe823b4
-docs: finalize batch 18.8 integration reference
-```
-
-Dernier code intégré :
-
-```text
-0886216324106d941c3df0e30f074e24dbe1d33a
-feat: add bounded network retry resilience
+11a04be33bf209552e6337e28318d039b775b264
+feat: add PAPER control plane
 ```
 
 ## Jalons intégrés
@@ -24,27 +15,23 @@ feat: add bounded network retry resilience
 - Batch 18.5 : `paper-experiment-v3` et identité tools/sélection ;
 - Batch 18.6 : recovery `paper-ledger-recovery-v1`, migration `0005` ;
 - Batch 18.7 : retries réseau bornés ;
-- Batch 18.8 : validation réelle recovery/réseau, 20/20 cycles `COMPLETED`, tous `HOLD`.
+- Batch 18.8 : validation réelle recovery/réseau, 20/20 cycles `COMPLETED`, tous `HOLD` ;
+- Batch 18.9A : Control Plane backend, stratégies versionnées, campagnes persistantes,
+  `paper-experiment-v4`, migration `0006`, runtime canonique par campagne.
 
 ## Batch 18.9 — découpage décidé
 
 ```text
-18.9A — Control Plane + persistence + stratégie/prompt backend
-18.9B — Cockpit de configuration + PERPETUAL UI
-18.9C — validation comportementale via cockpit
+18.9A — Control Plane + persistence + stratégie/prompt backend      INTÉGRÉ
+18.9B — Cockpit de configuration + PERPETUAL UI                    PROCHAIN
+18.9C — validation comportementale via cockpit                     APRÈS 18.9B
 ```
 
 Ne pas fusionner ces trois périmètres.
 
-## Batch 18.9A — validé localement, en attente d'intégration
+## Batch 18.9A — intégré
 
-### Objectif
-
-Créer la frontière backend permettant au cockpit futur de créer/versionner des stratégies, créer
-des campagnes PAPER reproductibles, prévisualiser le prompt puis activer/reprendre un runtime
-canonique.
-
-### Implémentation du patch
+### Périmètre livré
 
 - Strategy + StrategyRevision immuable ;
 - normalisation/digest prompt ;
@@ -63,9 +50,7 @@ canonique.
 - recovery lineage exposée dans `/api/v1/paper-runs` ;
 - aucun frontend 18.9B.
 
-### Statut de validation
-
-Validation opérateur confirmée :
+### Validation finale
 
 ```text
 pytest backend/tests/test_control_plane_persistence.py::test_strategy_revisions_are_immutable_and_campaign_snapshots_revision : 1 passed
@@ -76,24 +61,32 @@ Alembic 0005_paper_run_recovery -> 0006_paper_control_plane sur PostgreSQL : OK
 git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 ```
 
-Les deux warnings pytest sont des dépréciations de dépendances Starlette/httpx et AnyIO.
+Commit d'intégration :
 
-18.9A est donc **validé localement**. Il ne doit être marqué **intégré** qu'après commit et push
-explicites par l'opérateur.
+```text
+11a04be33bf209552e6337e28318d039b775b264
+feat: add PAPER control plane
+```
 
-## Batch 18.9B — prochain batch après intégration 18.9A
+## Batch 18.9B — prochain batch
 
-Cockpit frontend uniquement à partir des contrats backend stabilisés :
+Cockpit frontend uniquement, à partir des contrats backend 18.9A stabilisés :
 
-- liste/création/édition par nouvelle révision des stratégies ;
+- liste/création/renommage/archivage des stratégies ;
+- édition via création d'une nouvelle révision ;
 - comparaison de révisions ;
 - builder Campaign SPOT/PERPETUAL ;
-- Luna/Sol, agressivité, cadence, capital, coûts ;
-- levier et Risk PERPETUAL ;
-- preview prompt ;
-- activation/reprise ;
+- sélection Luna/Sol ;
+- agressivité, cadence, capital initial ;
+- frais, spread, slippage ;
+- paramètres Risk ;
+- levier PERPETUAL déterministe et marge isolée ;
+- preview du prompt ;
+- activation fraîche / reprise explicite ;
 - contrôle `run-cycle`, Start, Stop ;
-- visualisation `campaign_id`, `paper_run_id`, recovery.
+- visualisation `campaign_id`, `paper_run_id`, lineage recovery ;
+- état moteur et campagne active ;
+- aucune responsabilité de trading déplacée dans le frontend.
 
 Le frontend ne devient jamais l'application de trading et sa fermeture ne doit pas arrêter le
 backend.

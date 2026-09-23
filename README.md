@@ -8,25 +8,27 @@ Risk peut produire un `ExecutionIntent`, ensuite exécuté par le `PaperBroker`.
 > Objectif expérimental : rechercher une performance élevée, avec une cible de travail de +4 %/jour.
 > Ce n'est ni une promesse ni une garantie de rendement.
 
-## Référence intégrée au départ du Batch 18.9A
+## Référence code intégrée — Batch 18.9A
 
 ```text
 repository : Ax-07/AI-Spot-Trader
 branche    : main
-HEAD       : 2b0d227454f2bf894b075b8deef3378e2fe823b4
-commit     : docs: finalize batch 18.8 integration reference
+code       : 11a04be33bf209552e6337e28318d039b775b264
+commit     : feat: add PAPER control plane
 ```
 
-Dernier commit code intégré au départ du batch :
+Le Batch 18.9A — **Control Plane PAPER backend + stratégies éditables + campagnes persistantes** —
+est intégré sur `main`.
+
+Validation opérateur du Batch 18.9A :
 
 ```text
-0886216324106d941c3df0e30f074e24dbe1d33a
-feat: add bounded network retry resilience
+pytest backend : 504 passed, 2 warnings de dépréciation dépendances
+ruff check backend : All checks passed!
+mypy --config-file backend/pyproject.toml backend/src : Success, 89 source files
+Alembic 0005_paper_run_recovery -> 0006_paper_control_plane sur PostgreSQL : OK
+git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 ```
-
-Le Batch 18.9A introduit un **Control Plane backend**. Le patch est désormais **validé localement**
-(504 tests, Ruff, mypy et migration PostgreSQL `0006`), mais reste non intégré à `main` tant que
-le commit et le push opérateur ne sont pas effectués.
 
 ## Invariants
 
@@ -106,7 +108,7 @@ Les révisions refusent des motifs de secrets connus au lieu de les recopier dan
 
 ### Contrat Agent protégé + stratégie opérateur
 
-Les nouveaux runtimes de campagne composent les instructions dans cet ordre :
+Les runtimes de campagne composent les instructions dans cet ordre :
 
 ```text
 contrat applicatif protégé
@@ -208,8 +210,8 @@ POST /api/v1/engine/start
 POST /api/v1/engine/stop
 ```
 
-L'API `/api/v1/paper-runs` expose désormais aussi `campaign_id`,
-`resumed_from_paper_run_id` et `recovery_version`.
+L'API `/api/v1/paper-runs` expose aussi `campaign_id`, `resumed_from_paper_run_id` et
+`recovery_version`.
 
 ## Persistence PostgreSQL
 
@@ -247,5 +249,6 @@ git diff --check
 git status --short
 ```
 
-Le frontend de configuration complet appartient au Batch 18.9B et n'est pas implémenté dans
-18.9A.
+Le prochain périmètre est le Batch 18.9B : cockpit frontend de configuration SPOT/PERPETUAL,
+reposant sur les contrats backend 18.9A intégrés. Le frontend reste un cockpit de contrôle ; sa
+fermeture ne doit jamais arrêter le moteur backend.
