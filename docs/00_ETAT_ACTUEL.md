@@ -6,69 +6,52 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub vérifié au démarrage du Batch 18.6 : `70457125c5a238fe9b798463081c8769d8879d5e`
-- Commit HEAD : `docs: record batch 18.5 integration`
-- Dernier commit code intégré : `84548d23efda0b0a8e2c1350bacc830c1de34140`
-- Commit code : `feat: version multi-market experiment protocol`
-- Batch 18.5 : **intégré**.
-- Batch 18.6 : **patch proposé, non intégré**.
+- HEAD GitHub vérifié après intégration du Batch 18.6 : `9642ec394357fe1e1807b538a2353bdc6d062f46`
+- Commit HEAD/code : `feat: add durable PAPER ledger recovery`
+- Batch 18.6 : **intégré** après migration PostgreSQL, validation locale complète, commit et push.
 - Prompt stratégique : `agent-strategy-v4`, inchangé par 18.6.
 
-## État intégré avant 18.6
+Référence de démarrage du Batch 18.6 : `70457125c5a238fe9b798463081c8769d8879d5e`
+(`docs: record batch 18.5 integration`), avec `84548d23...` comme dernier commit code intégré à ce
+moment-là.
+
+## État intégré
 
 Le même Agent stratégique sélectionne un marché dans l'univers PAPER typé, reçoit le
 `MarketState` canonique exact, puis propose `BUY`, `SELL` ou `HOLD`. Risk garde l'autorité finale et
 le Broker n'est appelé qu'après `ExecutionIntent`.
 
-Le runtime multi-marché SPOT/PERPETUAL, les tools read-only, la sélection causale, le journal
-PostgreSQL, `paper-analytics-v3` et `paper-experiment-v3` sont intégrés.
-
-Limitation confirmée avant 18.6 : chaque démarrage backend créait un nouveau `paper_run_id` avec un
-ledger PAPER frais en mémoire. Aucun recovery durable du portefeuille n'était câblé.
-
-## Batch 18.6 — patch proposé
-
-Le patch proposé introduit `paper-ledger-recovery-v1` sans modifier la stratégie Agent/Risk :
+Le runtime supporte désormais aussi le recovery/restart durable du ledger PAPER multi-actifs via
+`paper-ledger-recovery-v1` :
 
 - un nouveau `paper_run_id` reste créé pour chaque lifetime backend ;
-- `resumed_from_paper_run_id` relie explicitement la nouvelle session à la précédente ;
+- `resumed_from_paper_run_id` relie explicitement une session reprise à sa précédente ;
 - `initial_portfolio_payload` et `current_portfolio_payload` rendent l'état du ledger durable ;
 - le snapshot courant est mis à jour dans la **même transaction** que le cycle durable ;
-- au restart, le ledger est restauré depuis le snapshot courant durable, sans replay de décision,
-  d'intent ou de fill ;
-- l'analytics du run courant rejoue aussi la chaîne explicite `resumed_from_paper_run_id`, afin de
-  préserver P&L, frais, funding et compteurs cumulés à travers les restarts ;
-- SPOT détenu, cash, positions PERPETUAL, marge, P&L et funding ouverts sont restaurés via
-  `PortfolioState` ;
-- un cycle `FAILED` ne fait pas avancer le ledger : la frontière d'audit restaure le checkpoint
-  mémoire ;
-- si l'audit échoue après mutation PAPER, le checkpoint mémoire est restauré et le runner reste
-  fail-closed ;
-- un replay audit idempotent (`record() == False`) ne double pas l'exposition mémoire ;
+- au restart, le ledger est restauré depuis le dernier `PortfolioState` durable sans rejouer LLM,
+  Risk, `ExecutionIntent` ni `Fill` ;
+- SPOT détenu, cash, positions PERPETUAL, marge, P&L et funding sont restaurés ;
+- un cycle `FAILED`, une erreur d'audit ou un replay idempotent restaure le checkpoint mémoire ;
+- l'analytics suit la lignée `resumed_from_paper_run_id` pour préserver P&L, frais, funding,
+  drawdown et compteurs cumulés à travers les restarts ;
 - univers incompatible, payload invalide ou état legacy terminal ambigu => démarrage fail-closed.
 
-Migration proposée : `0005_paper_run_recovery`.
+Migration intégrée : `0005_paper_run_recovery`.
 
-## Validation ChatGPT du patch 18.6
+## Validation Batch 18.6
 
-Réellement exécuté dans l'environnement ChatGPT :
-
-```text
-python -m py_compile fichiers Python modifiés : OK
-contrôle lignes > 100 sur fichiers Python modifiés : OK
-smoke local PortfolioState JSON -> recovery validation -> PaperPortfolioLedger.restore : OK
-```
-
-Non exécuté ici faute de checkout complet et de dépendances dev disponibles hors réseau :
+Validation locale opérateur confirmée avant intégration :
 
 ```text
-pytest tests ciblés recovery/persistence/trading/broker
-pytest backend
-ruff check backend
-mypy --config-file backend/pyproject.toml backend/src
-migration Alembic réelle sur PostgreSQL
-git diff --check dans le checkout opérateur
+Alembic 0004_multi_market_selection -> 0005_paper_run_recovery sur PostgreSQL : OK
+pytest ciblé recovery/persistence/trading/broker : 75 passed
+pytest backend : 468 passed, 2 warnings
+ruff check backend : All checks passed!
+mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
+git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 ```
+
+Les deux warnings Starlette/AnyIO sont les warnings de dépendances non bloquants déjà connus.
 
 ## Frontières conservées
 
@@ -84,8 +67,8 @@ git diff --check dans le checkout opérateur
 
 Principe : **l'Agent cherche, sélectionne et propose ; le Risk Engine autorise, modifie ou refuse.**
 
-## Suite
+## Suite à auditer
 
-Avant intégration de 18.6 : appliquer le ZIP sur un checkout propre, exécuter la migration et la
-suite complète, puis seulement commit/push. Après 18.6, restent candidats la robustesse
-réseau/observabilité, l'enrichissement research et les campagnes Luna/Sol multi-marchés v3.
+Après 18.6 : robustesse réseau/observabilité bornée des erreurs transitoires, enrichissement mesuré
+des données de recherche puis campagnes Luna/Sol multi-marchés sous protocole v3. Multi-quote/FX,
+FUTURE daté et LIVE restent séparés et non décidés sans besoin mesuré.

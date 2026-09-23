@@ -6,15 +6,12 @@ AI Spot Trader est une application expérimentale de trading crypto PAPER pilot�
 Agent IA stratégique**. Le backend est l'application de trading ; le frontend est un cockpit de
 contrôle et de visualisation.
 
-HEAD GitHub vérifié au démarrage du Batch 18.6 :
-`70457125c5a238fe9b798463081c8769d8879d5e`
-(`docs: record batch 18.5 integration`).
+Commit d'intégration code du Batch 18.6 :
+`9642ec394357fe1e1807b538a2353bdc6d062f46`
+(`feat: add durable PAPER ledger recovery`). Le Batch 18.6 est intégré.
 
-Dernier commit code intégré :
-`84548d23efda0b0a8e2c1350bacc830c1de34140`
-(`feat: version multi-market experiment protocol`). Le Batch 18.5 est intégré.
-
-Le Batch 18.6 décrit ci-dessous un **patch proposé non intégré** de recovery durable du ledger PAPER.
+Référence de démarrage du Batch 18.6 : `70457125c5a238fe9b798463081c8769d8879d5e`, avec
+`84548d23efda0b0a8e2c1350bacc830c1de34140` comme dernier commit code intégré à ce moment-là.
 
 ## 2. Invariants fonctionnels
 
@@ -246,7 +243,7 @@ Une panne :
 
 Le digest global du cycle couvre ces artefacts.
 
-## 13. `paper_runs`
+## 13. `paper_runs` et recovery durable
 
 Le contrat historique `market_type + symbol` ne suffit pas pour un run multi-marchés.
 `0004` ajoute donc `execution_universe_payload` et rend les deux colonnes historiques nullables.
@@ -257,7 +254,7 @@ Le contrat historique `market_type + symbol` ne suffit pas pour un run multi-mar
 
 Les rows existantes sont backfillées vers un univers singleton lors de la migration.
 
-Le patch 18.6 propose en plus :
+Le Batch 18.6 ajoute via `0005_paper_run_recovery` :
 
 ```text
 resumed_from_paper_run_id
@@ -267,7 +264,8 @@ current_portfolio_payload
 ```
 
 Le `paper_run_id` reste une identité de session backend ; un restart crée donc un nouveau run relié
-à son prédécesseur au lieu de réouvrir une ligne historique.
+à son prédécesseur au lieu de réouvrir une ligne historique. Le dernier `PortfolioState` durable
+est la source de vérité du restart.
 
 ## 14. Analytics
 
@@ -336,9 +334,9 @@ sont pas transformées en validation.
 Le Batch 18.5 versionne ce comportement existant ; il ne constitue pas une nouvelle campagne
 Luna/Sol et ne change aucune règle de sélection, Risk ou Broker.
 
-## 18. Recovery/restart durable PAPER — Batch 18.6 proposé
+## 18. Recovery/restart durable PAPER — Batch 18.6 intégré
 
-Le recovery ne rejoue **aucune** décision historique. La frontière durable devient :
+Le recovery ne rejoue **aucune** décision historique. La frontière durable est :
 
 ```text
 checkpoint ledger mémoire
@@ -368,8 +366,11 @@ Fail-closed : univers différent, snapshot invalide, run legacy sans état recon
 legacy terminant par un cycle `FAILED` ambigu. Aucun fill, intent ou appel LLM historique n'est
 réémis.
 
-Le patch conserve `paper-experiment-v1/v2/v3`, `experiment_manifest=None`, `agent-strategy-v4`, les
-règles Risk et le Broker PAPER existants.
+Validation locale de l'intégration 18.6 : migration PostgreSQL `0004 -> 0005` OK, 75 tests ciblés,
+468 tests backend complets, Ruff OK, mypy OK sur 79 fichiers source et `git diff --check` sans erreur.
+
+Le Batch 18.6 conserve `paper-experiment-v1/v2/v3`, `experiment_manifest=None`,
+`agent-strategy-v4`, les règles Risk et le Broker PAPER existants.
 
 ## 19. LIVE
 

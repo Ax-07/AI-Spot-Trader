@@ -2,21 +2,16 @@
 
 ## 1. Référence
 
-HEAD GitHub vérifié au démarrage du Batch 18.6 :
+Commit d'intégration code du Batch 18.6 :
 
 ```text
-70457125c5a238fe9b798463081c8769d8879d5e
-docs: record batch 18.5 integration
+9642ec394357fe1e1807b538a2353bdc6d062f46
+feat: add durable PAPER ledger recovery
 ```
 
-Dernier commit code intégré :
-
-```text
-84548d23efda0b0a8e2c1350bacc830c1de34140
-feat: version multi-market experiment protocol
-```
-
-Le Batch 18.5 est intégré. Le Batch 18.6 décrit ici un **patch proposé non intégré**.
+Le Batch 18.6 est intégré. Sa base de démarrage était
+`70457125c5a238fe9b798463081c8769d8879d5e`, avec `84548d23...` comme dernier commit code intégré à
+ce moment-là.
 
 ## 2. Modules concernés
 
@@ -141,7 +136,7 @@ Le runner capture un portefeuille complet avant la sélection puis le recapture 
 marché choisi. Cela garantit que mark, unrealized P&L et funding causaux d'une position dérivée
 existante sont visibles par l'Agent final et Risk.
 
-`PaperPortfolioLedger.restore(PortfolioState)` est ajouté par le patch 18.6. Il remplace
+`PaperPortfolioLedger.restore(PortfolioState)` est intégré par le Batch 18.6. Il remplace
 atomiquement les balances, positions SPOT et positions dérivées à partir d'un contrat déjà validé ;
 il ne rejoue aucun fill.
 
@@ -188,7 +183,7 @@ runtime, avant tout cycle et donc avant tout nouvel appel stratégique.
 ## 14. Persistance de cycle et état de ledger
 
 Avant 18.6, le graphe de cycle était durable mais le ledger PAPER courant restait uniquement en
-mémoire. Le patch propose la migration `0005_paper_run_recovery` avec :
+mémoire. La migration intégrée `0005_paper_run_recovery` ajoute :
 
 ```text
 paper_runs.resumed_from_paper_run_id UUID NULL UNIQUE
@@ -233,7 +228,7 @@ Ainsi :
 
 ## 16. Handoff de restart
 
-La sémantique choisie conserve l'invariant historique **un run par lifetime backend** :
+La sémantique intégrée conserve l'invariant historique **un run par lifetime backend** :
 
 ```text
 run A --shutdown/crash--> startup
@@ -295,10 +290,10 @@ Aucun calcul rétrospectif de décision n'est nécessaire.
 
 ## 19. Analytics et causalité
 
-`paper-analytics-v3` garde ses calculs, mais la couche de persistance devient consciente de la
-lignée de recovery. `paper_analytics_for_run(run_id)` remonte `resumed_from_paper_run_id`, puis
-rejoue les cycles de l'ancêtre le plus ancien jusqu'au run demandé. Les rows restent attachées à
-leurs `paper_run_id` d'origine ; seule la lecture analytique suit explicitement la chaîne, ce qui
+`paper-analytics-v3` garde ses calculs, mais la couche de persistance est consciente de la lignée de
+recovery. `paper_analytics_for_run(run_id)` remonte `resumed_from_paper_run_id`, puis rejoue les
+cycles de l'ancêtre le plus ancien jusqu'au run demandé. Les rows restent attachées à leurs
+`paper_run_id` d'origine ; seule la lecture analytique suit explicitement la chaîne, ce qui
 préserve frais, funding, P&L, drawdown et compteurs cumulés à travers les restarts.
 
 ## 20. Compatibilité et fail-closed
@@ -314,11 +309,22 @@ mode mono-marché legacy du TradingCycleRunner
 composition PAPER multi-marché canonique
 ```
 
-Le démarrage est refusé si l'état durable est invalide, incomplet ou incompatible. Le patch ne crée
-aucune architecture stratégique parallèle et ne change ni `agent-strategy-v4`, ni RiskPolicy, ni
-les règles de PaperBroker.
+Le démarrage est refusé si l'état durable est invalide, incomplet ou incompatible. Le Batch 18.6
+ne crée aucune architecture stratégique parallèle et ne change ni `agent-strategy-v4`, ni
+RiskPolicy, ni les règles de PaperBroker.
 
-## 21. Hors périmètre 18.6
+## 21. Validation intégrée 18.6
+
+```text
+Alembic 0004_multi_market_selection -> 0005_paper_run_recovery sur PostgreSQL : OK
+pytest ciblé recovery/persistence/trading/broker : 75 passed
+pytest backend : 468 passed, 2 warnings
+ruff check backend : All checks passed!
+mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
+git diff --check : aucune erreur, uniquement warnings LF -> CRLF
+```
+
+## 22. Hors périmètre 18.6
 
 Pas de retries réseau/LLM génériques, nouvelles données research, campagne Luna/Sol,
 scanner/ranking/opportunity score, multi-quote/FX, FUTURE daté, LIVE ou changement de stratégie.

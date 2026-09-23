@@ -9,21 +9,19 @@ Un seul Agent stratégique, PAPER d'abord, Risk autorité finale, aucun LLM dire
 SPOT sans short/levier, Derivatives avec protections déterministes, audit durable, no-look-ahead,
 backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE séparé.
 
-HEAD GitHub vérifié au démarrage du Batch 18.6 :
+Commit d'intégration code du Batch 18.6 :
+
+```text
+9642ec394357fe1e1807b538a2353bdc6d062f46
+feat: add durable PAPER ledger recovery
+```
+
+Base auditée au démarrage du Batch 18.6 :
 
 ```text
 70457125c5a238fe9b798463081c8769d8879d5e
 docs: record batch 18.5 integration
 ```
-
-Dernier commit code intégré :
-
-```text
-84548d23efda0b0a8e2c1350bacc830c1de34140
-feat: version multi-market experiment protocol
-```
-
-Le Batch 18.6 ci-dessous est un **patch proposé non intégré**.
 
 ## Statut du Batch 18.1
 
@@ -185,11 +183,11 @@ n'est nécessaire.
 **INTÉGRÉE.** `experiment_manifest=None` reste valide. La v3 est opt-in pour les campagnes qui ont
 besoin d'une identité contrôlée complète.
 
-## Décisions Batch 18.6 — proposées, non intégrées
+## Décisions Batch 18.6 — intégrées
 
 ### ADR-156 — Conserver un nouveau `paper_run_id` par lifetime backend et relier les reprises
 
-**PROPOSÉE.** Le recovery ne réouvre pas une row historique. Le nouveau run porte
+**INTÉGRÉE.** Le recovery ne réouvre pas une row historique. Le nouveau run porte
 `resumed_from_paper_run_id` vers le run parent. Cela préserve l'isolation analytique historique et
 rend la continuité runtime explicite.
 
@@ -198,7 +196,7 @@ contrainte unique sur `resumed_from_paper_run_id` interdit deux successeurs dire
 
 ### ADR-157 — Persister l'état initial et courant du ledger dans `paper_runs`
 
-**PROPOSÉE.** La migration `0005_paper_run_recovery` ajoute :
+**INTÉGRÉE.** La migration `0005_paper_run_recovery` ajoute :
 
 - `resumed_from_paper_run_id` ;
 - `recovery_version` ;
@@ -211,7 +209,7 @@ P&L, funding et timestamps correspondants.
 
 ### ADR-158 — Faire avancer le snapshot courant dans la même transaction que le cycle
 
-**PROPOSÉE.** `SqlAlchemyCycleAuditRepository` met à jour `current_portfolio_payload` uniquement
+**INTÉGRÉE.** `SqlAlchemyCycleAuditRepository` met à jour `current_portfolio_payload` uniquement
 pour un cycle `COMPLETED`, dans la transaction qui persiste le graphe audit.
 
 Pour un cycle exécuté, la source est `portfolio_state_after`. Pour un cycle sans exécution, la
@@ -220,7 +218,7 @@ la décision.
 
 ### ADR-159 — Un cycle `FAILED` n'est pas un commit de ledger
 
-**PROPOSÉE.** `AuditedTradingCycleRunner` capture un checkpoint du ledger avant le cycle. Un
+**INTÉGRÉE.** `AuditedTradingCycleRunner` capture un checkpoint du ledger avant le cycle. Un
 résultat `FAILED` restaure ce checkpoint avant d'écrire le failure durable.
 
 Cela évite qu'un mark/funding ou une mutation partielle non représentée par un état durable devienne
@@ -228,13 +226,13 @@ silencieusement la nouvelle source de vérité.
 
 ### ADR-160 — Rollback mémoire si l'audit durable échoue ou n'insère rien
 
-**PROPOSÉE.** Si l'écriture PostgreSQL échoue après une mutation PAPER, le checkpoint est restauré
+**INTÉGRÉE.** Si l'écriture PostgreSQL échoue après une mutation PAPER, le checkpoint est restauré
 et le runner reste fail-closed. Si `record()` retourne `False` pour un replay exact idempotent, le
 checkpoint est également restauré afin de ne pas doubler l'exposition mémoire.
 
 ### ADR-161 — Reprendre depuis le snapshot, jamais depuis un replay de décisions/fills
 
-**PROPOSÉE.** Au restart, le runtime restaure le `PaperPortfolioLedger` depuis
+**INTÉGRÉE.** Au restart, le runtime restaure le `PaperPortfolioLedger` depuis
 `current_portfolio_payload`. Il ne relance ni `MarketSelection`, ni LLM, ni Risk, ni Broker et ne
 réapplique aucun `Fill`.
 
@@ -242,7 +240,7 @@ Cette règle empêche toute régénération historique, look-ahead ou double tra
 
 ### ADR-162 — Migrer les runs legacy uniquement lorsqu'ils sont non ambigus
 
-**PROPOSÉE.** Pour un run antérieur à `paper-ledger-recovery-v1`, le dernier cycle `COMPLETED`
+**INTÉGRÉE.** Pour un run antérieur à `paper-ledger-recovery-v1`, le dernier cycle `COMPLETED`
 peut fournir un snapshot terminal durable. En revanche, un run legacy terminant par un cycle
 `FAILED`, un payload invalide ou un état manquant provoque un refus fail-closed.
 
@@ -250,13 +248,13 @@ Aucune reconstruction approximative n'est autorisée.
 
 ### ADR-163 — Refuser une reprise incompatible avec l'univers courant
 
-**PROPOSÉE.** Le recovery exige le même `execution_universe`. Les balances de règlement, actifs
+**INTÉGRÉE.** Le recovery exige le même `execution_universe`. Les balances de règlement, actifs
 SPOT détenus et symboles PERPETUAL sont validés contre la configuration. Une incohérence bloque le
 démarrage au lieu de créer un ledger partiellement plausible.
 
 ### ADR-164 — Faire suivre à l'analytics la lignée de recovery explicite
 
-**PROPOSÉE.** `paper_analytics_for_run()` remonte `resumed_from_paper_run_id` et rejoue les cycles
+**INTÉGRÉE.** `paper_analytics_for_run()` remonte `resumed_from_paper_run_id` et rejoue les cycles
 des runs parents avant ceux du run demandé. Les faits ne changent pas de propriétaire et aucun
 cycle n'est copié ; la lecture devient seulement chain-aware. Cela conserve P&L, frais, funding,
 drawdown et compteurs cumulés après restart tout en gardant un `paper_run_id` distinct par session.
@@ -322,35 +320,39 @@ git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 Intégration confirmée sur `main` au commit
 `84548d23efda0b0a8e2c1350bacc830c1de34140`.
 
-## Changelog — 2026-09-23 — Batch 18.6 patch proposé
+## Changelog — 2026-09-23 — Batch 18.6 intégré
 
 Audit de départ : GitHub `main = 70457125c5a238fe9b798463081c8769d8879d5e`, commit documentaire
 18.5 ; dernier commit code `84548d23...`.
 
-Constats :
+Constats de départ :
 
-- confirmé : cycle/audit/fills et snapshots sont persistés ;
-- confirmé : le ledger et le Broker partagent un état process-local canonique ;
-- confirmé : un restart recrée actuellement capital initial + nouveau run ;
-- confirmé : l'idempotence du graphe de cycle existe par `cycle_id + digest` ;
+- confirmé : cycle/audit/fills et snapshots étaient persistés ;
+- confirmé : le ledger et le Broker partageaient un état process-local canonique ;
+- confirmé : un restart recréait capital initial + nouveau run ;
+- confirmé : l'idempotence du graphe de cycle existait par `cycle_id + digest` ;
 - manquant : snapshot courant durable du ledger et handoff de restart ;
 - manquant : rollback mémoire si mutation PAPER puis panne d'audit ;
-- à décider puis retenu dans le patch : nouveau run lié plutôt que réouverture du même run ;
-- obsolète après patch proposé : « restart => ledger PAPER frais ».
+- décision retenue : nouveau run lié plutôt que réouverture du même run.
 
-Fichiers code proposés : persistence models/runs/repository/audit, ledger, composition, migration
-`0005_paper_run_recovery` et tests ciblés.
+Implémentation intégrée : migration `0005_paper_run_recovery`, snapshots initial/courant du ledger,
+handoff `resumed_from_paper_run_id`, restore SPOT/PERPETUAL, rollback mémoire à la frontière
+d'audit, reprise legacy fail-closed et analytics chain-aware.
 
-Validation réellement exécutée par ChatGPT :
+Validation locale opérateur :
 
 ```text
-python -m py_compile fichiers Python modifiés : OK
-contrôle lignes Python > 100 caractères : OK
-smoke PortfolioState JSON -> validation recovery -> PaperPortfolioLedger.restore : OK
+Alembic 0004_multi_market_selection -> 0005_paper_run_recovery sur PostgreSQL : OK
+pytest ciblé recovery/persistence/trading/broker : 75 passed
+pytest backend : 468 passed, 2 warnings
+ruff check backend : All checks passed!
+mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
+git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 ```
 
-La suite pytest complète, ruff, mypy, Alembic PostgreSQL et `git diff --check` restent à exécuter
-localement avant toute intégration.
+Intégration confirmée sur `main` au commit
+`9642ec394357fe1e1807b538a2353bdc6d062f46`
+(`feat: add durable PAPER ledger recovery`). Le working tree opérateur était propre après push.
 
 ## À décider après 18.6
 

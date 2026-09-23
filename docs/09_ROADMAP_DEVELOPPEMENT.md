@@ -19,19 +19,20 @@ Un batch est **intégré** uniquement après validation locale, commit et push c
 - Batch 18.2 : sélection causale du marché exécutable par le même Agent, univers PAPER typé, routeur SPOT/PERPETUAL, persistance/API multi-marchés, migration `0004_multi_market_selection` et analytics causal v3.
 - Batch 18.3 : validation comportementale PAPER multi-marchés/cross-symbol et correction du parsing des `marginSchedules` Kraken Derivatives imbriqués.
 - Batch 18.5 : protocole expérimental `paper-experiment-v3` pour versionner univers typé, sélection et capacité tools sans modifier la stratégie.
+- Batch 18.6 : recovery/restart durable du ledger PAPER multi-actifs, migration `0005_paper_run_recovery`, handoff de runs et rollback mémoire fail-closed.
 
-HEAD GitHub vérifié au démarrage du Batch 18.6 :
+Commit d'intégration code du Batch 18.6 :
+
+```text
+9642ec394357fe1e1807b538a2353bdc6d062f46
+feat: add durable PAPER ledger recovery
+```
+
+Base auditée au démarrage du Batch 18.6 :
 
 ```text
 70457125c5a238fe9b798463081c8769d8879d5e
 docs: record batch 18.5 integration
-```
-
-Dernier commit code intégré :
-
-```text
-84548d23efda0b0a8e2c1350bacc830c1de34140
-feat: version multi-market experiment protocol
 ```
 
 ## Batch 18.2 — intégré
@@ -159,7 +160,7 @@ commit : 84548d23efda0b0a8e2c1350bacc830c1de34140
 
 Le commit a été poussé sur `origin/main` et le working tree opérateur était propre après push.
 
-## Batch 18.6 — patch proposé, non intégré
+## Batch 18.6 — intégré
 
 ### Objectif
 
@@ -179,7 +180,7 @@ Avant 18.6 :
 - le Broker pouvait muter le ledger avant que `AuditedTradingCycleRunner` ne committe le graphe ;
 - aucun recovery canonique n'était câblé au restart.
 
-### Design proposé
+### Design intégré
 
 - conserver un nouveau `paper_run_id` par lifetime backend ;
 - relier le nouveau run avec `resumed_from_paper_run_id` ;
@@ -209,20 +210,23 @@ Avant 18.6 :
 
 Les coûts/frais déjà réalisés restent reflétés dans le cash et auditables dans les fills historiques.
 
-### Validation ChatGPT réellement exécutée
+### Validation locale et intégration
 
 ```text
-python -m py_compile fichiers Python modifiés : OK
-contrôle lignes Python > 100 caractères : OK
-smoke PortfolioState JSON -> validation recovery -> PaperPortfolioLedger.restore : OK
+Alembic 0004_multi_market_selection -> 0005_paper_run_recovery sur PostgreSQL : OK
+pytest ciblé recovery/persistence/trading/broker : 75 passed
+pytest backend : 468 passed, 2 warnings
+ruff check backend : All checks passed!
+mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
+git diff --check : aucune erreur, uniquement warnings LF -> CRLF
+commit : 9642ec394357fe1e1807b538a2353bdc6d062f46
 ```
 
-Non exécuté ici : suite pytest du repository, ruff, mypy, migration PostgreSQL et `git diff --check`
-du checkout opérateur. Ces validations restent obligatoires avant intégration.
+Le commit a été poussé sur `origin/main` et le working tree opérateur était propre après push.
 
 ## Prochains candidats après 18.6
 
-Une fois 18.6 validé et intégré localement :
+Aucune priorité architecturale n'est décidée ici. Candidats :
 
 - robustesse réseau et observabilité bornée des erreurs transitoires Market/LLM ;
 - enrichissement mesuré des données de recherche : order book, trades, funding historique, news ;
