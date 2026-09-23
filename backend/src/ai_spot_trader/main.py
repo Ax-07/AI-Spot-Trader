@@ -8,14 +8,19 @@ from ai_spot_trader.agent.openai_client import OpenAIResponsesClient
 from ai_spot_trader.api.routes.analytics import router as analytics_router
 from ai_spot_trader.api.routes.audit import router as audit_router
 from ai_spot_trader.api.routes.chat import router as chat_router
+from ai_spot_trader.api.routes.control_plane import router as control_plane_router
 from ai_spot_trader.api.routes.engine import router as engine_router
 from ai_spot_trader.api.routes.health import router as health_router
 from ai_spot_trader.api.routes.paper_runs import router as paper_runs_router
 from ai_spot_trader.api.routes.portfolio import router as portfolio_router
 from ai_spot_trader.chat.provider import OpenAIChatProvider
 from ai_spot_trader.chat.service import OperatorChatService, RuntimeChatContextSource
-from ai_spot_trader.composition import build_paper_runtime
-from ai_spot_trader.core.config import Settings, get_settings
+from ai_spot_trader.core.config import (
+    PaperRuntimeConfigurationError,
+    Settings,
+    get_settings,
+)
+from ai_spot_trader.core.control_plane_runtime import CampaignRuntimeManager
 from ai_spot_trader.core.runtime import (
     AppRuntime,
     PortfolioSnapshotSource,
@@ -25,6 +30,8 @@ from ai_spot_trader.persistence.analytics import (
     PaperAnalyticsReader,
     SqlAlchemyPaperAnalyticsQueryService,
 )
+from ai_spot_trader.persistence.campaign_runs import CampaignPaperRunQueryService
+from ai_spot_trader.persistence.control_plane import SqlAlchemyControlPlaneStore
 from ai_spot_trader.persistence.db import Database
 from ai_spot_trader.persistence.query import (
     CycleAuditReader,
@@ -47,7 +54,7 @@ def create_app(
     chat_service: OperatorChatService | None = None,
     compose_paper: bool = False,
 ) -> FastAPI:
-    """Create FastAPI; the module-level app composes PAPER only during lifespan startup."""
+    """Create FastAPI; Batch 18.9A keeps infrastructure alive without a campaign."""
 
     resolved_settings = settings or get_settings()
     injected_dependencies = (
@@ -64,10 +71,45 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         resolved_chat_service: OperatorChatService | None
+        control_plane_store: SqlAlchemyControlPlaneStore | None = None
+
         if compose_paper:
-            composition = build_paper_runtime(resolved_settings)
-            runtime = composition.runtime
-            resolved_chat_service = composition.chat_service
+            database_secret = resolved_settings.database_url
+            if database_secret is not None and database_secret.get_secret_value().strip():
+                database = Database(database_secret.get_secret_value().strip())
+                base_audit_reader = SqlAlchemyCycleAuditQueryService(database.sessions)
+                base_analytics_reader = SqlAlchemyPaperAnalyticsQueryService(database.sessions)
+                campaign_run_reader = CampaignPaperRunQueryService(database.sessions)
+                control_plane_store = SqlAlchemyControlPlaneStore(database.sessions)
+                runtime: AppRuntime | CampaignRuntimeManager = CampaignRuntimeManager(
+                    settings=resolved_settings,
+                    control_plane_store=control_plane_store,
+                    database=database,
+                    paper_run_reader=campaign_run_reader,
+                    audit_reader=base_audit_reader,
+                    analytics_reader=base_analytics_reader,
+                )
+            else:
+                raise PaperRuntimeConfigurationError(
+                    "Control Plane startup requires DATABASE_URL; "
+                    "no campaign activation is required"
+                )
+
+            resolved_chat_service = None
+            api_key = resolved_settings.openai_api_key
+            if api_key is not None:
+                client = OpenAIResponsesClient(
+                    api_key=api_key,
+                    base_url=resolved_settings.openai_base_url,
+                    timeout_seconds=resolved_settings.openai_timeout_seconds,
+                )
+                resolved_chat_service = OperatorChatService(
+                    provider=OpenAIChatProvider(
+                        client=client,
+                        model=resolved_settings.llm_model,
+                    ),
+                    context_source=RuntimeChatContextSource(runtime),  # type: ignore[arg-type]
+                )
         else:
             owned_database: Database | None = None
             resolved_audit_reader = audit_reader
@@ -125,6 +167,7 @@ def create_app(
 
         app.state.runtime = runtime
         app.state.chat_service = resolved_chat_service
+        app.state.control_plane_store = control_plane_store
         try:
             await runtime.initialize()
             yield
@@ -143,6 +186,7 @@ def create_app(
     app.include_router(audit_router)
     app.include_router(analytics_router)
     app.include_router(paper_runs_router)
+    app.include_router(control_plane_router)
     app.include_router(chat_router)
     return app
 

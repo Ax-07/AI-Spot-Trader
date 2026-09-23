@@ -1,7 +1,17 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, Uuid
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    String,
+    Text,
+    Uuid,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -9,13 +19,82 @@ JsonType = JSON().with_variant(JSONB, "postgresql")
 
 
 class Base(DeclarativeBase):
-    """SQLAlchemy metadata root for the durable audit journal."""
+    """SQLAlchemy metadata root for durable PAPER state and audit records."""
+
+
+class StrategyRecord(Base):
+    __tablename__ = "strategies"
+
+    strategy_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    strategy_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+    revisions: Mapped[list["StrategyRevisionRecord"]] = relationship(
+        back_populates="strategy",
+        cascade="all, delete-orphan",
+        order_by="StrategyRevisionRecord.strategy_revision",
+    )
+
+
+class StrategyRevisionRecord(Base):
+    __tablename__ = "strategy_revisions"
+
+    strategy_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("strategies.strategy_id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    strategy_revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    strategy_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    strategy_prompt_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    base_agent_contract_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+    strategy: Mapped[StrategyRecord] = relationship(back_populates="revisions")
+
+
+class CampaignRecord(Base):
+    __tablename__ = "campaigns"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["strategy_id", "strategy_revision"],
+            ["strategy_revisions.strategy_id", "strategy_revisions.strategy_revision"],
+            ondelete="RESTRICT",
+            name="fk_campaigns_strategy_revision",
+        ),
+    )
+
+    campaign_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    strategy_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)
+    strategy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    strategy_prompt_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    base_agent_contract_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    configuration_payload: Mapped[dict[str, object]] = mapped_column(JsonType, nullable=False)
+    configuration_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    experiment_protocol_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    experiment_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
+    paper_runs: Mapped[list["PaperRunRecord"]] = relationship(back_populates="campaign")
 
 
 class PaperRunRecord(Base):
     __tablename__ = "paper_runs"
 
     paper_run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    campaign_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("campaigns.campaign_id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
@@ -40,6 +119,7 @@ class PaperRunRecord(Base):
     initial_portfolio_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
     current_portfolio_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
 
+    campaign: Mapped[CampaignRecord | None] = relationship(back_populates="paper_runs")
     cycles: Mapped[list["CycleRecord"]] = relationship(back_populates="paper_run")
 
 

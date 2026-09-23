@@ -1,375 +1,119 @@
 # 09 — Roadmap de développement
 
-## Règle de lecture
+## Référence
 
-Un batch est **intégré** uniquement après validation locale, commit et push confirmés sur GitHub
-`main`. Un ZIP livré par ChatGPT reste un patch proposé tant que ces étapes ne sont pas réalisées.
-
-## Historique intégré synthétique
-
-- Batches 00–15.3 : socle SPOT PAPER, Agent, Risk, Broker, PostgreSQL, API/cockpit, analytics et expériences.
-- Batch 16 : Kraken Derivatives PAPER, LONG/SHORT, marge ISOLATED, levier déterministe, funding, P&L et anti-reversal.
-- Batch 16.2 : isolation durable par `paper_run_id`.
-- Batch 16.3 : smokes LONG/SHORT contrôlés.
-- Batch 16.5 : contexte PERPETUAL causal via `MarketStateBuilder` et bougies mark publiques.
-- Batch 16.6 : validation comportementale Luna sans forcer BUY/SELL.
-- Prompt `agent-strategy-v4` : localisation française.
-- Batch 17 : durcissement fail-closed de la frontière Kraken Derivatives publique.
-- Batch 18.1 : tools Agent read-only bornés, boucle Responses function calling, traces causales et migration `0003_agent_tool_traces`.
-- Batch 18.2 : sélection causale du marché exécutable par le même Agent, univers PAPER typé, routeur SPOT/PERPETUAL, persistance/API multi-marchés, migration `0004_multi_market_selection` et analytics causal v3.
-- Batch 18.3 : validation comportementale PAPER multi-marchés/cross-symbol et correction du parsing des `marginSchedules` Kraken Derivatives imbriqués.
-- Batch 18.5 : protocole expérimental `paper-experiment-v3` pour versionner univers typé, sélection et capacité tools sans modifier la stratégie.
-- Batch 18.6 : recovery/restart durable du ledger PAPER multi-actifs, migration `0005_paper_run_recovery`, handoff de runs et rollback mémoire fail-closed.
-- Batch 18.7 : retries réseau bornés sur lectures Kraken publiques et Responses API
-  pré-décision, classification d’erreurs et observabilité sanitizée sans retry des mutations.
-- Batch 18.8 : validation comportementale réelle de la résilience 18.7 et du recovery 18.6,
-  sans changement code : 20/20 cycles PAPER `COMPLETED`, aucun retry naturel observé.
-
-HEAD GitHub vérifié après intégration du Batch 18.8 :
+Base intégrée auditée au démarrage du Batch 18.9A :
 
 ```text
-36e6f46dd7c427d40426c98ee57f30ed4fd466c2
-docs: record batch 18.8 behavioral validation
+2b0d227454f2bf894b075b8deef3378e2fe823b4
+docs: finalize batch 18.8 integration reference
 ```
 
-Dernier commit code intégré :
+Dernier code intégré :
 
 ```text
 0886216324106d941c3df0e30f074e24dbe1d33a
 feat: add bounded network retry resilience
 ```
 
-## Batch 18.2 — intégré
+## Jalons intégrés
 
-Le même Agent stratégique exécute deux phases causales :
+- Batch 18.1 : tools Agent read-only et traces causales ;
+- Batch 18.2 : sélection causale multi-marchés SPOT/PERPETUAL ;
+- Batch 18.3 : validation comportementale et parsing Kraken margin schedules ;
+- Batch 18.5 : `paper-experiment-v3` et identité tools/sélection ;
+- Batch 18.6 : recovery `paper-ledger-recovery-v1`, migration `0005` ;
+- Batch 18.7 : retries réseau bornés ;
+- Batch 18.8 : validation réelle recovery/réseau, 20/20 cycles `COMPLETED`, tous `HOLD`.
+
+## Batch 18.9 — découpage décidé
 
 ```text
-MarketSelectionInput
--> recherche/sélection par l'Agent
--> MarketSelection
--> acquisition du MarketState exécutable exact
--> AgentInput final
--> BUY/SELL/HOLD
--> Risk
--> Broker éventuel
+18.9A — Control Plane + persistence + stratégie/prompt backend
+18.9B — Cockpit de configuration + PERPETUAL UI
+18.9C — validation comportementale via cockpit
 ```
 
-Le périmètre intégré conserve les invariants suivants : aucun second Agent, aucun
-scanner/ranking/opportunity score, séparation stricte research/execution, SPOT sans short/levier,
-PERPETUAL linéaire uniquement lorsque supporté, Risk autorité finale et aucune exécution directe
-par le LLM ou un tool.
+Ne pas fusionner ces trois périmètres.
 
-Validation locale confirmée avant intégration 18.2 :
+## Batch 18.9A — validé localement, en attente d'intégration
+
+### Objectif
+
+Créer la frontière backend permettant au cockpit futur de créer/versionner des stratégies, créer
+des campagnes PAPER reproductibles, prévisualiser le prompt puis activer/reprendre un runtime
+canonique.
+
+### Implémentation du patch
+
+- Strategy + StrategyRevision immuable ;
+- normalisation/digest prompt ;
+- rejet des motifs de secret dans les prompts opérateur ;
+- contrat Agent protégé séparé du texte stratégique ;
+- CampaignConfiguration whitelistée et sans secret ;
+- `paper-experiment-v4` au niveau Campaign ;
+- couverture complète des paramètres Risk PERPETUAL par `configuration_digest` ;
+- migration `0006_paper_control_plane` ;
+- FK `paper_runs.campaign_id` ;
+- lifecycle recovery par campagne ;
+- CampaignRuntimeManager avec un runtime actif maximum ;
+- activation/reprise refusée pendant `RUNNING` ;
+- prompt preview canonique ;
+- API Strategy/Campaign ;
+- recovery lineage exposée dans `/api/v1/paper-runs` ;
+- aucun frontend 18.9B.
+
+### Statut de validation
+
+Validation opérateur confirmée :
 
 ```text
-pytest backend : 447 passed, 2 warnings
-ruff check backend : OK
-mypy backend/src : OK, 79 source files
-Alembic 0003_agent_tool_traces -> 0004_multi_market_selection sur PostgreSQL : OK
+pytest backend/tests/test_control_plane_persistence.py::test_strategy_revisions_are_immutable_and_campaign_snapshots_revision : 1 passed
+ruff check backend : All checks passed!
+pytest backend : 504 passed, 2 warnings
+mypy --config-file backend/pyproject.toml backend/src : Success, 89 source files
+Alembic 0005_paper_run_recovery -> 0006_paper_control_plane sur PostgreSQL : OK
 git diff --check : aucune erreur, uniquement warnings LF -> CRLF
 ```
 
-## Batch 18.3 — intégré
-
-### Objectif
-
-Valider réellement le pipeline PAPER multi-marchés/cross-symbol de 18.2 avec le provider réel et
-les sources Kraken publiques, sans forcer BUY/SELL ni transformer un résultat HOLD en échec.
-
-### Résultats confirmés
-
-- sélection cross-symbol SPOT réelle ;
-- `paper_runs.execution_universe_payload` multi-marché réel avec projection historique
-  `market_type/symbol = NULL` ;
-- univers mixte `SPOT:BTC/USD + PERPETUAL:ETH/USD` chargé et recherché ;
-- plusieurs cycles mixtes SPOT terminés `COMPLETED / HOLD` ;
-- branche singleton `PERPETUAL:ETH/USD` validée de la sélection jusqu'au `MarketState`, à la
-  décision `HOLD` et à `Risk=ALLOW/HOLD_NO_EXECUTION` ;
-- catalogue public Derivatives parsé après correction : 296 instruments lors du smoke ;
-- séparation research/execution observée : les snapshots de research restent des traces et le
-  marché sélectionné est reacquis par la source d'exécution dédiée.
-
-### Défaut découvert et intégré
-
-Le payload public Kraken expose désormais notamment :
-
-```text
-marginSchedules
-  -> région
-    -> retail | professional
-      -> [tiers de marge]
-```
-
-Le parser historique supposait une map directe `nom -> ligne de marge` et échouait avec
-`KrakenPayloadError: initialMargin is invalid`. Le commit `4042e0b` aplatit les feuilles reconnues,
-les valide toutes fail-closed et conserve la sémantique conservatrice existante : taux publics les
-plus stricts retenus faute de tier privé prouvable.
-
-### Validation locale confirmée
-
-```text
-pytest backend/tests/test_kraken_derivatives.py backend/tests/test_kraken_derivatives_context.py : 27 passed
-pytest backend : 449 passed, 2 warnings
-ruff check backend : All checks passed!
-mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
-git diff --check : aucune erreur, uniquement warnings LF -> CRLF avant commit
-```
-
-Les deux warnings Starlette/AnyIO restent non bloquants.
-
-### Limites honnêtes du smoke
-
-- aucune sélection PERPETUAL spontanée n'a été observée depuis l'univers mixte ;
-- aucun fill réel n'a été produit, les décisions observées ayant été `HOLD` ;
-- un timeout SPOT au stage `MARKET` a été observé une fois puis non reproduit sur plusieurs cycles
-  suivants ;
-- un `LLMTransportError` au stage `MARKET_SELECTION` a été observé isolément.
-
-Ces limites ne remettent pas en cause les branches validées, mais elles restent des axes de
-robustesse/expérimentation à mesurer au lieu d'être déclarées résolues.
-
-## Batch 18.5 — intégré
-
-### Objectif
-
-Versionner scientifiquement l'environnement Agent/tools/sélection déjà utilisé par le pipeline
-multi-marché, sans modifier la stratégie de trading.
-
-### Décisions intégrées
-
-- nouvelle identité `paper-experiment-v3` pour les **nouveaux** manifestes multi-marchés ;
-- conservation stricte de `paper-experiment-v1` et `paper-experiment-v2` comme identités
-  historiques ;
-- univers contrôlé v3 = tuple déterministe de `ExecutableMarket(symbol, market_type)` ;
-- protocole de sélection causal explicitement identifié ;
-- tools exposés pendant la sélection et interdits pendant la décision finale canonique ;
-- identité tools = digest des définitions OpenAI effectives, pas simple version manuelle ;
-- bornes contrôlées = max calls, timeout, taille résultat et maximum `list_markets.limit` ;
-- tous ces facteurs entrent dans le `experiment_group_digest` v3 ; `llm_model` et
-  `replicate_index` restent les seules exclusions volontaires pour les comparaisons modèle ;
-- contrôles provider/runner avant appel Agent lorsqu'un manifeste v3 est fourni ;
-- aucune migration PostgreSQL, le JSON persistant existant restant suffisant ;
-- `experiment_manifest=None` reste valide pour le PAPER normal.
-
-### Validation et intégration
-
-```text
-pytest ciblé experiments/provider/tools/market-selection : 136 passed
-pytest backend : 460 passed, 2 warnings
-ruff check backend : All checks passed!
-mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
-git diff --check : aucune erreur, uniquement warnings LF -> CRLF
-commit : 84548d23efda0b0a8e2c1350bacc830c1de34140
-```
-
-Le commit a été poussé sur `origin/main` et le working tree opérateur était propre après push.
-
-## Batch 18.6 — intégré
-
-### Objectif
-
-Rendre le recovery/restart du ledger PAPER multi-actifs déterministe et durable sans rejouer une
-décision Agent, un `ExecutionIntent` ou un `Fill` historique.
-
-### Audit confirmé
-
-Avant 18.6 :
-
-- `AppRuntime.initialize()` créait systématiquement un run durable neuf ;
-- `build_paper_runtime()` créait systématiquement un `PaperPortfolioLedger` depuis le capital
-  initial configuré ;
-- les cycles, décisions, risk assessments, intents, fills et snapshots de portefeuille étaient
-  durables ;
-- le ledger courant restait process-local ;
-- le Broker pouvait muter le ledger avant que `AuditedTradingCycleRunner` ne committe le graphe ;
-- aucun recovery canonique n'était câblé au restart.
-
-### Design intégré
-
-- conserver un nouveau `paper_run_id` par lifetime backend ;
-- relier le nouveau run avec `resumed_from_paper_run_id` ;
-- persister `initial_portfolio_payload` et `current_portfolio_payload` ;
-- identité de recovery : `paper-ledger-recovery-v1` ;
-- migration `0005_paper_run_recovery` ;
-- mise à jour de `current_portfolio_payload` dans la même transaction que le cycle `COMPLETED` ;
-- checkpoint mémoire avant chaque cycle audité ;
-- rollback du ledger pour les cycles `FAILED`, les erreurs de persistance et les replays
-  idempotents ;
-- restart depuis `current_portfolio_payload` sans replay historique ;
-- analytics du run courant rejouée sur la lignée `resumed_from_paper_run_id` pour conserver les
-  métriques cumulées à travers les restarts ;
-- validation de l'univers, des balances, de l'inventaire SPOT et des positions PERPETUAL ;
-- migration legacy uniquement lorsque l'état terminal est non ambigu ; sinon fail-closed.
-
-### État restauré
-
-- cash disponible ;
-- inventaire SPOT ;
-- positions PERPETUAL LONG/SHORT ;
-- quantité, entry price, mark, notional ;
-- realized/unrealized P&L ;
-- levier, marge et maintenance ;
-- cumulative funding et `funding_updated_at` ;
-- liquidation price portée par le dernier snapshot durable.
-
-Les coûts/frais déjà réalisés restent reflétés dans le cash et auditables dans les fills historiques.
-
-### Validation locale et intégration
-
-```text
-Alembic 0004_multi_market_selection -> 0005_paper_run_recovery sur PostgreSQL : OK
-pytest ciblé recovery/persistence/trading/broker : 75 passed
-pytest backend : 468 passed, 2 warnings
-ruff check backend : All checks passed!
-mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
-git diff --check : aucune erreur, uniquement warnings LF -> CRLF
-commit : 9642ec394357fe1e1807b538a2353bdc6d062f46
-```
-
-Le commit a été poussé sur `origin/main` et le working tree opérateur était propre après push.
-
-## Batch 18.7 — intégré
-
-### Objectif
-
-Durcir les pannes transitoires observées sur Kraken public et Responses API sans modifier la
-stratégie, sans masquer les erreurs et sans introduire de double exécution.
-
-### Audit retenu
-
-- le WebSocket SPOT possède déjà un reconnect borné ;
-- les clients REST publics SPOT/Derivatives n'avaient aucun retry ;
-- le client Responses API n'avait aucun retry ;
-- les erreurs HTTP/transport étaient agrégées en types trop génériques pour diagnostiquer 429,
-  5xx, timeout et connectivité depuis l'audit ;
-- le runner transforme déjà toute panne technique en cycle `FAILED`, jamais en `HOLD` ;
-- `AuditedTradingCycleRunner` 18.6 restaure déjà le checkpoint ledger pour tout cycle `FAILED` ;
-- le Broker est state-mutating et ne doit recevoir aucun retry générique.
-
-### Implémentation intégrée
-
-- `core/retry.py` : budget borné + backoff exponentiel + logs sanitaires ;
-- REST Kraken public : 3 tentatives max uniquement sur timeout/transport, 408, 429 et 5xx ;
-- Responses API : 2 tentatives max sur les mêmes classes transitoires avant décision durable ;
-- 4xx permanent, JSON/payload invalide et contrat provider invalide : échec immédiat ;
-- wrappers REST placés avant toute mutation de `MarketState`/ledger, jamais autour du snapshot
-  PERPETUAL complet ;
-- types d'erreur dédiés pour timeout, réseau, rate-limit, 5xx et HTTP permanent ;
-- aucun retry Risk, Broker, audit DB ou recovery ;
-- aucun jitter dans ce batch, afin de conserver des tests déterministes sur le runtime mono-Agent.
-
-### Compatibilité visée
-
-Aucun bump de `agent-strategy-v4`, `paper-experiment-v1/v2/v3` ou
-`paper-ledger-recovery-v1`. Aucune migration PostgreSQL.
-
-### Validation locale et intégration
-
-```text
-pytest backend/tests/test_network_resilience.py backend/tests/test_openai_client.py : 27 passed
-pytest backend/tests/test_trading_engine.py backend/tests/test_market_selection_runner.py backend/tests/test_paper_recovery.py : 55 passed
-pytest backend : 487 passed, 2 warnings de dépréciation dépendances
-ruff check backend : All checks passed!
-mypy --config-file backend/pyproject.toml backend/src : Success, 81 source files
-git diff --check : aucune erreur, uniquement warnings LF -> CRLF
-```
-
-Aucune migration PostgreSQL n'est ajoutée par ce batch. Intégration confirmée sur `main` au commit
-`0886216324106d941c3df0e30f074e24dbe1d33a`
-(`feat: add bounded network retry resilience`). Le working tree opérateur était propre après push.
-
-## Batch 18.8 — intégré
-
-### Objectif
-
-Mesurer la résilience réseau/LLM ajoutée en 18.7 sur des cycles PAPER réels, confirmer le recovery
-18.6 au restart et décider à partir de données réelles s'il faut modifier budgets, jitter,
-configuration ou observabilité.
-
-### Validation recovery réelle
-
-- changement d'univers entre le dernier run durable et la configuration courante :
-  `PaperRunRecoveryError`, démarrage refusé fail-closed ;
-- restauration de l'univers parent : handoff réel vers un nouveau `paper_run_id` ;
-- lignée confirmée :
-  `9a6bea62-d0c3-425d-b0f8-99229fc5a2ed`
-  -> `fc5c87ef-3bb6-41cf-a1de-cd4b820f2b24` ;
-- `recovery_version = paper-ledger-recovery-v1` sur le successeur ;
-- `ended_at` renseigné sur le parent ;
-- aucun replay de décision/intention/fill nécessaire au handoff.
-
-### Campagne multi-marché réelle
-
-Univers `SPOT:BTC/USD + PERPETUAL:ETH/USD`, modèle `gpt-5.6-luna` :
-
-```text
-10/10 cycles COMPLETED
-HTTP 200 : 10/10
-BTC/USD SPOT sélectionné : 7
-ETH/USD PERPETUAL sélectionné : 3
-décisions naturelles : 10 HOLD
-durée min/max : ~13,0s / ~22,1s
-moyenne : ~15,6s
-médiane : ~15,0s
-network_retry* observé : 0
-doublons détectés : 0
-motif de secret détecté dans le scan ciblé : 0
-```
-
-### Campagne mono-marché réelle
-
-Base PostgreSQL isolée et migrée jusqu'à `0005_paper_run_recovery`, univers
-`PERPETUAL:BTC/USD`, modèle `gpt-5.6-luna` :
-
-```text
-10/10 cycles COMPLETED
-HTTP 200 : 10/10
-décisions naturelles : 10 HOLD
-durée min/max : ~5,9s / ~10,1s
-moyenne : ~7,9s
-médiane : ~7,4s
-network_retry* observé : 0
-doublons détectés : 0
-motif de secret détecté dans le scan ciblé : 0
-```
-
-### Conclusions
-
-- aucune donnée réelle ne justifie d'augmenter les budgets 3 Kraken / 2 Responses ;
-- aucun jitter n'est justifié ;
-- aucune exposition des budgets dans `Settings` n'est justifiée ;
-- aucun backend métrique dédié n'est justifié sur cet échantillon ;
-- les logs suffisent pour une campagne courte, mais un retry récupéré n'est pas persisté comme
-  métrique durable ;
-- les deadlines observées `MARKET=20s`, `AGENT=35s`, transport Kraken `10s`, transport OpenAI
-  `30s` fonctionnent au nominal ;
-- elles ne garantissent pas l'épuisement du budget théorique lors de timeouts transport complets :
-  le deadline de stage reste volontairement l'autorité temporelle supérieure ;
-- zéro retry naturel ne prouve pas que les retries sont inutiles.
-
-Limite : les 20 décisions réelles étaient `HOLD`. Aucun nouveau `ExecutionIntent`, appel Broker ou
-fill n'a donc été exercé par ces campagnes. Les protections anti-duplication de ces branches restent
-couvertes par les tests déterministes 18.7, pas par un BUY/SELL artificiellement forcé.
-
-Dette d'observabilité repérée : `/api/v1/paper-runs` n'expose pas actuellement
-`resumed_from_paper_run_id` et `recovery_version`, bien que ces champs soient durables et présents
-dans `PaperRunView`. Aucun patch n'est imposé par 18.8.
-
-Aucun test automatisé n'a été rejoué pendant 18.8, le batch ne modifiant pas le code.
-
-Intégration documentaire confirmée sur `main` au commit
-`36e6f46dd7c427d40426c98ee57f30ed4fd466c2`
-(`docs: record batch 18.8 behavioral validation`).
-
-## Prochains candidats après 18.8
-
-Aucune modification de la politique réseau n'est prioritaire sur la seule base de ces 20 cycles.
-Candidats séparés :
-
-- campagne PAPER plus longue pour mesurer des retries/429/5xx/timeouts naturels avant tout tuning ;
-- exposition de la lignée recovery dans l'API si le besoin opératoire est confirmé ;
-- enrichissement mesuré des données de recherche : order book, trades, funding historique, news ;
-- campagnes Luna/Sol sur univers multi-marché sous `paper-experiment-v3` ;
-- valorisation multi-quote avec FX explicite seulement si le besoin est mesuré ;
-- FUTURE daté seulement si le domaine correspondant est réellement implémenté ;
-- LIVE toujours dans un batch séparé.
+Les deux warnings pytest sont des dépréciations de dépendances Starlette/httpx et AnyIO.
+
+18.9A est donc **validé localement**. Il ne doit être marqué **intégré** qu'après commit et push
+explicites par l'opérateur.
+
+## Batch 18.9B — prochain batch après intégration 18.9A
+
+Cockpit frontend uniquement à partir des contrats backend stabilisés :
+
+- liste/création/édition par nouvelle révision des stratégies ;
+- comparaison de révisions ;
+- builder Campaign SPOT/PERPETUAL ;
+- Luna/Sol, agressivité, cadence, capital, coûts ;
+- levier et Risk PERPETUAL ;
+- preview prompt ;
+- activation/reprise ;
+- contrôle `run-cycle`, Start, Stop ;
+- visualisation `campaign_id`, `paper_run_id`, recovery.
+
+Le frontend ne devient jamais l'application de trading et sa fermeture ne doit pas arrêter le
+backend.
+
+## Batch 18.9C — après 18.9B
+
+Validation comportementale réelle via cockpit :
+
+- création stratégie/révision ;
+- campagnes SPOT et PERPETUAL ;
+- reprise après restart ;
+- campagne modifiée => nouvelle identité ;
+- observation de BUY/SELL naturels si le marché/Agent en produit, sans forcer artificiellement une
+  décision stratégique ;
+- comparaison Luna/Sol et audit des digests ;
+- contrôle de l'absence de secrets et de replay.
+
+## Plus tard
+
+- enrichissement research uniquement sur besoin mesuré ;
+- multi-quote/FX explicite avant tout univers multi-devise ;
+- FUTURE daté seulement avec domaine/exécution dédiés ;
+- LIVE dans un projet/batch séparé avec permissions et barrières explicites.

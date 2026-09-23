@@ -1,45 +1,53 @@
 # AI Spot Trader
 
-AI Spot Trader est une application expérimentale de trading crypto **PAPER** sur Kraken,
-pilotée par **un seul Agent IA stratégique**. L'Agent choisit le marché à analyser et propose
-`BUY`, `SELL` ou `HOLD`; un **Risk Engine déterministe** conserve l'autorité finale et reste le
-seul composant autorisé à créer un `ExecutionIntent`.
+AI Spot Trader est une application expérimentale de trading crypto **PAPER** sur Kraken, pilotée
+par **un seul Agent IA stratégique**. L'Agent recherche, sélectionne un marché exécutable puis
+propose `BUY`, `SELL` ou `HOLD`. Le **Risk Engine déterministe** conserve l'autorité finale : seul
+Risk peut produire un `ExecutionIntent`, ensuite exécuté par le `PaperBroker`.
 
-## Référence de développement
+> Objectif expérimental : rechercher une performance élevée, avec une cible de travail de +4 %/jour.
+> Ce n'est ni une promesse ni une garantie de rendement.
 
-État intégré courant :
+## Référence intégrée au départ du Batch 18.9A
 
 ```text
 repository : Ax-07/AI-Spot-Trader
 branche    : main
-HEAD       : 4042e0b0e6394de788009229e3dae5924cd732d7
-commit     : fix: support nested Kraken derivative margin schedules
+HEAD       : 2b0d227454f2bf894b075b8deef3378e2fe823b4
+commit     : docs: finalize batch 18.8 integration reference
 ```
 
-Les **Batches 18.1, 18.2 et 18.3 sont intégrés** sur `main`. Le Batch 18.3 a validé en PAPER le
-pipeline multi-marchés/cross-symbol et la branche PERPETUAL réelle, puis corrigé le parsing
-fail-closed des `marginSchedules` publics Kraken lorsqu'ils sont imbriqués par région/profil.
+Dernier commit code intégré au départ du batch :
 
-## Principes
+```text
+0886216324106d941c3df0e30f074e24dbe1d33a
+feat: add bounded network retry resilience
+```
+
+Le Batch 18.9A introduit un **Control Plane backend**. Le patch est désormais **validé localement**
+(504 tests, Ruff, mypy et migration PostgreSQL `0006`), mais reste non intégré à `main` tant que
+le commit et le push opérateur ne sont pas effectués.
+
+## Invariants
 
 - un seul Agent IA stratégique ;
 - Kraken comme exchange initial ;
 - PAPER uniquement ;
 - SPOT sans short, levier ni marge ;
-- PERPETUAL linéaire avec LONG/SHORT, marge ISOLATED et protections déterministes ;
-- le LLM ne choisit ni le levier ni `reduce_only` ;
-- aucune sortie LLM et aucun tool ne déclenche directement un ordre ;
-- frais, spread, slippage et funding restent pris en compte ;
-- toutes les décisions, recherches et sélections causales sont auditables ;
-- aucune clé Kraken privée n'est nécessaire ;
-- aucun secret dans prompts, logs ou Git ;
+- PERPETUAL linéaire LONG/SHORT, marge `ISOLATED` ;
+- levier configuré/déterministe, jamais choisi par le LLM ;
+- aucune sortie LLM -> Broker ;
+- aucun tool -> Broker/Risk ;
+- Risk autorise, modifie ou refuse et garde l'autorité finale ;
+- aucun secret dans les prompts, campagnes, réponses API ou fichiers versionnés ;
+- aucun replay LLM/Risk/Broker/Fill lors du recovery ;
 - aucun look-ahead ;
-- backend indépendant du frontend ;
-- cible +4 %/jour = objectif expérimental, jamais une garantie.
+- toutes les décisions, dont `HOLD`, restent auditables ;
+- le backend reste indépendant du frontend.
 
-Principe : **l'Agent cherche, sélectionne et propose ; Risk autorise, modifie ou refuse.**
+Principe : **l'Agent propose. Le Risk Engine autorise, modifie ou refuse.**
 
-## Architecture intégrée — Batch 18.2, validée en Batch 18.3
+## Pipeline canonique
 
 ```text
 PortfolioState complet
@@ -48,190 +56,196 @@ PortfolioState complet
 MarketSelectionInput
         |
         v
-même Agent stratégique
-   |        \
-   |         +--> list_markets / get_market_snapshot (read-only)
-   |                         |
-   +-------------------------+
-        |
+OpenAIDecisionProvider (Agent unique)
+        |\
+        | +--> tools read-only Kraken publics
         v
-MarketSelection explicite
-(symbol + market_type + rationale + traces + digest)
-        |
-        v
-validation de l'univers PAPER exécutable
+MarketSelection (symbol + market_type + traces + digest)
         |
         v
 RoutedExecutableMarketDataSource
         |
-        +--> source SPOT d'exécution
-        |
-        +--> source PERPETUAL d'exécution
+        v
+MarketState canonique exact
         |
         v
-MarketState canonique exact du marché sélectionné
+AgentInput -> même Agent -> BUY / SELL / HOLD
         |
         v
-AgentInput + même Agent
+RiskEngine -> ALLOW / MODIFY / REJECT
         |
         v
-BUY / SELL / HOLD
+ExecutionIntent éventuel -> PaperBroker -> Fill
         |
         v
-Risk Engine -> ExecutionIntent éventuel -> PaperBroker
+Audit PostgreSQL + ledger PAPER durable
 ```
 
-Il n'existe pas de second Agent, scanner, ranking, `opportunity score` ou présélection
-algorithmique. Le code déterministe vérifie uniquement qu'un choix de l'Agent est techniquement
-et réglementairement représentable par le runtime.
+Il n'existe ni second Agent, ni moteur parallèle, ni scanner déterministe qui choisit
+l'opportunité à la place du LLM.
 
-## Univers exécutable typé
+## Control Plane — Batch 18.9A
 
-Le Batch 18.2 intégré ajoute :
+Le Control Plane ajoute trois concepts persistants.
+
+### Strategy / StrategyRevision
+
+`Strategy` porte l'identité et le nom d'une stratégie. `StrategyRevision` est immuable et contient
+le texte stratégique opérateur, son digest SHA-256, la version du contrat Agent protégé et son
+timestamp.
+
+Le digest du prompt utilise la normalisation `strategy-prompt-sha256-v1` :
+
+1. CRLF/CR -> LF ;
+2. suppression des espaces de fin de ligne ;
+3. suppression des blancs extérieurs ;
+4. SHA-256 UTF-8 du texte normalisé.
+
+Créer un nouveau texte crée une nouvelle révision. Renommer la stratégie ne change aucun digest.
+Les révisions refusent des motifs de secrets connus au lieu de les recopier dans le prompt.
+
+### Contrat Agent protégé + stratégie opérateur
+
+Les nouveaux runtimes de campagne composent les instructions dans cet ordre :
 
 ```text
-AI_SPOT_TRADER_PAPER_EXECUTABLE_MARKETS
+contrat applicatif protégé
++ stratégie opérateur éditable
++ contexte d'agressivité canonique
 ```
 
-Format :
+L'input dynamique (`MarketSelectionInput` ou `AgentInput`) reste envoyé séparément et n'est jamais
+inventé par l'API de preview.
+
+Le contrat protégé impose toujours PAPER, BUY/SELL/HOLD structurés, les sémantiques SPOT/PERP,
+l'absence d'accès Broker/Risk depuis le LLM/tools, l'autorité finale de Risk et l'interdiction
+d'inventer des faits. Une stratégie « ignore Risk » n'ajoute aucun chemin d'exécution : elle reste
+subordonnée au contrat et le pipeline déterministe demeure inchangé.
+
+### Campaign
+
+Une `Campaign` est un snapshot immuable de configuration opérateur non sensible :
+
+- modèle Luna/Sol ;
+- agressivité et cadence ;
+- capital initial, actif de règlement et univers SPOT/PERP ;
+- frais, spread, slippage ;
+- levier/marge PERPETUAL ;
+- limites Risk SPOT et PERPETUAL ;
+- deadlines MARKET/AGENT/BROKER ;
+- stratégie/révision/digest ;
+- `configuration_digest` et `experiment_digest`.
+
+`OPENAI_API_KEY`, `DATABASE_URL` et les futurs secrets privés Kraken/LIVE restent exclusivement
+dans la configuration serveur et ne font pas partie du modèle Campaign.
+
+## `paper-experiment-v4`
+
+Le Control Plane introduit `paper-experiment-v4` comme identité de campagne. Son digest canonique
+inclut au minimum :
 
 ```text
-["SPOT:BTC/USD", "SPOT:ETH/USD", "PERPETUAL:SOL/USD"]
+strategy_id
+strategy_revision
+strategy_prompt_digest
+base_agent_contract_version
+configuration_digest
 ```
 
-`paper_symbol + paper_market_type` restent le **bootstrap de compatibilité** et doivent appartenir
-à cet univers lorsqu'il est configuré. Ils ne fixent plus le marché de chaque cycle.
+Le `configuration_digest` couvre les paramètres structurels effectifs, notamment les limites Risk
+PERPETUAL qui n'étaient pas toutes représentées par le snapshot Risk historique v3.
 
-Contraintes actuelles :
+Les protocoles `paper-experiment-v1`, `v2` et `v3` ne sont pas réinterprétés ni migrés. Leur code de
+validation et leurs anciens digests restent leur source de vérité historique.
 
-- uniquement `SPOT` et `PERPETUAL` linéaire ;
-- `FUTURE` daté reste découvrable mais non exécutable ;
-- chaque symbole exécutable doit rester présent dans `risk_allowed_pairs` ;
-- tous les marchés d'un même runtime utilisent le même actif de règlement/quote ;
-- la présence d'un instrument dans Kraken ou dans `list_markets` ne l'autorise jamais à elle seule.
-
-## Recherche vs exécution
-
-Les sources Kraken de **recherche** restent distinctes des sources de **trading/exécution**.
-Une recherche Derivatives n'a aucun `market_sink` et ne peut donc ni marquer le ledger, ni
-accumuler du funding, ni modifier le portefeuille.
-
-Seule l'acquisition du marché finalement sélectionné passe par le routeur d'exécution. Pour un
-PERPETUAL, cette acquisition peut mettre à jour le mark/funding d'une position déjà ouverte ; le
-`PortfolioState` final fourni à l'Agent est capturé ensuite.
-
-## Causalité et audit
-
-Le journal permet de reconstruire :
+## Campaign vs `paper_run`
 
 ```text
-cycle
--> MarketSelectionInput
--> AgentToolTrace(s)
--> MarketSelection
--> MarketState exécutable
--> AgentInput final
--> DecisionCandidate
--> RiskAssessment
--> ExecutionIntent éventuel
--> Fill éventuel
+Campaign = identité configuration/stratégie expérimentale
+paper_run = lifetime d'exécution/recovery
 ```
 
-Une panne après sélection mais avant décision finale conserve la sélection et ses traces.
-Le digest du cycle inclut ces artefacts. Le résumé `/api/v1/cycles` expose aussi le `symbol` et le
-`market_type` sélectionnés lorsqu'une décision n'existe pas encore.
+Une même campagne peut produire plusieurs `paper_run_id` successifs. Chaque reprise :
 
-## `paper_runs` multi-marchés
+- conserve `campaign_id` ;
+- crée un nouveau `paper_run_id` ;
+- renseigne `resumed_from_paper_run_id` ;
+- conserve `paper-ledger-recovery-v1` ;
+- restaure le snapshot durable sans replay LLM/Risk/Broker/Fill.
 
-La migration `0004_multi_market_selection` ajoute un univers durable typé :
+Changer stratégie, révision ou configuration implique une **nouvelle campagne**. Une reprise ne
+cherche que les runs de la campagne demandée et échoue fermée en cas d'incompatibilité.
+
+## API Control Plane
+
+Sous `/api/v1` :
 
 ```text
-paper_runs.execution_universe_payload
+POST   /strategies
+GET    /strategies
+GET    /strategies/{strategy_id}
+PATCH  /strategies/{strategy_id}
+POST   /strategies/{strategy_id}/archive
+POST   /strategies/{strategy_id}/revisions
+GET    /strategies/{strategy_id}/revisions/{revision}
+GET    /strategies/{strategy_id}/compare?left=1&right=2
+
+POST   /campaigns
+GET    /campaigns
+GET    /campaigns/active
+GET    /campaigns/{campaign_id}
+POST   /campaigns/{campaign_id}/activate
+POST   /campaigns/{campaign_id}/resume
+
+POST   /prompt-preview
 ```
 
-Les anciens runs singleton sont automatiquement backfillés. Pour un nouveau run réellement
-multi-marché :
+Les commandes moteur existantes restent canoniques :
 
 ```text
-paper_runs.symbol      = NULL
-paper_runs.market_type = NULL
+POST /api/v1/engine/run-cycle
+POST /api/v1/engine/start
+POST /api/v1/engine/stop
 ```
 
-Aucun faux `symbol="MULTI"` ou `market_type="MULTI"` n'est inventé. L'API `/api/v1/paper-runs`
-expose `execution_universe` et conserve les champs historiques uniquement pour un singleton réel.
+L'API `/api/v1/paper-runs` expose désormais aussi `campaign_id`,
+`resumed_from_paper_run_id` et `recovery_version`.
 
-## Analytics multi-marchés
+## Persistence PostgreSQL
 
-`paper-analytics-v3` valorise les positions SPOT détenues à partir du **dernier mark SPOT causal
-durable** connu pour chaque actif. Aucun prix futur ou prix courant hors journal n'est injecté.
-Les positions Derivatives continuent d'utiliser leurs marks/P&L durables dans `PortfolioState`.
-
-Si un actif détenu ne possède aucun mark causal disponible, l'analytics échoue explicitement au
-lieu d'inventer une valorisation.
-
-## Kraken Derivatives public
-
-Le parser des instruments accepte les formes publiques observées de `marginLevels`,
-`retailMarginLevels` et `marginSchedules`, y compris les schedules imbriqués par région/profil.
-Chaque feuille reste validée fail-closed. Comme le runtime public ne connaît pas le tier privé du
-compte, il conserve une politique volontairement conservatrice : le taux de marge public le plus
-strict disponible est retenu.
-
-## Migrations PostgreSQL
-
-La migration `0004_multi_market_selection` est intégrée. Elle a été appliquée avec succès sur
-PostgreSQL lors de la validation locale précédant l'intégration.
-
-Chaîne intégrée :
+Chaîne de migrations :
 
 ```text
-0001_audit_journal
--> 0002_paper_runs
+0001_create_audit_journal
+-> 0002_add_paper_runs
 -> 0003_agent_tool_traces
 -> 0004_multi_market_selection
+-> 0005_paper_run_recovery
+-> 0006_paper_control_plane
 ```
 
-Le downgrade de `0004` refuse de s'exécuter si des runs multi-marchés existent, car les anciennes
-colonnes singleton ne pourraient pas les représenter honnêtement.
+`0006_paper_control_plane` crée `strategies`, `strategy_revisions`, `campaigns` et ajoute le FK
+nullable `paper_runs.campaign_id`. Les anciens runs restent valides avec `campaign_id = NULL`.
 
-## Validation jusqu'au Batch 18.3
+## Démarrage sans campagne active
 
-Validation locale confirmée :
+Avec l'infrastructure serveur configurée (`DATABASE_URL`, migrations appliquées), FastAPI démarre
+le Control Plane sans créer implicitement de campagne ni de run. Le moteur est alors
+`UNAVAILABLE` jusqu'à activation/reprise explicite. `OPENAI_API_KEY` n'entre dans aucune Campaign ;
+il est requis au moment de composer un runtime Agent réel.
 
-```text
-pytest backend : 449 passed, 2 warnings
-ruff check backend : All checks passed!
-mypy --config-file backend/pyproject.toml backend/src : Success, 79 source files
-git diff --check : aucune erreur, uniquement warnings LF -> CRLF avant commit
+## Validation
+
+Commandes de validation de référence sous PowerShell :
+
+```powershell
+pytest backend
+ruff check backend
+mypy --config-file backend/pyproject.toml backend/src
+alembic -c backend/alembic.ini upgrade head
+git diff --check
+git status --short
 ```
 
-Validation comportementale PAPER confirmée :
-
-- sélection cross-symbol SPOT réelle ;
-- univers mixte `SPOT:BTC/USD + PERPETUAL:ETH/USD` réellement chargé et recherché ;
-- plusieurs cycles mixtes SPOT terminés `COMPLETED` ;
-- branche `PERPETUAL:ETH/USD` validée séparément de la sélection au `MarketState`, puis décision
-  `HOLD` et Risk `ALLOW` ;
-- catalogue public Kraken Derivatives parsé après correction (296 instruments lors du smoke).
-
-Deux incidents ponctuels ont été observés sans reproduction durable : un timeout de reacquisition
-SPOT au stage `MARKET` et un `LLMTransportError` au stage `MARKET_SELECTION`.
-
-Non revendiqué : aucune sélection PERPETUAL spontanée depuis l'univers mixte n'a été observée et
-aucun fill réel n'a été produit pendant ces smokes (`HOLD` reste une décision valide).
-
-Les deux warnings Starlette/AnyIO sont non bloquants.
-
-## Sécurité / LIVE
-
-LIVE reste hors périmètre. Il nécessitera un batch séparé avec permissions minimales sans retrait,
-idempotence, réconciliation, recovery et activation explicite.
-
-## Documentation
-
-- `docs/00_ETAT_ACTUEL.md` : reprise courte ;
-- `docs/01_PROJECT_MASTER.md` : spécification principale ;
-- `docs/02_ARCHITECTURE_TECHNIQUE.md` : architecture ;
-- `docs/03_AGENT_TRADING_RISK.md` : responsabilités Agent/Risk ;
-- `docs/09_ROADMAP_DEVELOPPEMENT.md` : roadmap ;
-- `docs/10_DECISIONS_ET_CHANGELOG.md` : décisions et changelog.
+Le frontend de configuration complet appartient au Batch 18.9B et n'est pas implémenté dans
+18.9A.

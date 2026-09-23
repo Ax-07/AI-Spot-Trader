@@ -68,6 +68,7 @@ def _response(
             universe = ()
     return PaperRunResponse(
         paper_run_id=value.paper_run_id,
+        campaign_id=getattr(value, "campaign_id", None),
         started_at=value.started_at,
         ended_at=value.ended_at,
         market_type=value.market_type,
@@ -79,6 +80,8 @@ def _response(
             )
             for item in universe
         ),
+        resumed_from_paper_run_id=value.resumed_from_paper_run_id,
+        recovery_version=value.recovery_version,
         is_current=value.paper_run_id == current_run_id,
     )
 

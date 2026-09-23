@@ -197,12 +197,15 @@ class ExecutableMarketResponse(ApiModel):
 
 class PaperRunResponse(ApiModel):
     paper_run_id: UUID
+    campaign_id: UUID | None = None
     started_at: datetime
     ended_at: datetime | None = None
     # Legacy singleton projection. Genuine multi-market runs return null here.
     market_type: Literal["SPOT", "PERPETUAL", "FUTURE"] | None = None
     symbol: str | None = None
     execution_universe: tuple[ExecutableMarketResponse, ...] = ()
+    resumed_from_paper_run_id: UUID | None = None
+    recovery_version: str | None = None
     is_current: bool = False
 
 
