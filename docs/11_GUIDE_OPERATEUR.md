@@ -85,6 +85,13 @@ au contrat backend actuel.
 - pas de marge ;
 - SELL ne peut réduire qu'un actif réellement détenu et disponible.
 
+Pour les positions ouvertes avec la comptabilité Batch 19.1, le backend expose également le prix
+moyen d'entrée, le coût de revient restant et le P&L réalisé cumulé de la position courante. Les
+anciennes positions restaurées depuis un snapshot qui ne contenait pas de base de coût sont marquées
+comme comptabilité incomplète ; le cockpit affiche alors `—` au lieu d'inventer une valeur.
+
+Le P&L latent SPOT reste à `—` tant que le mark-to-market canonique du Batch 19.2 n'est pas intégré.
+
 ### PERPETUAL
 
 Périmètre actuel : contrats linéaires PAPER avec LONG/SHORT, marge `ISOLATED` uniquement, levier
@@ -149,9 +156,9 @@ aussi préfixé par `+` ou `−` pour ne pas dépendre uniquement du rouge/vert.
 
 ### SPOT
 
-Le contrat portefeuille SPOT expose actuellement seulement l'actif, la quantité et la quantité
-disponible. Il n'expose pas un prix d'entrée moyen ni un P&L par position. Ces champs restent donc à
-`—` au lieu d'être reconstruits côté frontend.
+Le backend expose quantité, disponible, prix moyen d'entrée, coût de revient restant, P&L réalisé et
+un indicateur `accounting_complete`. Le cockpit affiche ces données telles quelles, sans recalculer
+la comptabilité. Le P&L latent reste volontairement à `—` jusqu'au Batch 19.2.
 
 ## 12. Lire Historique
 

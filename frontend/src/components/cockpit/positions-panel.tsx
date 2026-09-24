@@ -70,25 +70,26 @@ export function PositionsPanel() {
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div><CardTitle>SPOT</CardTitle><CardDescription>Actifs effectivement détenus par le ledger PAPER backend.</CardDescription></div>
+            <div><CardTitle>SPOT</CardTitle><CardDescription>Inventaire et comptabilité canonique du ledger PAPER backend.</CardDescription></div>
             <Badge tone="info">{spotPositions.length} position(s)</Badge>
           </div>
         </CardHeader>
         <CardContent>
           {spotPositions.length ? (
             <div className="overflow-x-auto rounded-xl border border-border/80">
-              <table className="w-full min-w-[760px] text-sm">
-                <thead className="bg-muted/60 text-left text-xs text-muted-foreground"><tr><th className="px-4 py-3 font-semibold">Actif</th><th className="px-4 py-3 text-right font-semibold">Quantité</th><th className="px-4 py-3 text-right font-semibold">Disponible</th><th className="px-4 py-3 text-right font-semibold">Prix d’entrée</th><th className="px-4 py-3 text-right font-semibold">Prix actuel</th><th className="px-4 py-3 text-right font-semibold">P&L position</th></tr></thead>
+              <table className="w-full min-w-[1050px] text-sm">
+                <thead className="bg-muted/60 text-left text-xs text-muted-foreground"><tr><th className="px-4 py-3 font-semibold">Actif</th><th className="px-4 py-3 text-right font-semibold">Quantité</th><th className="px-4 py-3 text-right font-semibold">Disponible</th><th className="px-4 py-3 text-right font-semibold">Coût moyen</th><th className="px-4 py-3 text-right font-semibold">Coût restant</th><th className="px-4 py-3 text-right font-semibold">Prix actuel</th><th className="px-4 py-3 text-right font-semibold">P&L réalisé</th><th className="px-4 py-3 text-right font-semibold">P&L latent</th></tr></thead>
                 <tbody className="divide-y divide-border/80">
                   {spotPositions.map((position) => {
                     const currentPrice = market?.symbol.startsWith(`${position.asset}/`) ? market.last_price : null;
-                    return <tr key={position.asset} className="transition-colors hover:bg-muted/30"><td className="px-4 py-3 font-semibold">{position.asset}</td><td className="px-4 py-3 text-right font-mono tabular-nums">{formatDecimal(position.quantity)}</td><td className="px-4 py-3 text-right font-mono tabular-nums">{formatDecimal(position.available)}</td><td className="px-4 py-3 text-right text-muted-foreground">—</td><td className="px-4 py-3 text-right font-mono tabular-nums">{currentPrice ? formatDecimal(currentPrice) : "—"}</td><td className="px-4 py-3 text-right text-muted-foreground">—</td></tr>;
+                    const accountingAvailable = position.accounting_complete;
+                    return <tr key={position.asset} className="transition-colors hover:bg-muted/30"><td className="px-4 py-3 font-semibold">{position.asset}</td><td className="px-4 py-3 text-right font-mono tabular-nums">{formatDecimal(position.quantity)}</td><td className="px-4 py-3 text-right font-mono tabular-nums">{formatDecimal(position.available)}</td><td className="px-4 py-3 text-right font-mono tabular-nums">{accountingAvailable && position.average_entry_price ? formatDecimal(position.average_entry_price) : "—"}</td><td className="px-4 py-3 text-right font-mono tabular-nums">{accountingAvailable && position.remaining_cost_basis ? formatDecimal(position.remaining_cost_basis) : "—"}</td><td className="px-4 py-3 text-right font-mono tabular-nums">{currentPrice ? formatDecimal(currentPrice) : "—"}</td><td className={cn("px-4 py-3 text-right font-mono font-semibold tabular-nums", accountingAvailable ? pnlClass(position.realized_pnl) : "text-muted-foreground")}>{accountingAvailable ? signedDecimal(position.realized_pnl) : "—"}</td><td className="px-4 py-3 text-right text-muted-foreground">—</td></tr>;
                   })}
                 </tbody>
               </table>
             </div>
           ) : <p className="rounded-xl border border-dashed p-5 text-sm text-muted-foreground">Aucune position SPOT ouverte.</p>}
-          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">Le contrat portefeuille SPOT canonique expose actuellement quantité et disponibilité, mais pas de coût moyen ni de P&L par position. Le cockpit n’invente donc pas ces valeurs : le P&L et l’exposition globaux restent ceux des analytics backend.</p>
+          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">Le coût moyen, le coût restant et le P&L réalisé proviennent directement du backend. Les anciennes positions récupérées sans historique comptable restent marquées indisponibles. Le P&L latent attend le mark-to-market canonique du Batch 19.2.</p>
         </CardContent>
       </Card>
 

@@ -1,51 +1,41 @@
 # 00 — État actuel
 
-> Mémoire courte de reprise. À garder synthétique, factuelle et alignée avec GitHub `main`.
+> Mémoire courte de reprise. À garder synthétique, factuelle et alignée avec la base GitHub auditée et le patch local en cours.
 
 ## Référence technique
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub audité au démarrage du batch documentaire :
-  `9a312040eb671976b44e5f50077ca11a9d9213b3`
-- Commit fonctionnel intégré du Batch 18.13 :
-  `4cb0567cae6ff100c5ad9ad1df9e3f68b8f7ffd7`
-  (`feat: add dark mode and modernize cockpit UI`).
-- Commit documentaire suivant :
-  `9a312040eb671976b44e5f50077ca11a9d9213b3`
-  (`docs: sync batch 18.13 integrated state`).
-- Batch 18.13 : **INTÉGRÉ / VALIDÉ**.
+- HEAD GitHub `main` audité au démarrage du Batch 19.1 :
+  `dbdc8f83bb39c158ec7331ce2adba616d2922842`
+  (`docs: plan upcoming trading improvements`).
+- Le Batch 19.1 est implémenté dans le patch local livré avec ce document ; il n'est pas déclaré intégré à GitHub tant que l'opérateur ne l'a pas validé/commité.
 
-## État fonctionnel confirmé
+## État fonctionnel après application du Batch 19.1
 
 - un seul Agent IA stratégique ; Kraken ; PAPER uniquement ; SPOT + PERPETUAL linéaire ;
-- navigation actuelle : **Accueil / Configurer / Positions / Historique / Réglages** ;
 - Risk Engine déterministe = autorité finale ; aucune sortie LLM ne déclenche directement un ordre ;
-- `paper_executable_markets` constitue actuellement un univers statique configuré par Campaign ;
-- la sélection IA de marché est aujourd'hui liée au cycle stratégique multi-marchés ;
-- le portefeuille SPOT canonique expose `asset`, `quantity`, `available`, sans coût moyen ni P&L par position ;
-- les positions PERPETUAL exposent déjà coût moyen, mark, P&L, marge, liquidation et funding ;
-- le `rationale` de la décision IA existe et est audité, mais n'est pas encore exposé comme information métier dédiée dans le cockpit ;
-- Kraken Spot utilise déjà REST OHLC et WebSocket ticker côté backend, sans pipeline candles cockpit persistant ;
+- `paper_executable_markets` reste un univers statique configuré par Campaign ;
+- le portefeuille SPOT canonique expose désormais quantité, disponibilité, prix moyen d'entrée, coût de revient restant, P&L réalisé et `accounting_complete` ;
+- les BUY SPOT successifs utilisent un coût économique moyen pondéré (`coût restant / quantité`) ; le coût de revient utilise le débit cash réel incluant les frais ;
+- les ventes partielles libèrent le coût au prorata et réalisent le P&L à partir du crédit cash net ;
+- spread/slippage sont déjà incorporés au prix du fill et ne sont pas ajoutés une seconde fois au coût ;
+- les anciens snapshots sans base de coût restent récupérables avec `accounting_complete=false`, sans reconstruction rétrospective ;
+- le P&L latent SPOT reste à implémenter par le monitoring/mark-to-market du Batch 19.2 ;
+- le cockpit affiche les champs SPOT canoniques disponibles et ne reconstruit aucun calcul financier ;
+- PERPETUAL conserve sa comptabilité, sa marge, liquidation et son funding existants ;
 - frontend indépendant du moteur ; LIVE reste indisponible.
 
-## Améliorations planifiées
+## Prochaine priorité
 
-Le cadrage détaillé des prochaines améliorations est centralisé dans :
+1. Batch 19.2 — monitoring / mark-to-market déterministe indépendant de l'IA ;
+2. Batch 19.3 — mode gestion lorsque l'exposition interdit toute nouvelle ouverture ;
+3. Batch 19.4 — découverte dynamique des marchés et watchlist auditée ;
+4. Batch 19.5 — explicabilité dédiée IA / Risk ;
+5. Batch 19.6A/19.6B — candles/WebSocket puis vue Marchés et charts.
 
-`docs/11_AMELIORATIONS_PLANIFIEES.md`
-
-Axes prioritaires proposés :
-
-1. comptabilité SPOT canonique et P&L par position ;
-2. monitoring / mark-to-market déterministe indépendant de l'IA ;
-3. mode gestion lorsque l'exposition interdit toute nouvelle ouverture ;
-4. découverte dynamique des marchés et watchlist auditée ;
-5. explicabilité dédiée IA / Risk ;
-6. pipeline candles/WebSocket puis vue **Marchés** et charts.
-
-Les valeurs de cadence définitives et certains choix de persistence restent **à décider** pendant les batches d'implémentation correspondants.
+Le cadrage détaillé reste centralisé dans `docs/11_AMELIORATIONS_PLANIFIEES.md`.
 
 ## Règle de reprise
 
-À chaque nouveau batch : revérifier le HEAD GitHub réel avant de considérer la référence ci-dessus comme courante.
+À chaque nouveau batch : revérifier le HEAD GitHub réel, puis distinguer clairement état intégré, modifications locales et patch proposé.

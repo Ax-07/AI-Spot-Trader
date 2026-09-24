@@ -31,6 +31,18 @@ ONE = Decimal(1)
 class _PositionAmount:
     quantity: Decimal
     available: Decimal
+    average_entry_price: Decimal | None = None
+    remaining_cost_basis: Decimal | None = None
+    realized_pnl: Decimal = ZERO
+    accounting_complete: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class SpotFillAccounting:
+    """Ledger accounting returned to PaperBroker for durable SPOT Fill fields."""
+
+    realized_pnl: Decimal = ZERO
+    accounting_complete: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +76,10 @@ class PaperPortfolioLedger:
             position.asset: _PositionAmount(
                 quantity=position.quantity,
                 available=position.available,
+                average_entry_price=position.average_entry_price,
+                remaining_cost_basis=position.remaining_cost_basis,
+                realized_pnl=position.realized_pnl,
+                accounting_complete=position.accounting_complete,
             )
             for position in state.positions
         }
@@ -90,6 +106,10 @@ class PaperPortfolioLedger:
                     asset=asset,
                     quantity=amount.quantity,
                     available=amount.available,
+                    average_entry_price=amount.average_entry_price,
+                    remaining_cost_basis=amount.remaining_cost_basis,
+                    realized_pnl=amount.realized_pnl,
+                    accounting_complete=amount.accounting_complete,
                 )
                 for asset, amount in sorted(self._positions.items())
             ),
@@ -106,11 +126,18 @@ class PaperPortfolioLedger:
         quote_asset: str,
         quantity: Decimal,
         quote_debit: Decimal,
+        execution_price: Decimal | None = None,
     ) -> None:
         """Atomically debit settlement cash and increase a SPOT base-asset position."""
 
         _validate_positive(quantity, "quantity")
         _validate_positive(quote_debit, "quote_debit")
+        if execution_price is not None:
+            _validate_positive(execution_price, "execution_price")
+            if quote_debit < execution_price * quantity:
+                raise ValueError(
+                    "quote_debit cannot be lower than execution_price * quantity"
+                )
         if base_asset in self._balances:
             raise AmbiguousAssetRoleError(
                 f"cannot create position for balance asset {base_asset}"
@@ -125,15 +152,45 @@ class PaperPortfolioLedger:
 
         balances = dict(self._balances)
         positions = dict(self._positions)
+        current = positions.get(base_asset)
+        if current is not None and current.accounting_complete and execution_price is None:
+            raise ValueError("execution_price is required to preserve complete SPOT accounting")
+
         balances[quote_asset] = quote_available - quote_debit
-        current = positions.get(
-            base_asset,
-            _PositionAmount(quantity=ZERO, available=ZERO),
-        )
-        positions[base_asset] = _PositionAmount(
-            quantity=current.quantity + quantity,
-            available=current.available + quantity,
-        )
+        if current is None:
+            positions[base_asset] = _PositionAmount(
+                quantity=quantity,
+                available=quantity,
+                average_entry_price=(
+                    quote_debit / quantity if execution_price is not None else None
+                ),
+                remaining_cost_basis=quote_debit if execution_price is not None else None,
+                realized_pnl=ZERO,
+                accounting_complete=execution_price is not None,
+            )
+        elif current.accounting_complete:
+            assert current.average_entry_price is not None
+            assert current.remaining_cost_basis is not None
+            assert execution_price is not None
+            total_quantity = current.quantity + quantity
+            total_cost_basis = current.remaining_cost_basis + quote_debit
+            positions[base_asset] = _PositionAmount(
+                quantity=total_quantity,
+                available=current.available + quantity,
+                average_entry_price=total_cost_basis / total_quantity,
+                remaining_cost_basis=total_cost_basis,
+                realized_pnl=current.realized_pnl,
+                accounting_complete=True,
+            )
+        else:
+            # Historical snapshots created before Batch 19.1 do not contain enough facts to
+            # reconstruct a trustworthy cost basis. Keep them explicitly incomplete rather than
+            # inventing accounting from future fills.
+            positions[base_asset] = _PositionAmount(
+                quantity=current.quantity + quantity,
+                available=current.available + quantity,
+                realized_pnl=current.realized_pnl,
+            )
         self._balances = balances
         self._positions = positions
 
@@ -144,8 +201,8 @@ class PaperPortfolioLedger:
         quote_asset: str,
         quantity: Decimal,
         quote_credit: Decimal,
-    ) -> None:
-        """Atomically decrease a sellable SPOT base position and credit settlement cash."""
+    ) -> SpotFillAccounting:
+        """Atomically decrease SPOT inventory, realize P&L and credit settlement cash."""
 
         _validate_positive(quantity, "quantity")
         _validate_non_negative(quote_credit, "quote_credit")
@@ -168,16 +225,47 @@ class PaperPortfolioLedger:
         balances = dict(self._balances)
         positions = dict(self._positions)
         balances[quote_asset] = quote_available + quote_credit
-        remaining = _PositionAmount(
-            quantity=current.quantity - quantity,
-            available=current.available - quantity,
-        )
-        if remaining.quantity == ZERO and remaining.available == ZERO:
-            del positions[base_asset]
+        remaining_quantity = current.quantity - quantity
+        remaining_available = current.available - quantity
+        accounting = SpotFillAccounting()
+
+        if current.accounting_complete:
+            assert current.average_entry_price is not None
+            assert current.remaining_cost_basis is not None
+            released_cost_basis = current.remaining_cost_basis * quantity / current.quantity
+            realized_pnl = quote_credit - released_cost_basis
+            accounting = SpotFillAccounting(
+                realized_pnl=realized_pnl,
+                accounting_complete=True,
+            )
+            if remaining_quantity == ZERO and remaining_available == ZERO:
+                del positions[base_asset]
+            else:
+                remaining_cost_basis = (
+                    current.remaining_cost_basis - released_cost_basis
+                )
+                positions[base_asset] = _PositionAmount(
+                    quantity=remaining_quantity,
+                    available=remaining_available,
+                    average_entry_price=remaining_cost_basis / remaining_quantity,
+                    remaining_cost_basis=remaining_cost_basis,
+                    realized_pnl=current.realized_pnl + realized_pnl,
+                    accounting_complete=True,
+                )
         else:
-            positions[base_asset] = remaining
+            remaining = _PositionAmount(
+                quantity=remaining_quantity,
+                available=remaining_available,
+                realized_pnl=current.realized_pnl,
+            )
+            if remaining.quantity == ZERO and remaining.available == ZERO:
+                del positions[base_asset]
+            else:
+                positions[base_asset] = remaining
+
         self._balances = balances
         self._positions = positions
+        return accounting
 
     def mark_derivative_market(self, market_state: MarketState) -> None:
         """Mark one derivative position and accrue perpetual funding without trading."""

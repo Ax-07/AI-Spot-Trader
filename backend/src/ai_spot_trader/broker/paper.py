@@ -118,13 +118,17 @@ class PaperBroker:
                     quote_asset=quote_asset,
                     quantity=intent.quantity,
                     quote_debit=estimate.buy_quote_debit,
+                    execution_price=estimate.price,
                 )
             else:
-                self._ledger.apply_sell(
+                accounting = self._ledger.apply_sell(
                     base_asset=base_asset,
                     quote_asset=quote_asset,
                     quantity=intent.quantity,
                     quote_credit=estimate.sell_quote_credit,
+                )
+                fill = fill.model_copy(
+                    update={"realized_pnl": accounting.realized_pnl}
                 )
             return (fill,)
 

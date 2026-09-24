@@ -4,13 +4,13 @@
 
 AI Spot Trader est une application expérimentale de trading crypto **PAPER** pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement un cockpit de contrôle et de visualisation.
 
-Référence auditée pour le cadrage documentaire des améliorations planifiées :
+Base GitHub auditée pour le Batch 19.1 :
 
 ```text
-HEAD GitHub main audité : 9a312040eb671976b44e5f50077ca11a9d9213b3
-Dernier commit fonctionnel : 4cb0567cae6ff100c5ad9ad1df9e3f68b8f7ffd7
-Dernier commit documentaire : 9a312040eb671976b44e5f50077ca11a9d9213b3
+HEAD GitHub main : dbdc8f83bb39c158ec7331ce2adba616d2922842
 ```
+
+Le présent document décrit l'état attendu après application du patch 19.1 ; l'intégration GitHub reste une action explicite de l'opérateur.
 
 ## 2. Invariants fonctionnels
 
@@ -39,7 +39,8 @@ Principe central :
 - aucun short ;
 - aucun levier/margin ;
 - `SELL` réduit uniquement une position détenue/disponible ;
-- la comptabilité canonique doit rester backend et ne doit pas être reconstruite dans le frontend.
+- la comptabilité canonique est backend et n'est jamais reconstruite dans le frontend ;
+- calculs monétaires et quantités restent en `Decimal` côté backend.
 
 ### PERPETUAL
 
@@ -63,7 +64,9 @@ PortfolioState
 -> RiskEngine -> ALLOW/MODIFY/REJECT
 -> ExecutionIntent éventuel
 -> PaperBroker
--> audit + ledger durable
+-> Fill
+-> PaperPortfolioLedger
+-> audit + snapshot durable
 ```
 
 Le même Agent porte la sélection stratégique de marché et la décision de trading. Aucun composant déterministe ni frontend ne choisit l'opportunité à sa place.
@@ -76,8 +79,6 @@ Les sources de recherche Kraken sont séparées des sources d'exécution. Un ré
 
 ### Évolution planifiée
 
-Le cadrage prévoit de distinguer à terme :
-
 ```text
 univers techniquement admissible     <- backend déterministe
 watchlist stratégique actuelle       <- même Agent IA
@@ -89,38 +90,43 @@ Le backend pourra filtrer ce qui est structurellement exécutable, sans effectue
 
 ## 5. Portefeuille et comptabilité
 
-### Confirmé aujourd'hui
+### SPOT — Batch 19.1
 
-Le `PortfolioState` sépare :
+`AssetPosition` porte désormais :
 
-- balances de règlement ;
-- positions SPOT `asset / quantity / available` ;
-- positions dérivées détaillées.
+- `asset` ;
+- `quantity` ;
+- `available` ;
+- `average_entry_price` ;
+- `remaining_cost_basis` ;
+- `realized_pnl` ;
+- `accounting_complete`.
 
-Les positions PERPETUAL possèdent déjà notamment : prix moyen d'entrée, mark price, notional, P&L réalisé/latent, marge, maintenance, funding et liquidation.
+Règles canoniques :
 
-### Manquant aujourd'hui côté SPOT
+- `average_entry_price` = **coût économique moyen par unité**, soit `remaining_cost_basis / quantity` ; il inclut donc le prix de fill dégradé par spread/slippage ainsi que les frais BUY ;
+- `remaining_cost_basis` = somme des débits cash BUY réels (`notional + fee`) encore attachée à la quantité détenue ;
+- une vente partielle libère la base de coût au prorata de la quantité vendue ;
+- P&L réalisé d'une vente = crédit cash SELL net (`notional - fee`) − base de coût libérée ;
+- les frais ne sont donc comptés qu'une fois et spread/slippage ne sont jamais ajoutés à nouveau au prix déjà dégradé du fill ;
+- une vente totale supprime la position ouverte ; le fait durable du dernier P&L réalisé reste porté par le Fill/audit ;
+- un ancien snapshot sans ces champs reste récupérable avec `accounting_complete=false` : aucune base de coût n'est inventée rétroactivement.
 
-Le contrat SPOT ne porte pas :
+Le P&L latent SPOT reste séparé de cette comptabilité permanente et sera calculé à partir d'un mark courant dans le Batch 19.2.
 
-- coût/prix moyen d'entrée ;
-- coût de revient restant ;
-- P&L latent par position ;
-- P&L réalisé cumulatif par position.
+### PERPETUAL
 
-Cette extension doit être réalisée dans le modèle/ledger canonique backend avant toute exposition UI complète.
+Les positions PERPETUAL possèdent déjà prix moyen d'entrée, mark price, notional, P&L réalisé/latent, marge, maintenance, funding et liquidation.
 
 ## 6. Mark-to-market et cadences
 
-Le moteur doit distinguer conceptuellement au minimum trois cadences configurables :
+Le moteur doit distinguer au minimum trois cadences configurables :
 
 1. **monitoring / mark-to-market** : rapide, déterministe, sans LLM ;
 2. **cycle stratégique IA** : plus lent, décision BUY/SELL/HOLD ;
 3. **découverte / révision de watchlist IA** : beaucoup plus lente.
 
 Le monitoring peut calculer prix, P&L latent, exposition, marge, liquidation et funding sans prendre de décision stratégique.
-
-Le code PERPETUAL possède déjà des primitives de revalorisation déterministe ; le manque principal est une orchestration de monitoring indépendante du cycle IA, ainsi qu'un équivalent SPOT fondé sur une comptabilité enrichie.
 
 ## 7. Mode gestion à exposition saturée
 
@@ -142,13 +148,9 @@ Le produit doit distinguer explicitement :
 - **Pourquoi l'IA ?** → `rationale` stratégique ;
 - **Risk Engine** → `ALLOW / MODIFY / REJECT` et raisons déterministes.
 
-Ces informations devront être réutilisables dans Accueil, Positions, Historique et les futurs markers de chart.
-
 ## 9. Données marchés et charts
 
 La source de vérité reste Kraken via le backend.
-
-Architecture cible :
 
 ```text
 Kraken REST        -> historique initial
@@ -158,9 +160,7 @@ WebSocket cockpit  -> frontend
 Lightweight Charts -> rendu
 ```
 
-TradingView Lightweight Charts est privilégié pour le rendu. Un iframe TradingView externe ne doit pas devenir une dépendance de vérité du moteur.
-
-Pour le Spot, l'API REST Kraken OHLC ne permet de récupérer que les 720 entrées les plus récentes ; une profondeur supérieure exige donc une accumulation durable côté backend si elle est réellement nécessaire.
+TradingView Lightweight Charts est privilégié pour le rendu. Un iframe TradingView externe ne devient pas une source de vérité du moteur.
 
 ## 10. Recovery PAPER
 
@@ -173,13 +173,11 @@ Pour le Spot, l'API REST Kraken OHLC ne permet de récupérer que les 720 entré
 - aucun replay de MarketSelection, décision, Risk, Broker ou Fill ;
 - validation fail-closed de l'état restauré.
 
-Toute extension de comptabilité SPOT devra préserver ces propriétés et restaurer sans ambiguïté le coût moyen et les P&L nécessaires.
+Le Batch 19.1 étend le contenu JSON de `PortfolioState` sans migration SQL : les nouveaux snapshots restaurent exactement coût moyen, coût restant et P&L réalisé courant ; les anciens snapshots restent valides grâce aux valeurs par défaut et à `accounting_complete=false`.
 
 ## 11. Control Plane backend
 
-`Strategy`, `StrategyRevision`, `Campaign` et `paper_run` conservent leurs rôles actuels : configuration durable et immuable pour l'expérience, exécution/recovery explicite et runtime backend canonique.
-
-Une évolution de Campaign sera probablement nécessaire pour les nouvelles cadences, le mode de watchlist (`manual`/`automatic`) et les paramètres associés. Le schéma/version de configuration exact reste **à décider** pendant les batches d'implémentation.
+`Strategy`, `StrategyRevision`, `Campaign` et `paper_run` conservent leurs rôles actuels. Une évolution de Campaign pourra être nécessaire pour les futures cadences et la watchlist automatique, sans impact requis pour 19.1.
 
 ## 12. Cockpit
 
@@ -192,7 +190,7 @@ Accueil | Marchés | Positions | Historique | Réglages
 Le frontend reste un client des contrats backend. Il ne :
 
 - calcule pas de portefeuille alternatif ;
-- ne reconstruit pas un coût moyen SPOT ;
+- ne reconstruit pas un coût moyen ou un P&L SPOT ;
 - ne décide pas BUY/SELL/HOLD ;
 - ne déduit pas une autorisation Risk ;
 - ne devient pas la source de vérité candles/positions ;
@@ -200,8 +198,4 @@ Le frontend reste un client des contrats backend. Il ne :
 
 ## 13. Documentation de planification
 
-La spécification détaillée et le séquencement des améliorations sont centralisés dans :
-
-`docs/11_AMELIORATIONS_PLANIFIEES.md`
-
-La roadmap d'exécution est résumée dans `docs/09_ROADMAP_DEVELOPPEMENT.md`.
+Le séquencement est dans `docs/09_ROADMAP_DEVELOPPEMENT.md` et le détail des améliorations dans `docs/11_AMELIORATIONS_PLANIFIEES.md`.

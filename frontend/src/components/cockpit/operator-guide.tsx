@@ -131,7 +131,7 @@ export function OperatorGuide() {
       <Card className="shadow-none">
         <CardHeader><CardTitle>SPOT et PERPETUAL</CardTitle><CardDescription>Deux marchés, avec des contraintes différentes.</CardDescription></CardHeader>
         <CardContent className="grid gap-4 text-sm text-muted-foreground lg:grid-cols-2">
-          <div className="rounded-xl border p-4"><p className="font-semibold text-foreground">SPOT</p><p className="mt-2 leading-6">Pas de short, pas de levier, pas de marge. SELL ne peut réduire qu’un actif détenu et disponible.</p><p className="mt-2 text-xs">Le contrat portefeuille actuel n’expose pas de coût moyen/P&L par position SPOT ; le cockpit n’invente pas ces valeurs.</p></div>
+          <div className="rounded-xl border p-4"><p className="font-semibold text-foreground">SPOT</p><p className="mt-2 leading-6">Pas de short, pas de levier, pas de marge. SELL ne peut réduire qu’un actif détenu et disponible.</p><p className="mt-2 text-xs">Les nouvelles positions SPOT exposent prix moyen, coût restant et P&L réalisé calculés par le backend. Le P&L latent reste indisponible jusqu’au mark-to-market canonique ; les positions historiques sans base de coût fiable restent affichées avec « — ».</p></div>
           <div className="rounded-xl border p-4"><p className="font-semibold text-foreground">PERPETUAL linéaire</p><p className="mt-2 leading-6">LONG/SHORT, marge ISOLATED et levier configuré. Risk contrôle les plafonds de levier, position et exposition.</p><p className="mt-2 text-xs">CROSS, contrats inverses et futures datés restent hors périmètre exécutable actuel.</p></div>
         </CardContent>
       </Card>

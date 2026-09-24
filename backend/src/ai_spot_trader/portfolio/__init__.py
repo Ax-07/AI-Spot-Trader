@@ -8,7 +8,11 @@ from ai_spot_trader.portfolio.errors import (
     PositionNotHeldError,
     UnknownBalanceAssetError,
 )
-from ai_spot_trader.portfolio.ledger import DerivativeFillAccounting, PaperPortfolioLedger
+from ai_spot_trader.portfolio.ledger import (
+    DerivativeFillAccounting,
+    PaperPortfolioLedger,
+    SpotFillAccounting,
+)
 
 __all__ = [
     "AmbiguousAssetRoleError",
@@ -18,5 +22,6 @@ __all__ = [
     "PaperPortfolioLedger",
     "PortfolioLedgerError",
     "PositionNotHeldError",
+    "SpotFillAccounting",
     "UnknownBalanceAssetError",
 ]

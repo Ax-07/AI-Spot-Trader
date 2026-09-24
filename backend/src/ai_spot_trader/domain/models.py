@@ -70,16 +70,35 @@ class AssetBalance(DomainModel):
 
 
 class AssetPosition(DomainModel):
-    """Held and currently available quantity for one SPOT portfolio position asset."""
+    """Canonical SPOT inventory plus durable weighted-average cost accounting."""
 
     asset: NonEmptyText
     quantity: NonNegativeDecimal
     available: NonNegativeDecimal
+    average_entry_price: PositiveDecimal | None = None
+    remaining_cost_basis: NonNegativeDecimal | None = None
+    realized_pnl: Decimal = Decimal(0)
+    accounting_complete: bool = False
 
     @model_validator(mode="after")
-    def available_cannot_exceed_quantity(self) -> "AssetPosition":
+    def validate_spot_accounting(self) -> "AssetPosition":
         if self.available > self.quantity:
             raise ValueError("available quantity cannot exceed held quantity")
+        if self.accounting_complete:
+            if self.quantity <= 0:
+                raise ValueError("complete SPOT accounting requires a positive held quantity")
+            if self.average_entry_price is None or self.remaining_cost_basis is None:
+                raise ValueError(
+                    "complete SPOT accounting requires average_entry_price and remaining_cost_basis"
+                )
+            if self.remaining_cost_basis <= 0:
+                raise ValueError(
+                    "complete SPOT accounting requires a positive remaining_cost_basis"
+                )
+        elif self.average_entry_price is not None or self.remaining_cost_basis is not None:
+            raise ValueError(
+                "incomplete SPOT accounting cannot expose partial cost-basis fields"
+            )
         return self
 
 
@@ -876,8 +895,10 @@ class Fill(DomainModel):
                 "spread_cost plus slippage_cost must explain the execution price delta"
             )
         if self.market_type is MarketType.SPOT:
-            if self.reduce_only or self.realized_pnl != 0 or self.margin_delta != 0:
+            if self.reduce_only or self.margin_delta != 0:
                 raise ValueError("SPOT fills cannot carry derivative execution fields")
+            if self.action is TradingAction.BUY and self.realized_pnl != 0:
+                raise ValueError("SPOT BUY fills cannot realize P&L")
             if self.funding_payment != 0 or self.contract_size != 1:
                 raise ValueError("SPOT fills require contract_size=1 and no funding")
         return self

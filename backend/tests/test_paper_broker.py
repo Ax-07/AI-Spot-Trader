@@ -160,7 +160,15 @@ def test_simple_buy_full_fill_updates_portfolio() -> None:
     snapshot = ledger.snapshot()
     assert snapshot.balances[0].available == Decimal("800")
     assert snapshot.positions == (
-        AssetPosition(asset="BTC", quantity=Decimal("2"), available=Decimal("2")),
+        AssetPosition(
+            asset="BTC",
+            quantity=Decimal("2"),
+            available=Decimal("2"),
+            average_entry_price=Decimal("100"),
+            remaining_cost_basis=Decimal("200"),
+            realized_pnl=Decimal("0"),
+            accounting_complete=True,
+        ),
     )
 
 
@@ -181,7 +189,9 @@ def test_buy_fee_is_debited_from_quote_asset_and_audited() -> None:
     fill = (execute_broker(paper_broker, intent(TradingAction.BUY), market()))[0]
 
     assert fill.fee == Decimal("0.200")
-    assert ledger.snapshot().balances[0].available == Decimal("799.800")
+    snapshot = ledger.snapshot()
+    assert snapshot.balances[0].available == Decimal("799.800")
+    assert snapshot.positions[0].remaining_cost_basis == Decimal("200.200")
 
 
 def test_sell_fee_is_deducted_from_quote_proceeds_and_audited() -> None:
@@ -234,7 +244,10 @@ def test_combined_costs_use_decimal_without_hidden_rounding() -> None:
     assert fill.fee == Decimal("0.200600")
     assert fill.spread_cost == Decimal("0.200")
     assert fill.slippage_cost == Decimal("0.400")
-    assert ledger.snapshot().balances[0].available == Decimal("799.199400")
+    snapshot = ledger.snapshot()
+    assert snapshot.balances[0].available == Decimal("799.199400")
+    assert snapshot.positions[0].average_entry_price == Decimal("100.400300")
+    assert snapshot.positions[0].remaining_cost_basis == Decimal("200.800600")
 
 
 def test_insufficient_cash_rejects_without_mutation_or_fill() -> None:

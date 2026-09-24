@@ -149,6 +149,10 @@ class AssetPositionResponse(ApiModel):
     asset: str
     quantity: Decimal = Field(ge=0)
     available: Decimal = Field(ge=0)
+    average_entry_price: Decimal | None = Field(default=None, gt=0)
+    remaining_cost_basis: Decimal | None = Field(default=None, ge=0)
+    realized_pnl: Decimal = Decimal(0)
+    accounting_complete: bool = False
 
 
 class DerivativePositionResponse(ApiModel):

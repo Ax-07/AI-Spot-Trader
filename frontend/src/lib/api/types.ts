@@ -34,6 +34,10 @@ export type AssetPositionResponse = {
   asset: string;
   quantity: string;
   available: string;
+  average_entry_price: string | null;
+  remaining_cost_basis: string | null;
+  realized_pnl: string;
+  accounting_complete: boolean;
 };
 
 export type DerivativePositionResponse = {
