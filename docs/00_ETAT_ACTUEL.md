@@ -6,63 +6,46 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub courant :
-  `4cb0567cae6ff100c5ad9ad1df9e3f68b8f7ffd7`
+- HEAD GitHub audité au démarrage du batch documentaire :
+  `9a312040eb671976b44e5f50077ca11a9d9213b3`
 - Commit fonctionnel intégré du Batch 18.13 :
   `4cb0567cae6ff100c5ad9ad1df9e3f68b8f7ffd7`
   (`feat: add dark mode and modernize cockpit UI`).
+- Commit documentaire suivant :
+  `9a312040eb671976b44e5f50077ca11a9d9213b3`
+  (`docs: sync batch 18.13 integrated state`).
 - Batch 18.13 : **INTÉGRÉ / VALIDÉ**.
 
 ## État fonctionnel confirmé
 
 - un seul Agent IA stratégique ; Kraken ; PAPER uniquement ; SPOT + PERPETUAL linéaire ;
-- navigation principale : **Accueil / Configurer / Positions / Historique / Réglages** ;
-- assistant PAPER simple : marché, capital, IA, sécurité, résumé ;
-- thèmes **clair / sombre / système** via `next-themes`, avec sélecteur dans la barre supérieure et Réglages ;
-- activation fraîche, `run-cycle`, Start/Stop et recovery restent des commandes backend explicites ;
+- navigation actuelle : **Accueil / Configurer / Positions / Historique / Réglages** ;
 - Risk Engine déterministe = autorité finale ; aucune sortie LLM ne déclenche directement un ordre ;
-- coûts PAPER, positions, P&L, drawdown, exposition et audit durable viennent du backend ;
-- frontend indépendant du moteur : fermer le cockpit n'arrête pas le trading ;
-- LIVE reste indisponible.
+- `paper_executable_markets` constitue actuellement un univers statique configuré par Campaign ;
+- la sélection IA de marché est aujourd'hui liée au cycle stratégique multi-marchés ;
+- le portefeuille SPOT canonique expose `asset`, `quantity`, `available`, sans coût moyen ni P&L par position ;
+- les positions PERPETUAL exposent déjà coût moyen, mark, P&L, marge, liquidation et funding ;
+- le `rationale` de la décision IA existe et est audité, mais n'est pas encore exposé comme information métier dédiée dans le cockpit ;
+- Kraken Spot utilise déjà REST OHLC et WebSocket ticker côté backend, sans pipeline candles cockpit persistant ;
+- frontend indépendant du moteur ; LIVE reste indisponible.
 
-## Batch 18.13 — thème, contrastes et modernisation
+## Améliorations planifiées
 
-Le Batch 18.13 intégré apporte :
+Le cadrage détaillé des prochaines améliorations est centralisé dans :
 
-- `next-themes` avec thèmes **clair / sombre / système** et persistance locale ;
-- tokens sémantiques light/dark pour les états et composants partagés ;
-- variantes Button/Badge/Card corrigées pour renforcer les contrastes ;
-- modernisation visuelle du cockpit sans modifier l'architecture UX du Batch 18.12 ;
-- P&L affiché avec signe `+`/`−` en plus de la couleur ;
-- Historique explicitant `Exécuté` / `Non exécuté` ;
-- compatibilité dark des anciens états rouge/ambre/vert/bleu des panneaux avancés.
+`docs/11_AMELIORATIONS_PLANIFIEES.md`
 
-Aucun changement backend n'a été introduit par ce batch.
+Axes prioritaires proposés :
 
-## Limite de contrat volontairement respectée
+1. comptabilité SPOT canonique et P&L par position ;
+2. monitoring / mark-to-market déterministe indépendant de l'IA ;
+3. mode gestion lorsque l'exposition interdit toute nouvelle ouverture ;
+4. découverte dynamique des marchés et watchlist auditée ;
+5. explicabilité dédiée IA / Risk ;
+6. pipeline candles/WebSocket puis vue **Marchés** et charts.
 
-Le contrat portefeuille SPOT canonique expose `asset`, `quantity` et `available`, mais pas le prix
-d'entrée moyen ni un P&L par position SPOT. Le frontend continue donc d'afficher `—` pour ces champs
-au lieu de reconstruire un portefeuille parallèle.
+Les valeurs de cadence définitives et certains choix de persistence restent **à décider** pendant les batches d'implémentation correspondants.
 
-## Validation du Batch 18.13
+## Règle de reprise
 
-Validation locale réellement exécutée avec succès avant commit/push :
-
-```powershell
-cd frontend
-pnpm install
-pnpm lint
-pnpm typecheck
-pnpm build
-
-cd ..
-git diff --check
-git status --short
-```
-
-Le `git status --short` final après commit/push était vide.
-
-## Suite
-
-Le Batch 18.13 est intégré sur `main`. LIVE reste un périmètre séparé et ultérieur.
+À chaque nouveau batch : revérifier le HEAD GitHub réel avant de considérer la référence ci-dessus comme courante.

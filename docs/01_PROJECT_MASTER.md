@@ -2,19 +2,15 @@
 
 ## 1. Mission
 
-AI Spot Trader est une application expérimentale de trading crypto **PAPER** pilotée par **un seul
-Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement
-un cockpit de contrôle et de visualisation.
+AI Spot Trader est une application expérimentale de trading crypto **PAPER** pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement un cockpit de contrôle et de visualisation.
 
-Base GitHub auditée pour le Batch 18.12 :
+Référence auditée pour le cadrage documentaire des améliorations planifiées :
 
 ```text
-HEAD main audité      : c6cf03e62ce49ad6b294ea1d4c44d933b4688b0a
-Référence fonctionnelle 18.11 : c02b9e8edd52b416969922f12a17e32f047d3989
+HEAD GitHub main audité : 9a312040eb671976b44e5f50077ca11a9d9213b3
+Dernier commit fonctionnel : 4cb0567cae6ff100c5ad9ad1df9e3f68b8f7ffd7
+Dernier commit documentaire : 9a312040eb671976b44e5f50077ca11a9d9213b3
 ```
-
-Le Batch 18.12 est livré comme patch multi-fichiers et n'est pas réputé intégré tant que la
-validation locale et le commit ne sont pas effectués.
 
 ## 2. Invariants fonctionnels
 
@@ -22,23 +18,28 @@ validation locale et le commit ne sont pas effectués.
 
 - un seul Agent IA stratégique ;
 - Kraken ;
-- PAPER uniquement ; LIVE reste séparé et ultérieur ;
+- PAPER uniquement à ce stade ; LIVE reste séparé et ultérieur ;
 - actions finales `BUY`, `SELL`, `HOLD` ;
-- Luna configurable par défaut, Sol sélectionnable ;
+- GPT-5.6 Luna pour les premiers tests, Sol sélectionnable par configuration ;
 - Risk Engine déterministe avec autorité finale ;
-- seul Risk crée un `ExecutionIntent` ;
-- aucune sortie LLM ni aucun tool ne déclenche Broker/Kraken ;
-- coûts PAPER et funding pris en compte ;
-- audit causal de toutes les décisions, `HOLD` inclus ;
+- seul Risk peut produire l'intention d'exécution autorisée ;
+- aucune sortie LLM ni aucun tool ne déclenche directement Broker/Kraken ;
+- coûts PAPER, spread, slippage et funding lorsque pertinent sont pris en compte ;
+- toutes les décisions, `HOLD` inclus, restent auditables ;
 - aucun secret dans prompts, logs, navigateur ou Git ;
-- aucun look-ahead ;
+- aucun look-ahead ni sélection rétrospective ;
 - frontend non nécessaire au fonctionnement du moteur.
+
+Principe central :
+
+**L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
 ### SPOT
 
 - aucun short ;
 - aucun levier/margin ;
-- `SELL` réduit uniquement une position détenue/disponible.
+- `SELL` réduit uniquement une position détenue/disponible ;
+- la comptabilité canonique doit rester backend et ne doit pas être reconstruite dans le frontend.
 
 ### PERPETUAL
 
@@ -47,9 +48,9 @@ validation locale et le commit ne sont pas effectués.
 - marge `ISOLATED` ;
 - levier déterministe/configuré, jamais choisi par le LLM ;
 - Risk contrôle marge, exposition, liquidation, `reduce_only` et anti-reversal ;
-- contrats inverses, CROSS et futures datés restent non exécutables.
+- contrats inverses, CROSS et futures datés restent non exécutables tant qu'un périmètre dédié n'est pas décidé.
 
-## 3. Pipeline canonique
+## 3. Pipeline canonique actuel
 
 ```text
 PortfolioState
@@ -65,18 +66,103 @@ PortfolioState
 -> audit + ledger durable
 ```
 
-Aucun composant déterministe ni frontend ne choisit l'opportunité à la place de l'Agent.
+Le même Agent porte la sélection stratégique de marché et la décision de trading. Aucun composant déterministe ni frontend ne choisit l'opportunité à sa place.
 
-## 4. Univers exécutable
+## 4. Univers exécutable actuel
 
-`ExecutableMarket(symbol, market_type)` représente la frontière d'exécution. L'univers est trié,
-sans doublon, limité à SPOT/PERPETUAL, et chaque symbole doit être autorisé par Risk. Tous les
-marchés d'une Campaign partagent actuellement le même actif de quote/règlement.
+`ExecutableMarket(symbol, market_type)` représente la frontière d'exécution. La Campaign snapshotte actuellement un `paper_executable_markets` statique, trié et limité aux types supportés. Tous les marchés d'une Campaign partagent l'actif de quote/règlement attendu par la configuration actuelle.
 
-Les sources de recherche Kraken sont séparées des sources d'exécution. Un snapshot de recherche
-n'est jamais promu silencieusement en `MarketState` d'exécution.
+Les sources de recherche Kraken sont séparées des sources d'exécution. Un résultat de recherche ne devient jamais implicitement un `MarketState` exécutable.
 
-## 5. Recovery PAPER
+### Évolution planifiée
+
+Le cadrage prévoit de distinguer à terme :
+
+```text
+univers techniquement admissible     <- backend déterministe
+watchlist stratégique actuelle       <- même Agent IA
+univers surveillé                    <- watchlist IA + toutes positions ouvertes
+marché d'une décision de trading     <- même Agent IA
+```
+
+Le backend pourra filtrer ce qui est structurellement exécutable, sans effectuer de ranking stratégique à la place de l'Agent.
+
+## 5. Portefeuille et comptabilité
+
+### Confirmé aujourd'hui
+
+Le `PortfolioState` sépare :
+
+- balances de règlement ;
+- positions SPOT `asset / quantity / available` ;
+- positions dérivées détaillées.
+
+Les positions PERPETUAL possèdent déjà notamment : prix moyen d'entrée, mark price, notional, P&L réalisé/latent, marge, maintenance, funding et liquidation.
+
+### Manquant aujourd'hui côté SPOT
+
+Le contrat SPOT ne porte pas :
+
+- coût/prix moyen d'entrée ;
+- coût de revient restant ;
+- P&L latent par position ;
+- P&L réalisé cumulatif par position.
+
+Cette extension doit être réalisée dans le modèle/ledger canonique backend avant toute exposition UI complète.
+
+## 6. Mark-to-market et cadences
+
+Le moteur doit distinguer conceptuellement au minimum trois cadences configurables :
+
+1. **monitoring / mark-to-market** : rapide, déterministe, sans LLM ;
+2. **cycle stratégique IA** : plus lent, décision BUY/SELL/HOLD ;
+3. **découverte / révision de watchlist IA** : beaucoup plus lente.
+
+Le monitoring peut calculer prix, P&L latent, exposition, marge, liquidation et funding sans prendre de décision stratégique.
+
+Le code PERPETUAL possède déjà des primitives de revalorisation déterministe ; le manque principal est une orchestration de monitoring indépendante du cycle IA, ainsi qu'un équivalent SPOT fondé sur une comptabilité enrichie.
+
+## 7. Mode gestion à exposition saturée
+
+Lorsque le backend détermine qu'une **nouvelle exposition est impossible** :
+
+- la phase stratégique doit se limiter aux positions ouvertes ;
+- l'Agent peut proposer HOLD, réduction ou clôture ;
+- le déterministe ne choisit pas à sa place quelle position conserver ou fermer ;
+- Risk conserve son autorité finale ;
+- le retour au mode normal est automatique dès qu'une capacité d'exposition redevient disponible ;
+- les appels/tools qui ne peuvent conduire qu'à une nouvelle ouverture doivent être évités et leur économie mesurée.
+
+## 8. Explicabilité
+
+Le champ `rationale` est une explication stratégique enregistrée par l'Agent ; il ne constitue jamais une instruction d'exécution.
+
+Le produit doit distinguer explicitement :
+
+- **Pourquoi l'IA ?** → `rationale` stratégique ;
+- **Risk Engine** → `ALLOW / MODIFY / REJECT` et raisons déterministes.
+
+Ces informations devront être réutilisables dans Accueil, Positions, Historique et les futurs markers de chart.
+
+## 9. Données marchés et charts
+
+La source de vérité reste Kraken via le backend.
+
+Architecture cible :
+
+```text
+Kraken REST        -> historique initial
+Kraken WebSocket   -> mises à jour temps réel
+backend            -> normalisation + cache + persistence éventuelle
+WebSocket cockpit  -> frontend
+Lightweight Charts -> rendu
+```
+
+TradingView Lightweight Charts est privilégié pour le rendu. Un iframe TradingView externe ne doit pas devenir une dépendance de vérité du moteur.
+
+Pour le Spot, l'API REST Kraken OHLC ne permet de récupérer que les 720 entrées les plus récentes ; une profondeur supérieure exige donc une accumulation durable côté backend si elle est réellement nécessaire.
+
+## 10. Recovery PAPER
 
 `paper-ledger-recovery-v1` reste le mécanisme canonique :
 
@@ -87,175 +173,35 @@ n'est jamais promu silencieusement en `MarketState` d'exécution.
 - aucun replay de MarketSelection, décision, Risk, Broker ou Fill ;
 - validation fail-closed de l'état restauré.
 
-Un restart backend ne reprend jamais silencieusement une Campaign. La reprise opérateur reste une
-action explicite.
+Toute extension de comptabilité SPOT devra préserver ces propriétés et restaurer sans ambiguïté le coût moyen et les P&L nécessaires.
 
-## 6. Control Plane backend
+## 11. Control Plane backend
 
-### Strategy / StrategyRevision
+`Strategy`, `StrategyRevision`, `Campaign` et `paper_run` conservent leurs rôles actuels : configuration durable et immuable pour l'expérience, exécution/recovery explicite et runtime backend canonique.
 
-`Strategy` est une identité durable nommable/archivable. Chaque `StrategyRevision` est immuable et
-contient le texte opérateur, son digest, la version du contrat Agent protégé et son timestamp.
-Modifier le texte crée une nouvelle révision.
+Une évolution de Campaign sera probablement nécessaire pour les nouvelles cadences, le mode de watchlist (`manual`/`automatic`) et les paramètres associés. Le schéma/version de configuration exact reste **à décider** pendant les batches d'implémentation.
 
-### Contrat Agent protégé
+## 12. Cockpit
 
-```text
-PROTECTED_AGENT_CONTRACT
-+ StrategyRevision.strategy_prompt
-+ AggressivenessContext canonique
-```
-
-Le contrat protégé impose PAPER, les sémantiques SPOT/PERP, les sorties structurées et l'autorité
-finale de Risk. Il n'est exposé à aucune mutation API.
-
-### Campaign
-
-Une Campaign snapshotte stratégie/révision et configuration structurelle non sensible. Elle inclut
-modèle, agressivité, cadence, capital, univers, coûts, levier/marge, limites Risk et deadlines de
-cycle. Elle est immuable.
-
-`paper-experiment-v4` identifie l'expérience à partir de la Strategy/Revision et du digest de
-configuration.
-
-## 7. Campaign vs paper_run
+Navigation cible planifiée :
 
 ```text
-Campaign  : configuration expérimentale immuable
-paper_run : session d'exécution/recovery
+Accueil | Marchés | Positions | Historique | Réglages
 ```
 
-Une Campaign peut posséder plusieurs runs liés par recovery. Une reprise doit conserver le même
-`campaign_id`.
+Le frontend reste un client des contrats backend. Il ne :
 
-## 8. Runtime dynamique
-
-Le Control Plane ne crée pas de second moteur. `build_campaign_runtime()` assemble les composants
-canoniques : `TradingCycleRunner`, `AuditedTradingCycleRunner`, `TradingEngine`, `RiskEngine` et
-`PaperBroker`.
-
-Activation/reprise est refusée pendant `RUNNING`. Un runtime `STOPPED` peut être remplacé proprement
-par une autre Campaign selon les contrats backend.
-
-## 9. API canonique utilisée par le cockpit
-
-Le frontend reste un client HTTP du backend via `/backend` et `frontend/src/lib/api/client.ts`.
-Routes principales :
-
-- Strategy/Revision : création, lecture, renommage, archivage, comparaison ;
-- Campaign : création, lecture, activation fraîche, reprise ;
-- moteur : `run-cycle`, `start`, `stop` ;
-- lecture : portfolio, market, cycles, décisions, risk-assessments, executions, analytics,
-  paper-runs ;
-- prompt preview et chat informatif.
-
-Les réponses backend 409/422/503 restent autoritaires et ne sont pas contournées côté UI.
-
-## 10. Évolution du cockpit
-
-### Batches 18.9B à 18.11
-
-Le cockpit historique a d'abord exposé directement Strategy, StrategyRevision, Campaign, activation,
-recovery et commandes moteur. Le Batch 18.10 a ajouté une Vue d'ensemble ; le Batch 18.11 a ajouté
-un Guide et de l'aide contextuelle.
-
-### Batch 18.12 — UX orientée tâches
-
-Le Batch 18.12 conserve les contrats précédents mais change le modèle mental principal :
-
-```text
-Accueil
-Configurer
-Positions
-Historique
-Réglages
-```
-
-Le parcours débutant n'exige plus de comprendre Strategy/Revision/Campaign.
-
-#### Assistant de configuration
-
-Le frontend orchestre les appels canoniques :
-
-```text
-create Strategy (crée aussi Revision r1)
--> create Campaign
--> éventuellement activate Campaign
--> éventuellement start Engine
-```
-
-Il ne fusionne pas ces concepts dans le backend et n'ajoute aucune transaction métier parallèle.
-En cas d'échec intermédiaire, les objets déjà persistés restent auditables dans les réglages avancés.
-
-#### Profils Risk UX
-
-`Prudent`, `Équilibré` et `Agressif` ne sont que des fonctions de traduction vers les champs
-existants de `CampaignConfiguration`. `Personnalisé` expose les champs détaillés. Le backend reste
-seul responsable de la validation et le Risk Engine garde l'autorité finale à l'exécution.
-
-Mappings initiaux du patch 18.12 :
-
-- Prudent : ordre max 5 % capital ; PERP 1x ; position 10 % ; exposition totale 20 % ; buffer 1.25 ;
-- Équilibré : ordre max 10 % ; PERP 2x ; position 20 % ; exposition totale 40 % ; buffer 1.15 ;
-- Agressif : ordre max 20 % ; PERP 3x ; position 35 % ; exposition totale 70 % ; buffer 1.10.
-
-#### Divulgation progressive
-
-- la landing expose état, configuration humaine, capital, P&L, positions et **Action suivante** ;
-- les détails Strategy/Revision/Campaign, digests, IDs et recovery restent sous
-  `Réglages > Avancé` ;
-- Guide et Assistant deviennent secondaires au lieu d'occuper la navigation principale.
-
-#### Positions
-
-Le frontend utilise uniquement `PortfolioResponse` et les analytics backend. Pour PERPETUAL, les
-métriques par position viennent du backend. Pour SPOT, le contrat ne fournit pas de coût moyen ni de
-P&L unitaire : ces valeurs ne sont pas reconstruites côté navigateur.
-
-#### Historique
-
-La vue regroupe par `cycle_id` les faits déjà canoniques : décision Agent, résultat Risk, éventuelle
-exécution/fills et erreur. Cette corrélation est de présentation uniquement.
-
-## 11. Frontend sans logique métier parallèle
-
-Le frontend ne :
-
-- valide pas à la place de `CampaignConfiguration` ;
-- ne calcule pas de portefeuille alternatif ;
+- calcule pas de portefeuille alternatif ;
+- ne reconstruit pas un coût moyen SPOT ;
 - ne décide pas BUY/SELL/HOLD ;
-- ne crée pas d'`ExecutionIntent` ;
-- ne simule pas le Risk Engine ;
-- ne simule pas le Broker ;
+- ne déduit pas une autorisation Risk ;
+- ne devient pas la source de vérité candles/positions ;
 - ne persiste aucun secret.
 
-Fermer le frontend n'envoie jamais `stop`.
+## 13. Documentation de planification
 
-## 12. Validation comportementale historique
+La spécification détaillée et le séquencement des améliorations sont centralisés dans :
 
-Le Batch 18.9C a déjà confirmé sur les contrats canoniques : Strategy/Revision, Campaign SPOT et
-PERPETUAL, activation fraîche, `run-cycle`, Start/Stop, restart backend et recovery explicite.
-Des BUY naturels SPOT/PERPETUAL soumis à Risk `MODIFY` et des HOLD naturels ont été observés.
+`docs/11_AMELIORATIONS_PLANIFIEES.md`
 
-## 13. Persistence et migrations
-
-La migration `0006_paper_control_plane` crée `strategies`, `strategy_revisions`, `campaigns` et le
-lien `paper_runs.campaign_id`. Le Batch 18.12 ne demande aucune migration.
-
-## 14. Secrets
-
-Secrets serveur uniquement, notamment :
-
-```text
-OPENAI_API_KEY
-DATABASE_URL
-futures clés privées Kraken/LIVE
-```
-
-Ils ne sont jamais champs de `CampaignConfiguration` ni envoyés au cockpit.
-
-## 15. État du jalon
-
-Les Batches 18.9 à 18.11 sont intégrés. Le Batch 18.12 est un patch frontend/documentation préparé
-sur `c6cf03e...`, sans changement backend. Il doit être validé localement avec les commandes frontend
-standard avant intégration. LIVE reste un batch/projet séparé.
+La roadmap d'exécution est résumée dans `docs/09_ROADMAP_DEVELOPPEMENT.md`.

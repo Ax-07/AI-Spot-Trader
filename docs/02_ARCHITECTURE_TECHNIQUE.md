@@ -2,17 +2,16 @@
 
 ## 1. Référence
 
-Base GitHub auditée au démarrage du Batch 18.9B :
+Base GitHub auditée pour le cadrage des améliorations planifiées :
 
 ```text
-HEAD GitHub : efe5a0f162a69e50bd6e5f5cd7aa61039792e911
-Dernier code: 11a04be33bf209552e6337e28318d039b775b264
+HEAD GitHub main        : 9a312040eb671976b44e5f50077ca11a9d9213b3
+Commit fonctionnel 18.13: 4cb0567cae6ff100c5ad9ad1df9e3f68b8f7ffd7
 ```
 
-Le HEAD `efe5a0f` est le commit documentaire finalisant 18.9A ; aucun commit code n'est intervenu
-après `11a04be` au moment de l'audit.
+Le HEAD doit être revérifié au démarrage de chaque batch.
 
-## 2. Architecture générale
+## 2. Architecture générale actuelle
 
 ```text
 Next.js cockpit
@@ -37,174 +36,189 @@ Next.js cockpit
                     +-- Kraken public research/execution sources
 ```
 
-Le frontend n'est pas dans la chaîne d'exécution. Le manager backend possède au plus un runtime
-actif et délègue aux composants canoniques existants.
+Le frontend n'est pas dans la chaîne d'exécution. Le manager backend possède au plus un runtime actif et délègue aux composants canoniques existants.
 
-## 3. Modules backend Control Plane 18.9A
+## 3. Composants confirmés utiles aux prochaines évolutions
 
-```text
-agent/prompt.py
-agent/strategy_client.py
-control_plane.py
-campaign_composition.py
-core/control_plane_runtime.py
-persistence/control_plane.py
-persistence/campaign_runs.py
-api/control_plane_schemas.py
-api/routes/control_plane.py
-alembic/versions/0006_paper_control_plane.py
-```
+### Portefeuille / comptabilité
 
-Ces modules restent inchangés dans le patch 18.9B.
+- `domain/models.py` : `PortfolioState`, `AssetPosition`, `DerivativePosition`, `DecisionCandidate`, inputs Agent ;
+- `portfolio/ledger.py` : source de vérité PAPER en mémoire et logique d'application des fills ;
+- `broker/paper.py` : coût d'exécution PAPER, fills, appels au ledger ;
+- persistence/recovery : snapshots durables de `PortfolioState` et reprise fail-closed.
 
-## 4. Modules frontend 18.9B
+Le SPOT ne stocke actuellement que quantité détenue/disponible. Le PERPETUAL possède déjà une comptabilité détaillée et une primitive `mark_derivative_market()`.
 
-```text
-frontend/src/lib/api/types.ts
-  miroir TypeScript des réponses Pydantic utiles, incluant Control Plane et lineage recovery
+### Marchés Kraken
 
-frontend/src/lib/api/client.ts
-  client HTTP canonique existant étendu ; aucune seconde couche API
+- `integrations/kraken/market_data.py` : Spot, ticker WebSocket + historique OHLC REST pour construire `MarketState` ;
+- `integrations/kraken/websocket.py` : client public ticker v2 avec `iter_tickers()` et `first_ticker()` ;
+- `integrations/kraken/derivatives.py` : acquisition PERPETUAL et revalorisation déterministe du ledger via market sink ;
+- `market/*` : normalisation et contexte de marché.
 
-frontend/src/hooks/use-control-plane.ts
-  orchestration UI, polling read-only et commandes HTTP ; aucun calcul Risk/Trading
+Le WebSocket Spot actuel sert principalement à obtenir un ticker pour le snapshot. Il n'existe pas encore de service backend durable de diffusion candles vers le cockpit.
 
-frontend/src/components/cockpit/control-plane-panel.tsx
-  UI Strategy/Revision/preview/Campaign/runtime
+### Trading / Agent / Risk
 
-frontend/src/app/page.tsx
-  montage du nouveau panneau avec le cockpit existant
-```
+- `trading/engine.py` orchestre actuellement sélection, acquisition, décision, Risk et Broker dans le cycle ;
+- `agent/provider.py` porte le même Agent pour `select_market()` puis `generate_decision()` ;
+- `risk/engine.py` reste la frontière déterministe finale ;
+- `paper_executable_markets` est snapshoté dans la Campaign et transmis comme univers exécutable statique.
 
-Le hook ne persiste aucun draft de Strategy/Campaign dans le navigateur. Les valeurs de formulaire
-restent en mémoire React jusqu'au POST backend.
+### Cockpit
 
-## 5. Flux Strategy / Revision
+- `frontend/src/hooks/use-cockpit.ts` effectue aujourd'hui un polling HTTP global de 10 s lorsque l'onglet est visible ;
+- `positions-panel.tsx` consomme le portefeuille/analytics backend ;
+- `history-panel.tsx` regroupe les faits par cycle et expose les payloads techniques ;
+- `cockpit-shell.tsx` porte la navigation principale ;
+- aucun composant chart canonique n'existe actuellement.
+
+## 4. Architecture cible des cadences
+
+Les prochaines évolutions doivent éviter de confondre trois boucles :
 
 ```text
-GET /strategies
--> sélectionner Strategy
--> lire latest_revision
--> GET /strategies/{id}/revisions/1..latest_revision
+A. Market monitoring loop
+   Kraken -> normalisation -> mark-to-market -> état portefeuille/risque technique
+   fréquence rapide, zéro LLM
+
+B. Strategic trading loop
+   état canonique -> même Agent -> BUY/SELL/HOLD -> Risk -> Broker
+   fréquence plus lente
+
+C. Market discovery loop
+   univers admissible -> même Agent -> watchlist stratégique versionnée
+   fréquence beaucoup plus lente
 ```
 
-La persistence 18.9A crée les révisions séquentiellement, sans trou. Il n'existe pas de route
-`list revisions` dédiée ; le cockpit réutilise donc les GET unitaires canoniques sans créer un
-contrat parallèle.
+Les valeurs exactes ne sont pas figées dans ce document. Elles devront être configurables lorsque pertinent et bornées par les limites Kraken, les besoins produit et le coût IA.
 
-Éditer le texte déclenche uniquement :
+## 5. Architecture cible du portefeuille SPOT
+
+Le modèle cible doit conserver dans le backend suffisamment d'information pour rendre déterministes et récupérables :
+
+- quantité ;
+- coût de revient restant ;
+- prix moyen d'entrée ;
+- P&L réalisé ;
+- P&L latent calculé au mark courant ;
+- frais/coûts associés.
+
+Les buys successifs doivent produire une moyenne pondérée canonique. Une vente partielle doit libérer seulement la part de coût correspondante et réaliser le P&L de la quantité vendue. Une vente totale doit fermer la position sans perdre l'historique auditable des fills/P&L.
+
+**À décider lors du batch comptable :** forme exacte du modèle (`AssetPosition` enrichi ou sous-structure dédiée), séparation coût brut/coûts d'exécution et politique d'arrondi/quantification.
+
+## 6. Architecture cible du monitoring déterministe
+
+Le monitoring ne constitue pas un second agent et ne prend aucune décision stratégique.
+
+Il peut :
+
+- maintenir les derniers prix/marks ;
+- revaloriser SPOT et PERPETUAL ;
+- calculer P&L latent, exposition, marge, maintenance et liquidation ;
+- appliquer le funding PERPETUAL selon les données disponibles ;
+- mettre à jour des snapshots/caches lisibles par l'Agent, Risk et l'API ;
+- alimenter les métriques cockpit.
+
+Il ne peut pas :
+
+- choisir un marché à trader ;
+- fermer une position de lui-même pour une raison stratégique ;
+- remplacer la décision BUY/SELL/HOLD de l'Agent.
+
+Les protections d'urgence déterministes éventuellement nécessaires à l'avenir devront faire l'objet d'une décision explicite distincte ; elles ne sont pas introduites par ce cadrage.
+
+## 7. Mode gestion à exposition saturée
+
+Une couche déterministe peut produire un état de capacité, par exemple conceptuellement :
 
 ```text
-POST /strategies/{id}/revisions
+can_open_new_exposure: bool
+reason: max_total_exposure | derivative_cap | cash/margin | ...
 ```
 
-Aucune révision existante n'est mutée.
+Cet état doit adapter **le périmètre présenté à l'Agent**, pas prendre la décision à sa place.
 
-## 6. Prompt preview
+En mode gestion :
 
-Le cockpit appelle `POST /prompt-preview`. Il ne recompose pas le prompt métier. Il découpe
-uniquement la chaîne `instructions` retournée selon les marqueurs canoniques pour l'affichage :
+- univers stratégique = positions ouvertes ;
+- outils orientés découverte de nouvelles ouvertures non nécessaires = évités ;
+- actions restent BUY/SELL/HOLD selon les sémantiques du marché, avec contraintes permettant uniquement maintien/réduction/clôture ;
+- Risk vérifie encore chaque proposition ;
+- sortie automatique du mode dès que l'ouverture redevient techniquement possible.
+
+Le contrat exact permettant d'empêcher une proposition augmentant l'exposition reste **à décider** entre contexte Agent explicite et validation déterministe renforcée, sans doublonner Risk.
+
+## 8. Découverte dynamique / watchlist
+
+Architecture cible :
 
 ```text
-contrat Agent protégé
-stratégie opérateur
-contexte d'agressivité
-input dynamique futur = null
+Kraken metadata
+  -> filtre déterministe d'admissibilité
+      -> univers admissible versionné
+          -> même Agent IA de découverte
+              -> watchlist stratégique versionnée
+                  + positions ouvertes forcées
+                      -> univers surveillé effectif
 ```
 
-Si les marqueurs ne sont pas trouvés, il affiche le contenu canonique sans inventer de section.
+Le filtre backend peut éliminer un marché techniquement non supporté ; il ne doit pas classer les opportunités selon un score de trading.
 
-## 7. Builder Campaign
+Le mode manuel doit rester disponible pour les tests et expériences reproductibles.
 
-Le formulaire mappe les champs vers le modèle backend `CampaignConfiguration` :
+## 9. Historique candles et diffusion cockpit
+
+Architecture privilégiée :
 
 ```text
-paper-control-plane-config-v1
-llm_model / aggressiveness / trading_cadence_seconds
-paper_initial_capital / paper_settlement_asset
-paper_executable_markets
-paper_fee_rate / paper_spread_bps / paper_slippage_bps
-paper_derivative_leverage / paper_derivative_margin_mode=ISOLATED
-risk_*
-cycle_*_timeout_seconds
+Kraken REST OHLC ------+
+                       +-> CandleService normalisé -> cache/persistence -> API historique
+Kraken WS OHLC --------+                               |
+                                                       +-> WS cockpit
+                                                               |
+                                                       Lightweight Charts
 ```
 
-Le navigateur n'implémente pas les règles de cohérence : quote/règlement, whitelist Risk,
-unicité, levier, limites PERPETUAL, spread+slippage, FUTURE, etc. Ces règles restent dans Pydantic
-et le Control Plane backend. L'UI n'offre que `SPOT` et `PERPETUAL` et fixe visuellement
-`ISOLATED`, puis affiche les refus 422/409/503 du backend.
+Pour le Spot, Kraken REST OHLC renvoie au maximum les 720 entrées les plus récentes. Si le produit doit afficher davantage d'historique, le backend doit accumuler ses propres candles fermées de manière durable.
 
-Les valeurs préremplies sont un profil de saisie opérateur ; elles ne sont pas présentées comme des
-valeurs par défaut `Settings` serveur, dont la majorité est volontairement `None`.
+Le canal Kraken Spot WebSocket v2 `ohlc` permet les mises à jour OHLC par événement de trade. Le code actuel ne l'exploite pas encore comme service candles cockpit.
 
-## 8. Activation / reprise / moteur
+### Chargement frontend
 
-```text
-POST /campaigns/{id}/activate   # frais
-POST /campaigns/{id}/resume     # explicite
-POST /engine/run-cycle
-POST /engine/start
-POST /engine/stop
-```
+- paire active : historique + abonnement temps réel prioritaires ;
+- autres onglets : métadonnées légères, cache, lazy loading ;
+- ne pas instancier/rendre tous les charts simultanément ;
+- le frontend ne corrige ni ne réconcilie lui-même les séries canoniques.
 
-Une activation/reprise pendant `RUNNING`, une activation fraîche d'une Campaign déjà exécutée ou
-une reprise sans run parent restent refusées côté backend. L'UI affiche le conflit ; elle ne le
-contourne pas.
+## 10. API/WS cible
 
-Le polling du cockpit relit toutes les 10 secondes, lorsque l'onglet est visible :
+Les contrats précis sont **à décider**, mais le découpage probable est :
 
-```text
-strategies
-campaigns
-campaigns/active
-paper-runs (100 derniers)
-engine
-```
+- endpoint lecture watchlist courante + version ;
+- endpoint historique watchlist/audit ;
+- endpoint état monitoring/positions enrichies ;
+- endpoint candles initiales par marché/timeframe ;
+- WebSocket cockpit pour ticks/candles/position marks ;
+- endpoints d'audit/corrélation décisions ↔ positions/fills réutilisables par UI.
 
-Fermer ou redémarrer Next.js n'envoie jamais `stop` au moteur backend.
+Un seul backend reste propriétaire de ces données.
 
-## 9. Identités et recovery visibles
+## 11. Persistence et migrations
 
-Le cockpit expose les identités fournies par le backend :
+Les évolutions suivantes peuvent nécessiter des migrations :
 
-```text
-strategy_prompt_digest
-configuration_digest
-experiment_protocol_version
-experiment_digest
-campaign_id
-paper_run_id
-resumed_from_paper_run_id
-recovery_version
-```
+- état comptable SPOT enrichi dans snapshots ou tables durables ;
+- versions de watchlist et raisons de changement ;
+- métriques d'appels/tokens économisés ;
+- candles accumulées au-delà des limites natives Kraken.
 
-Aucun digest n'est recalculé dans le navigateur.
+Le schéma exact ne doit pas être figé avant l'audit du modèle de persistence au début de chaque batch.
 
-## 10. Erreurs et confidentialité
+## 12. Références externes Kraken vérifiées le 2026-09-24
 
-`ApiError` conserve le statut HTTP et un message opératoire. Pour les erreurs Pydantic, le client
-n'affiche que `loc` + `msg` et n'inclut pas le champ `input`, afin d'éviter de refléter une valeur de
-formulaire potentiellement sensible.
-
-Le panneau Control Plane ne référence ni `localStorage`, ni `sessionStorage`, ni nom de secret
-serveur. Les secrets restent exclusivement dans la configuration backend.
-
-## 11. Persistence backend
-
-Schéma canonique :
-
-```text
-strategies
-strategy_revisions
-campaigns
-paper_runs.campaign_id NULLABLE
-paper_runs.resumed_from_paper_run_id
-```
-
-Aucune migration n'est ajoutée par 18.9B.
-
-## 12. Validation
-
-Le patch frontend a fait l'objet d'un harness source et d'un typecheck ciblé avec stubs. Les
-commandes canoniques `pnpm lint`, `pnpm typecheck` et `pnpm build` doivent être rejouées dans le
-repository local avec les dépendances installées avant intégration.
+- Spot REST OHLC : `https://docs.kraken.com/api-reference/market-data/get-ohlc-data`
+  - jusqu'à 720 entrées récentes ; données plus anciennes non récupérables via cet endpoint ;
+- Spot WebSocket v2 OHLC : `https://docs.kraken.com/exchange/api-reference/spot-websocket-v2/ohlc`
+  - abonnement multi-symboles ; updates OHLC générées sur événements de trade.
