@@ -6,10 +6,10 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub `main` audité au démarrage du Batch 19.1 :
-  `dbdc8f83bb39c158ec7331ce2adba616d2922842`
-  (`docs: plan upcoming trading improvements`).
-- Le Batch 19.1 est implémenté dans le patch local livré avec ce document ; il n'est pas déclaré intégré à GitHub tant que l'opérateur ne l'a pas validé/commité.
+- HEAD GitHub `main` intégré après le Batch 19.1 :
+  `4e19381b093df81a947397f90a858f5f1b42886a`
+  (`feat: add canonical SPOT position accounting`).
+- Batch 19.1 intégré et validé localement : backend `516 passed`, frontend `pnpm lint`, `pnpm typecheck` et `pnpm build` réussis.
 
 ## État fonctionnel après application du Batch 19.1
 
