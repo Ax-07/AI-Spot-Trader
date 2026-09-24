@@ -50,19 +50,23 @@ Aucun short, leverage ou margin SPOT.
 
 ### Comptabilité Batch 19.1
 
-Le `PortfolioState` transmis à l'Agent peut désormais contenir pour chaque position SPOT :
+Le `PortfolioState` transmis à l'Agent contient la comptabilité backend : quantité, disponible, `average_entry_price`, `remaining_cost_basis`, `realized_pnl`, `accounting_complete`.
 
-- quantité et disponible ;
-- `average_entry_price` ;
-- `remaining_cost_basis` ;
-- `realized_pnl` ;
-- `accounting_complete`.
+### Valorisation Batch 19.2
 
-Ces valeurs sont calculées exclusivement par le backend déterministe. L'Agent ne calcule jamais le coût moyen ni le P&L.
+Le même `PortfolioState` peut désormais contenir :
 
-`accounting_complete=false` signifie qu'une position historique ne dispose pas d'une base de coût suffisamment fiable pour présenter ces valeurs. L'Agent ne doit pas les inventer.
+- `mark_price`, `mark_observed_at`, `mark_source` ;
+- `market_value` ;
+- `unrealized_pnl` ;
+- `valuation_complete` ;
+- les agrégats cash/coût/valeur/P&L/equity/exposition du portefeuille.
 
-Le P&L latent n'est pas encore fourni comme champ canonique de position par 19.1 ; il dépendra du mark-to-market du Batch 19.2.
+Ces valeurs sont calculées exclusivement par le backend déterministe. L'Agent et Risk ne doivent pas recalculer un autre P&L latent.
+
+`accounting_complete=false` signifie qu'une position historique ne dispose pas d'une base de coût suffisamment fiable. Même avec un mark, son P&L latent reste indisponible. Un mark absent/périmé rend également la valorisation indisponible.
+
+La fraîcheur du mark n'autorise aucune donnée future : le ledger refuse une observation postérieure à son horloge et ne remplace pas un mark récent par un mark plus ancien.
 
 ## 7. PERPETUAL
 
@@ -70,15 +74,23 @@ Le P&L latent n'est pas encore fourni comme champ canonique de position par 19.1
 
 Risk garde le contrôle du contrat, taille, levier, marge, notional, exposition, buffer liquidation, `reduce_only`, anti-reversal et marge `ISOLATED`. Le LLM ne choisit jamais le levier effectif.
 
-## 8. Mode gestion quand aucune nouvelle exposition n'est possible
+La comptabilité/valorisation dérivée existante reste canonique ; le Batch 19.2 ne crée pas une seconde implémentation parallèle.
 
-Le backend pourra constater de manière déterministe qu'une nouvelle exposition est interdite. Dans ce cas, l'Agent ne recherchera pas de nouvelles ouvertures et son contexte portera sur les positions ouvertes ; HOLD, réduction et clôture resteront soumises à Risk.
+## 8. Monitoring déterministe
 
-## 9. Découverte périodique des marchés
+`PaperSpotMarkToMarketMonitor` utilise la source publique Kraken et le ledger canonique. Il ne possède aucune référence à l'Agent, Risk ou Broker et ne peut pas produire d'ordre.
+
+Le monitor reste actif avec le runtime backend même si le TradingEngine est `STOPPED`. Fermer le frontend n'arrête donc pas la valorisation du runtime actif.
+
+## 9. Mode gestion quand aucune nouvelle exposition n'est possible
+
+Le backend pourra constater de manière déterministe qu'une nouvelle exposition est interdite. Dans ce cas, l'Agent ne recherchera pas de nouvelles ouvertures et son contexte portera sur les positions ouvertes ; HOLD, réduction et clôture resteront soumises à Risk. Ce périmètre reste celui du Batch 19.3.
+
+## 10. Découverte périodique des marchés
 
 Le backend fournit un univers techniquement admissible ; le même Agent produit la sélection stratégique/watchlist. Le déterministe ne doit pas calculer un score d'opportunité qui remplace le choix stratégique de l'Agent.
 
-## 10. Watchlist et positions ouvertes
+## 11. Watchlist et positions ouvertes
 
 Invariant cible :
 
@@ -86,17 +98,19 @@ Invariant cible :
 univers surveillé = watchlist IA actuelle + toutes les positions ouvertes
 ```
 
-## 11. Recovery
+## 12. Recovery
 
 Le recovery restaure un `PortfolioState` durable et ne réexécute jamais sélection, Agent, Risk, Broker ou Fill.
 
-Pour 19.1 :
+Pour 19.2 :
 
-- une nouvelle position SPOT comptabilisée restaure exactement prix moyen, coût restant et P&L réalisé courant ;
+- un mark frais restauré reste utilisable ;
+- un mark devenu trop ancien est masqué au nouveau snapshot ;
 - une position legacy sans coût historique reste marquée incomplète ;
-- aucune donnée future n'est utilisée pour compléter artificiellement son historique.
+- le P&L réalisé global reste `None` si la lignée historique ne permet pas de le connaître ;
+- aucune donnée future ou replay historique n'est utilisé pour compléter artificiellement l'état.
 
-## 12. Interdits maintenus
+## 13. Interdits maintenus
 
 - aucun LIVE ;
 - aucun second Agent ;
@@ -105,6 +119,6 @@ Pour 19.1 :
 - aucune modification post-hoc d'une décision ;
 - aucun look-ahead ;
 - aucune obligation de trader ;
-- aucun calcul stratégique déporté dans le frontend.
+- aucun calcul stratégique ou financier canonique déporté dans le frontend.
 
 Le séquencement détaillé est documenté dans `docs/11_AMELIORATIONS_PLANIFIEES.md`.

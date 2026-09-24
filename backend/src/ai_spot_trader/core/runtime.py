@@ -77,6 +77,12 @@ class AsyncAcloseable(Protocol):
     async def aclose(self) -> None: ...
 
 
+class BackgroundService(AsyncAcloseable, Protocol):
+    """Process-local service started only after durable PAPER recovery has completed."""
+
+    async def start(self) -> None: ...
+
+
 class TradingEngineUnavailableError(RuntimeError):
     """Raised when lifecycle control is requested without an injected engine."""
 
@@ -117,15 +123,25 @@ class AppRuntime:
     analytics_reader: PaperAnalyticsReader | None = None
     paper_run_lifecycle: PaperRunLifecycle | None = None
     paper_run_reader: PaperRunReader | None = None
+    background_services: tuple[BackgroundService, ...] = ()
     owned_database: AsyncCloseable | None = None
     owned_resources: tuple[AsyncAcloseable, ...] = ()
     _engine_command_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def initialize(self) -> None:
-        """Create a fresh durable run for the fresh in-memory PAPER ledger."""
+        """Recover durable PAPER state, then start non-strategic process-local services."""
 
         if self.paper_run_lifecycle is not None:
             await self.paper_run_lifecycle.initialize()
+        started: list[BackgroundService] = []
+        try:
+            for service in self.background_services:
+                await service.start()
+                started.append(service)
+        except Exception:
+            for service in reversed(started):
+                await service.aclose()
+            raise
 
     @property
     def current_paper_run_id(self) -> UUID | None:
@@ -212,7 +228,7 @@ class AppRuntime:
         return engine
 
     async def close(self) -> None:
-        """Stop trading, close the run, then release network/database resources."""
+        """Stop trading/monitoring, close the run, then release network/database resources."""
 
         self.shutdown_requested.set()
         try:
@@ -220,16 +236,20 @@ class AppRuntime:
                 await self.trading_engine.stop()
         finally:
             try:
-                if self.paper_run_lifecycle is not None:
-                    await self.paper_run_lifecycle.close()
+                for service in reversed(self.background_services):
+                    await service.aclose()
             finally:
                 try:
-                    for resource in reversed(self.owned_resources):
-                        await resource.aclose()
+                    if self.paper_run_lifecycle is not None:
+                        await self.paper_run_lifecycle.close()
                 finally:
-                    if self.owned_database is not None:
-                        await self.owned_database.close()
-                    await asyncio.sleep(0)
+                    try:
+                        for resource in reversed(self.owned_resources):
+                            await resource.aclose()
+                    finally:
+                        if self.owned_database is not None:
+                            await self.owned_database.close()
+                        await asyncio.sleep(0)
 
 
 def _enum_text(value: object) -> str:

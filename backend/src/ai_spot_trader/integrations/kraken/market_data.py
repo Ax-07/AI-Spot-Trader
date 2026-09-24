@@ -35,6 +35,12 @@ class TickerSource(Protocol):
     async def first_ticker(self, symbol: str) -> KrakenTicker: ...
 
 
+class SpotMarketSink(Protocol):
+    """Optional PAPER ledger hook for causal SPOT valuation after a valid snapshot."""
+
+    def mark_spot_market(self, market_state: MarketState) -> None: ...
+
+
 class KrakenMarketDataSource:
     """Kraken public Spot source exposing normalized observations and rich snapshots."""
 
@@ -46,12 +52,14 @@ class KrakenMarketDataSource:
         clock: Clock | None = None,
         stale_after: timedelta | None = None,
         registry: KrakenPairRegistry | None = None,
+        market_sink: SpotMarketSink | None = None,
     ) -> None:
         self._rest_client = rest_client
         self._websocket_client = websocket_client
         self._clock = clock or SystemClock()
         self._stale_after = stale_after
         self._registry = registry
+        self._market_sink = market_sink
         self._builders: dict[str, MarketStateBuilder] = {}
         self._latest_current_observations: dict[str, MarketObservation] = {}
 
@@ -119,6 +127,8 @@ class KrakenMarketDataSource:
             statistics_as_of=statistics_as_of,
         )
         self._latest_current_observations[observation.symbol] = observation
+        if self._market_sink is not None:
+            self._market_sink.mark_spot_market(market_state)
         return market_state
 
     def is_stale(self, as_of: datetime) -> bool:
@@ -177,6 +187,7 @@ def build_kraken_market_data_source(
     settings: Settings,
     *,
     clock: Clock | None = None,
+    market_sink: SpotMarketSink | None = None,
 ) -> KrakenMarketDataSource:
     stale_after = (
         timedelta(seconds=settings.kraken_stale_after_seconds)
@@ -198,4 +209,5 @@ def build_kraken_market_data_source(
         ),
         clock=clock,
         stale_after=stale_after,
+        market_sink=market_sink,
     )

@@ -38,6 +38,12 @@ export type AssetPositionResponse = {
   remaining_cost_basis: string | null;
   realized_pnl: string;
   accounting_complete: boolean;
+  mark_price: string | null;
+  mark_observed_at: string | null;
+  mark_source: "LAST_PRICE" | null;
+  market_value: string | null;
+  unrealized_pnl: string | null;
+  valuation_complete: boolean;
 };
 
 export type DerivativePositionResponse = {
@@ -46,6 +52,7 @@ export type DerivativePositionResponse = {
   quantity: string;
   average_entry_price: string;
   mark_price: string;
+  mark_observed_at: string | null;
   contract_size: string;
   notional: string;
   realized_pnl: string;
@@ -65,9 +72,19 @@ export type PortfolioResponse = {
   portfolio_state_id: string;
   as_of: string;
   mode: "PAPER";
+  settlement_asset: string | null;
   balances: AssetBalanceResponse[];
   positions: AssetPositionResponse[];
   derivative_positions: DerivativePositionResponse[];
+  cash_available: string | null;
+  spot_remaining_cost_basis_total: string | null;
+  spot_market_value_total: string | null;
+  spot_realized_pnl_total: string | null;
+  spot_unrealized_pnl_total: string | null;
+  equity: string | null;
+  exposure_value: string | null;
+  exposure_fraction: string | null;
+  valuation_complete: boolean;
 };
 
 export type ExecutableMarketType = "SPOT" | "PERPETUAL";

@@ -1,25 +1,19 @@
 # AI Spot Trader
 
-AI Spot Trader est une application expérimentale de trading crypto **PAPER** sur Kraken, pilotée
-par **un seul Agent IA stratégique**. L'Agent recherche, sélectionne un marché exécutable puis
-propose `BUY`, `SELL` ou `HOLD`. Le **Risk Engine déterministe** conserve l'autorité finale : seul
-Risk peut produire un `ExecutionIntent`, ensuite exécuté par le `PaperBroker`.
+AI Spot Trader est une application expérimentale de trading crypto **PAPER** sur Kraken, pilotée par **un seul Agent IA stratégique**. L'Agent recherche, sélectionne un marché exécutable puis propose `BUY`, `SELL` ou `HOLD`. Le **Risk Engine déterministe** conserve l'autorité finale : seul Risk peut produire un `ExecutionIntent`, ensuite exécuté par le `PaperBroker`.
 
-> Objectif expérimental : rechercher une performance élevée, avec une cible de travail de +4 %/jour.
-> Ce n'est ni une promesse ni une garantie de rendement.
+> Objectif expérimental : rechercher une performance élevée, avec une cible de travail de +4 %/jour. Ce n'est ni une promesse ni une garantie de rendement.
 
-## Référence auditée — après Batch 18.9C
+## Référence auditée — Batch 19.2
 
 ```text
 repository : Ax-07/AI-Spot-Trader
 branche    : main
-HEAD       : 5fc7704e7ca43ded4c2565b21871b81fe2161b0a
-message    : fix: finalize batch 18.9C behavioral validation
+HEAD base  : 01ca1e857947d969556481e5593c5712d137f5ad
+message    : docs: finalize Batch 19.1 integration state
 ```
 
-Les Batches 18.9A, 18.9B et 18.9C sont intégrés. Le cockpit Control Plane a été validé sur les
-parcours réels PAPER SPOT et PERPETUAL ; les correctifs JSON `market_type` et typing mypy de 18.9C
-font partie du HEAD courant.
+Le Batch 19.1 est intégré. Le Batch 19.2 est livré comme patch local à valider/intégrer explicitement par l'opérateur.
 
 ## Invariants
 
@@ -32,6 +26,7 @@ font partie du HEAD courant.
 - aucune sortie LLM -> Broker ;
 - aucun tool -> Broker/Risk ;
 - Risk autorise, modifie ou refuse et garde l'autorité finale ;
+- comptabilité et mark-to-market canoniques dans le backend ;
 - aucun secret dans les prompts, Campaigns, réponses UI ou fichiers versionnés ;
 - aucun replay LLM/Risk/Broker/Fill lors du recovery ;
 - aucun look-ahead ;
@@ -43,23 +38,26 @@ Principe : **l'Agent propose. Le Risk Engine autorise, modifie ou refuse.**
 ## Pipeline canonique
 
 ```text
-PortfolioState complet
+PaperSpotMarkToMarketMonitor -----------+
+PaperDerivativeMarkToMarketMonitor -----+
+                                        |
+PortfolioState marqué                   |
+        |                               |
+        v                               |
+MarketSelectionInput                    |
+        |                               |
+        v                               |
+OpenAIDecisionProvider (Agent unique)   |
+        |\                              |
+        | +--> tools read-only Kraken   |
+        v                               |
+MarketSelection                         |
+        |                               |
+        v                               |
+RoutedExecutableMarketDataSource -------+
         |
         v
-MarketSelectionInput
-        |
-        v
-OpenAIDecisionProvider (Agent unique)
-        |\
-        | +--> tools read-only Kraken publics
-        v
-MarketSelection (symbol + market_type + traces + digest)
-        |
-        v
-RoutedExecutableMarketDataSource
-        |
-        v
-MarketState canonique exact
+MarketState canonique exact -> mark ledger
         |
         v
 AgentInput -> même Agent -> BUY / SELL / HOLD
@@ -71,142 +69,67 @@ RiskEngine -> ALLOW / MODIFY / REJECT
 ExecutionIntent éventuel -> PaperBroker -> Fill
         |
         v
-Audit PostgreSQL + ledger PAPER durable
+PaperPortfolioLedger -> audit PostgreSQL + snapshot durable
 ```
 
 Le frontend n'appartient pas à cette chaîne d'exécution.
 
-## Control Plane backend — Batch 18.9A
+## Comptabilité et mark-to-market SPOT
 
-### Strategy / StrategyRevision
-
-`Strategy` porte l'identité et le nom. `StrategyRevision` est immuable et contient le texte
-stratégique opérateur, son digest SHA-256, la version du contrat Agent protégé et son timestamp.
-Modifier le texte crée une nouvelle révision. Renommer la Strategy ne modifie aucune révision.
-
-### Contrat Agent protégé
-
-Les runtimes de Campaign composent :
+La comptabilité Batch 19.1 utilise un coût économique moyen pondéré :
 
 ```text
-contrat applicatif protégé
-+ stratégie opérateur éditable
-+ contexte d'agressivité canonique
+average_entry_price = remaining_cost_basis / quantity
 ```
 
-L'input dynamique (`MarketSelectionInput` ou `AgentInput`) est séparé. Le preview ne l'invente pas.
+Le coût restant inclut les débits cash BUY réels, frais inclus. Les SELL libèrent la base au prorata et réalisent le P&L sur le crédit cash net. Spread/slippage sont déjà dans le prix de fill et ne sont jamais ajoutés deux fois.
 
-### Campaign
-
-Une `Campaign` est un snapshot immuable non sensible : modèle, agressivité, cadence, capital,
-univers SPOT/PERP, coûts, levier/marge, limites Risk, deadlines, stratégie/révision et digests.
-
-`OPENAI_API_KEY`, `DATABASE_URL` et les futurs secrets privés Kraken/LIVE restent exclusivement
-serveur.
-
-### Campaign vs paper_run
+Le Batch 19.2 ajoute le mark-to-market :
 
 ```text
-Campaign = identité configuration/stratégie expérimentale
-paper_run = lifetime d'exécution/recovery
+mark_price     = dernier prix ticker Kraken causal
+market_value   = quantity * mark_price
+unrealized_pnl = market_value - remaining_cost_basis
 ```
 
-Une reprise conserve `campaign_id`, crée un nouveau `paper_run_id`, renseigne
-`resumed_from_paper_run_id` et restaure le ledger sans replay historique.
+Le P&L latent n'est produit que si la base de coût est complète. Un mark absent ou périmé devient explicitement indisponible. Les positions legacy peuvent être valorisées au marché sans inventer de P&L latent.
 
-## Cockpit Control Plane — Batch 18.9B
+Le backend peut également exposer cash, valeur SPOT, P&L réalisé/latent, equity et exposition au niveau portefeuille. Le frontend affiche ces valeurs sans les recalculer.
 
-Le panneau frontend permet de :
+## Monitoring backend sans LLM
 
-- créer, lister, renommer et archiver des Strategies ;
-- consulter les révisions jusqu'à `latest_revision` ;
-- créer une nouvelle StrategyRevision immuable ;
-- comparer deux révisions via l'API backend ;
-- prévisualiser le prompt canonique en distinguant contrat Agent protégé, stratégie opérateur,
-  contexte d'agressivité et input dynamique futur ;
-- créer une Campaign PAPER SPOT et/ou PERPETUAL ;
-- choisir GPT-5.6 Luna ou Sol ;
-- configurer agressivité, cadence, capital et actif de règlement ;
-- configurer frais, spread, slippage ;
-- configurer les champs Risk exposés par `CampaignConfiguration` ;
-- configurer le levier PERPETUAL déterministe avec marge `ISOLATED` ;
-- visualiser les digests et identités expérimentales ;
-- déclencher activation fraîche ou reprise explicite ;
-- piloter `run-cycle`, `start`, `stop` via les routes moteur canoniques ;
-- voir Campaign active, `campaign_id`, `paper_run_id`, `resumed_from_paper_run_id` et
-  `recovery_version` ;
-- afficher les refus backend 409/422/503 sans les contourner.
-
-Le cockpit ne calcule aucun signal, aucune décision, aucune autorisation Risk et aucun ordre. Les
-valeurs du builder sont envoyées au modèle Pydantic canonique, qui conserve l'autorité de
-validation.
-
-Le panneau ne stocke ni prompt, ni Campaign, ni paramètres Risk dans `localStorage` ou
-`sessionStorage`. Fermer le frontend n'envoie jamais `stop` au backend.
-
-## Validation comportementale — Batch 18.9C
-
-Le parcours réel via cockpit a confirmé :
-
-- création/édition/versionnement de Strategy et preview canonique ;
-- Campaign PAPER SPOT et PERPETUAL ;
-- Luna et Sol sélectionnables par configuration ;
-- activation fraîche, `run-cycle`, Start/Stop ;
-- restart backend sans reprise silencieuse ;
-- reprise explicite avec nouveau `paper_run_id`, lineage et ledger restauré ;
-- BUY SPOT naturel avec Risk `MODIFY`, fill PAPER et coûts ;
-- HOLD naturels ;
-- BUY PERPETUAL naturel sur SOL/USD avec Risk `MODIFY`, levier 2, `ISOLATED` et position LONG ;
-- refus backend 409 / 422 / 503 ;
-- aucun SELL naturel et aucun SELL forcé.
-
-Le correctif 18.9C adapte les valeurs JSON `market_type` à la frontière Control Plane tout en
-conservant `ExecutableMarket` strict. Le même commit contient un nettoyage mypy type-only de trois
-routes API, sans changement fonctionnel.
-
-Validation locale opérateur exécutée avant intégration de `5fc7704` :
+Le mark-to-market possède des cadences techniques indépendantes du cycle stratégique :
 
 ```text
-pytest backend : 506 passed, 2 warnings de dépréciation dépendances
-ruff check backend : All checks passed
-mypy backend/src : Success: no issues found in 89 source files
-git diff --check : OK hors avertissements LF -> CRLF
-working tree propre avant push
+AI_SPOT_TRADER_PAPER_MARK_TO_MARKET_CADENCE_SECONDS=5
+AI_SPOT_TRADER_PAPER_DERIVATIVE_MARK_TO_MARKET_CADENCE_SECONDS=15
+AI_SPOT_TRADER_PAPER_MARK_TO_MARKET_TIMEOUT_SECONDS=5
+AI_SPOT_TRADER_PAPER_MARK_TO_MARKET_STALE_AFTER_SECONDS=30
 ```
 
-## API Control Plane
+Le monitor ne peut ni sélectionner un trade, ni appeler Risk, ni appeler Broker. Il reste lié au runtime backend actif, pas au navigateur.
 
-Sous `/api/v1` :
+## Control Plane et cockpit
 
-```text
-POST   /strategies
-GET    /strategies
-GET    /strategies/{strategy_id}
-PATCH  /strategies/{strategy_id}
-POST   /strategies/{strategy_id}/archive
-POST   /strategies/{strategy_id}/revisions
-GET    /strategies/{strategy_id}/revisions/{revision}
-GET    /strategies/{strategy_id}/compare?left=1&right=2
+`Strategy`, `StrategyRevision`, `Campaign` et `paper_run` conservent leurs rôles : configuration/stratégie immuable d'un côté, lifetime d'exécution/recovery de l'autre.
 
-POST   /campaigns
-GET    /campaigns
-GET    /campaigns/active
-GET    /campaigns/{campaign_id}
-POST   /campaigns/{campaign_id}/activate
-POST   /campaigns/{campaign_id}/resume
+Le cockpit permet notamment de créer/configurer des tests PAPER, activer/reprendre une Campaign, lancer un cycle ou le moteur autonome, lire les positions et l'historique. Fermer le frontend n'arrête ni le moteur backend ni le monitoring du runtime actif.
 
-POST   /prompt-preview
-```
+## Recovery
 
-Commandes moteur :
+`paper-ledger-recovery-v1` restaure le snapshot canonique sans replay Agent/Risk/Broker/Fill. Les champs 19.2 sont persistés dans le JSON `PortfolioState`, sans migration SQL supplémentaire.
+
+Un mark restauré est toujours soumis à la règle de fraîcheur courante. Un snapshot historique incapable d'établir le P&L réalisé global conserve cette valeur inconnue ; aucun historique n'est fabriqué.
+
+## API principales
+
+Sous `/api/v1`, le Control Plane expose Strategies, Campaigns, prompt preview, paper runs, moteur, portfolio, audit et analytics. Les commandes moteur restent :
 
 ```text
 POST /api/v1/engine/run-cycle
 POST /api/v1/engine/start
 POST /api/v1/engine/stop
 ```
-
-`/api/v1/paper-runs` expose `campaign_id`, `resumed_from_paper_run_id` et `recovery_version`.
 
 ## Persistence PostgreSQL
 
@@ -219,9 +142,13 @@ POST /api/v1/engine/stop
 -> 0006_paper_control_plane
 ```
 
-Aucune migration supplémentaire n'est ajoutée par le Batch 18.9C.
+Aucune migration SQL supplémentaire n'est requise par les Batches 19.1/19.2 ; les nouveaux champs portefeuille sont dans les snapshots JSON existants.
 
-## État après 18.9C
+## Suite de la roadmap
 
-Le jalon 18.9 est intégré et validé. Le projet reste exclusivement PAPER ; tout périmètre LIVE doit
-être traité séparément avec permissions et barrières explicites.
+- 19.3 : mode gestion à exposition saturée et économie d'appels IA ;
+- 19.4 : discovery/watchlist dynamique et auditée ;
+- 19.5 : explicabilité IA/Risk ;
+- 19.6A/19.6B : candles/streaming puis vue Marchés/charts.
+
+Le détail est dans `docs/09_ROADMAP_DEVELOPPEMENT.md` et `docs/11_AMELIORATIONS_PLANIFIEES.md`.

@@ -13,6 +13,7 @@ from ai_spot_trader.chat.service import OperatorChatService, RuntimeChatContextS
 from ai_spot_trader.core.clock import SystemClock
 from ai_spot_trader.core.config import PaperRunConfiguration, Settings
 from ai_spot_trader.core.runtime import AppRuntime
+from ai_spot_trader.domain.enums import MarketType
 from ai_spot_trader.domain.models import AssetBalance, PortfolioState
 from ai_spot_trader.domain.ports import MarketDataSource
 from ai_spot_trader.integrations.kraken.derivatives import (
@@ -37,6 +38,10 @@ from ai_spot_trader.persistence.runs import (
     SqlAlchemyPaperRunQueryService,
 )
 from ai_spot_trader.portfolio.ledger import PaperPortfolioLedger
+from ai_spot_trader.portfolio.mark_to_market import (
+    PaperDerivativeMarkToMarketMonitor,
+    PaperSpotMarkToMarketMonitor,
+)
 from ai_spot_trader.risk.engine import RiskEngine
 from ai_spot_trader.risk.policy import RiskPolicy
 from ai_spot_trader.tools.market_research import build_market_research_tool_registry
@@ -64,6 +69,8 @@ class PaperRuntimeComposition:
     market_research: MarketResearchService
     agent_tools: ReadOnlyToolRegistry
     portfolio: PaperPortfolioLedger
+    mark_to_market: PaperSpotMarkToMarketMonitor
+    derivative_mark_to_market: PaperDerivativeMarkToMarketMonitor
     agent: OpenAIDecisionProvider
     risk_engine: RiskEngine
     broker: PaperBroker
@@ -113,14 +120,31 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
     initial_portfolio = PortfolioState(
         portfolio_state_id=uuid4(),
         as_of=clock.now(),
+        settlement_asset=run.settlement_asset,
         balances=(
             AssetBalance(
                 asset=run.settlement_asset,
                 available=run.initial_capital,
             ),
         ),
+        cash_available=run.initial_capital,
+        spot_remaining_cost_basis_total=Decimal(0),
+        spot_market_value_total=Decimal(0),
+        spot_realized_pnl_total=Decimal(0),
+        spot_unrealized_pnl_total=Decimal(0),
+        equity=run.initial_capital,
+        exposure_value=Decimal(0),
+        exposure_fraction=Decimal(0),
+        valuation_complete=True,
     )
-    portfolio = PaperPortfolioLedger(initial_state=initial_portfolio, clock=clock)
+    portfolio = PaperPortfolioLedger(
+        initial_state=initial_portfolio,
+        clock=clock,
+        settlement_asset=run.settlement_asset,
+        mark_stale_after=timedelta(
+            seconds=settings.paper_mark_to_market_stale_after_seconds
+        ),
+    )
     paper_run_lifecycle = SqlAlchemyPaperRunLifecycle(
         database.sessions,
         execution_universe=run.executable_markets,
@@ -129,8 +153,7 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         clock=clock,
     )
 
-    # Research sources are distinct from execution sources. In particular, the research
-    # Derivatives source has no market_sink and can never mark positions or accrue funding.
+    # Research sources are distinct from execution sources. They never reach the ledger.
     research_spot: KrakenMarketDataSource = build_kraken_market_data_source(
         settings, clock=clock
     )
@@ -178,18 +201,50 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         max_tool_calls=run.agent_tool_max_calls,
     )
 
-    execution_spot: RuntimeMarketDataSource = build_kraken_market_data_source(
-        settings, clock=clock
+    execution_spot = build_kraken_market_data_source(
+        settings,
+        clock=clock,
+        market_sink=portfolio,
     )
     execution_derivatives = _derivatives_source(
         settings,
         clock=clock,
         market_sink=portfolio,
     )
+    monitoring_spot = build_kraken_market_data_source(settings, clock=clock)
+    monitoring_derivatives = _derivatives_source(
+        settings,
+        clock=clock,
+        market_sink=None,
+    )
     market_data = RoutedExecutableMarketDataSource(
         spot=execution_spot,
         derivatives=execution_derivatives,
         allowed_markets=run.executable_markets,
+    )
+    mark_to_market = PaperSpotMarkToMarketMonitor(
+        market_data=monitoring_spot,
+        portfolio=portfolio,
+        settlement_asset=run.settlement_asset,
+        executable_symbols=(
+            market.symbol
+            for market in run.executable_markets
+            if market.market_type is MarketType.SPOT
+        ),
+        cadence_seconds=settings.paper_mark_to_market_cadence_seconds,
+        timeout_seconds=settings.paper_mark_to_market_timeout_seconds,
+    )
+
+    derivative_mark_to_market = PaperDerivativeMarkToMarketMonitor(
+        market_data=monitoring_derivatives,
+        portfolio=portfolio,
+        executable_symbols=(
+            market.symbol
+            for market in run.executable_markets
+            if market.market_type is MarketType.PERPETUAL
+        ),
+        cadence_seconds=settings.paper_derivative_mark_to_market_cadence_seconds,
+        timeout_seconds=settings.paper_mark_to_market_timeout_seconds,
     )
 
     cost_model = PaperExecutionCostModel(
@@ -251,6 +306,8 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
     resources: list[RuntimeMarketDataSource] = [
         execution_spot,
         execution_derivatives,
+        monitoring_spot,
+        monitoring_derivatives,
         research_spot,
         research_derivatives,
     ]
@@ -266,6 +323,7 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         analytics_reader=analytics_reader,
         paper_run_lifecycle=paper_run_lifecycle,
         paper_run_reader=paper_run_reader,
+        background_services=(mark_to_market, derivative_mark_to_market),
         owned_database=database,
         owned_resources=tuple(unique_resources),
     )
@@ -281,6 +339,8 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         market_research=market_research,
         agent_tools=agent_tools,
         portfolio=portfolio,
+        mark_to_market=mark_to_market,
+        derivative_mark_to_market=derivative_mark_to_market,
         agent=agent,
         risk_engine=risk_engine,
         broker=broker,

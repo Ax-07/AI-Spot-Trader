@@ -153,6 +153,12 @@ class AssetPositionResponse(ApiModel):
     remaining_cost_basis: Decimal | None = Field(default=None, ge=0)
     realized_pnl: Decimal = Decimal(0)
     accounting_complete: bool = False
+    mark_price: Decimal | None = Field(default=None, gt=0)
+    mark_observed_at: datetime | None = None
+    mark_source: Literal["LAST_PRICE"] | None = None
+    market_value: Decimal | None = Field(default=None, ge=0)
+    unrealized_pnl: Decimal | None = None
+    valuation_complete: bool = False
 
 
 class DerivativePositionResponse(ApiModel):
@@ -161,6 +167,7 @@ class DerivativePositionResponse(ApiModel):
     quantity: Decimal = Field(gt=0)
     average_entry_price: Decimal = Field(gt=0)
     mark_price: Decimal = Field(gt=0)
+    mark_observed_at: datetime | None = None
     contract_size: Decimal = Field(gt=0)
     notional: Decimal = Field(gt=0)
     realized_pnl: Decimal
@@ -180,9 +187,19 @@ class PortfolioResponse(ApiModel):
     portfolio_state_id: UUID
     as_of: datetime
     mode: Literal["PAPER"] = "PAPER"
+    settlement_asset: str | None = None
     balances: tuple[AssetBalanceResponse, ...] = ()
     positions: tuple[AssetPositionResponse, ...] = ()
     derivative_positions: tuple[DerivativePositionResponse, ...] = ()
+    cash_available: Decimal | None = Field(default=None, ge=0)
+    spot_remaining_cost_basis_total: Decimal | None = Field(default=None, ge=0)
+    spot_market_value_total: Decimal | None = Field(default=None, ge=0)
+    spot_realized_pnl_total: Decimal | None = None
+    spot_unrealized_pnl_total: Decimal | None = None
+    equity: Decimal | None = None
+    exposure_value: Decimal | None = Field(default=None, ge=0)
+    exposure_fraction: Decimal | None = Field(default=None, ge=0)
+    valuation_complete: bool = False
 
 
 class EngineStatusResponse(ApiModel):
@@ -204,7 +221,6 @@ class PaperRunResponse(ApiModel):
     campaign_id: UUID | None = None
     started_at: datetime
     ended_at: datetime | None = None
-    # Legacy singleton projection. Genuine multi-market runs return null here.
     market_type: Literal["SPOT", "PERPETUAL", "FUTURE"] | None = None
     symbol: str | None = None
     execution_universe: tuple[ExecutableMarketResponse, ...] = ()

@@ -3,53 +3,45 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub main audité : dbdc8f83bb39c158ec7331ce2adba616d2922842
+HEAD GitHub main audité : 01ca1e857947d969556481e5593c5712d137f5ad
 ```
 
 Le HEAD doit être revérifié au démarrage de chaque nouveau batch. Le document détaillé des améliorations est `docs/11_AMELIORATIONS_PLANIFIEES.md`.
 
-## Jalons intégrés avant 19.1
+## Jalons intégrés avant 19.2
 
 - 18.1 à 18.8 : tools Agent read-only, sélection multi-marchés, expérimentation, recovery et résilience réseau ;
 - 18.9A à 18.9C : Control Plane backend/frontend et validation comportementale ;
 - 18.10 à 18.13 : refonte UX, guide opérateur, simplification, dark mode et modernisation ;
-- cadrage des améliorations futures jusqu'aux batches 19.x : HEAD `dbdc8f83...`.
+- Batch 19.1 : comptabilité SPOT canonique intégrée, clôture documentaire au HEAD `01ca1e8...`.
 
-## Batch 19.1 — Comptabilité SPOT canonique
+## Batch 19.2 — Monitoring et mark-to-market déterministes
 
-**État du patch : implémenté, à valider/intégrer localement par l'opérateur.**
+**État du patch : implémenté par ChatGPT, à valider/intégrer localement par l'opérateur.**
 
 Résultat :
 
-- `AssetPosition` enrichi avec prix moyen d'entrée, coût de revient restant, P&L réalisé et indicateur de complétude ;
-- BUY successifs au coût économique moyen pondéré (`remaining_cost_basis / quantity`) ;
-- frais BUY inclus dans le coût de revient via le débit cash réel ;
-- ventes partielles avec libération de base de coût au prorata et P&L réalisé net ;
-- vente totale fermant la position ;
-- P&L réalisé de SELL porté également par le Fill durable ;
-- aucune double prise en compte spread/slippage/frais ;
-- persistence/recovery via le JSON `PortfolioState` existant, sans migration SQL ;
-- compatibilité des anciens snapshots via `accounting_complete=false` ;
-- contrat API et types cockpit enrichis ;
-- affichage frontend backend-sourced, sans P&L latent reconstruit ;
-- tests ciblés dédiés à la comptabilité SPOT.
+- mark SPOT canonique basé sur le dernier prix ticker Kraken causal ;
+- timestamp et source du mark exposés par position ;
+- `market_value = quantity * mark_price` ;
+- `unrealized_pnl = market_value - remaining_cost_basis` lorsque la comptabilité 19.1 est complète ;
+- marks absents/périmés explicitement indisponibles ;
+- positions legacy valorisables au marché sans inventer un P&L latent ;
+- agrégats `PortfolioState` : cash, coût restant, valeur SPOT, P&L réalisé/latent, equity et exposition lorsque calculables ;
+- monitor backend SPOT/PERPETUAL sans LLM, cadence/timeout/staleness configurables ;
+- valorisation SPOT alimentée par la source de marché canonique et le monitor, séparée de l'exécution du broker ;
+- recovery compatible sans migration SQL ni replay historique ;
+- API/types/cockpit Positions enrichis ;
+- suppression du rapprochement TypeScript entre position et dernier marché global ;
+- tests ciblés 19.2 couvrant valorisation, recovery, staleness, coûts, Decimal et no-look-ahead.
 
-Le P&L latent/mark-to-market complet reste volontairement hors 19.1.
+Le Batch 19.2 ne comprend ni watchlist dynamique, ni optimisation IA à exposition saturée, ni charts/WebSocket cockpit.
 
 ## Prochaine séquence
 
-### Batch 19.2 — Monitoring et mark-to-market déterministes
-
-- acquisition prix/marks Kraken adaptée au monitoring ;
-- revalorisation SPOT et PERPETUAL ;
-- P&L latent, exposition, marge, liquidation et funding lorsque pertinent ;
-- snapshot cohérent consommable par API, Agent et analytics ;
-- cadence dédiée/configurable ;
-- aucun choix stratégique dans le monitor.
-
 ### Batch 19.3 — Mode gestion et optimisation de consommation IA
 
-- déterminer si une nouvelle exposition est possible ;
+- déterminer si une nouvelle exposition est possible à partir de l'état canonique valorisé ;
 - éviter recherche/tools d'ouverture inutiles lorsque la capacité est saturée ;
 - concentrer le même Agent sur les positions existantes ;
 - HOLD/réduction/clôture ;
@@ -91,7 +83,7 @@ Le P&L latent/mark-to-market complet reste volontairement hors 19.1.
 
 ## Pourquoi cet ordre
 
-La comptabilité SPOT doit exister avant le mark-to-market. Le monitoring doit ensuite fournir un état courant fiable avant le mode gestion. Discovery/watchlist introduit un nouvel état durable et une autre cadence IA. Les charts restent séparés en source backend puis rendu frontend.
+La comptabilité SPOT 19.1 fournit la base de coût ; le mark-to-market 19.2 fournit maintenant l'état courant fiable nécessaire au mode gestion. Discovery/watchlist introduira ensuite un nouvel état durable et une autre cadence IA. Les charts restent séparés en source backend puis rendu frontend.
 
 ## Cadences à maintenir distinctes
 

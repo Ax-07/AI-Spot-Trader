@@ -130,6 +130,9 @@ class PaperBroker:
                 fill = fill.model_copy(
                     update={"realized_pnl": accounting.realized_pnl}
                 )
+            # SPOT execution mutates accounting only. Mark-to-market is refreshed by the
+            # dedicated market-data sink / background monitor so broker and valuation clocks
+            # remain decoupled and historical execution tests stay deterministic.
             return (fill,)
 
         context = market_state.derivative

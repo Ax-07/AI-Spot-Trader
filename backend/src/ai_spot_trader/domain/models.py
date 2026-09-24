@@ -70,7 +70,7 @@ class AssetBalance(DomainModel):
 
 
 class AssetPosition(DomainModel):
-    """Canonical SPOT inventory plus durable weighted-average cost accounting."""
+    """Canonical SPOT inventory, cost accounting and causal mark-to-market."""
 
     asset: NonEmptyText
     quantity: NonNegativeDecimal
@@ -79,6 +79,12 @@ class AssetPosition(DomainModel):
     remaining_cost_basis: NonNegativeDecimal | None = None
     realized_pnl: Decimal = Decimal(0)
     accounting_complete: bool = False
+    mark_price: PositiveDecimal | None = None
+    mark_observed_at: UtcDateTime | None = None
+    mark_source: Literal["LAST_PRICE"] | None = None
+    market_value: NonNegativeDecimal | None = None
+    unrealized_pnl: Decimal | None = None
+    valuation_complete: bool = False
 
     @model_validator(mode="after")
     def validate_spot_accounting(self) -> "AssetPosition":
@@ -99,6 +105,43 @@ class AssetPosition(DomainModel):
             raise ValueError(
                 "incomplete SPOT accounting cannot expose partial cost-basis fields"
             )
+
+        mark_facts = (
+            self.mark_price,
+            self.mark_observed_at,
+            self.mark_source,
+            self.market_value,
+        )
+        has_mark = self.mark_price is not None
+        if any(value is not None for value in mark_facts) and not all(
+            value is not None for value in mark_facts
+        ):
+            raise ValueError("SPOT mark fields must be complete or entirely unavailable")
+        if not has_mark:
+            if self.unrealized_pnl is not None or self.valuation_complete:
+                raise ValueError("SPOT valuation cannot be complete without a mark")
+            return self
+
+        assert self.mark_price is not None
+        assert self.market_value is not None
+        expected_market_value = self.mark_price * self.quantity
+        if self.market_value != expected_market_value:
+            raise ValueError("SPOT market_value must equal mark_price * quantity")
+        if not self.accounting_complete:
+            if self.unrealized_pnl is not None or self.valuation_complete:
+                raise ValueError(
+                    "incomplete SPOT accounting cannot expose a canonical unrealized P&L"
+                )
+            return self
+
+        assert self.remaining_cost_basis is not None
+        expected_unrealized = self.market_value - self.remaining_cost_basis
+        if self.unrealized_pnl != expected_unrealized:
+            raise ValueError(
+                "SPOT unrealized_pnl must equal market_value - remaining_cost_basis"
+            )
+        if not self.valuation_complete:
+            raise ValueError("complete SPOT accounting plus mark requires complete valuation")
         return self
 
 
@@ -169,6 +212,7 @@ class DerivativePosition(DomainModel):
     quantity: PositiveDecimal
     average_entry_price: PositiveDecimal
     mark_price: PositiveDecimal
+    mark_observed_at: UtcDateTime | None = None
     contract_size: PositiveDecimal = Decimal(1)
     notional: PositiveDecimal
     realized_pnl: Decimal = Decimal(0)
@@ -347,14 +391,24 @@ class MarketState(DomainModel):
 
 
 class PortfolioState(DomainModel):
-    """Canonical PAPER portfolio with separate SPOT holdings and derivative positions."""
+    """Canonical PAPER portfolio with SPOT accounting and deterministic valuation totals."""
 
     portfolio_state_id: UUID
     as_of: UtcDateTime
     mode: ExecutionMode = ExecutionMode.PAPER
+    settlement_asset: NonEmptyText | None = None
     balances: tuple[AssetBalance, ...] = ()
     positions: tuple[AssetPosition, ...] = ()
     derivative_positions: tuple[DerivativePosition, ...] = ()
+    cash_available: NonNegativeDecimal | None = None
+    spot_remaining_cost_basis_total: NonNegativeDecimal | None = None
+    spot_market_value_total: NonNegativeDecimal | None = None
+    spot_realized_pnl_total: Decimal | None = None
+    spot_unrealized_pnl_total: Decimal | None = None
+    equity: Decimal | None = None
+    exposure_value: NonNegativeDecimal | None = None
+    exposure_fraction: NonNegativeDecimal | None = None
+    valuation_complete: bool = False
 
     @model_validator(mode="after")
     def asset_roles_must_be_unambiguous(self) -> "PortfolioState":
@@ -371,6 +425,93 @@ class PortfolioState(DomainModel):
         derivative_symbols = tuple(position.symbol for position in self.derivative_positions)
         if len(set(derivative_symbols)) != len(derivative_symbols):
             raise ValueError("portfolio derivative positions must be one-way and unique by symbol")
+
+        for position in self.positions:
+            if position.mark_observed_at is not None and position.mark_observed_at > self.as_of:
+                raise ValueError("SPOT position mark cannot be newer than PortfolioState.as_of")
+        if self.settlement_asset is None:
+            if self.cash_available is not None:
+                raise ValueError("cash_available requires settlement_asset")
+        else:
+            settlement_balance = next(
+                (balance for balance in self.balances if balance.asset == self.settlement_asset),
+                None,
+            )
+            if self.cash_available is not None:
+                if settlement_balance is None or settlement_balance.available != self.cash_available:
+                    raise ValueError("cash_available must match the settlement balance")
+
+        if self.spot_remaining_cost_basis_total is not None:
+            if any(position.remaining_cost_basis is None for position in self.positions):
+                raise ValueError("SPOT cost-basis total requires complete position accounting")
+            expected = sum(
+                (cast(Decimal, position.remaining_cost_basis) for position in self.positions),
+                Decimal(0),
+            )
+            if self.spot_remaining_cost_basis_total != expected:
+                raise ValueError("SPOT cost-basis total must equal open position cost bases")
+
+        if self.spot_market_value_total is not None:
+            if any(position.market_value is None for position in self.positions):
+                raise ValueError("SPOT market-value total requires marks for every position")
+            expected = sum(
+                (cast(Decimal, position.market_value) for position in self.positions),
+                Decimal(0),
+            )
+            if self.spot_market_value_total != expected:
+                raise ValueError("SPOT market-value total must equal open position market values")
+
+        if self.spot_unrealized_pnl_total is not None:
+            if any(position.unrealized_pnl is None for position in self.positions):
+                raise ValueError("SPOT unrealized total requires complete position valuations")
+            expected = sum(
+                (cast(Decimal, position.unrealized_pnl) for position in self.positions),
+                Decimal(0),
+            )
+            if self.spot_unrealized_pnl_total != expected:
+                raise ValueError("SPOT unrealized total must equal open position unrealized P&L")
+
+        if self.valuation_complete:
+            required = (
+                self.cash_available,
+                self.spot_market_value_total,
+                self.equity,
+                self.exposure_value,
+            )
+            if any(value is None for value in required):
+                raise ValueError("complete portfolio valuation requires cash, value, equity and exposure")
+            assert self.cash_available is not None
+            assert self.spot_market_value_total is not None
+            assert self.equity is not None
+            assert self.exposure_value is not None
+            expected_equity = self.cash_available + self.spot_market_value_total + sum(
+                (
+                    position.margin_used
+                    + position.unrealized_pnl
+                    + position.cumulative_funding
+                    for position in self.derivative_positions
+                ),
+                Decimal(0),
+            )
+            if self.equity != expected_equity:
+                raise ValueError("portfolio equity must match canonical marked components")
+            expected_exposure = self.spot_market_value_total + sum(
+                (position.notional for position in self.derivative_positions),
+                Decimal(0),
+            )
+            if self.exposure_value != expected_exposure:
+                raise ValueError("portfolio exposure_value must match marked position exposure")
+            if self.equity > 0:
+                expected_fraction = self.exposure_value / self.equity
+                if self.exposure_fraction != expected_fraction:
+                    raise ValueError("portfolio exposure_fraction must equal exposure_value / equity")
+            elif self.exposure_fraction is not None:
+                raise ValueError("portfolio exposure_fraction requires positive equity")
+        elif any(
+            value is not None
+            for value in (self.equity, self.exposure_value, self.exposure_fraction)
+        ):
+            raise ValueError("incomplete portfolio valuation cannot expose equity or exposure")
         return self
 
 

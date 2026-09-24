@@ -2,10 +2,10 @@
 
 ## 1. Référence
 
-Base GitHub auditée pour le Batch 19.1 :
+Base GitHub auditée pour le Batch 19.2 :
 
 ```text
-HEAD GitHub main : dbdc8f83bb39c158ec7331ce2adba616d2922842
+HEAD GitHub main : 01ca1e857947d969556481e5593c5712d137f5ad
 ```
 
 Le HEAD doit être revérifié au démarrage de chaque batch.
@@ -32,14 +32,16 @@ Next.js cockpit
                     +-- RiskEngine
                     +-- PaperBroker
                     +-- PaperPortfolioLedger
+                    +-- PaperSpotMarkToMarketMonitor
+                    +-- PaperDerivativeMarkToMarketMonitor
                     +-- Kraken public research/execution sources
 ```
 
-Le frontend n'est pas dans la chaîne d'exécution. Le backend possède la source de vérité trading.
+Le frontend n'est pas dans la chaîne d'exécution. Le backend possède la source de vérité trading et la valorisation live.
 
 ## 3. Comptabilité SPOT canonique — Batch 19.1
 
-Le chemin comptable est :
+Le chemin comptable reste :
 
 ```text
 MarketState
@@ -70,52 +72,129 @@ P&L réalisé du fill = (fill.notional - fill.fee) - base libérée
 coût restant après vente = coût restant avant vente - base libérée
 ```
 
-Le coût moyen unitaire de la quantité restante ne change pas sous la méthode du coût moyen pondéré. Une clôture totale supprime l'`AssetPosition`; le Fill durable conserve le P&L réalisé de la clôture.
+`AssetPosition.accounting_complete` distingue les positions possédant une base de coût fiable des snapshots historiques incomplets.
 
-`AssetPosition.accounting_complete` distingue les positions créées avec la nouvelle comptabilité des snapshots historiques qui ne permettent pas de reconstruire honnêtement une base de coût.
+## 4. Mark-to-market SPOT canonique — Batch 19.2
 
-## 4. Persistence / recovery
+Deux chemins alimentent le **même** ledger :
 
-Aucune migration SQL n'est requise pour 19.1 : les snapshots `PortfolioState` sont déjà stockés sous forme JSON. Les nouveaux champs sont persistés dans ce JSON et restaurés par le chemin existant `paper-ledger-recovery-v1`.
+```text
+cycle d'exécution SPOT
+KrakenMarketDataSource.snapshot()
+-> MarketState causal validé
+-> PaperPortfolioLedger.mark_spot_market()
+
+monitor indépendant du LLM
+PaperSpotMarkToMarketMonitor
+-> KrakenMarketDataSource.observation()
+-> MarketObservation causal
+-> PaperPortfolioLedger.mark_spot_observation()
+
+PaperDerivativeMarkToMarketMonitor
+-> KrakenDerivativesMarketDataSource.snapshot()
+-> MarketState dérivé causal
+-> PaperPortfolioLedger.mark_derivative_market()
+```
+
+La source retenue est le dernier prix ticker Kraken SPOT (`LAST_PRICE`). La date de l'observation est conservée. Aucun prix futur n'est accepté et un mark plus ancien ne remplace jamais un mark plus récent.
+
+Pour une position complète :
+
+```text
+market_value   = quantity * mark_price
+unrealized_pnl = market_value - remaining_cost_basis
+```
+
+Le mark ne simule pas une vente. Les frais/spread/slippage déjà supportés au BUY restent dans `remaining_cost_basis`; ils ne sont pas ajoutés une seconde fois.
+
+Un mark périmé est masqué lors du `snapshot()` selon `paper_mark_to_market_stale_after_seconds` (30 s par défaut). Les champs deviennent indisponibles plutôt que de publier une valeur actuelle trompeuse.
+
+## 5. Agrégats `PortfolioState`
+
+Le ledger calcule les agrégats au moment du snapshot, avant l'API :
+
+```text
+cash_available
+spot_remaining_cost_basis_total
+spot_market_value_total
+spot_realized_pnl_total
+spot_unrealized_pnl_total
+equity
+exposure_value
+exposure_fraction
+valuation_complete
+```
+
+Définition d'equity lorsque toutes les composantes nécessaires sont fraîches :
+
+```text
+equity = cash settlement
+       + valeur de marché SPOT
+       + Σ(margin_used + unrealized_pnl + cumulative_funding) des dérivés
+```
+
+Le réalisé SPOT n'est pas rajouté à l'equity car il est déjà dans le cash. `exposure_value = valeur SPOT + Σ notional dérivé`. `PortfolioState.valuation_complete` qualifie la complétude de la valorisation de marché/equity, pas la connaissance de la base de coût de chaque position.
+
+Pour une lignée historique antérieure à 19.2, `spot_realized_pnl_total` reste `None` si le snapshot ne permet pas de le connaître. Aucune reconstruction par replay n'est effectuée.
+
+## 6. Persistence / recovery
+
+Aucune migration SQL n'est requise : les snapshots `PortfolioState` sont déjà stockés sous forme JSON.
 
 Compatibilité :
 
-- nouveaux snapshots : comptabilité complète restaurée exactement ;
-- anciens snapshots : nouveaux champs absents acceptés par défaut, `accounting_complete=false` ;
+- snapshots 19.2 : comptabilité, marks et agrégats connus restaurés ;
+- snapshots 19.1 : champs de valorisation absents acceptés par défaut ;
+- anciens snapshots sans base de coût : `accounting_complete=false` ;
+- mark restauré mais trop ancien : masqué au prochain snapshot ;
 - aucun replay Agent/Risk/Broker ;
-- aucune reconstruction rétrospective de base de coût.
+- aucune reconstruction rétrospective de base de coût ou de P&L.
 
-## 5. API / Agent / frontend
+## 7. Lifecycle et rafraîchissement
 
-Le contrat portefeuille API expose les nouveaux champs SPOT. `AgentInput` transporte déjà le `PortfolioState`, donc l'Agent reçoit naturellement l'état enrichi sans calcul LLM supplémentaire.
-
-Le frontend affiche les champs backend tels quels et laisse le P&L latent SPOT à `—` tant qu'aucun mark-to-market canonique n'est disponible.
-
-## 6. Architecture cible des cadences
-
-Les évolutions suivantes doivent rester séparées :
+`AppRuntime` possède désormais des `background_services`. Le lifecycle est :
 
 ```text
-A. Market monitoring loop
-   Kraken -> normalisation -> mark-to-market -> état portefeuille/risque technique
-   fréquence rapide, zéro LLM
+initialize()
+-> recovery paper_run
+-> start monitor(s)
 
-B. Strategic trading loop
-   état canonique -> même Agent -> BUY/SELL/HOLD -> Risk -> Broker
-   fréquence plus lente
-
-C. Market discovery loop
-   univers admissible -> même Agent -> watchlist stratégique versionnée
-   fréquence beaucoup plus lente
+close()
+-> stop TradingEngine
+-> stop monitor(s)
+-> close paper_run
+-> close ressources réseau
+-> close database
 ```
 
-## 7. Monitoring déterministe — Batch 19.2
+Les monitors SPOT et PERPETUAL sont donc indépendants du frontend et du cycle stratégique. Valeurs par défaut :
 
-Le P&L latent SPOT n'est pas stocké comme un coût permanent dans 19.1. Il sera calculé à partir d'une valorisation datée (`as_of`) fournie par le backend.
+- cadence SPOT : 5 s ;
+- cadence PERPETUAL : 15 s ;
+- timeout par observation : 5 s ;
+- staleness : 30 s.
 
-Le monitor pourra maintenir prix/marks, revaloriser SPOT/PERPETUAL, calculer exposition/marge/liquidation/funding et publier des snapshots cohérents, sans choisir de BUY/SELL/HOLD.
+Une erreur d'acquisition ne fabrique aucun prix et n'arrête pas le backend ; l'ancien mark cesse d'être exposé dès qu'il dépasse le seuil de fraîcheur.
 
-## 8. Discovery, watchlist et Marchés
+## 8. API / Agent / Risk / frontend
+
+`AgentInput` et `RiskEngine` consomment déjà `PortfolioState`; ils reçoivent donc naturellement les nouvelles valeurs sans calcul parallèle du P&L latent.
+
+L'API portfolio sérialise le snapshot canonique. Le frontend affiche `mark_price`, `market_value`, `remaining_cost_basis`, `realized_pnl` et `unrealized_pnl` tels quels. Une donnée `None` apparaît comme `—`.
+
+L'analytics PAPER historique conserve son rôle de replay causal des cycles persistés ; il n'est pas utilisé comme moteur de valorisation live.
+
+## 9. Cadences futures
+
+Les trois boucles restent séparées :
+
+```text
+A. monitoring / mark-to-market : rapide, déterministe, zéro LLM
+B. cycle stratégique            : même Agent, BUY/SELL/HOLD
+C. discovery/watchlist          : même Agent, cadence plus lente
+```
+
+## 10. Discovery, watchlist et Marchés
 
 Architecture cible :
 
@@ -130,7 +209,3 @@ Kraken metadata
 ```
 
 Pour les charts : Kraken/backend restent canoniques ; le cockpit consommera historique REST + mises à jour WebSocket normalisées côté backend et rendues via Lightweight Charts.
-
-## 9. Persistence future
-
-Les futurs batches peuvent nécessiter de nouvelles tables pour watchlists, marks ou candles. Ces décisions restent hors périmètre 19.1 et doivent être prises après audit du batch concerné.

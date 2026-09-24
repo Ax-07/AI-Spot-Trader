@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
+from decimal import Decimal
 from typing import Protocol, cast
 from uuid import uuid4
 
@@ -15,6 +16,7 @@ from ai_spot_trader.chat.service import OperatorChatService, RuntimeChatContextS
 from ai_spot_trader.core.clock import SystemClock
 from ai_spot_trader.core.config import PaperRuntimeConfigurationError, Settings
 from ai_spot_trader.core.runtime import AppRuntime
+from ai_spot_trader.domain.enums import MarketType
 from ai_spot_trader.domain.models import AssetBalance, PortfolioState
 from ai_spot_trader.domain.ports import MarketDataSource
 from ai_spot_trader.integrations.kraken.derivatives import (
@@ -40,6 +42,10 @@ from ai_spot_trader.persistence.db import Database
 from ai_spot_trader.persistence.query import SqlAlchemyCycleAuditQueryService
 from ai_spot_trader.persistence.repository import SqlAlchemyCycleAuditRepository
 from ai_spot_trader.portfolio.ledger import PaperPortfolioLedger
+from ai_spot_trader.portfolio.mark_to_market import (
+    PaperDerivativeMarkToMarketMonitor,
+    PaperSpotMarkToMarketMonitor,
+)
 from ai_spot_trader.risk.engine import RiskEngine
 from ai_spot_trader.risk.policy import RiskPolicy
 from ai_spot_trader.tools.market_research import build_market_research_tool_registry
@@ -59,6 +65,8 @@ class CampaignRuntimeComposition:
     market_research: MarketResearchService
     agent_tools: ReadOnlyToolRegistry
     portfolio: PaperPortfolioLedger
+    mark_to_market: PaperSpotMarkToMarketMonitor
+    derivative_mark_to_market: PaperDerivativeMarkToMarketMonitor
     agent: OpenAIDecisionProvider
     risk_engine: RiskEngine
     broker: PaperBroker
@@ -110,14 +118,31 @@ def build_campaign_runtime(
     initial_portfolio = PortfolioState(
         portfolio_state_id=uuid4(),
         as_of=clock.now(),
+        settlement_asset=config.paper_settlement_asset,
         balances=(
             AssetBalance(
                 asset=config.paper_settlement_asset,
                 available=config.paper_initial_capital,
             ),
         ),
+        cash_available=config.paper_initial_capital,
+        spot_remaining_cost_basis_total=Decimal(0),
+        spot_market_value_total=Decimal(0),
+        spot_realized_pnl_total=Decimal(0),
+        spot_unrealized_pnl_total=Decimal(0),
+        equity=config.paper_initial_capital,
+        exposure_value=Decimal(0),
+        exposure_fraction=Decimal(0),
+        valuation_complete=True,
     )
-    portfolio = PaperPortfolioLedger(initial_state=initial_portfolio, clock=clock)
+    portfolio = PaperPortfolioLedger(
+        initial_state=initial_portfolio,
+        clock=clock,
+        settlement_asset=config.paper_settlement_asset,
+        mark_stale_after=timedelta(
+            seconds=settings.paper_mark_to_market_stale_after_seconds
+        ),
+    )
     paper_run_lifecycle = CampaignPaperRunLifecycle(
         database.sessions,
         campaign_id=campaign.campaign_id,
@@ -128,8 +153,7 @@ def build_campaign_runtime(
         clock=clock,
     )
 
-    # Research sources remain distinct from executable sources. The research derivatives source
-    # has no ledger sink and cannot mark positions, accrue funding, call Risk, or call Broker.
+    # Research sources remain distinct from executable sources and never reach the ledger.
     research_spot: KrakenMarketDataSource = build_kraken_market_data_source(
         settings, clock=clock
     )
@@ -181,8 +205,10 @@ def build_campaign_runtime(
         max_tool_calls=settings.agent_tool_max_calls,
     )
 
-    execution_spot: RuntimeMarketDataSource = build_kraken_market_data_source(
-        settings, clock=clock
+    execution_spot = build_kraken_market_data_source(
+        settings,
+        clock=clock,
+        market_sink=portfolio,
     )
     execution_derivatives = KrakenDerivativesMarketDataSource(
         RetryingKrakenDerivativesRestSource(
@@ -199,10 +225,49 @@ def build_campaign_runtime(
             else None
         ),
     )
+    monitoring_spot = build_kraken_market_data_source(settings, clock=clock)
+    monitoring_derivatives = KrakenDerivativesMarketDataSource(
+        RetryingKrakenDerivativesRestSource(
+            KrakenDerivativesPublicClient(
+                settings.kraken_derivatives_rest_url,
+                timeout_seconds=settings.kraken_rest_timeout_seconds,
+            )
+        ),
+        clock=clock,
+        stale_after=(
+            timedelta(seconds=settings.kraken_stale_after_seconds)
+            if settings.kraken_stale_after_seconds is not None
+            else None
+        ),
+    )
     market_data = RoutedExecutableMarketDataSource(
         spot=execution_spot,
         derivatives=execution_derivatives,
         allowed_markets=config.paper_executable_markets,
+    )
+    mark_to_market = PaperSpotMarkToMarketMonitor(
+        market_data=monitoring_spot,
+        portfolio=portfolio,
+        settlement_asset=config.paper_settlement_asset,
+        executable_symbols=(
+            market.symbol
+            for market in config.paper_executable_markets
+            if market.market_type is MarketType.SPOT
+        ),
+        cadence_seconds=settings.paper_mark_to_market_cadence_seconds,
+        timeout_seconds=settings.paper_mark_to_market_timeout_seconds,
+    )
+
+    derivative_mark_to_market = PaperDerivativeMarkToMarketMonitor(
+        market_data=monitoring_derivatives,
+        portfolio=portfolio,
+        executable_symbols=(
+            market.symbol
+            for market in config.paper_executable_markets
+            if market.market_type is MarketType.PERPETUAL
+        ),
+        cadence_seconds=settings.paper_derivative_mark_to_market_cadence_seconds,
+        timeout_seconds=settings.paper_mark_to_market_timeout_seconds,
     )
 
     cost_model = PaperExecutionCostModel(
@@ -241,9 +306,6 @@ def build_campaign_runtime(
             agent_seconds=config.cycle_agent_timeout_seconds,
             broker_seconds=config.cycle_broker_timeout_seconds,
         ),
-        # paper-experiment-v4 is the durable campaign identity reached through
-        # audit_cycle -> paper_run -> campaign. Historical ExperimentManifest v1/v2/v3
-        # wire identities therefore remain byte-compatible and are not reinterpreted.
         experiment_manifest=None,
         clock=clock,
     )
@@ -264,6 +326,8 @@ def build_campaign_runtime(
     resources: list[RuntimeMarketDataSource] = [
         execution_spot,
         execution_derivatives,
+        monitoring_spot,
+        monitoring_derivatives,
         research_spot,
         research_derivatives,
     ]
@@ -279,6 +343,7 @@ def build_campaign_runtime(
         analytics_reader=analytics_reader,
         paper_run_lifecycle=paper_run_lifecycle,
         paper_run_reader=paper_run_reader,
+        background_services=(mark_to_market, derivative_mark_to_market),
         owned_database=database,
         owned_resources=tuple(unique_resources),
     )
@@ -293,6 +358,8 @@ def build_campaign_runtime(
         market_research=market_research,
         agent_tools=agent_tools,
         portfolio=portfolio,
+        mark_to_market=mark_to_market,
+        derivative_mark_to_market=derivative_mark_to_market,
         agent=agent,
         risk_engine=risk_engine,
         broker=broker,

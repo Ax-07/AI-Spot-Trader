@@ -1,17 +1,17 @@
 # 11 — Améliorations planifiées
 
-> Référence de reprise des chantiers 19.x. Ce document distingue ce qui est **implémenté dans le Batch 19.1**, ce qui reste **planifié** et ce qui reste **à décider**.
+> Référence de reprise des chantiers 19.x. Ce document distingue ce qui est **intégré**, ce qui est **implémenté dans le patch 19.2**, ce qui reste **planifié** et ce qui reste **à décider**.
 
 ## 1. Référence
 
 ```text
 Repository              : Ax-07/AI-Spot-Trader
 Branche                 : main
-HEAD GitHub main audité : dbdc8f83bb39c158ec7331ce2adba616d2922842
-Date Batch 19.1         : 2026-09-24
+HEAD GitHub main audité : 01ca1e857947d969556481e5593c5712d137f5ad
+Date Batch 19.2         : 2026-09-24
 ```
 
-Le patch 19.1 n'est pas déclaré intégré à GitHub avant validation/commit explicites de l'opérateur.
+Le Batch 19.1 est intégré. Le patch 19.2 n'est pas déclaré intégré à GitHub avant validation/commit explicites de l'opérateur.
 
 ## 2. Invariants transverses
 
@@ -39,54 +39,49 @@ Le patch 19.1 n'est pas déclaré intégré à GitHub avant validation/commit ex
 | Cycle stratégique | BUY / SELL / HOLD | oui, Agent unique |
 | Discovery / watchlist | réévaluer les marchés intéressants | oui, même Agent |
 
-Les valeurs exactes restent configurables et ne sont pas figées ici.
+Le monitoring 19.2 utilise par défaut une cadence de 5 s en SPOT et 15 s en PERPETUAL, avec 5 s de timeout et 30 s de staleness. Les cadences restent configurables séparément.
 
-# 4. Comptabilité SPOT par position — INTÉGRÉE DANS LE PATCH 19.1
+# 4. Comptabilité SPOT par position — INTÉGRÉE 19.1
 
-## Confirmé dans 19.1
+Confirmé : coût économique moyen pondéré, coût restant frais BUY inclus, ventes partielles au prorata, P&L réalisé net, pas de double comptage spread/slippage/frais, recovery JSON et compatibilité `accounting_complete=false`.
 
-- `AssetPosition` expose `asset`, `quantity`, `available`, `average_entry_price`, `remaining_cost_basis`, `realized_pnl`, `accounting_complete` ;
-- BUY successifs : coût économique moyen pondéré, calculé comme coût restant / quantité ;
-- coût restant : débits cash BUY réels, frais inclus ;
-- vente partielle : base libérée au prorata, P&L réalisé net, coût moyen unitaire du solde conservé ;
-- vente totale : position supprimée, dernier P&L réalisé conservé dans le Fill/audit ;
-- spread/slippage déjà inclus au prix de fill, donc jamais rajoutés à la base de coût ;
-- frais SELL déjà retranchés du crédit cash utilisé pour le P&L ;
-- persistence/recovery via JSON `PortfolioState`, sans migration SQL ;
-- anciens snapshots compatibles avec `accounting_complete=false` ;
-- API et types frontend enrichis ;
-- cockpit Positions affiche les valeurs backend et ne recalcule rien ;
-- `AgentInput` transporte naturellement le `PortfolioState` enrichi.
+# 5. Monitoring / mark-to-market — PATCH 19.2 IMPLÉMENTÉ
 
-## Encore planifié
+## Confirmé dans le patch
 
-- P&L latent SPOT ;
-- mark/prix courant canonique daté ;
-- rafraîchissement indépendant du cycle IA ;
-- éventuelle projection historique complète d'une position après fermeture/réouverture.
+- source de mark SPOT : dernier ticker Kraken causal (`LAST_PRICE`) ;
+- `mark_price`, `mark_observed_at`, `mark_source`, `market_value`, `unrealized_pnl`, `valuation_complete` ;
+- P&L latent calculé uniquement côté backend avec `market_value - remaining_cost_basis` ;
+- mark absent ou périmé => valeurs indisponibles ;
+- position legacy avec coût inconnu => valeur de marché possible, P&L latent interdit ;
+- agrégats portfolio : cash, coût restant, valeur SPOT, P&L réalisé/latent, equity, exposition ;
+- monitor backend indépendant de l'Agent et du frontend ;
+- source d'exécution SPOT poussant également le `MarketState` dans le ledger ;
+- snapshot/recovery compatible sans migration SQL ;
+- Agent et Risk reçoivent le `PortfolioState` enrichi sans calcul financier parallèle ;
+- cockpit Positions branché sur les champs backend, `—` pour indisponible.
 
-## À décider
+## Définition equity retenue
 
-- prix de valorisation SPOT du Batch 19.2 (`last`, autre mark canonique ou approche conservatrice) ;
-- éventuel modèle durable séparé pour l'historique de position au-delà des fills/audits déjà persistés ;
-- politique d'arrondi/quantification spécifique exchange si un besoin réel apparaît au-delà de `Decimal`.
+```text
+equity = cash settlement
+       + valeur SPOT
+       + Σ(margin_used + unrealized_pnl + cumulative_funding) dérivés
+```
 
-# 5. Monitoring / mark-to-market — PLANIFIÉ 19.2
+Le réalisé n'est pas additionné une seconde fois à l'equity.
 
-Objectif : faire évoluer l'état des positions sans appel LLM.
+## Compatibilité historique
 
-À construire :
+- les snapshots 19.1/legacy sans total réalisé global conservent `spot_realized_pnl_total=None` ;
+- les marques restaurées sont soumises au seuil de fraîcheur courant ;
+- aucun replay des fills n'est utilisé pour reconstituer un passé inconnu.
 
-- acquisition prix/marks Kraken adaptée au monitoring ;
-- revalorisation de toutes les positions ouvertes ;
-- P&L latent SPOT et PERPETUAL ;
-- exposition, marge, maintenance, liquidation, funding ;
-- snapshots datés cohérents ;
-- cadence configurable ;
-- staleness/erreurs explicites ;
-- atomicité entre fills et revalorisation.
+## À décider plus tard
 
-À décider : cadence, référence de valorisation SPOT, persistence des marks et comportement en trou de données.
+- besoin éventuel d'un modèle durable séparé d'historique de positions fermées au-delà des fills/audits ;
+- politique d'arrondi/quantification spécifique exchange si un besoin réel apparaît au-delà de `Decimal` ;
+- extension éventuelle du monitor à une watchlist dynamique lorsque 19.4 existera.
 
 # 6. Mode gestion lorsque l'exposition est saturée — PLANIFIÉ 19.3
 
@@ -165,8 +160,8 @@ Le backend doit gérer déduplication, candle courante mutable, reconnect/backfi
 
 | Ordre | Batch | Résultat principal | Statut |
 | ---: | --- | --- | --- |
-| 1 | 19.1 — Comptabilité SPOT | coût moyen, coût restant, P&L réalisé, recovery | patch implémenté |
-| 2 | 19.2 — Monitoring | P&L latent et état vivant sans LLM | planifié |
+| 1 | 19.1 — Comptabilité SPOT | coût moyen, coût restant, P&L réalisé, recovery | intégré |
+| 2 | 19.2 — Monitoring | P&L latent et état vivant sans LLM | patch implémenté |
 | 3 | 19.3 — Mode gestion | évite recherche IA inutile à exposition saturée | planifié |
 | 4 | 19.4 — Discovery/watchlist | univers dynamique versionné | planifié |
 | 5 | 19.5 — Explicabilité | rationale visible vs Risk | planifié |
@@ -174,13 +169,6 @@ Le backend doit gérer déduplication, candle courante mutable, reconnect/backfi
 | 7 | 19.6B — Marchés/charts | rendu, onglets, markers | planifié |
 
 ## 13. Validation attendue des prochains batches
-
-### 19.2
-
-- monitor sans Agent ;
-- multi-position SPOT/PERP ;
-- funding/liquidation ;
-- concurrence/restart/staleness.
 
 ### 19.3
 

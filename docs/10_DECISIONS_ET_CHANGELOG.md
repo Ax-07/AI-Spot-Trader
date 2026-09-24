@@ -10,14 +10,14 @@ Broker/Kraken, SPOT sans short/levier, PERPETUAL linéaire avec protections dét
 durable, no-look-ahead, backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE
 séparé.
 
-## Référence auditée du Batch 19.1
+## Référence auditée du Batch 19.2
 
 ```text
-HEAD GitHub main audité : dbdc8f83bb39c158ec7331ce2adba616d2922842
-Commit                 : docs: plan upcoming trading improvements
+HEAD GitHub main audité : 01ca1e857947d969556481e5593c5712d137f5ad
+Commit                 : docs: finalize Batch 19.1 integration state
 ```
 
-Le Batch 19.1 est livré comme patch local ; son intégration GitHub reste explicite et postérieure à la validation opérateur.
+Le Batch 19.1 est intégré. Le Batch 19.2 est livré comme patch local ; son intégration GitHub reste explicite et postérieure à la validation opérateur.
 
 ## Décisions historiques toujours actives
 
@@ -33,51 +33,73 @@ Le Batch 19.1 est livré comme patch local ; son intégration GitHub reste expli
 
 ## ADR-205 — Comptabilité SPOT canonique backend
 
-**IMPLÉMENTÉE DANS LE BATCH 19.1.**
+**INTÉGRÉE AU BATCH 19.1.**
 
-`AssetPosition` porte désormais :
+Méthode : coût moyen pondéré économique. `average_entry_price = remaining_cost_basis / quantity`; le coût restant utilise les débits cash BUY réels frais inclus ; les SELL libèrent la base au prorata et réalisent le P&L sur le crédit net. Spread/slippage sont déjà incorporés dans les prix de fill et ne sont jamais recomptés.
 
-- `average_entry_price` ;
-- `remaining_cost_basis` ;
-- `realized_pnl` ;
-- `accounting_complete` ;
-- en plus de `asset`, `quantity`, `available`.
-
-### Méthode comptable retenue
-
-La méthode est le **coût moyen pondéré**.
-
-- `average_entry_price` représente le coût économique moyen unitaire : `remaining_cost_basis / quantity` ;
-- spread et slippage sont déjà incorporés dans le prix réel du fill ;
-- les frais BUY entrent dans `remaining_cost_basis` via le débit cash réel `notional + fee` et donc dans `average_entry_price` ;
-- une vente partielle libère une fraction proportionnelle de `remaining_cost_basis` ;
-- le P&L réalisé du SELL vaut `notional - fee - released_cost_basis` ;
-- la quantité restante conserve le même prix moyen sous cette méthode ;
-- une vente totale supprime la position ouverte ; le P&L du dernier SELL reste durable dans le Fill/audit.
-
-Cette définition rend `average_entry_price` directement réconciliable avec le **coût économique restant all-in**, sans double comptage.
-
-### Compatibilité historique
-
-Les anciens snapshots sans champs comptables restent valides : les valeurs coût/prix moyen restent `None` et `accounting_complete=false`. Aucun coût historique n'est reconstruit à partir de fills futurs ou d'hypothèses.
-
-Une position legacy reste comptablement incomplète tant qu'elle n'est pas fermée. Une nouvelle position ouverte ensuite par le broker 19.1 démarre avec une comptabilité complète.
-
-### Persistence / recovery
-
-Pas de migration SQL : les snapshots `PortfolioState` sont déjà persistés en JSON. `paper-ledger-recovery-v1` reste valable car il restaure le snapshot validé ; les nouveaux champs sont simplement inclus dans le contrat JSON.
-
-### P&L latent
-
-**NON IMPLÉMENTÉ PAR 19.1.** La valorisation courante nécessite un mark daté et reste le périmètre du Batch 19.2. Le frontend affiche donc `—` au lieu de la reconstruire.
+Les snapshots antérieurs sans base de coût restent `accounting_complete=false` sans reconstruction historique.
 
 ## ADR-206 — Séparer le monitoring déterministe du cycle stratégique IA
 
-**PLANIFIÉE / NON IMPLÉMENTÉE.** Prix/marks, P&L latent, exposition, marge, liquidation et funding pertinent doivent évoluer sans appel LLM. Le monitoring aura une cadence distincte et configurable.
+**IMPLÉMENTÉE DANS LE BATCH 19.2.**
+
+``PaperSpotMarkToMarketMonitor` et `PaperDerivativeMarkToMarketMonitor` sont des services backend indépendant du `TradingEngine` et du LLM. Il ne sélectionne aucun trade et ne produit aucun ordre.
+
+Paramètres techniques par défaut :
+
+```text
+cadence SPOT MTM  : 5 s
+cadence PERP MTM  : 15 s
+timeout observation: 5 s
+staleness mark     : 30 s
+```
+
+Ces valeurs sont configurables par environnement et ne changent pas silencieusement la stratégie de Campaign.
+
+## ADR-215 — Mark SPOT = dernier prix ticker Kraken causal
+
+**IMPLÉMENTÉE DANS LE BATCH 19.2.**
+
+La référence de valorisation SPOT est `LAST_PRICE` issue d'une observation Kraken datée. Une observation future par rapport à l'horloge du ledger est rejetée ; une observation plus ancienne ne remplace pas un mark plus récent.
+
+Définitions :
+
+```text
+market_value   = quantity * mark_price
+unrealized_pnl = market_value - remaining_cost_basis
+```
+
+Le mark ne simule pas un SELL et n'ajoute donc ni frais, ni spread, ni slippage de sortie hypothétique.
+
+## ADR-216 — Staleness fail-closed pour la valorisation live
+
+**IMPLÉMENTÉE DANS LE BATCH 19.2.**
+
+Un mark plus ancien que le seuil configuré n'est plus exposé dans le snapshot : prix courant, valeur de marché et P&L latent deviennent indisponibles. Le backend ne prolonge pas artificiellement la validité d'un prix lors d'une panne de données.
+
+Une position legacy avec coût inconnu peut exposer `market_value`, mais jamais un `unrealized_pnl` canonique.
+
+## ADR-217 — Agrégats portefeuille calculés dans le ledger
+
+**IMPLÉMENTÉE DANS LE BATCH 19.2.**
+
+Le frontend et l'API ne recalculent pas les métriques financières. Le ledger expose cash, coût restant SPOT, valeur SPOT, P&L réalisé/latent SPOT, equity et exposition lorsque les données nécessaires existent.
+
+Définition de l'equity :
+
+```text
+equity = cash settlement
+       + valeur SPOT
+       + Σ(margin_used + unrealized_pnl + cumulative_funding) dérivés
+```
+
+Le P&L réalisé n'est pas rajouté : il est déjà reflété dans le cash.
+
+Le total réalisé SPOT commence à zéro pour une nouvelle lignée 19.2 et est ensuite persisté dans `PortfolioState`. Pour un snapshot antérieur qui ne permet pas de connaître l'historique complet, il reste `None`; aucun replay des fills n'est lancé.
 
 ## ADR-207 — Saturation d'exposition = restriction déterministe du champ des actions
 
-**PLANIFIÉE / NON IMPLÉMENTÉE.** Le backend peut constater qu'aucune nouvelle exposition n'est possible et éviter les phases d'ouverture inutiles. Le même Agent choisit encore parmi HOLD/réduction/clôture ; Risk reste final.
+**PLANIFIÉE / NON IMPLÉMENTÉE.** Le backend pourra utiliser l'état valorisé 19.2 pour constater qu'aucune nouvelle exposition n'est possible. Le même Agent choisira encore parmi HOLD/réduction/clôture ; Risk reste final.
 
 ## ADR-208/209 — Univers admissible, watchlist stratégique et révisions
 
@@ -101,14 +123,21 @@ Le schéma de persistence/watchlist reste à décider au batch dédié.
 
 ## Changelog — 2026-09-24 — Batch 19.1
 
-- resynchronisation sur le HEAD GitHub `dbdc8f83...` ;
-- audit de `AssetPosition`, ledger, broker/pricing, analytics, persistence/recovery, API et frontend ;
-- extension de la comptabilité SPOT canonique au coût moyen pondéré ;
-- prise en compte all-in des frais BUY dans le coût restant et des frais SELL dans le produit net ;
-- spread/slippage conservés dans le prix de fill sans double comptage ;
-- P&L réalisé SPOT exposé par les SELL fills ;
-- compatibilité historique explicite via `accounting_complete=false` ;
-- API/types/cockpit Positions enrichis ;
-- guide opérateur et documentation synchronisés ;
-- P&L latent/mark-to-market laissé au Batch 19.2 ;
+- comptabilité SPOT canonique au coût moyen pondéré ;
+- coût restant all-in, ventes partielles et P&L réalisé ;
+- compatibilité historique via `accounting_complete=false` ;
+- API/types/cockpit enrichis ;
+- intégration GitHub clôturée au HEAD `01ca1e8...`.
+
+## Changelog — 2026-09-24 — Batch 19.2
+
+- resynchronisation sur le HEAD GitHub `01ca1e8579...` ;
+- audit ledger/broker/pricing/Kraken/recovery/analytics/Agent/Risk/API/frontend ;
+- mark SPOT causal `LAST_PRICE` et P&L latent backend ;
+- agrégats portefeuille et equity/exposition backend ;
+- monitor SPOT/PERPETUAL sans LLM avec cadence/timeout/staleness configurables ;
+- séparation exécution/valorisation : le broker met à jour la comptabilité, tandis que la source de marché et le monitor rafraîchissent le mark ;
+- compatibilité snapshot/recovery sans migration SQL ;
+- API et cockpit Positions branchés uniquement sur les valeurs backend ;
+- tests ciblés ajoutés ;
 - aucune modification GitHub effectuée par ChatGPT.

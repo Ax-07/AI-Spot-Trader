@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -10,6 +10,7 @@ from ai_spot_trader.domain.models import (
     AssetBalance,
     AssetPosition,
     DerivativePosition,
+    MarketObservation,
     MarketState,
     PortfolioState,
 )
@@ -35,6 +36,12 @@ class _PositionAmount:
     remaining_cost_basis: Decimal | None = None
     realized_pnl: Decimal = ZERO
     accounting_complete: bool = False
+    mark_price: Decimal | None = None
+    mark_observed_at: datetime | None = None
+    mark_source: str | None = None
+    market_value: Decimal | None = None
+    unrealized_pnl: Decimal | None = None
+    valuation_complete: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,15 +70,31 @@ class PaperPortfolioLedger:
         initial_state: PortfolioState,
         clock: Clock | None = None,
         portfolio_state_id_factory: PortfolioStateIdFactory = uuid4,
+        settlement_asset: str | None = None,
+        mark_stale_after: timedelta | None = None,
     ) -> None:
+        if mark_stale_after is not None and mark_stale_after <= timedelta(0):
+            raise ValueError("mark_stale_after must be positive")
         self._clock = clock or SystemClock()
         self._portfolio_state_id_factory = portfolio_state_id_factory
+        self._configured_settlement_asset = settlement_asset
+        self._mark_stale_after = mark_stale_after
         self.restore(initial_state)
 
     def restore(self, state: PortfolioState) -> None:
         """Atomically replace the process-local ledger from one validated durable snapshot."""
 
+        if (
+            self._configured_settlement_asset is not None
+            and state.settlement_asset is not None
+            and state.settlement_asset != self._configured_settlement_asset
+        ):
+            raise ValueError("restored settlement_asset conflicts with runtime configuration")
+        settlement_asset = self._configured_settlement_asset or state.settlement_asset
         balances = {balance.asset: balance.available for balance in state.balances}
+        if settlement_asset is None and len(balances) == 1:
+            settlement_asset = next(iter(balances))
+
         positions = {
             position.asset: _PositionAmount(
                 quantity=position.quantity,
@@ -80,44 +103,137 @@ class PaperPortfolioLedger:
                 remaining_cost_basis=position.remaining_cost_basis,
                 realized_pnl=position.realized_pnl,
                 accounting_complete=position.accounting_complete,
+                mark_price=position.mark_price,
+                mark_observed_at=position.mark_observed_at,
+                mark_source=position.mark_source,
+                market_value=position.market_value,
+                unrealized_pnl=position.unrealized_pnl,
+                valuation_complete=position.valuation_complete,
             )
             for position in state.positions
         }
         derivative_positions = {
             position.symbol: position for position in state.derivative_positions
         }
+        self._settlement_asset = settlement_asset
+        self._spot_realized_pnl_total = state.spot_realized_pnl_total
         self._balances = balances
         self._positions = positions
         self._derivative_positions = derivative_positions
 
     def snapshot(self, *, as_of: datetime | None = None) -> PortfolioState:
-        """Return an immutable canonical snapshot with deterministic ordering."""
+        """Return an immutable canonical snapshot with deterministic ordering and fresh marks only."""
 
         timestamp = self._clock.now() if as_of is None else as_of
+        positions = tuple(
+            self._asset_position(asset=asset, amount=amount, as_of=timestamp)
+            for asset, amount in sorted(self._positions.items())
+        )
+        balances = tuple(
+            AssetBalance(asset=asset, available=available)
+            for asset, available in sorted(self._balances.items())
+        )
+        derivatives = tuple(
+            position for _, position in sorted(self._derivative_positions.items())
+        )
+        metrics = self._portfolio_metrics(
+            as_of=timestamp,
+            positions=positions,
+            derivatives=derivatives,
+        )
         return PortfolioState(
             portfolio_state_id=self._portfolio_state_id_factory(),
             as_of=timestamp,
-            balances=tuple(
-                AssetBalance(asset=asset, available=available)
-                for asset, available in sorted(self._balances.items())
-            ),
-            positions=tuple(
-                AssetPosition(
-                    asset=asset,
-                    quantity=amount.quantity,
-                    available=amount.available,
-                    average_entry_price=amount.average_entry_price,
-                    remaining_cost_basis=amount.remaining_cost_basis,
-                    realized_pnl=amount.realized_pnl,
-                    accounting_complete=amount.accounting_complete,
-                )
-                for asset, amount in sorted(self._positions.items())
-            ),
-            derivative_positions=tuple(
-                position
-                for _, position in sorted(self._derivative_positions.items())
-            ),
+            settlement_asset=self._settlement_asset,
+            balances=balances,
+            positions=positions,
+            derivative_positions=derivatives,
+            cash_available=metrics["cash_available"],
+            spot_remaining_cost_basis_total=metrics["spot_remaining_cost_basis_total"],
+            spot_market_value_total=metrics["spot_market_value_total"],
+            spot_realized_pnl_total=self._spot_realized_pnl_total,
+            spot_unrealized_pnl_total=metrics["spot_unrealized_pnl_total"],
+            equity=metrics["equity"],
+            exposure_value=metrics["exposure_value"],
+            exposure_fraction=metrics["exposure_fraction"],
+            valuation_complete=metrics["valuation_complete"],
         )
+
+    def mark_spot_observation(self, observation: MarketObservation) -> None:
+        """Apply one causal SPOT last-price observation to an already-held position."""
+
+        now = self._clock.now()
+        if observation.observed_at > now:
+            raise ValueError("SPOT mark observation cannot be newer than the ledger clock")
+        base_asset, quote_asset = parse_canonical_symbol(observation.symbol)
+        if self._settlement_asset is not None and quote_asset != self._settlement_asset:
+            raise ValueError("SPOT mark quote asset must match the portfolio settlement asset")
+        current = self._positions.get(base_asset)
+        if current is None:
+            return
+        if current.mark_observed_at is not None:
+            if observation.observed_at < current.mark_observed_at:
+                return
+            if (
+                observation.observed_at == current.mark_observed_at
+                and current.mark_price is not None
+                and observation.last_price != current.mark_price
+            ):
+                raise ValueError("SPOT mark conflicts with an existing observation timestamp")
+
+        market_value = observation.last_price * current.quantity
+        unrealized_pnl = None
+        valuation_complete = False
+        if current.accounting_complete:
+            assert current.remaining_cost_basis is not None
+            unrealized_pnl = market_value - current.remaining_cost_basis
+            valuation_complete = True
+        self._positions = {
+            **self._positions,
+            base_asset: _PositionAmount(
+                quantity=current.quantity,
+                available=current.available,
+                average_entry_price=current.average_entry_price,
+                remaining_cost_basis=current.remaining_cost_basis,
+                realized_pnl=current.realized_pnl,
+                accounting_complete=current.accounting_complete,
+                mark_price=observation.last_price,
+                mark_observed_at=observation.observed_at,
+                mark_source="LAST_PRICE",
+                market_value=market_value,
+                unrealized_pnl=unrealized_pnl,
+                valuation_complete=valuation_complete,
+            ),
+        }
+
+    def mark_spot_market(self, market_state: MarketState) -> None:
+        """Apply the canonical SPOT last price from one already validated MarketState."""
+
+        if market_state.market_type is not MarketType.SPOT:
+            return
+        observed_at = (
+            market_state.context.last_observed_at
+            if market_state.context is not None
+            else market_state.as_of
+        )
+        self.mark_spot_observation(
+            MarketObservation(
+                observed_at=observed_at,
+                symbol=market_state.symbol,
+                last_price=market_state.last_price,
+            )
+        )
+
+    def clear_spot_mark(self, asset: str) -> None:
+        """Make one SPOT valuation explicitly unavailable without altering accounting."""
+
+        current = self._positions.get(asset)
+        if current is None:
+            return
+        self._positions = {
+            **self._positions,
+            asset: self._without_mark(current),
+        }
 
     def apply_buy(
         self,
@@ -138,6 +254,8 @@ class PaperPortfolioLedger:
                 raise ValueError(
                     "quote_debit cannot be lower than execution_price * quantity"
                 )
+        if self._settlement_asset is not None and quote_asset != self._settlement_asset:
+            raise ValueError("SPOT trade quote asset must match portfolio settlement asset")
         if base_asset in self._balances:
             raise AmbiguousAssetRoleError(
                 f"cannot create position for balance asset {base_asset}"
@@ -183,9 +301,6 @@ class PaperPortfolioLedger:
                 accounting_complete=True,
             )
         else:
-            # Historical snapshots created before Batch 19.1 do not contain enough facts to
-            # reconstruct a trustworthy cost basis. Keep them explicitly incomplete rather than
-            # inventing accounting from future fills.
             positions[base_asset] = _PositionAmount(
                 quantity=current.quantity + quantity,
                 available=current.available + quantity,
@@ -206,6 +321,8 @@ class PaperPortfolioLedger:
 
         _validate_positive(quantity, "quantity")
         _validate_non_negative(quote_credit, "quote_credit")
+        if self._settlement_asset is not None and quote_asset != self._settlement_asset:
+            raise ValueError("SPOT trade quote asset must match portfolio settlement asset")
         if quote_asset in self._positions:
             raise AmbiguousAssetRoleError(
                 f"cannot credit balance for position asset {quote_asset}"
@@ -228,6 +345,7 @@ class PaperPortfolioLedger:
         remaining_quantity = current.quantity - quantity
         remaining_available = current.available - quantity
         accounting = SpotFillAccounting()
+        realized_total = self._spot_realized_pnl_total
 
         if current.accounting_complete:
             assert current.average_entry_price is not None
@@ -238,12 +356,12 @@ class PaperPortfolioLedger:
                 realized_pnl=realized_pnl,
                 accounting_complete=True,
             )
+            if realized_total is not None:
+                realized_total += realized_pnl
             if remaining_quantity == ZERO and remaining_available == ZERO:
                 del positions[base_asset]
             else:
-                remaining_cost_basis = (
-                    current.remaining_cost_basis - released_cost_basis
-                )
+                remaining_cost_basis = current.remaining_cost_basis - released_cost_basis
                 positions[base_asset] = _PositionAmount(
                     quantity=remaining_quantity,
                     available=remaining_available,
@@ -253,6 +371,7 @@ class PaperPortfolioLedger:
                     accounting_complete=True,
                 )
         else:
+            realized_total = None
             remaining = _PositionAmount(
                 quantity=remaining_quantity,
                 available=remaining_available,
@@ -265,6 +384,7 @@ class PaperPortfolioLedger:
 
         self._balances = balances
         self._positions = positions
+        self._spot_realized_pnl_total = realized_total
         return accounting
 
     def mark_derivative_market(self, market_state: MarketState) -> None:
@@ -277,6 +397,17 @@ class PaperPortfolioLedger:
             return
         context = market_state.derivative
         instrument = context.instrument
+        # Preserve the established derivative event-time semantics: derivative marks may be
+        # replayed with an explicitly dated MarketState even when a test ledger uses a fixed
+        # wall clock. Causality is enforced by monotonic observation timestamps below.
+        if current.mark_observed_at is not None:
+            if context.observed_at < current.mark_observed_at:
+                return
+            if (
+                context.observed_at == current.mark_observed_at
+                and context.mark_price != current.mark_price
+            ):
+                raise ValueError("derivative mark conflicts with an existing observation timestamp")
         if instrument.contract_size != current.contract_size:
             raise ValueError("derivative contract_size changed for an open PAPER position")
 
@@ -298,6 +429,7 @@ class PaperPortfolioLedger:
             market_state.symbol: _revalue_position(
                 current,
                 mark_price=context.mark_price,
+                mark_observed_at=context.observed_at,
                 cumulative_funding=funding,
                 funding_updated_at=funding_updated_at,
             ),
@@ -379,6 +511,7 @@ class PaperPortfolioLedger:
                 positions[market_state.symbol] = _revalue_position(
                     remaining,
                     mark_price=context.mark_price,
+                    mark_observed_at=context.observed_at,
                     cumulative_funding=remaining_funding,
                     funding_updated_at=context.observed_at,
                 )
@@ -430,6 +563,7 @@ class PaperPortfolioLedger:
             quantity=total_quantity,
             average_entry_price=average_entry,
             mark_price=context.mark_price,
+            mark_observed_at=context.observed_at,
             contract_size=instrument.contract_size,
             notional=context.mark_price * total_quantity * instrument.contract_size,
             realized_pnl=realized,
@@ -451,6 +585,7 @@ class PaperPortfolioLedger:
         position = _revalue_position(
             raw,
             mark_price=context.mark_price,
+            mark_observed_at=context.observed_at,
             cumulative_funding=funding,
             funding_updated_at=context.observed_at,
         )
@@ -463,11 +598,138 @@ class PaperPortfolioLedger:
         }
         return DerivativeFillAccounting(margin_delta=initial_margin)
 
+    def _asset_position(
+        self,
+        *,
+        asset: str,
+        amount: _PositionAmount,
+        as_of: datetime,
+    ) -> AssetPosition:
+        visible = amount
+        if amount.mark_observed_at is not None:
+            if amount.mark_observed_at > as_of:
+                raise ValueError("PortfolioState.as_of cannot precede a retained SPOT mark")
+            if (
+                self._mark_stale_after is not None
+                and as_of - amount.mark_observed_at > self._mark_stale_after
+            ):
+                visible = self._without_mark(amount)
+        return AssetPosition(
+            asset=asset,
+            quantity=visible.quantity,
+            available=visible.available,
+            average_entry_price=visible.average_entry_price,
+            remaining_cost_basis=visible.remaining_cost_basis,
+            realized_pnl=visible.realized_pnl,
+            accounting_complete=visible.accounting_complete,
+            mark_price=visible.mark_price,
+            mark_observed_at=visible.mark_observed_at,
+            mark_source=visible.mark_source,
+            market_value=visible.market_value,
+            unrealized_pnl=visible.unrealized_pnl,
+            valuation_complete=visible.valuation_complete,
+        )
+
+    def _without_mark(self, amount: _PositionAmount) -> _PositionAmount:
+        return _PositionAmount(
+            quantity=amount.quantity,
+            available=amount.available,
+            average_entry_price=amount.average_entry_price,
+            remaining_cost_basis=amount.remaining_cost_basis,
+            realized_pnl=amount.realized_pnl,
+            accounting_complete=amount.accounting_complete,
+        )
+
+    def _portfolio_metrics(
+        self,
+        *,
+        as_of: datetime,
+        positions: tuple[AssetPosition, ...],
+        derivatives: tuple[DerivativePosition, ...],
+    ) -> dict[str, Decimal | bool | None]:
+        settlement = self._settlement_asset
+        cash_available = self._balances.get(settlement) if settlement is not None else None
+
+        if all(position.remaining_cost_basis is not None for position in positions):
+            spot_cost = sum(
+                (position.remaining_cost_basis for position in positions if position.remaining_cost_basis is not None),
+                ZERO,
+            )
+        else:
+            spot_cost = None
+
+        if all(position.market_value is not None for position in positions):
+            spot_value = sum(
+                (position.market_value for position in positions if position.market_value is not None),
+                ZERO,
+            )
+        else:
+            spot_value = None
+
+        if all(position.unrealized_pnl is not None for position in positions):
+            spot_unrealized = sum(
+                (position.unrealized_pnl for position in positions if position.unrealized_pnl is not None),
+                ZERO,
+            )
+        else:
+            spot_unrealized = None
+
+        derivatives_fresh = True
+        for position in derivatives:
+            marked_at = position.mark_observed_at
+            if marked_at is None or marked_at > as_of:
+                derivatives_fresh = False
+                break
+            if (
+                self._mark_stale_after is not None
+                and as_of - marked_at > self._mark_stale_after
+            ):
+                derivatives_fresh = False
+                break
+
+        valuation_complete = (
+            cash_available is not None
+            and spot_value is not None
+            and derivatives_fresh
+        )
+        equity: Decimal | None = None
+        exposure_value: Decimal | None = None
+        exposure_fraction: Decimal | None = None
+        if valuation_complete:
+            assert cash_available is not None
+            assert spot_value is not None
+            derivative_equity = sum(
+                (
+                    position.margin_used
+                    + position.unrealized_pnl
+                    + position.cumulative_funding
+                    for position in derivatives
+                ),
+                ZERO,
+            )
+            derivative_exposure = sum((position.notional for position in derivatives), ZERO)
+            equity = cash_available + spot_value + derivative_equity
+            exposure_value = spot_value + derivative_exposure
+            if equity > ZERO:
+                exposure_fraction = exposure_value / equity
+
+        return {
+            "cash_available": cash_available,
+            "spot_remaining_cost_basis_total": spot_cost,
+            "spot_market_value_total": spot_value,
+            "spot_unrealized_pnl_total": spot_unrealized,
+            "equity": equity,
+            "exposure_value": exposure_value,
+            "exposure_fraction": exposure_fraction,
+            "valuation_complete": valuation_complete,
+        }
+
 
 def _revalue_position(
     position: DerivativePosition,
     *,
     mark_price: Decimal,
+    mark_observed_at: datetime,
     cumulative_funding: Decimal,
     funding_updated_at: datetime | None,
 ) -> DerivativePosition:
@@ -488,6 +750,7 @@ def _revalue_position(
     return position.model_copy(
         update={
             "mark_price": mark_price,
+            "mark_observed_at": mark_observed_at,
             "notional": notional,
             "unrealized_pnl": unrealized,
             "maintenance_margin": maintenance,

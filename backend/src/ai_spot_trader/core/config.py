@@ -324,6 +324,10 @@ class Settings(BaseSettings):
     cycle_market_timeout_seconds: float | None = Field(default=None, gt=0)
     cycle_agent_timeout_seconds: float | None = Field(default=None, gt=0)
     cycle_broker_timeout_seconds: float | None = Field(default=None, gt=0)
+    paper_mark_to_market_cadence_seconds: float = Field(default=5.0, gt=0)
+    paper_derivative_mark_to_market_cadence_seconds: float = Field(default=15.0, gt=0)
+    paper_mark_to_market_timeout_seconds: float = Field(default=5.0, gt=0)
+    paper_mark_to_market_stale_after_seconds: float = Field(default=30.0, gt=0)
     risk_max_order_notional: Decimal | None = Field(default=None, gt=0)
     risk_allowed_pairs: frozenset[str] | None = None
     risk_allow_quantity_reduction: bool | None = None

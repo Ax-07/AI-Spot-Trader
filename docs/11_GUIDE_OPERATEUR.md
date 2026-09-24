@@ -6,7 +6,7 @@
 ## 1. Ce qu'il faut savoir avant de commencer
 
 AI Spot Trader fonctionne actuellement en **PAPER uniquement** avec Kraken comme source/exchange
-initial. Le frontend est un cockpit : le moteur de trading reste dans le backend.
+initial. Le frontend est un cockpit : le moteur de trading et le mark-to-market restent dans le backend.
 
 Principe central :
 
@@ -30,7 +30,7 @@ Assistant pour créer un test PAPER sans manipuler Strategy, Revision ou Campaig
 
 ### Positions
 
-Affiche les positions canoniques du backend et les métriques globales de performance/exposition.
+Affiche les positions canoniques du backend et leurs valeurs mark-to-market lorsque les données sont disponibles et fraîches.
 
 ### Historique
 
@@ -85,12 +85,11 @@ au contrat backend actuel.
 - pas de marge ;
 - SELL ne peut réduire qu'un actif réellement détenu et disponible.
 
-Pour les positions ouvertes avec la comptabilité Batch 19.1, le backend expose également le prix
-moyen d'entrée, le coût de revient restant et le P&L réalisé cumulé de la position courante. Les
-anciennes positions restaurées depuis un snapshot qui ne contenait pas de base de coût sont marquées
-comme comptabilité incomplète ; le cockpit affiche alors `—` au lieu d'inventer une valeur.
+Le backend expose pour une position comptablement complète : quantité, prix moyen d'entrée économique, coût restant, P&L réalisé, mark courant, valeur de marché et P&L latent.
 
-Le P&L latent SPOT reste à `—` tant que le mark-to-market canonique du Batch 19.2 n'est pas intégré.
+Le mark SPOT 19.2 correspond au dernier prix ticker Kraken causal retenu par le backend. Il n'est pas calculé dans le navigateur.
+
+Si le mark manque ou devient trop ancien, le cockpit affiche `—`. Si une ancienne position ne possède pas de base de coût fiable (`accounting_complete=false`), le backend peut encore afficher sa valeur de marché, mais son P&L latent reste `—` : aucune valeur n'est inventée.
 
 ### PERPETUAL
 
@@ -126,8 +125,19 @@ Le backend valide toujours la configuration et peut la refuser.
 ## 8. Paramètres avancés
 
 Dans l'assistant, **Paramètres avancés** permet de modifier sans encombrer le parcours normal :
-cadence, frais PAPER, spread, slippage, deadlines et champs Risk détaillés du profil Personnalisé.
+cadence stratégique, frais PAPER, spread, slippage, deadlines et champs Risk détaillés du profil Personnalisé.
 Les validations métier restent exclusivement côté backend.
+
+Le mark-to-market backend possède en plus des paramètres techniques de processus par environnement :
+
+```text
+AI_SPOT_TRADER_PAPER_MARK_TO_MARKET_CADENCE_SECONDS=5
+AI_SPOT_TRADER_PAPER_DERIVATIVE_MARK_TO_MARKET_CADENCE_SECONDS=15
+AI_SPOT_TRADER_PAPER_MARK_TO_MARKET_TIMEOUT_SECONDS=5
+AI_SPOT_TRADER_PAPER_MARK_TO_MARKET_STALE_AFTER_SECONDS=30
+```
+
+Ils ne déclenchent aucun appel IA.
 
 ## 9. Créer, démarrer et tester un cycle
 
@@ -143,10 +153,24 @@ envoie `Start` au TradingEngine backend.
 `Démarrer` lance la boucle autonome **dans le backend**. Fermer le navigateur ou le frontend ne
 l'arrête pas. `Arrêter` envoie explicitement Stop.
 
+Le mark-to-market SPOT appartient aussi au runtime backend actif : il ne dépend pas de la page Positions ni du navigateur.
+
 Après un restart backend, aucune Campaign n'est reprise silencieusement. La reprise reste explicite
 et passe par le recovery canonique ; le backend refuse une session incompatible.
 
 ## 11. Lire Positions
+
+### Vue globale
+
+Lorsque les données sont disponibles, le backend fournit directement :
+
+- cash disponible ;
+- valeur de marché SPOT ;
+- P&L latent SPOT ;
+- equity ;
+- exposition courante.
+
+Une valeur `—` signifie que la donnée canonique n'est pas disponible ou n'est plus assez fraîche ; ce n'est pas zéro.
 
 ### PERPETUAL
 
@@ -156,9 +180,18 @@ aussi préfixé par `+` ou `−` pour ne pas dépendre uniquement du rouge/vert.
 
 ### SPOT
 
-Le backend expose quantité, disponible, prix moyen d'entrée, coût de revient restant, P&L réalisé et
-un indicateur `accounting_complete`. Le cockpit affiche ces données telles quelles, sans recalculer
-la comptabilité. Le P&L latent reste volontairement à `—` jusqu'au Batch 19.2.
+Le backend expose directement :
+
+- quantité et disponible ;
+- prix moyen d'entrée économique ;
+- prix mark courant et timestamp ;
+- valeur de position ;
+- coût de revient restant ;
+- P&L réalisé ;
+- P&L latent ;
+- état de complétude de la valorisation.
+
+Le cockpit n'effectue aucun rapprochement avec le dernier marché global et ne refait aucun calcul financier.
 
 ## 12. Lire Historique
 
@@ -179,7 +212,7 @@ prompt preview, Campaigns, activation fraîche, recovery, digests et IDs. Elle r
 - SPOT + PERPETUAL linéaire ;
 - aucune sortie LLM ne déclenche directement un ordre ;
 - Risk Engine déterministe = autorité finale ;
-- aucune logique Risk ou Broker dupliquée dans le frontend ;
+- aucune logique Risk, Broker ou mark-to-market canonique dupliquée dans le frontend ;
 - toutes les décisions, HOLD inclus, restent journalisées ;
 - aucun secret dans le navigateur ou les fichiers versionnés ;
 - LIVE reste séparé et ultérieur.
