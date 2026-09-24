@@ -9,203 +9,101 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 Broker/Risk, SPOT sans short/levier, PERPETUAL avec protections déterministes, audit durable,
 no-look-ahead, backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE séparé.
 
-## Référence fonctionnelle intégrée
+## Référence avant Batch 18.12
 
 ```text
-Commit fonctionnel 18.11 : c02b9e8edd52b416969922f12a17e32f047d3989
-Message                  : feat: add operator guide and contextual help
-Batch 18.11              : INTÉGRÉ / VALIDÉ
+HEAD main audité             : c6cf03e62ce49ad6b294ea1d4c44d933b4688b0a
+Commit fonctionnel 18.11     : c02b9e8edd52b416969922f12a17e32f047d3989
+Batch 18.12                  : PATCH PRÉPARÉ / NON INTÉGRÉ
 ```
 
-Le HEAD GitHub courant est vérifié à chaque reprise. Les commits de synchronisation documentaire
-peuvent être postérieurs à cette référence sans changement fonctionnel.
+## Décisions historiques toujours actives
 
-## Décisions Batch 18.9A toujours actives
+- ADR-173 à ADR-181 : StrategyRevision immuable, contrat Agent protégé, digests, Campaign snapshot,
+  identité expérimentale v4, distinction Campaign/paper_run, runtime backend et recovery ;
+- ADR-182 à ADR-188 : frontend client du Control Plane, API unique, validators backend, preview
+  canonique, pas de draft sensible persistant, activation et reprise distinctes ;
+- ADR-189/190 : adaptation JSON `market_type` à la frontière API et typing sans changement runtime ;
+- ADR-191/192 : Vue d'ensemble comme surface principale et réutilisation des panneaux canoniques ;
+- ADR-193 à ADR-195 : aide progressive, règles métier au backend et guide opérateur versionné.
 
-ADR-173 à ADR-181 restent applicables : StrategyRevision immuable, contrat Agent protégé séparé,
-digest prompt déterministe, Campaign snapshot non sensible, `paper-experiment-v4`, distinction
-Campaign/paper_run, ownership runtime backend, preview canonique et lineage recovery exposé.
+## Décisions Batch 18.12 — patch proposé
 
-## Décisions Batch 18.9B toujours actives
+### ADR-196 — Orienter la navigation vers les tâches opérateur
 
-ADR-182 à ADR-188 restent applicables : frontend client du Control Plane, client API unique,
-validators métier backend, révisions lues via les contrats existants, preview non recomposé côté
-frontend, aucun draft Control Plane persistant dans le navigateur, activation fraîche et reprise
-explicitement distinctes.
+**PATCH PROPOSÉ.** La navigation principale devient :
 
-## Décisions Batch 18.9C
+- Accueil ;
+- Configurer ;
+- Positions ;
+- Historique ;
+- Réglages.
 
-### ADR-189 — Adapter les enums JSON à la frontière Control Plane sans relâcher le domaine strict
+Strategy, StrategyRevision, Campaign, paper_run, digests et lineage cessent d'être des prérequis de
+navigation. Ils restent disponibles sous **Réglages > Avancé**.
 
-**INTÉGRÉ.** Une Campaign créée depuis le navigateur transporte `market_type` comme chaîne JSON.
-`ExecutableMarket` reste strict dans le domaine ; le Control Plane adapte uniquement les valeurs
-canoniques `SPOT` et `PERPETUAL` vers `MarketType` avant la validation du modèle imbriqué.
+### ADR-197 — Orchestrer les objets canoniques au lieu de créer un modèle métier simplifié parallèle
 
-Une valeur inconnue n'est pas normalisée silencieusement et reste rejetée par la validation.
-Le frontend, le Risk Engine, le TradingEngine et le Broker ne sont pas modifiés par ce correctif.
-
-### ADR-190 — Corriger les frontières API mypy sans changer le runtime
-
-**INTÉGRÉ.** La validation mypy globale avait exposé quatre incompatibilités de typing entre valeurs
-`str` lues depuis les vues de persistence et schémas de réponse `Literal[...]`.
-
-La correction reste limitée aux frontières API :
-
-- casts explicites pour `market_type` dans `paper_runs` ;
-- cast explicite du `market_type` dans les résumés d'audit ;
-- annotation explicite du type du modèle dynamique dans le prompt preview.
-
-Aucune validation métier, décision Agent, règle Risk ou exécution Broker n'est modifiée.
-
-## Décisions Batch 18.10 — intégrées
-
-### ADR-191 — Faire de la Vue d'ensemble la surface opérateur principale
-
-**INTÉGRÉ.** La page racine n'empile plus directement Dashboard, Control Plane, Chat et Analytics.
-Elle instancie une `CockpitShell` qui applique une divulgation progressive :
-
-- la landing ne montre que les états et actions nécessaires au pilotage immédiat ;
-- les détails de configuration, d'audit, de performance et de chat restent accessibles dans des vues
-  distinctes ;
-- PAPER, Campaign active et état moteur restent visibles en permanence dans le header.
-
-Cette décision est purement UX et ne modifie aucun contrat backend.
-
-### ADR-192 — Réutiliser les panneaux canoniques plutôt que dupliquer leurs fonctions
-
-**INTÉGRÉ.** `ControlPlanePanel`, `CockpitDashboard`, `AnalyticsPanel` et `ChatPanel` sont conservés
-comme vues secondaires. La nouvelle Vue d'ensemble consomme les hooks/API existants pour afficher
-une synthèse ; elle ne recrée ni validation Campaign, ni logique Risk, ni calcul de trading, ni
-exécution Broker.
-
-Les commandes `run-cycle`, Start et Stop restent les commandes canoniques du backend. Fermer ou
-recharger le frontend ne déclenche aucun Stop implicite.
-
-## Décisions Batch 18.11 — intégrées
-
-### ADR-193 — Structurer l'aide en trois niveaux sans créer une seconde application
-
-**INTÉGRÉ.** L'aide opérateur suit la même architecture Option A :
-
-1. démarrage rapide directement dans la Vue d'ensemble ;
-2. aide contextuelle courte uniquement aux endroits ambigus ;
-3. vue **Guide** dédiée dans la navigation principale pour l'explication complète.
-
-La vue Guide reste un composant du `CockpitShell`. Elle ne recrée aucun flux de navigation ou
-runtime parallèle.
-
-### ADR-194 — Réutiliser les explications existantes et garder les règles métier au backend
-
-**INTÉGRÉ.** Le Control Plane contient déjà des explications utiles sur Strategy/StrategyRevision,
-validation backend, Risk, activation/reprise et PERPETUAL `ISOLATED`. Le Batch 18.11 les conserve au
-lieu d'ajouter des tooltips répétitifs.
-
-Les nouveaux blocs d'aide utilisent des cartes existantes et des `<details>` natifs. Ils décrivent
-le comportement sans implémenter de validation métier, de logique Risk, de calcul de portefeuille ou
-de commande Broker.
-
-### ADR-195 — Versionner un guide opérateur distinct du Project Master
-
-**INTÉGRÉ.** `docs/01_PROJECT_MASTER.md` reste la spécification principale et technique.
-`docs/11_GUIDE_OPERATEUR.md` devient la référence pédagogique destinée à l'opérateur.
-
-Le guide rappelle explicitement :
-
-**L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
-
-Il documente PAPER, SPOT/PERPETUAL, Campaigns, recovery, lecture des décisions et performances, sans
-ouvrir le périmètre LIVE.
-
-## Changelog — 2026-09-24 — Batch 18.9C intégré et validé
-
-Le commit `5fc7704e7ca43ded4c2565b21871b81fe2161b0a` est intégré sur `main`.
-
-Validation comportementale réelle effectuée depuis le cockpit avant intégration :
-
-- Strategy créée, renommée, archivée ; révisions immuables, comparaison et preview confirmées ;
-- refus 409 confirmé lors d'une tentative de révision sur Strategy archivée ;
-- correctif de création Campaign intégré pour l'adaptation JSON de `market_type` ;
-- Campaign SPOT créée et activée avec Luna ;
-- sélection multi-marchés réelle BTC/ETH/SOL par le même Agent ;
-- BUY SPOT naturel sur SOL/USD : quantité proposée par l'Agent réduite par Risk pour respecter le
-  max order notional, puis fill PAPER avec frais, spread et slippage ;
-- HOLD naturels observés et journalisés sans exécution ;
-- `run-cycle` isolé confirmé : un cycle et moteur restant `STOPPED` ;
-- Start/Stop confirmés sur la boucle autonome backend ;
-- après restart backend : aucune Campaign ni moteur repris automatiquement ;
-- `run-cycle` sans runtime confirmé en 503 fail-closed ;
-- reprise explicite confirmée avec nouveau `paper_run_id`, lineage correct et restauration du ledger ;
-- Campaign PERPETUAL BTC/ETH/SOL créée avec levier 2, marge `ISOLATED`, caps de position et
-  d'exposition ;
-- cycle PERPETUAL réel : sélection SOL/USD, BUY naturel, Risk `MODIFY`, fill PAPER, marge isolée et
-  position LONG persistée ;
-- 422 confirmé pour un levier PAPER supérieur au plafond Risk ;
-- `gpt-5.6-sol` sélectionnable et persisté par configuration avec digests distincts ;
-- aucun SELL naturel observé et aucun SELL forcé.
-
-Validation locale opérateur exécutée avant le push du commit intégré :
+**PATCH PROPOSÉ.** L'assistant de configuration n'introduit aucun nouvel objet backend. Lorsqu'un
+opérateur crée un test, le frontend enchaîne les appels canoniques existants :
 
 ```text
-pytest backend : 506 passed, 2 warnings de dépréciation dépendances
-ruff check backend : All checks passed
-mypy backend/src : Success: no issues found in 89 source files
-git diff --check : OK hors avertissements LF -> CRLF
-working tree propre avant push
+create Strategy (+ Revision r1)
+-> create Campaign
+-> optionnel : activate Campaign
+-> optionnel : start Engine
 ```
 
-## Changelog — 2026-09-24 — Batch 18.10 UX/UI intégré et validé
+Cette orchestration ne rend pas l'opération transactionnelle. Si une étape échoue après une
+persistence réussie, l'objet déjà créé reste durable et consultable en mode avancé. Le frontend ne
+le supprime ni ne le masque.
 
-Le commit `b445b70b02d2c4af4b24a86ccfbdeff6f18a75e9` est intégré sur `main` avec la refonte UX/UI du
-cockpit PAPER.
+### ADR-198 — Les profils Risk sont des presets explicites de CampaignConfiguration
 
-Contenu intégré :
+**PATCH PROPOSÉ.** Les profils UX ne contiennent aucune décision Risk dynamique. Ils convertissent le
+capital et le profil choisi en valeurs persistées :
 
-- nouvelle `CockpitShell` opérateur ;
-- navigation latérale simple à cinq vues ;
-- landing **Vue d'ensemble** selon l'Option A ;
-- header permanent avec PAPER, Campaign/Strategy active, modèle, types de marchés et état moteur ;
-- commandes moteur visibles et explicites ;
-- KPI PAPER, Marché & activité, Actions rapides, dernières décisions IA + Risk et alertes ;
-- anciens panneaux réutilisés comme vues détaillées ;
-- typographie globale remplacée par une stack système plus lisible ;
-- aucun changement backend.
+| Profil | ordre max | levier PERP | position dérivée max | exposition totale max | buffer |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Prudent | 5 % | 1x | 10 % | 20 % | 1.25 |
+| Équilibré | 10 % | 2x | 20 % | 40 % | 1.15 |
+| Agressif | 20 % | 3x | 35 % | 70 % | 1.10 |
 
-Validation opérateur réelle avant intégration :
+Le profil Personnalisé expose les champs détaillés. Le backend valide `CampaignConfiguration` et le
+Risk Engine reste seul autorisé à ALLOW/MODIFY/REJECT une proposition Agent.
 
-```text
-validation visuelle opérateur : OK
-pnpm lint : OK, 0 erreur, 0 warning
-pnpm typecheck : OK
-pnpm build : OK
-git diff --check : OK hors avertissements LF -> CRLF
-working tree propre après push
-```
+### ADR-199 — Ne pas reconstruire le coût moyen ni le P&L SPOT dans le frontend
 
-## Changelog — 2026-09-24 — Batch 18.11 guide opérateur intégré et validé
+**PATCH PROPOSÉ.** `AssetPositionResponse` ne fournit actuellement que `asset`, `quantity` et
+`available`. Le cockpit n'infère donc pas un prix d'entrée ou un P&L par position à partir des fills.
+Il affiche `—` pour ces valeurs et utilise les analytics backend pour le P&L/exposition globaux.
 
-Le commit `c02b9e8edd52b416969922f12a17e32f047d3989` est intégré sur `main` avec le guide opérateur et
-l'aide contextuelle du cockpit PAPER.
+Cette décision évite une seconde comptabilité et respecte le backend comme source de vérité.
 
-Contenu intégré :
+### ADR-200 — Faire d'Action suivante la porte d'entrée du pilotage courant
 
-- nouvelle vue **Guide** dans la navigation principale ;
-- démarrage rapide PAPER en trois phases dans la Vue d'ensemble ;
-- guide complet couvrant Strategy, StrategyRevision, Campaign, Agent, Risk, SPOT, PERPETUAL,
-  activation, `run-cycle`, Start/Stop, recovery, décisions, positions, performance et erreurs ;
-- aide contextuelle progressive sur `run-cycle`/Start, HOLD/Risk et états moteur ;
-- nouveau document `docs/11_GUIDE_OPERATEUR.md` ;
-- aucun changement backend.
+**PATCH PROPOSÉ.** L'Accueil dérive une action opérateur à partir des états déjà exposés par le
+backend : absence de configuration, Campaign non activée, runtime STOPPED, moteur RUNNING ou session
+historique à reprendre.
 
-Le premier passage `pnpm lint` a identifié 45 occurrences `react/no-unescaped-entities`, uniquement
-liées à des apostrophes ASCII dans les nouveaux textes JSX. Un correctif typographique limité à
-`cockpit-shell.tsx` et `operator-guide.tsx` a été appliqué avant intégration.
+Une situation ambiguë renvoie vers les réglages avancés plutôt que d'effectuer automatiquement une
+activation/reprise risquée. La reprise reste toujours explicite.
 
-Validation locale finale après correctif :
+## Changelog — 2026-09-24 — Batch 18.12 préparé
 
-```text
-pnpm lint : OK, 0 erreur
-pnpm typecheck : OK
-pnpm build : OK
-git diff --check : OK hors avertissements LF -> CRLF
-working tree propre avant et après push
-```
+Contenu du patch :
+
+- navigation principale simplifiée à cinq tâches ;
+- nouvel assistant de création PAPER avec SPOT/PERPETUAL, paires, capital, Luna/Sol, agressivité,
+  instructions Agent et profils Risk ;
+- boutons `Créer le test` et `Créer et démarrer` ;
+- orchestration frontend des routes Strategy/Revision/Campaign/activation/Start existantes ;
+- Accueil centré sur `Action suivante`, capital, P&L, positions, décision récente et alertes ;
+- nouvelle vue Positions ;
+- nouvelle vue Historique corrélée Agent -> Risk -> PAPER ;
+- Guide, Assistant et ancien Control Plane déplacés sous Réglages ;
+- aucun changement backend ;
+- documentation opérateur simplifiée.
+
+La validation `pnpm lint`, `pnpm typecheck` et `pnpm build` reste à exécuter localement avant de
+qualifier le batch **INTÉGRÉ / VALIDÉ**.

@@ -2,20 +2,19 @@
 
 ## 1. Mission
 
-AI Spot Trader est une application expérimentale de trading crypto PAPER pilotée par **un seul
+AI Spot Trader est une application expérimentale de trading crypto **PAPER** pilotée par **un seul
 Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement
 un cockpit de contrôle et de visualisation.
 
-Référence fonctionnelle intégrée du Batch 18.11 :
+Base GitHub auditée pour le Batch 18.12 :
 
 ```text
-Commit fonctionnel : c02b9e8edd52b416969922f12a17e32f047d3989
-message             : feat: add operator guide and contextual help
+HEAD main audité      : c6cf03e62ce49ad6b294ea1d4c44d933b4688b0a
+Référence fonctionnelle 18.11 : c02b9e8edd52b416969922f12a17e32f047d3989
 ```
 
-Les Batches 18.9A, 18.9B, 18.9C, 18.10 et 18.11 sont intégrés et validés. Le HEAD GitHub courant
-est contrôlé à chaque reprise ; il peut être postérieur au commit fonctionnel de référence à cause
-d’une synchronisation documentaire.
+Le Batch 18.12 est livré comme patch multi-fichiers et n'est pas réputé intégré tant que la
+validation locale et le commit ne sont pas effectués.
 
 ## 2. Invariants fonctionnels
 
@@ -25,13 +24,13 @@ d’une synchronisation documentaire.
 - Kraken ;
 - PAPER uniquement ; LIVE reste séparé et ultérieur ;
 - actions finales `BUY`, `SELL`, `HOLD` ;
-- Luna configurable par défaut dans les profils opérateur, Sol sélectionnable ;
+- Luna configurable par défaut, Sol sélectionnable ;
 - Risk Engine déterministe avec autorité finale ;
 - seul Risk crée un `ExecutionIntent` ;
 - aucune sortie LLM ni aucun tool ne déclenche Broker/Kraken ;
 - coûts PAPER et funding pris en compte ;
 - audit causal de toutes les décisions, `HOLD` inclus ;
-- aucun secret dans les artefacts opérateur, prompts, logs, navigateur ou Git ;
+- aucun secret dans prompts, logs, navigateur ou Git ;
 - aucun look-ahead ;
 - frontend non nécessaire au fonctionnement du moteur.
 
@@ -72,7 +71,7 @@ Aucun composant déterministe ni frontend ne choisit l'opportunité à la place 
 
 `ExecutableMarket(symbol, market_type)` représente la frontière d'exécution. L'univers est trié,
 sans doublon, limité à SPOT/PERPETUAL, et chaque symbole doit être autorisé par Risk. Tous les
-marchés d'une campagne partagent actuellement le même actif de quote/règlement.
+marchés d'une Campaign partagent actuellement le même actif de quote/règlement.
 
 Les sources de recherche Kraken sont séparées des sources d'exécution. Un snapshot de recherche
 n'est jamais promu silencieusement en `MarketState` d'exécution.
@@ -88,20 +87,18 @@ n'est jamais promu silencieusement en `MarketState` d'exécution.
 - aucun replay de MarketSelection, décision, Risk, Broker ou Fill ;
 - validation fail-closed de l'état restauré.
 
-Le Batch 18.9C a validé le restart backend sans reprise silencieuse et la reprise explicite avec
-nouveau `paper_run_id`, lineage et ledger restauré.
+Un restart backend ne reprend jamais silencieusement une Campaign. La reprise opérateur reste une
+action explicite.
 
-## 6. Control Plane backend — Batch 18.9A
+## 6. Control Plane backend
 
 ### Strategy / StrategyRevision
 
 `Strategy` est une identité durable nommable/archivable. Chaque `StrategyRevision` est immuable et
-contient le texte opérateur, son digest, la version du contrat Agent protégé et son timestamp. Une
-modification du texte crée obligatoirement une nouvelle révision.
+contient le texte opérateur, son digest, la version du contrat Agent protégé et son timestamp.
+Modifier le texte crée une nouvelle révision.
 
-### Contrat protégé
-
-La composition canonique est :
+### Contrat Agent protégé
 
 ```text
 PROTECTED_AGENT_CONTRACT
@@ -116,109 +113,138 @@ finale de Risk. Il n'est exposé à aucune mutation API.
 
 Une Campaign snapshotte stratégie/révision et configuration structurelle non sensible. Elle inclut
 modèle, agressivité, cadence, capital, univers, coûts, levier/marge, limites Risk et deadlines de
-cycle. Une Campaign est immuable : modifier un paramètre structurel crée une nouvelle Campaign.
+cycle. Elle est immuable.
 
-## 7. Identité expérimentale v4
+`paper-experiment-v4` identifie l'expérience à partir de la Strategy/Revision et du digest de
+configuration.
 
-`paper-experiment-v4` est une identité de Campaign. Son digest dépend de :
-
-```text
-strategy_id
-strategy_revision
-strategy_prompt_digest
-base_agent_contract_version
-configuration_digest
-```
-
-Les protocoles v1/v2/v3 restent historiques et inchangés.
-
-## 8. Campaign vs paper_run
+## 7. Campaign vs paper_run
 
 ```text
-Campaign : environnement opérateur/expérimental immuable
+Campaign  : configuration expérimentale immuable
 paper_run : session d'exécution/recovery
 ```
 
-Une Campaign peut posséder plusieurs runs liés par recovery. Une reprise ne peut utiliser qu'un
-run ayant le même `campaign_id`. Une autre stratégie/révision/configuration produit une autre
-Campaign.
+Une Campaign peut posséder plusieurs runs liés par recovery. Une reprise doit conserver le même
+`campaign_id`.
 
-## 9. Runtime dynamique
+## 8. Runtime dynamique
 
-Le Control Plane ne crée pas de second moteur. `build_campaign_runtime()` assemble les mêmes
-composants canoniques : `TradingCycleRunner`, `AuditedTradingCycleRunner`, `TradingEngine`,
-`RiskEngine` et `PaperBroker`.
+Le Control Plane ne crée pas de second moteur. `build_campaign_runtime()` assemble les composants
+canoniques : `TradingCycleRunner`, `AuditedTradingCycleRunner`, `TradingEngine`, `RiskEngine` et
+`PaperBroker`.
 
-Activation/reprise est refusée pendant `RUNNING`. Un runtime `STOPPED` peut être fermé proprement
-avant passage vers une autre Campaign.
+Activation/reprise est refusée pendant `RUNNING`. Un runtime `STOPPED` peut être remplacé proprement
+par une autre Campaign selon les contrats backend.
 
-## 10. Cockpit frontend — Batches 18.9B, 18.10 et 18.11
+## 9. API canonique utilisée par le cockpit
 
-Le cockpit est un client HTTP du Control Plane, pas un runtime de trading. Il réutilise le rewrite
-Next.js `/backend` et le client `frontend/src/lib/api/client.ts` existants.
+Le frontend reste un client HTTP du backend via `/backend` et `frontend/src/lib/api/client.ts`.
+Routes principales :
 
-Il permet :
+- Strategy/Revision : création, lecture, renommage, archivage, comparaison ;
+- Campaign : création, lecture, activation fraîche, reprise ;
+- moteur : `run-cycle`, `start`, `stop` ;
+- lecture : portfolio, market, cycles, décisions, risk-assessments, executions, analytics,
+  paper-runs ;
+- prompt preview et chat informatif.
 
-- Strategy : créer, lister, renommer, archiver ;
-- StrategyRevision : charger les révisions séquentielles jusqu'à `latest_revision`, créer une
-  nouvelle révision immuable et comparer deux révisions via l'API ;
-- prompt preview : visualiser les instructions canoniques et rappeler que l'input dynamique futur
-  est `null` avant le cycle ;
-- Campaign : créer des snapshots SPOT/PERPETUAL avec tous les champs de `CampaignConfiguration` ;
-- sélectionner Luna/Sol, agressivité, cadence, capital, coûts et paramètres Risk ;
-- fixer le levier PERPETUAL déterministe et la marge `ISOLATED` ;
-- activer frais ou reprendre explicitement une Campaign ;
-- envoyer uniquement les commandes moteur canoniques `run-cycle`, `start`, `stop` ;
-- observer la Campaign active et le lineage des `paper_run`.
+Les réponses backend 409/422/503 restent autoritaires et ne sont pas contournées côté UI.
 
-Le frontend ne reproduit pas les validators métier de `CampaignConfiguration`. Les réponses 409,
-422 et 503 sont affichées comme refus/conflits backend. Fermer le frontend n'envoie jamais `stop`.
+## 10. Évolution du cockpit
 
-Le Control Plane UI ne persiste ni prompt, ni Campaign, ni secret dans `localStorage` ou
-`sessionStorage`. Le stockage local historique du chat reste limité à un identifiant de session.
+### Batches 18.9B à 18.11
 
-### Batch 18.10 — architecture UX intégrée
+Le cockpit historique a d'abord exposé directement Strategy, StrategyRevision, Campaign, activation,
+recovery et commandes moteur. Le Batch 18.10 a ajouté une Vue d'ensemble ; le Batch 18.11 a ajouté
+un Guide et de l'aide contextuelle.
 
-La direction **Option A — Vue d'ensemble** est intégrée :
+### Batch 18.12 — UX orientée tâches
 
-- `CockpitShell` comme shell opérateur ;
-- Vue d'ensemble comme landing ;
-- navigation vers Pilotage, Activité, Performance et Assistant ;
-- PAPER, Campaign active et état moteur visibles dans le header ;
-- panneaux canoniques réutilisés comme vues secondaires.
+Le Batch 18.12 conserve les contrats précédents mais change le modèle mental principal :
 
-### Batch 18.11 — aide opérateur intégrée
+```text
+Accueil
+Configurer
+Positions
+Historique
+Réglages
+```
 
-Le Batch 18.11 ajoute sans modifier les contrats backend :
+Le parcours débutant n'exige plus de comprendre Strategy/Revision/Campaign.
 
-- une vue principale **Guide** dans la navigation du `CockpitShell` ;
-- un démarrage rapide depuis la Vue d'ensemble ;
-- le pipeline pédagogique Agent → Risk → Broker PAPER ;
-- des explications progressives ciblées sur `run-cycle`/Start, HOLD/Risk et états moteur ;
-- un guide versionné dédié : `docs/11_GUIDE_OPERATEUR.md`.
+#### Assistant de configuration
 
-Les aides contextuelles déjà présentes dans `ControlPlanePanel`, `CockpitDashboard`,
-`AnalyticsPanel` et `ChatPanel` sont conservées et réutilisées plutôt que dupliquées.
+Le frontend orchestre les appels canoniques :
 
-Validation locale finale 18.11 : `pnpm lint`, `pnpm typecheck` et `pnpm build` passent ;
-`git diff --check` ne relève aucune erreur hors avertissements de conversion LF → CRLF.
+```text
+create Strategy (crée aussi Revision r1)
+-> create Campaign
+-> éventuellement activate Campaign
+-> éventuellement start Engine
+```
 
-## 11. Validation comportementale — Batch 18.9C
+Il ne fusionne pas ces concepts dans le backend et n'ajoute aucune transaction métier parallèle.
+En cas d'échec intermédiaire, les objets déjà persistés restent auditables dans les réglages avancés.
 
-La validation réelle a confirmé les parcours Strategy/StrategyRevision, preview, Campaign SPOT et
+#### Profils Risk UX
+
+`Prudent`, `Équilibré` et `Agressif` ne sont que des fonctions de traduction vers les champs
+existants de `CampaignConfiguration`. `Personnalisé` expose les champs détaillés. Le backend reste
+seul responsable de la validation et le Risk Engine garde l'autorité finale à l'exécution.
+
+Mappings initiaux du patch 18.12 :
+
+- Prudent : ordre max 5 % capital ; PERP 1x ; position 10 % ; exposition totale 20 % ; buffer 1.25 ;
+- Équilibré : ordre max 10 % ; PERP 2x ; position 20 % ; exposition totale 40 % ; buffer 1.15 ;
+- Agressif : ordre max 20 % ; PERP 3x ; position 35 % ; exposition totale 70 % ; buffer 1.10.
+
+#### Divulgation progressive
+
+- la landing expose état, configuration humaine, capital, P&L, positions et **Action suivante** ;
+- les détails Strategy/Revision/Campaign, digests, IDs et recovery restent sous
+  `Réglages > Avancé` ;
+- Guide et Assistant deviennent secondaires au lieu d'occuper la navigation principale.
+
+#### Positions
+
+Le frontend utilise uniquement `PortfolioResponse` et les analytics backend. Pour PERPETUAL, les
+métriques par position viennent du backend. Pour SPOT, le contrat ne fournit pas de coût moyen ni de
+P&L unitaire : ces valeurs ne sont pas reconstruites côté navigateur.
+
+#### Historique
+
+La vue regroupe par `cycle_id` les faits déjà canoniques : décision Agent, résultat Risk, éventuelle
+exécution/fills et erreur. Cette corrélation est de présentation uniquement.
+
+## 11. Frontend sans logique métier parallèle
+
+Le frontend ne :
+
+- valide pas à la place de `CampaignConfiguration` ;
+- ne calcule pas de portefeuille alternatif ;
+- ne décide pas BUY/SELL/HOLD ;
+- ne crée pas d'`ExecutionIntent` ;
+- ne simule pas le Risk Engine ;
+- ne simule pas le Broker ;
+- ne persiste aucun secret.
+
+Fermer le frontend n'envoie jamais `stop`.
+
+## 12. Validation comportementale historique
+
+Le Batch 18.9C a déjà confirmé sur les contrats canoniques : Strategy/Revision, Campaign SPOT et
 PERPETUAL, activation fraîche, `run-cycle`, Start/Stop, restart backend et recovery explicite.
+Des BUY naturels SPOT/PERPETUAL soumis à Risk `MODIFY` et des HOLD naturels ont été observés.
 
-Un BUY SPOT naturel et un BUY PERPETUAL naturel sur SOL/USD ont été observés, tous deux soumis au
-Risk Engine déterministe. Des HOLD naturels ont aussi été observés. Aucun SELL naturel n'a été
-observé et aucun SELL n'a été forcé.
+## 13. Persistence et migrations
 
-Le correctif JSON `market_type` est intégré à la frontière Control Plane ; `ExecutableMarket` reste
-strict dans le domaine. Le nettoyage mypy de trois routes API est type-only et sans changement
-fonctionnel.
+La migration `0006_paper_control_plane` crée `strategies`, `strategy_revisions`, `campaigns` et le
+lien `paper_runs.campaign_id`. Le Batch 18.12 ne demande aucune migration.
 
-## 12. Secrets
+## 14. Secrets
 
-Secrets serveur uniquement :
+Secrets serveur uniquement, notamment :
 
 ```text
 OPENAI_API_KEY
@@ -228,20 +254,8 @@ futures clés privées Kraken/LIVE
 
 Ils ne sont jamais champs de `CampaignConfiguration` ni envoyés au cockpit.
 
-## 13. Persistence
+## 15. État du jalon
 
-`0006_paper_control_plane` crée `strategies`, `strategy_revisions`, `campaigns` et
-`paper_runs.campaign_id` nullable. Les anciennes rows restent valides avec `campaign_id=NULL`.
-
-## 14. API
-
-Le Control Plane expose Strategy/Revision, Campaign, activation/reprise et prompt preview. Les
-commandes de trading restent exclusivement `/api/v1/engine/*`. `/api/v1/paper-runs` expose
-`campaign_id`, `resumed_from_paper_run_id` et `recovery_version`.
-
-## 15. État du jalon et périmètre suivant
-
-Les Batches 18.9, 18.10 et 18.11 sont intégrés et validés sur les parcours PAPER actuels. Aucun
-périmètre LIVE n'est implicitement ouvert : tout passage LIVE reste un projet/batch séparé avec
-permissions, barrières et validation dédiées. Tout nouveau batch doit repartir du `main` GitHub
-courant.
+Les Batches 18.9 à 18.11 sont intégrés. Le Batch 18.12 est un patch frontend/documentation préparé
+sur `c6cf03e...`, sans changement backend. Il doit être validé localement avec les commandes frontend
+standard avant intégration. LIVE reste un batch/projet séparé.

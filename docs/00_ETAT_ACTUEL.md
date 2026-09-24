@@ -1,58 +1,68 @@
 # 00 — État actuel
 
-> Mémoire courte de reprise. À garder synthétique et factuelle.
+> Mémoire courte de reprise. À garder synthétique, factuelle et alignée avec GitHub `main`.
 
 ## Référence technique
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- Commit fonctionnel de référence du Batch 18.11 :
+- HEAD GitHub audité à l'ouverture du Batch 18.12 :
+  `c6cf03e62ce49ad6b294ea1d4c44d933b4688b0a`
+- Commit fonctionnel intégré du Batch 18.11 :
   `c02b9e8edd52b416969922f12a17e32f047d3989`
   (`feat: add operator guide and contextual help`).
-- Le HEAD GitHub courant doit être vérifié au démarrage de chaque nouveau batch ; les commits
-  documentaires postérieurs ne changent pas l’état fonctionnel.
-- Batches 18.9A, 18.9B, 18.9C, 18.10 et 18.11 : **intégrés et validés**.
-- Batch 18.11 — guide opérateur et aide intégrée : **INTÉGRÉ / VALIDÉ**.
+- Les deux commits entre `c02b9e8...` et `c6cf03e...` sont documentaires uniquement.
+- Batch 18.12 : **PATCH PRÉPARÉ / NON INTÉGRÉ AU MOMENT DE CETTE LIVRAISON**.
 
-## État fonctionnel confirmé
+## État fonctionnel confirmé avant Batch 18.12
 
 - un seul Agent IA stratégique ; Kraken ; PAPER uniquement ; SPOT + PERPETUAL linéaire ;
 - Strategy, StrategyRevision immuable, Campaign PAPER et recovery explicite ;
 - activation fraîche, `run-cycle`, Start/Stop et restart backend sans reprise silencieuse ;
 - Risk Engine déterministe = autorité finale ; aucune sortie LLM ne déclenche directement un ordre ;
-- coûts PAPER, positions, P&L, drawdown, exposition et audit durable visibles dans le cockpit ;
-- guide opérateur accessible depuis la navigation principale et démarrage rapide depuis la Vue d'ensemble ;
-- LIVE reste séparé et ultérieur.
+- coûts PAPER, positions, P&L, drawdown, exposition et audit durable disponibles via le backend ;
+- frontend indépendant du moteur : fermer le cockpit n'arrête pas le trading ;
+- LIVE reste indisponible.
 
-## Batch 18.11 — guide opérateur et aide intégrée
+## Batch 18.12 — simplification radicale de l'expérience opérateur
 
-Direction intégrée : aide en trois niveaux dans l'architecture **Option A — Vue d'ensemble**.
+Le patch 18.12 remplace le modèle mental technique du cockpit par un parcours orienté tâches :
 
-- démarrage rapide pour le premier test PAPER ;
-- aide contextuelle progressive sur les notions ambiguës ;
-- vue principale **Guide** dans `CockpitShell` ;
-- pipeline pédagogique Agent → Risk → Broker PAPER ;
-- guide versionné `docs/11_GUIDE_OPERATEUR.md` ;
-- réutilisation des aides déjà présentes dans les panneaux canoniques ;
-- aucun changement backend, contrat API, Risk Engine, Broker ou persistence.
+- navigation principale : **Accueil / Configurer / Positions / Historique / Réglages** ;
+- bloc **Action suivante** sur l'accueil selon l'état réel du backend ;
+- assistant de configuration PAPER en étapes simples : marché, capital, IA, sécurité, résumé ;
+- création orchestrée côté frontend via les routes canoniques existantes :
+  `Strategy -> StrategyRevision r1 -> Campaign`, sans exposer ces objets au parcours débutant ;
+- profils Risk UX `Prudent`, `Équilibré`, `Agressif`, `Personnalisé` traduits uniquement en champs
+  explicites de `CampaignConfiguration` ;
+- activation fraîche, reprise et Start restent des commandes backend distinctes et explicites ;
+- surface Positions dédiée utilisant exclusivement `/portfolio` et les analytics backend ;
+- surface Historique corrélant visuellement `Décision IA -> Risk -> Exécution PAPER` ;
+- ancien Control Plane, guide et assistant conservés sous **Réglages**, avec les concepts techniques
+  accessibles en mode avancé ;
+- aucun changement backend, Risk Engine, Broker, persistence ou contrat API requis.
 
-## Validation opérateur du Batch 18.11
+## Limite de contrat volontairement respectée
 
-Validation locale finale effectuée avant intégration :
+Le contrat portefeuille SPOT canonique expose actuellement `asset`, `quantity` et `available`, mais
+pas le prix d'entrée moyen ni un P&L par position SPOT. Le frontend 18.12 affiche donc `—` pour ces
+champs au lieu de reconstruire un portefeuille parallèle. Le P&L global reste celui des analytics
+backend.
 
-```text
-pnpm lint : OK, 0 erreur
-pnpm typecheck : OK
-pnpm build : OK
-git diff --check : OK hors avertissements LF -> CRLF
-working tree propre avant et après push
-```
+## Validation de cette livraison
 
-Le premier passage ESLint avait relevé uniquement des apostrophes JSX non échappées dans les deux
-fichiers frontend 18.11 ; le correctif typographique a été appliqué puis toutes les validations ont
-été relancées avec succès avant le commit intégré.
+Validation réalisable dans l'environnement de génération :
+
+- audit du HEAD GitHub et des contrats backend/frontend : effectué ;
+- vérification de syntaxe/transpilation TypeScript/TSX : à enregistrer dans le compte-rendu de
+  livraison ;
+- contrôle du ZIP root-relative et absence de secrets : à enregistrer dans le compte-rendu.
+
+Les commandes projet `pnpm lint`, `pnpm typecheck` et `pnpm build` doivent être exécutées localement
+après extraction. L'environnement de génération ne dispose pas de `pnpm` ni d'un accès registre
+permettant de l'installer.
 
 ## Suite
 
-Aucune étape d'intégration 18.11 ne reste à effectuer. Tout nouveau batch doit repartir du `main`
-GitHub courant. Le projet reste exclusivement PAPER ; LIVE reste un périmètre séparé et ultérieur.
+Après validation locale, intégrer le patch 18.12 sur `main`, puis mettre à jour ce document avec le
+commit fonctionnel réel et le statut **INTÉGRÉ / VALIDÉ**. LIVE reste un périmètre séparé et ultérieur.

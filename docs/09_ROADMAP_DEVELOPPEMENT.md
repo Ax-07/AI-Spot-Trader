@@ -1,186 +1,121 @@
 # 09 — Roadmap de développement
 
-## Référence fonctionnelle intégrée
+## Référence de reprise
 
 ```text
-Commit fonctionnel 18.11 : c02b9e8edd52b416969922f12a17e32f047d3989
-Message                  : feat: add operator guide and contextual help
+HEAD GitHub audité pour 18.12 : c6cf03e62ce49ad6b294ea1d4c44d933b4688b0a
+Commit fonctionnel 18.11      : c02b9e8edd52b416969922f12a17e32f047d3989
 ```
 
-Le HEAD GitHub courant est vérifié au démarrage de chaque nouveau batch. Une synchronisation
-documentaire postérieure peut donc avancer `main` sans modifier cette référence fonctionnelle.
+Le HEAD doit être revérifié au démarrage de chaque nouveau batch.
 
 ## Jalons intégrés
 
-- Batch 18.1 : tools Agent read-only et traces causales ;
-- Batch 18.2 : sélection causale multi-marchés SPOT/PERPETUAL ;
-- Batch 18.3 : validation comportementale et parsing Kraken margin schedules ;
-- Batch 18.5 : `paper-experiment-v3` et identité tools/sélection ;
-- Batch 18.6 : recovery `paper-ledger-recovery-v1`, migration `0005` ;
-- Batch 18.7 : retries réseau bornés ;
-- Batch 18.8 : validation réelle recovery/réseau, 20/20 cycles `COMPLETED`, tous `HOLD` ;
-- Batch 18.9A : Control Plane backend, stratégies versionnées, Campaigns persistantes,
-  `paper-experiment-v4`, migration `0006`, runtime canonique par Campaign ;
-- Batch 18.9B : cockpit Control Plane frontend, configuration PAPER SPOT/PERPETUAL, Strategy,
-  StrategyRevision, preview canonique, Campaigns, activation/reprise et commandes moteur ;
-- Batch 18.9C : validation comportementale réelle via cockpit, correctif JSON `market_type` et
-  nettoyage mypy des frontières API ;
-- Batch 18.10 : refonte UX/UI du cockpit selon l'Option A, `CockpitShell`, vue d'ensemble opérateur
-  et réutilisation des panneaux canoniques ;
-- Batch 18.11 : guide opérateur, démarrage rapide et aide contextuelle progressive dans le cockpit.
+- 18.1 : tools Agent read-only et traces causales ;
+- 18.2 : sélection causale multi-marchés SPOT/PERPETUAL ;
+- 18.3 : validation comportementale et parsing Kraken margin schedules ;
+- 18.5 : `paper-experiment-v3` ;
+- 18.6 : recovery `paper-ledger-recovery-v1`, migration `0005` ;
+- 18.7 : retries réseau bornés ;
+- 18.8 : validation recovery/réseau ;
+- 18.9A : Control Plane backend, Strategy/Revision, Campaigns, `paper-experiment-v4`, migration
+  `0006`, runtime canonique par Campaign ;
+- 18.9B : cockpit Control Plane frontend SPOT/PERPETUAL ;
+- 18.9C : validation comportementale réelle via cockpit ;
+- 18.10 : refonte UX/UI Option A, `CockpitShell` et Vue d'ensemble ;
+- 18.11 : guide opérateur et aide contextuelle.
 
-## État intégré
+## État
 
 ```text
-18.9A  — Control Plane + persistence + stratégie/prompt backend     INTÉGRÉ
-18.9B  — Cockpit de configuration + PERPETUAL UI                   INTÉGRÉ / VALIDÉ
-18.9C  — Validation comportementale via cockpit                    INTÉGRÉ / VALIDÉ
-18.10  — Refonte UX/UI cockpit — Option A                          INTÉGRÉ / VALIDÉ
-18.11  — Guide opérateur + aide intégrée                           INTÉGRÉ / VALIDÉ
+18.9A  — Control Plane backend                                INTÉGRÉ
+18.9B  — Cockpit configuration SPOT/PERPETUAL                 INTÉGRÉ / VALIDÉ
+18.9C  — Validation comportementale                           INTÉGRÉ / VALIDÉ
+18.10  — Refonte UX/UI Option A                               INTÉGRÉ / VALIDÉ
+18.11  — Guide opérateur                                      INTÉGRÉ / VALIDÉ
+18.12  — Simplification radicale expérience opérateur         PATCH PRÉPARÉ / À VALIDER
 ```
 
-## Batch 18.9C — validation comportementale réelle
+## Batch 18.12 — simplification radicale expérience opérateur
 
-Validation effectuée depuis le cockpit et les routes backend canoniques :
+### Objectif
 
-- création, renommage et archivage de Strategy ;
-- création de StrategyRevision immuable, comparaison et prompt preview ;
-- Campaign SPOT avec Luna, agressivité, capital, coûts et limites Risk ;
-- Campaign PERPETUAL avec marge `ISOLATED`, levier déterministe et caps dérivés ;
-- Luna et Sol sélectionnables et persistés dans la configuration de Campaign ;
-- activation fraîche et nouveau `paper_run_id` ;
-- `run-cycle` isolé : un cycle puis retour à `STOPPED` ;
-- Start/Stop : boucle autonome backend puis arrêt coopératif ;
-- restart backend : moteur `UNAVAILABLE` et aucune Campaign active avant action opérateur ;
-- reprise explicite : nouveau run, lineage `resumed_from_paper_run_id` et ledger restauré ;
-- SPOT : BUY naturel SOL/USD, Risk `MODIFY` pour la limite de notional, fill PAPER et coûts appliqués,
-  puis HOLD naturels ;
-- PERPETUAL : BUY naturel SOL/USD, Risk `MODIFY`, levier 2, `ISOLATED`, marge, fill PAPER et
-  position LONG persistée ;
-- refus fail-closed validés : 409 sur Strategy archivée, 422 sur configuration invalide,
-  503 sur `run-cycle` sans runtime ;
-- aucun SELL naturel observé ; aucune décision stratégique n'a été forcée.
+Passer d'une interface qui rend l'architecture backend compréhensible à une interface où cette
+architecture n'est plus nécessaire pour réussir un premier test PAPER.
 
-### Correctif JSON intégré
-
-`CampaignConfiguration` adapte à la frontière Control Plane les valeurs JSON canoniques `SPOT` /
-`PERPETUAL` vers `MarketType` avant validation du modèle `ExecutableMarket` strict. Les valeurs
-inconnues restent rejetées. Des tests de régression JSON couvrent SPOT, PERPETUAL et le rejet
-fail-closed.
-
-### Nettoyage mypy intégré
-
-Les incompatibilités de typing préexistantes aux frontières de sérialisation ont été corrigées par
-des annotations `Literal` / `cast` ciblées dans trois routes API, sans changement fonctionnel.
-
-### Validation historique du commit intégré
-
-Exécutée localement par l'opérateur avant le push de `5fc7704` :
-
-```text
-pytest backend : 506 passed, 2 warnings
-ruff check backend : All checks passed
-mypy backend/src : Success: no issues found in 89 source files
-git diff --check : OK hors avertissements LF -> CRLF
-working tree propre avant push
-```
-
-## Batch 18.10 — refonte UX/UI cockpit — INTÉGRÉ / VALIDÉ
-
-Objectif : transformer l'interface 18.9B, fonctionnelle mais dense, en cockpit opérateur lisible sans
-modifier les contrats ou la logique du backend.
-
-Direction retenue et intégrée : **Option A — Vue d'ensemble**.
-
-### Architecture UI intégrée
+### Architecture proposée
 
 ```text
 CockpitShell
-├─ navigation latérale
-│  ├─ Vue d'ensemble
-│  ├─ Pilotage
-│  ├─ Activité
-│  ├─ Performance
-│  └─ Assistant
-├─ header opérateur
-│  ├─ PAPER
-│  ├─ Campaign / Strategy active
-│  ├─ modèle + types de marchés
-│  ├─ état moteur
-│  └─ run-cycle / Start / Stop
-└─ landing Vue d'ensemble
-   ├─ KPI PAPER
-   ├─ Marché & activité
-   ├─ Actions rapides
-   ├─ Dernières décisions de l'IA + statut Risk
-   └─ Alertes système & backend
+├─ Accueil
+│  ├─ Action suivante
+│  ├─ état du bot
+│  ├─ configuration humaine
+│  ├─ capital / P&L / positions
+│  ├─ dernière décision + Risk
+│  └─ alertes
+├─ Configurer
+│  └─ assistant Marché -> Capital -> IA -> Sécurité -> Résumé
+├─ Positions
+├─ Historique
+│  └─ Agent -> Risk -> PAPER par cycle
+└─ Réglages
+   ├─ Aide
+   ├─ Assistant
+   └─ Avancé : Control Plane historique
 ```
 
-Les composants `ControlPlanePanel`, `CockpitDashboard`, `AnalyticsPanel` et `ChatPanel` restent
-canoniques et sont réutilisés comme vues secondaires. Aucune implémentation parallèle de Strategy,
-Campaign, Risk, Broker ou moteur de trading n'est introduite.
+### Orchestration
 
-### Validation opérateur 18.10
+Aucun endpoint backend supplémentaire n'est nécessaire. Le frontend appelle séquentiellement les
+routes canoniques existantes pour créer le test puis, sur demande, l'activer et le démarrer.
+Activation fraîche et reprise restent deux opérations différentes.
 
-Validation visuelle et locale effectuée avant le push de `b445b70` :
+### Profils Risk UX
 
-```text
-validation visuelle opérateur : OK
-pnpm lint : OK, 0 erreur, 0 warning
-pnpm typecheck : OK
-pnpm build : OK
-git diff --check : OK hors avertissements LF -> CRLF
-working tree propre après push
+- **Prudent** : ordre 5 % capital, PERP 1x, position 10 %, exposition 20 %, buffer 1.25 ;
+- **Équilibré** : ordre 10 %, PERP 2x, position 20 %, exposition 40 %, buffer 1.15 ;
+- **Agressif** : ordre 20 %, PERP 3x, position 35 %, exposition 70 %, buffer 1.10 ;
+- **Personnalisé** : champs canoniques avancés.
+
+Ces valeurs sont des presets frontend explicites. Elles ne changent aucune règle du Risk Engine.
+
+### Contrats préservés
+
+- backend canonique inchangé ;
+- `CampaignConfiguration` inchangée ;
+- TradingEngine/RiskEngine/PaperBroker inchangés ;
+- persistence/migrations inchangées ;
+- chat informatif inchangé ;
+- aucune reprise silencieuse ;
+- frontend toujours non requis pour que la boucle backend continue.
+
+### Limite connue conservée
+
+Les positions SPOT ne possèdent pas dans `PortfolioResponse` de prix d'entrée moyen ni de P&L par
+position. Le cockpit 18.12 refuse de les inventer et affiche les métriques globales backend à la
+place.
+
+### Validation attendue avant intégration
+
+```powershell
+cd frontend
+pnpm lint
+pnpm typecheck
+pnpm build
+cd ..
+git diff --check
+git status --short
 ```
 
-## Batch 18.11 — guide opérateur et aide intégrée — INTÉGRÉ / VALIDÉ
-
-Objectif : rendre l'architecture Option A compréhensible sans afficher un manuel technique massif.
-
-### Architecture d'aide intégrée
-
-Trois niveaux complémentaires :
-
-1. **Démarrage rapide** dans la Vue d'ensemble pour le premier parcours PAPER ;
-2. **Aide contextuelle progressive** via quelques blocs `<details>` sur les notions réellement
-   ambiguës ;
-3. **Vue Guide** dans la navigation principale, complétée par `docs/11_GUIDE_OPERATEUR.md`.
-
-La vue Guide couvre :
-
-- architecture mentale Agent → Risk → Broker PAPER ;
-- Strategy / StrategyRevision / Campaign ;
-- configuration Agent et Risk ;
-- SPOT / PERPETUAL, marge `ISOLATED` et levier PAPER ;
-- activation fraîche / reprise ;
-- `run-cycle` / Start / Stop ;
-- restart backend et état `UNAVAILABLE` ;
-- HOLD et statuts ALLOW/MODIFY/REJECT ;
-- positions, coûts, performance et erreurs fréquentes ;
-- glossaire et rappel PAPER/LIVE.
-
-Le batch ne modifie pas le backend et ne duplique aucune logique Risk, Broker ou validation de
-Campaign dans le frontend.
-
-### Validation opérateur 18.11
-
-Validation locale finale effectuée avant le push de `c02b9e8` :
-
-```text
-pnpm lint : OK, 0 erreur
-pnpm typecheck : OK
-pnpm build : OK
-git diff --check : OK hors avertissements LF -> CRLF
-working tree propre avant et après push
-```
-
-Un premier passage ESLint avait identifié uniquement des apostrophes JSX non échappées dans les
-nouveaux textes frontend. Ce défaut typographique a été corrigé, puis l'ensemble des validations a
-été relancé avec succès avant intégration.
+Si ces validations passent, le batch peut être commité puis la référence fonctionnelle mise à jour
+dans `docs/00_ETAT_ACTUEL.md`.
 
 ## Plus tard
 
 - enrichissement research uniquement sur besoin mesuré ;
-- multi-quote/FX explicite avant tout univers multi-devise ;
+- multi-quote/FX explicite avant univers multi-devise ;
 - FUTURE daté seulement avec domaine/exécution dédiés ;
+- éventuel enrichissement du contrat SPOT si un vrai besoin de coût moyen/P&L par position est
+  confirmé ;
 - LIVE dans un projet/batch séparé avec permissions et barrières explicites.

@@ -1,335 +1,253 @@
 # 11 — Guide opérateur
 
-> Guide pratique du cockpit AI Spot Trader. Le backend reste le moteur de trading ; le frontend
-> contrôle et visualise uniquement.
+> Guide pratique du cockpit AI Spot Trader. Le parcours principal est volontairement simple ; les
+> objets techniques restent disponibles dans **Réglages > Avancé**.
 
-## 1. Périmètre actuel
+## 1. Ce qu'il faut savoir avant de commencer
 
-AI Spot Trader fonctionne actuellement en **PAPER uniquement**.
-
-Le cockpit permet de configurer et d'observer :
-
-- SPOT ;
-- PERPETUAL linéaire ;
-- un seul Agent IA stratégique ;
-- le Risk Engine déterministe ;
-- le Broker PAPER ;
-- les positions, coûts, performances et journaux durables.
-
-**LIVE n'est pas disponible dans ce périmètre.** Tout passage au LIVE reste séparé et ultérieur.
-
-## 2. Démarrage rapide — premier test PAPER
-
-Pour un premier test, suivre cet ordre :
-
-1. créer ou choisir une `Strategy` ;
-2. créer une `StrategyRevision` avec le texte opérateur souhaité ;
-3. créer une `Campaign` à partir de cette révision ;
-4. choisir les marchés `SPOT` ou `PERPETUAL` ;
-5. vérifier capital PAPER, modèle, agressivité, coûts et paramètres Risk ;
-6. activer fraîchement la Campaign si elle n'a jamais été exécutée ;
-7. lancer `run-cycle` pour un test isolé ou `Start` pour la boucle autonome ;
-8. observer la décision Agent, le résultat Risk puis l'éventuel résultat PAPER ;
-9. utiliser `Stop` pour arrêter explicitement une boucle `RUNNING`.
-
-Pour une nouvelle configuration, commencer de préférence par `run-cycle`. Il est plus simple à
-observer car un seul cycle est exécuté.
-
-## 3. Architecture mentale
-
-Le pipeline canonique est :
-
-```text
-Marché / contexte
-      ↓
-Agent IA stratégique
-      ↓
-BUY / SELL / HOLD proposé
-      ↓
-Risk Engine déterministe
-      ↓
-ALLOW / MODIFY / REJECT
-      ↓
-Broker PAPER
-      ↓
-Ledger / positions / performance / audit
-```
+AI Spot Trader fonctionne actuellement en **PAPER uniquement** avec Kraken comme source/exchange
+initial. Le frontend est un cockpit : le moteur de trading reste dans le backend.
 
 Principe central :
 
 **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
-Une sortie LLM ne déclenche jamais directement un ordre. Le frontend ne contient ni moteur de
-trading, ni logique Risk, ni Broker.
+Une sortie LLM ne déclenche jamais directement un ordre. LIVE n'est pas disponible.
 
-## 4. Strategy et StrategyRevision
+## 2. Le parcours normal en cinq pages
 
-### Strategy
+### Accueil
 
-Une `Strategy` est l'identité durable d'une stratégie opérateur.
+Répond à la question : **que dois-je faire maintenant ?**
 
-Elle possède notamment un nom et peut être archivée. Le nom peut évoluer sans modifier l'historique
-des révisions.
+Le bloc **Action suivante** propose l'action cohérente avec l'état backend :
 
-### StrategyRevision
+- aucune configuration : `Créer mon premier test` ;
+- configuration jamais démarrée : `Démarrer` ;
+- session arrêtée mais chargée : `Démarrer` ou `Tester 1 cycle` ;
+- moteur en cours : `Surveiller les positions` ou `Arrêter` ;
+- session historique récupérable : `Reprendre la dernière session` ;
+- situation technique ambiguë : renvoi vers les réglages avancés plutôt que décision silencieuse.
 
-Une `StrategyRevision` est une version **immuable** du texte opérateur.
+### Configurer
 
-Modifier le prompt ne remplace jamais une ancienne version : cela crée une nouvelle révision. Une
-Campaign référence toujours une révision précise.
+Assistant pour créer un test PAPER sans manipuler Strategy, Revision ou Campaign.
 
-Conséquence pratique : si une Campaign utilise `r3` et que tu crées ensuite `r4`, la Campaign
-existante reste liée à `r3`.
+### Positions
 
-## 5. Campaign
+Affiche les positions canoniques du backend et les métriques globales de performance/exposition.
 
-Une `Campaign` fige l'environnement d'une expérience PAPER.
+### Historique
 
-Elle contient notamment :
+Présente le chemin d'une décision :
 
-- Strategy et StrategyRevision ;
-- modèle LLM ;
-- agressivité ;
+```text
+Agent IA -> Risk Engine -> éventuelle exécution PAPER
+```
+
+### Réglages
+
+Regroupe :
+
+- aide complète ;
+- assistant opérateur informatif ;
+- fonctions avancées du Control Plane.
+
+## 3. Créer son premier test PAPER
+
+Dans **Configurer** :
+
+1. choisir `SPOT` ou `PERPETUAL` ;
+2. saisir une ou plusieurs paires, par exemple `BTC/USD, ETH/USD, SOL/USD` ;
+3. définir le capital PAPER ;
+4. choisir Luna ou Sol ;
+5. régler l'agressivité de 1 à 10 ;
+6. écrire les instructions opérateur destinées à l'Agent ;
+7. choisir un profil de sécurité ;
+8. vérifier le résumé ;
+9. cliquer sur `Créer le test` ou `Créer et démarrer`.
+
+Toutes les paires d'un test simple doivent partager le même actif de quote/règlement, conformément
+au contrat backend actuel.
+
+## 4. SPOT et PERPETUAL
+
+### SPOT
+
+- pas de short ;
+- pas de levier ;
+- pas de marge ;
+- SELL ne peut réduire qu'un actif réellement détenu et disponible.
+
+### PERPETUAL
+
+Périmètre actuel : contrats linéaires PAPER avec :
+
+- LONG/SHORT ;
+- marge `ISOLATED` uniquement ;
+- levier déterministe configuré ;
+- caps de levier, position et exposition contrôlés par Risk.
+
+CROSS, contrats inverses et futures datés restent hors périmètre exécutable actuel.
+
+## 5. IA : modèle, agressivité et instructions
+
+Le choix Luna/Sol et l'agressivité font partie de la configuration immuable du test.
+
+L'agressivité est un contexte stratégique, pas une permission de contourner Risk. Une agressivité
+10/10 ne relève aucune limite déterministe.
+
+Le texte saisi dans **Instructions opérateur** devient la partie éditable de la stratégie. Le contrat
+Agent protégé du backend reste séparé et non modifiable depuis le cockpit.
+
+Ne jamais placer de secret, clé API ou credential dans ces instructions.
+
+## 6. Profils de sécurité
+
+Les profils sont des **raccourcis UX** vers des valeurs explicites de `CampaignConfiguration`.
+Ils ne constituent pas un second Risk Engine.
+
+| Profil | Ordre max | Levier PERP | Position dérivée max | Exposition dérivée totale max | Buffer liquidation |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Prudent | 5 % du capital | 1x | 10 % du capital | 20 % du capital | 1.25 |
+| Équilibré | 10 % du capital | 2x | 20 % du capital | 40 % du capital | 1.15 |
+| Agressif | 20 % du capital | 3x | 35 % du capital | 70 % du capital | 1.10 |
+| Personnalisé | saisi par l'opérateur | saisi | saisi | saisi | saisi |
+
+En SPOT, les limites dérivées ne sont pas utilisées et le levier reste 1x. Les paires sélectionnées
+sont ajoutées aux paires autorisées Risk par défaut. La réduction de quantité reste autorisée afin
+que Risk puisse `MODIFY` une proposition trop grande plutôt que de devoir l'accepter telle quelle.
+
+Le backend valide toujours la configuration et peut la refuser.
+
+## 7. Paramètres avancés
+
+Dans l'assistant, **Paramètres avancés** permet de modifier sans encombrer le parcours normal :
+
 - cadence ;
-- capital PAPER ;
-- univers exécutable ;
-- frais ;
+- frais PAPER ;
 - spread ;
 - slippage ;
-- paramètres PERPETUAL ;
-- limites Risk ;
-- deadlines de cycle.
+- deadlines marché/Agent/Broker ;
+- champs Risk détaillés pour le profil Personnalisé.
 
-Une Campaign est immuable. Pour changer un paramètre structurel, créer une nouvelle Campaign.
+Les validations métier restent exclusivement côté backend.
 
-## 6. Configuration Agent
+## 8. Créer le test vs créer et démarrer
 
-Le cockpit permet de sélectionner le modèle prévu par la configuration intégrée, notamment Luna ou
-Sol.
+### Créer le test
 
-L'agressivité est un contexte stratégique de 1 à 10. Elle influence le comportement demandé à
-l'Agent, mais ne contourne jamais les limites du Risk Engine.
+Le frontend orchestre les appels canoniques nécessaires pour persister la configuration mais ne
+l'active pas. L'Accueil proposera ensuite de la démarrer.
 
-Le texte opérateur provient de la StrategyRevision choisie. Le contrat Agent protégé reste géré par
-le backend et n'est pas éditable depuis le cockpit.
+### Créer et démarrer
 
-## 7. Configuration Risk
+Le frontend :
 
-Les champs Risk du cockpit configurent le **Risk Engine backend**.
+1. crée la Strategy et sa première Revision via l'API canonique ;
+2. crée la Campaign immuable ;
+3. effectue une activation fraîche explicite ;
+4. envoie `Start` au TradingEngine backend.
 
-Le frontend ne reproduit pas les validations métier. Le backend peut refuser une configuration ou
-une action avec une réponse 409, 422 ou 503 selon le cas.
+Ce n'est pas une nouvelle logique métier : chaque étape utilise les routes canoniques existantes.
+Si une étape intermédiaire échoue, les objets déjà persistés restent visibles dans
+**Réglages > Avancé**.
 
-Le Risk Engine conserve l'autorité finale sur l'exécution.
+## 9. Tester un seul cycle
 
-## 8. SPOT
+`Tester 1 cycle` appelle la commande backend canonique `run-cycle`.
 
-En SPOT :
+Elle exécute un cycle puis laisse le moteur `STOPPED`. C'est utile pour observer précisément :
 
-- aucun short ;
-- aucun levier ;
-- aucune marge ;
-- BUY augmente une position ;
-- SELL ne peut réduire qu'un actif réellement détenu et disponible ;
-- HOLD ne crée aucune exécution.
+```text
+Marché -> décision Agent -> résultat Risk -> éventuel fill PAPER
+```
 
-## 9. PERPETUAL
+## 10. Démarrer et arrêter
 
-Le périmètre actuel couvre les PERPETUAL linéaires en PAPER.
+`Démarrer` lance la boucle autonome **dans le backend**. Fermer le navigateur ou le frontend ne
+l'arrête pas.
 
-Points importants :
+`Arrêter` envoie explicitement la commande Stop au backend.
 
-- marge `ISOLATED` ;
-- levier PAPER configuré de manière déterministe ;
-- le levier n'est jamais choisi librement par le LLM ;
-- Risk contrôle les caps de levier, position, exposition et protections dérivées ;
-- CROSS, contrats inverses et futures datés restent hors périmètre exécutable actuel.
+Libellés opérateur :
 
-## 10. Frais, spread et slippage
+- `RUNNING` -> **En cours** ;
+- `STOPPED` -> **Arrêté** ;
+- `UNAVAILABLE` -> **Aucune session active**.
 
-Les tests PAPER prennent en compte les coûts configurés.
+## 11. Reprendre après un redémarrage backend
 
-- **Frais** : coût explicite de transaction simulé ;
-- **Spread** : écart simulé entre prix de référence et prix de passage ;
-- **Slippage** : dégradation supplémentaire simulée du prix d'exécution.
+Après un restart backend, aucune Campaign n'est reprise silencieusement. Si un historique compatible
+existe, l'Accueil peut proposer **Reprendre la dernière session**.
 
-Le P&L net inclut ces coûts. Le P&L brut ne doit donc pas être interprété comme le résultat final du
-run.
+La reprise reste explicite et passe par le recovery backend canonique : nouveau `paper_run_id`,
+lineage `resumed_from_paper_run_id` et restauration du ledger durable. Le backend refuse une reprise
+incompatible.
 
-## 11. Activation fraîche et reprise
+## 12. Lire Positions
 
-### Activation fraîche
+### PERPETUAL
 
-Utiliser l'activation fraîche pour démarrer une Campaign qui ne reprend pas un run historique.
+Le contrat backend expose directement : côté LONG/SHORT, quantité, prix d'entrée moyen, mark price,
+P&L réalisé/non réalisé, notional, levier, marge et liquidation. Le cockpit les affiche sans les
+recalculer.
 
-L'activation prépare explicitement un runtime backend et un nouveau contexte PAPER.
+### SPOT
 
-### Reprise
+Le contrat portefeuille SPOT expose actuellement seulement l'actif, la quantité et la quantité
+disponible. Il n'expose pas un prix d'entrée moyen ni un P&L par position. Ces champs sont donc
+laissés à `—` dans l'UI plutôt que reconstruits côté frontend.
 
-La reprise sert à continuer une Campaign déjà exécutée à partir d'un `paper_run` compatible.
+Le P&L net global, le drawdown et l'exposition restent fournis par les analytics backend.
 
-Elle est toujours explicite. Le backend ne reprend jamais silencieusement un run après redémarrage.
+## 13. Lire Historique
 
-La reprise crée un nouveau `paper_run_id`, conserve le lineage via
-`resumed_from_paper_run_id` et restaure le ledger durable selon le recovery canonique.
+Chaque carte de cycle regroupe autant que possible :
 
-## 12. run-cycle, Start et Stop
+- décision Agent `BUY`, `SELL` ou `HOLD` ;
+- résultat Risk `ALLOW`, `MODIFY` ou `REJECT` ;
+- exécution et fills PAPER éventuels ;
+- erreur technique éventuelle.
 
-### run-cycle
+`HOLD` est une décision normale et auditée. `REJECT` signifie qu'aucune exécution n'est autorisée.
+`MODIFY` signifie que Risk a ajusté la proposition avant exécution.
 
-`run-cycle` exécute exactement un cycle puis laisse le moteur `STOPPED`.
+Les payloads techniques restent disponibles dans les détails à la demande.
 
-C'est la commande recommandée pour :
+## 14. Ce qui se trouve dans Réglages > Avancé
 
-- vérifier une nouvelle Campaign ;
-- observer une décision étape par étape ;
-- confirmer Agent → Risk → Broker PAPER sans lancer une boucle continue.
+La surface avancée conserve les capacités historiques :
 
-### Start
+- Strategies existantes ;
+- historique des StrategyRevision ;
+- comparaison de révisions ;
+- prompt preview ;
+- Campaigns ;
+- activation fraîche et recovery ;
+- digests, IDs et autres informations d'audit technique.
 
-`Start` lance la boucle autonome côté backend à la cadence définie dans la Campaign.
+Terminologie simplifiée utilisée ailleurs :
 
-Le frontend n'héberge pas cette boucle. Fermer ou recharger l'interface ne l'arrête pas.
-
-### Stop
-
-`Stop` envoie explicitement la commande d'arrêt au moteur backend.
-
-Utiliser cette commande pour arrêter proprement une boucle `RUNNING`.
-
-## 13. États moteur
-
-### STOPPED
-
-Un runtime est disponible mais la boucle autonome ne tourne pas.
-
-`run-cycle` ou `Start` peuvent être disponibles selon l'état courant.
-
-### RUNNING
-
-La boucle autonome backend est active.
-
-Un nouveau `run-cycle` ou un nouveau `Start` est normalement désactivé pendant cet état.
-
-### UNAVAILABLE
-
-Aucun runtime Campaign contrôlable n'est actuellement actif.
-
-C'est notamment l'état attendu après un restart backend avant activation ou reprise explicite.
-
-## 14. Lire une décision Agent
-
-Les décisions stratégiques possibles sont :
-
-- `BUY` ;
-- `SELL` ;
-- `HOLD`.
-
-`HOLD` est une décision normale : l'Agent choisit de ne pas proposer de trade sur ce cycle. Elle est
-journalisée comme les autres décisions.
-
-BUY ou SELL restent seulement des propositions tant que Risk ne les a pas traitées.
-
-## 15. Lire le résultat Risk
-
-Le résultat Risk est distinct de la décision Agent :
-
-- `ALLOW` : proposition compatible avec les contraintes ;
-- `MODIFY` : proposition ajustée avant exécution, par exemple quantité réduite ;
-- `REJECT` : aucune exécution n'est autorisée.
-
-Un `BUY` Agent suivi de `REJECT` ne produit donc aucun ordre PAPER.
-
-## 16. Broker PAPER, positions et ledger
-
-Après un résultat Risk permettant l'exécution, le chemin canonique peut créer un
-`ExecutionIntent` puis une exécution PAPER.
-
-Les positions et balances affichées dans le cockpit proviennent du backend. Le frontend ne calcule
-pas un portefeuille alternatif.
-
-Le ledger durable permet notamment le recovery explicite d'un run compatible.
-
-## 17. Lire les performances
-
-La vue Performance expose notamment :
-
-- P&L brut ;
-- P&L net ;
-- frais ;
-- coût de spread ;
-- slippage ;
-- drawdown maximum ;
-- exposition ;
-- nombre de trades ;
-- BUY / SELL ;
-- HOLD ;
-- MODIFY / REJECT ;
-- cycles en échec ;
-- performance quotidienne et cumulée.
-
-Les métriques sont calculées côté backend à partir des faits durables.
-
-## 18. Assistant opérateur
-
-Le chat du cockpit est informatif.
-
-Il peut aider à expliquer le marché, le portefeuille ou un cycle historique, mais :
-
-- il ne crée aucun trade ;
-- il ne modifie pas Risk ;
-- ses messages ne sont pas injectés dans les cycles autonomes.
-
-## 19. Erreurs fréquentes
-
-### Le moteur affiche UNAVAILABLE
-
-Après un restart backend, aucune Campaign n'est reprise automatiquement. Activer une Campaign
-fraîche ou reprendre explicitement un run compatible.
-
-### run-cycle ou Start est désactivé
-
-Vérifier qu'un runtime Campaign est configuré. `run-cycle` n'est pas lancé pendant `RUNNING` et
-`Start` n'est pas relancé si la boucle tourne déjà.
-
-### BUY/SELL apparaît mais aucun fill
-
-Lire le résultat Risk. `MODIFY` peut changer la quantité ; `REJECT` bloque l'exécution. Une erreur
-technique peut également interrompre le cycle avant le Broker PAPER.
-
-### La création de Campaign est refusée
-
-Le backend reste l'autorité de validation. Vérifier notamment univers exécutable, paires autorisées,
-levier, caps dérivés et champs requis.
-
-### Le P&L brut est supérieur au P&L net
-
-C'est attendu lorsque frais, spread ou slippage sont non nuls.
-
-## 20. Glossaire
-
-| Terme | Signification opérateur |
+| Technique | Libellé opérateur |
 | --- | --- |
-| Strategy | identité durable d'une stratégie |
-| StrategyRevision | version immuable du texte opérateur |
-| Campaign | snapshot immuable d'une expérience et de sa configuration |
-| paper run | session d'exécution/recovery d'une Campaign |
-| HOLD | décision Agent de ne pas proposer de trade |
-| ALLOW | Risk autorise la proposition compatible |
-| MODIFY | Risk ajuste la proposition avant exécution |
-| REJECT | Risk refuse l'exécution |
-| STOPPED | runtime disponible, boucle autonome arrêtée |
-| RUNNING | boucle backend autonome active |
-| UNAVAILABLE | aucun runtime Campaign contrôlable actif |
-| ISOLATED | mode de marge PERPETUAL utilisé dans le périmètre actuel |
+| Strategy | Stratégie |
+| StrategyRevision | Version |
+| Campaign | Configuration de test |
+| paper_run | Session |
+| run-cycle | Tester 1 cycle |
+| Start | Démarrer |
+| Stop | Arrêter |
 
-## 21. Rappels de sécurité et d'architecture
+## 15. Rappels d'architecture et de sécurité
 
 - PAPER uniquement ;
-- LIVE séparé et ultérieur ;
-- aucune clé Kraken avec droit de retrait ;
-- aucun secret dans les prompts, logs ou fichiers versionnés ;
+- un seul Agent IA stratégique ;
+- Kraken ;
+- SPOT + PERPETUAL linéaire ;
 - aucune sortie LLM ne déclenche directement un ordre ;
-- le Risk Engine déterministe garde l'autorité finale ;
-- le frontend peut être fermé sans arrêter le moteur backend ;
-- toutes les décisions, HOLD inclus, restent journalisées.
+- Risk Engine déterministe = autorité finale ;
+- aucune logique Risk ou Broker dupliquée dans le frontend ;
+- toutes les décisions, HOLD inclus, restent journalisées ;
+- aucun secret dans le navigateur ou les fichiers versionnés ;
+- LIVE reste séparé et ultérieur.

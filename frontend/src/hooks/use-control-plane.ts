@@ -24,6 +24,13 @@ export type ControlFeedback = {
   status: number | null;
 };
 
+export type PaperTestCreationRequest = {
+  name: string;
+  prompt: string;
+  configuration: CampaignConfiguration;
+  startNow: boolean;
+};
+
 type ControlPlaneSnapshot = {
   strategies: StrategyResponse[];
   campaigns: CampaignResponse[];
@@ -259,6 +266,120 @@ export function useControlPlane() {
     [mutate],
   );
 
+  const createPaperTest = useCallback(
+    async ({ name, prompt, configuration, startNow }: PaperTestCreationRequest) => {
+      if (busyAction) return null;
+      if (startNow && snapshot.engine?.status === "RUNNING") {
+        setFeedback({
+          tone: "error",
+          status: 409,
+          message: "Arrête la session en cours avant de créer et démarrer une autre configuration. Tu peux toujours utiliser « Créer le test » sans l’activer.",
+        });
+        return null;
+      }
+      setBusyAction("create-paper-test");
+      setFeedback(null);
+      let strategyPersisted = false;
+      let campaignPersisted = false;
+      let sessionActivated = false;
+      try {
+        const created = await api.createStrategy({
+          strategy_name: name,
+          strategy_prompt: prompt,
+        });
+        strategyPersisted = true;
+        setSelectedStrategyId(created.strategy.strategy_id);
+        const campaign = await api.createCampaign({
+          strategy_id: created.strategy.strategy_id,
+          strategy_revision: created.revision.strategy_revision,
+          configuration,
+        });
+        campaignPersisted = true;
+        if (startNow) {
+          await api.activateCampaign(campaign.campaign_id);
+          sessionActivated = true;
+          await api.startEngine();
+        }
+        setFeedback({
+          tone: "success",
+          status: null,
+          message: startNow
+            ? "Configuration PAPER créée et session démarrée côté backend."
+            : "Configuration PAPER créée. Elle est prête à être démarrée.",
+        });
+        await refresh();
+        return campaign;
+      } catch (error) {
+        const failure = actionFailure(error, "Création de la configuration PAPER impossible");
+        const partialState = sessionActivated
+          ? " La session a été activée mais la boucle n’a pas démarré ; elle reste contrôlable depuis l’accueil."
+          : campaignPersisted
+            ? " La configuration technique a déjà été persistée et reste consultable dans Réglages > Avancé."
+            : strategyPersisted
+              ? " La stratégie technique a déjà été persistée ; elle reste consultable dans Réglages > Avancé."
+              : "";
+        setFeedback({ ...failure, message: `${failure.message}${partialState}` });
+        await refresh();
+        return null;
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [busyAction, refresh, snapshot.engine?.status],
+  );
+
+  const startCampaign = useCallback(
+    async (campaignId: string) => {
+      if (busyAction) return null;
+      setBusyAction("start-campaign");
+      setFeedback(null);
+      try {
+        await api.activateCampaign(campaignId);
+        const engine = await api.startEngine();
+        setFeedback({
+          tone: "success",
+          status: null,
+          message: "Nouvelle session PAPER activée puis démarrée côté backend.",
+        });
+        await refresh();
+        return engine;
+      } catch (error) {
+        setFeedback(actionFailure(error, "Démarrage de la configuration impossible"));
+        await refresh();
+        return null;
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [busyAction, refresh],
+  );
+
+  const resumeAndStartCampaign = useCallback(
+    async (campaignId: string) => {
+      if (busyAction) return null;
+      setBusyAction("resume-and-start-campaign");
+      setFeedback(null);
+      try {
+        await api.resumeCampaign(campaignId);
+        const engine = await api.startEngine();
+        setFeedback({
+          tone: "success",
+          status: null,
+          message: "Dernière session reprise explicitement puis redémarrée côté backend.",
+        });
+        await refresh();
+        return engine;
+      } catch (error) {
+        setFeedback(actionFailure(error, "Reprise de la dernière session impossible"));
+        await refresh();
+        return null;
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [busyAction, refresh],
+  );
+
   const engineCommand = useCallback(
     (command: "run-cycle" | "start" | "stop") => {
       const operation =
@@ -275,7 +396,11 @@ export function useControlPlane() {
   );
 
   const compareRevisions = useCallback(
-    async (strategyId: string, left: number, right: number): Promise<StrategyRevisionComparisonResponse | null> => {
+    async (
+      strategyId: string,
+      left: number,
+      right: number,
+    ): Promise<StrategyRevisionComparisonResponse | null> => {
       setBusyAction("compare-revisions");
       setFeedback(null);
       try {
@@ -339,8 +464,13 @@ export function useControlPlane() {
     createCampaign,
     activateCampaign,
     resumeCampaign,
+    createPaperTest,
+    startCampaign,
+    resumeAndStartCampaign,
     runCycle: () => engineCommand("run-cycle"),
     startEngine: () => engineCommand("start"),
     stopEngine: () => engineCommand("stop"),
   };
 }
+
+export type ControlPlaneController = ReturnType<typeof useControlPlane>;
