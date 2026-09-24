@@ -6,14 +6,14 @@ AI Spot Trader est une application expérimentale de trading crypto PAPER pilot�
 Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement
 un cockpit de contrôle et de visualisation.
 
-Base GitHub auditée pour le patch Batch 18.9B :
+Référence GitHub intégrée après Batch 18.9C :
 
 ```text
-HEAD main : efe5a0f162a69e50bd6e5f5cd7aa61039792e911
-last code : 11a04be33bf209552e6337e28318d039b775b264
+HEAD main : 5fc7704e7ca43ded4c2565b21871b81fe2161b0a
+message   : fix: finalize batch 18.9C behavioral validation
 ```
 
-Le patch 18.9B n'est pas intégré à GitHub tant que l'opérateur ne l'a pas validé puis committé/poussé.
+Les Batches 18.9A, 18.9B et 18.9C sont intégrés.
 
 ## 2. Invariants fonctionnels
 
@@ -85,6 +85,9 @@ n'est jamais promu silencieusement en `MarketState` d'exécution.
 - rollback mémoire sur cycle FAILED ou erreur d'audit ;
 - aucun replay de MarketSelection, décision, Risk, Broker ou Fill ;
 - validation fail-closed de l'état restauré.
+
+Le Batch 18.9C a validé le restart backend sans reprise silencieuse et la reprise explicite avec
+nouveau `paper_run_id`, lineage et ledger restauré.
 
 ## 6. Control Plane backend — Batch 18.9A
 
@@ -169,10 +172,23 @@ Il permet :
 Le frontend ne reproduit pas les validators métier de `CampaignConfiguration`. Les réponses 409,
 422 et 503 sont affichées comme refus/conflits backend. Fermer le frontend n'envoie jamais `stop`.
 
-Le nouveau Control Plane UI ne persiste ni prompt, ni Campaign, ni secret dans `localStorage` ou
+Le Control Plane UI ne persiste ni prompt, ni Campaign, ni secret dans `localStorage` ou
 `sessionStorage`. Le stockage local historique du chat reste limité à un identifiant de session.
 
-## 11. Secrets
+## 11. Validation comportementale — Batch 18.9C
+
+La validation réelle a confirmé les parcours Strategy/StrategyRevision, preview, Campaign SPOT et
+PERPETUAL, activation fraîche, `run-cycle`, Start/Stop, restart backend et recovery explicite.
+
+Un BUY SPOT naturel et un BUY PERPETUAL naturel sur SOL/USD ont été observés, tous deux soumis au
+Risk Engine déterministe. Des HOLD naturels ont aussi été observés. Aucun SELL naturel n'a été
+observé et aucun SELL n'a été forcé.
+
+Le correctif JSON `market_type` est intégré à la frontière Control Plane ; `ExecutableMarket` reste
+strict dans le domaine. Le nettoyage mypy de trois routes API est type-only et sans changement
+fonctionnel.
+
+## 12. Secrets
 
 Secrets serveur uniquement :
 
@@ -184,19 +200,20 @@ futures clés privées Kraken/LIVE
 
 Ils ne sont jamais champs de `CampaignConfiguration` ni envoyés au cockpit.
 
-## 12. Persistence
+## 13. Persistence
 
 `0006_paper_control_plane` crée `strategies`, `strategy_revisions`, `campaigns` et
 `paper_runs.campaign_id` nullable. Les anciennes rows restent valides avec `campaign_id=NULL`.
 
-## 13. API
+## 14. API
 
 Le Control Plane expose Strategy/Revision, Campaign, activation/reprise et prompt preview. Les
 commandes de trading restent exclusivement `/api/v1/engine/*`. `/api/v1/paper-runs` expose
 `campaign_id`, `resumed_from_paper_run_id` et `recovery_version`.
 
-## 14. Périmètre suivant
+## 15. État du jalon et périmètre suivant
 
-Après intégration et validation statique du Batch 18.9B, le Batch 18.9C exercera les parcours réels
-via navigateur : création de stratégies/révisions, campagnes SPOT/PERPETUAL, activation/reprise,
-cycles et observation des décisions naturelles de l'Agent.
+Le jalon 18.9 est intégré et validé sur les parcours PAPER actuels. Aucun périmètre LIVE n'est
+implicitement ouvert par cette validation : tout passage LIVE reste un projet/batch séparé avec
+permissions, barrières et validation dédiées. Le prochain batch fonctionnel doit être cadré
+explicitement à partir du `main` courant.

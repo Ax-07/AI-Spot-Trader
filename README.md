@@ -8,20 +8,18 @@ Risk peut produire un `ExecutionIntent`, ensuite exécuté par le `PaperBroker`.
 > Objectif expérimental : rechercher une performance élevée, avec une cible de travail de +4 %/jour.
 > Ce n'est ni une promesse ni une garantie de rendement.
 
-## Référence auditée — Batch 18.9B
+## Référence auditée — après Batch 18.9C
 
 ```text
 repository : Ax-07/AI-Spot-Trader
 branche    : main
-HEAD       : efe5a0f162a69e50bd6e5f5cd7aa61039792e911
-code       : 11a04be33bf209552e6337e28318d039b775b264
+HEAD       : 5fc7704e7ca43ded4c2565b21871b81fe2161b0a
+message    : fix: finalize batch 18.9C behavioral validation
 ```
 
-Le HEAD `efe5a0f` finalise documentairement le Batch 18.9A ; le dernier commit code intégré reste
-`11a04be` (`feat: add PAPER control plane`).
-
-Le Batch 18.9B livré avec ce patch ajoute le cockpit frontend du Control Plane. Il n'est pas encore
-intégré à GitHub tant que l'opérateur ne l'a pas extrait, validé, committé et poussé.
+Les Batches 18.9A, 18.9B et 18.9C sont intégrés. Le cockpit Control Plane a été validé sur les
+parcours réels PAPER SPOT et PERPETUAL ; les correctifs JSON `market_type` et typing mypy de 18.9C
+font partie du HEAD courant.
 
 ## Invariants
 
@@ -118,7 +116,7 @@ Une reprise conserve `campaign_id`, crée un nouveau `paper_run_id`, renseigne
 
 ## Cockpit Control Plane — Batch 18.9B
 
-Le nouveau panneau frontend permet de :
+Le panneau frontend permet de :
 
 - créer, lister, renommer et archiver des Strategies ;
 - consulter les révisions jusqu'à `latest_revision` ;
@@ -143,8 +141,38 @@ Le cockpit ne calcule aucun signal, aucune décision, aucune autorisation Risk e
 valeurs du builder sont envoyées au modèle Pydantic canonique, qui conserve l'autorité de
 validation.
 
-Le nouveau panneau ne stocke ni prompt, ni Campaign, ni paramètres Risk dans `localStorage` ou
+Le panneau ne stocke ni prompt, ni Campaign, ni paramètres Risk dans `localStorage` ou
 `sessionStorage`. Fermer le frontend n'envoie jamais `stop` au backend.
+
+## Validation comportementale — Batch 18.9C
+
+Le parcours réel via cockpit a confirmé :
+
+- création/édition/versionnement de Strategy et preview canonique ;
+- Campaign PAPER SPOT et PERPETUAL ;
+- Luna et Sol sélectionnables par configuration ;
+- activation fraîche, `run-cycle`, Start/Stop ;
+- restart backend sans reprise silencieuse ;
+- reprise explicite avec nouveau `paper_run_id`, lineage et ledger restauré ;
+- BUY SPOT naturel avec Risk `MODIFY`, fill PAPER et coûts ;
+- HOLD naturels ;
+- BUY PERPETUAL naturel sur SOL/USD avec Risk `MODIFY`, levier 2, `ISOLATED` et position LONG ;
+- refus backend 409 / 422 / 503 ;
+- aucun SELL naturel et aucun SELL forcé.
+
+Le correctif 18.9C adapte les valeurs JSON `market_type` à la frontière Control Plane tout en
+conservant `ExecutableMarket` strict. Le même commit contient un nettoyage mypy type-only de trois
+routes API, sans changement fonctionnel.
+
+Validation locale opérateur exécutée avant intégration de `5fc7704` :
+
+```text
+pytest backend : 506 passed, 2 warnings de dépréciation dépendances
+ruff check backend : All checks passed
+mypy backend/src : Success: no issues found in 89 source files
+git diff --check : OK hors avertissements LF -> CRLF
+working tree propre avant push
+```
 
 ## API Control Plane
 
@@ -191,29 +219,9 @@ POST /api/v1/engine/stop
 -> 0006_paper_control_plane
 ```
 
-Aucune migration backend n'est ajoutée par le Batch 18.9B.
+Aucune migration supplémentaire n'est ajoutée par le Batch 18.9C.
 
-## Validation du patch 18.9B
+## État après 18.9C
 
-Exécuté par ChatGPT :
-
-```text
-harness source frontend : 50 assertions passées
-Node strip-types syntax checks : OK
-typecheck ciblé avec stubs de dépendances : OK
-```
-
-À exécuter localement avec les dépendances frontend installées :
-
-```powershell
-cd frontend
-pnpm lint
-pnpm typecheck
-pnpm build
-```
-
-Le backend n'est pas modifié par ce patch ; sa validation intégrée de référence reste celle de
-18.9A (`504 passed`, Ruff OK, mypy OK, migration `0006` OK).
-
-Après intégration de 18.9B, le prochain périmètre est le **Batch 18.9C — validation comportementale
-réelle via frontend**.
+Le jalon 18.9 est intégré et validé. Le projet reste exclusivement PAPER ; tout périmètre LIVE doit
+être traité séparément avec permissions et barrières explicites.
