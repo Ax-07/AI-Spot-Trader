@@ -3,9 +3,13 @@
 ## Référence auditée
 
 ```text
-HEAD GitHub intégré 18.9C : 5fc7704e7ca43ded4c2565b21871b81fe2161b0a
-Message                    : fix: finalize batch 18.9C behavioral validation
+HEAD GitHub audité pour 18.10 : 34145a904c07af90e1c9ed370479cd5e5a0c0139
+Message                        : docs: sync batch 18.9C integrated state
+HEAD code/validation 18.9C     : 5fc7704e7ca43ded4c2565b21871b81fe2161b0a
 ```
+
+Le commit `34145a9` synchronise la documentation de l'état 18.9C et ne modifie pas le code du
+cockpit ou du backend.
 
 ## Jalons intégrés
 
@@ -75,6 +79,63 @@ ruff check backend : All checks passed
 mypy backend/src : Success: no issues found in 89 source files
 git diff --check : OK hors avertissements LF -> CRLF
 working tree propre avant push
+```
+
+## Batch 18.10 — refonte UX/UI cockpit — livré, à valider localement
+
+Objectif : transformer l'interface 18.9B, fonctionnelle mais dense, en cockpit opérateur lisible sans
+modifier les contrats ou la logique du backend.
+
+Direction retenue : **Option A — Vue d'ensemble**.
+
+### Architecture UI cible livrée
+
+```text
+CockpitShell
+├─ navigation latérale
+│  ├─ Vue d'ensemble
+│  ├─ Pilotage
+│  ├─ Activité
+│  ├─ Performance
+│  └─ Assistant
+├─ header opérateur
+│  ├─ PAPER
+│  ├─ Campaign / Strategy active
+│  ├─ modèle + types de marchés
+│  ├─ état moteur
+│  └─ run-cycle / Start / Stop
+└─ landing Vue d'ensemble
+   ├─ KPI PAPER
+   ├─ Marché & activité
+   ├─ Actions rapides
+   ├─ Dernières décisions de l'IA + statut Risk
+   └─ Alertes système & backend
+```
+
+Les composants `ControlPlanePanel`, `CockpitDashboard`, `AnalyticsPanel` et `ChatPanel` restent
+canoniques et sont réutilisés comme vues secondaires. Aucune implémentation parallèle de Strategy,
+Campaign, Risk, Broker ou moteur de trading n'est introduite.
+
+### Validation de livraison 18.10
+
+Exécuté par ChatGPT :
+
+```text
+TypeScript transpile/syntax check : OK
+typecheck ciblé avec contrats GitHub actuels : OK
+harness structure UX/invariants : OK
+git diff --check du patch : OK
+```
+
+À exécuter localement avec les dépendances du repository :
+
+```powershell
+cd frontend
+pnpm lint
+pnpm typecheck
+pnpm build
+cd ..
+git diff --check
 ```
 
 ## Plus tard

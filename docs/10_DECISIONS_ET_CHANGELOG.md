@@ -9,13 +9,16 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 Broker/Risk, SPOT sans short/levier, PERPETUAL avec protections déterministes, audit durable,
 no-look-ahead, backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE séparé.
 
-## Référence intégrée après Batch 18.9C
+## Référence GitHub auditée pour le Batch 18.10
 
 ```text
-HEAD GitHub : 5fc7704e7ca43ded4c2565b21871b81fe2161b0a
-Message     : fix: finalize batch 18.9C behavioral validation
-Batch 18.9C: intégré et validé
+HEAD GitHub : 34145a904c07af90e1c9ed370479cd5e5a0c0139
+Message     : docs: sync batch 18.9C integrated state
+Base 18.9C  : intégrée et validée
+Batch 18.10 : patch local livré, non intégré
 ```
+
+Le commit `34145a9` est documentaire ; le comportement intégré confirmé reste celui de 18.9C.
 
 ## Décisions Batch 18.9A toujours actives
 
@@ -54,6 +57,30 @@ La correction reste limitée aux frontières API :
 
 Aucune validation métier, décision Agent, règle Risk ou exécution Broker n'est modifiée.
 
+## Décisions Batch 18.10 — patch local
+
+### ADR-191 — Faire de la Vue d'ensemble la surface opérateur principale
+
+**PROPOSÉ / LIVRÉ DANS LE PATCH.** La page racine n'empile plus directement Dashboard, Control Plane,
+Chat et Analytics. Elle instancie une `CockpitShell` qui applique une divulgation progressive :
+
+- la landing ne montre que les états et actions nécessaires au pilotage immédiat ;
+- les détails de configuration, d'audit, de performance et de chat restent accessibles dans des vues
+  distinctes ;
+- PAPER, Campaign active et état moteur restent visibles en permanence dans le header.
+
+Cette décision est purement UX et ne modifie aucun contrat backend.
+
+### ADR-192 — Réutiliser les panneaux canoniques plutôt que dupliquer leurs fonctions
+
+**PROPOSÉ / LIVRÉ DANS LE PATCH.** `ControlPlanePanel`, `CockpitDashboard`, `AnalyticsPanel` et
+`ChatPanel` sont conservés comme vues secondaires. La nouvelle Vue d'ensemble consomme les hooks/API
+existants pour afficher une synthèse ; elle ne recrée ni validation Campaign, ni logique Risk, ni
+calcul de trading, ni exécution Broker.
+
+Les commandes `run-cycle`, Start et Stop restent les commandes canoniques du backend. Fermer ou
+recharger le frontend ne déclenche aucun Stop implicite.
+
 ## Changelog — 2026-09-24 — Batch 18.9C intégré et validé
 
 Le commit `5fc7704e7ca43ded4c2565b21871b81fe2161b0a` est intégré sur `main`.
@@ -90,3 +117,33 @@ mypy backend/src : Success: no issues found in 89 source files
 git diff --check : OK hors avertissements LF -> CRLF
 working tree propre avant push
 ```
+
+## Changelog — 2026-09-24 — Batch 18.10 UX/UI livré à validation
+
+Audit du cockpit 18.9B : interface fonctionnelle mais trop linéaire et dense, avec Dashboard,
+Control Plane, Chat et Analytics empilés sur une seule page et de nombreuses informations techniques
+au même niveau visuel.
+
+Patch livré :
+
+- nouvelle `CockpitShell` opérateur ;
+- navigation latérale simple à cinq vues ;
+- landing **Vue d'ensemble** selon l'Option A ;
+- header permanent avec PAPER, Campaign/Strategy active, modèle, types de marchés et état moteur ;
+- commandes moteur visibles et explicites ;
+- KPI PAPER, Marché & activité, Actions rapides, dernières décisions IA + Risk et alertes ;
+- anciens panneaux réutilisés comme vues détaillées ;
+- typographie globale remplacée par une stack système plus lisible ;
+- aucun changement backend.
+
+Validation de livraison exécutée par ChatGPT :
+
+```text
+TypeScript transpile/syntax check : OK
+typecheck ciblé avec contrats GitHub actuels : OK
+harness structure UX/invariants : OK
+git diff --check du patch : OK
+```
+
+Les validations `pnpm lint`, `pnpm typecheck` et `pnpm build` restent à exécuter localement avec les
+dépendances frontend du repository.
