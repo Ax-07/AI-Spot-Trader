@@ -9,16 +9,13 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 Broker/Risk, SPOT sans short/levier, PERPETUAL avec protections déterministes, audit durable,
 no-look-ahead, backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE séparé.
 
-## Référence GitHub auditée pour le Batch 18.11
+## Référence GitHub intégrée
 
 ```text
-HEAD GitHub : e2807621352219e355810bcd212844ea646c83da
-Message     : docs: sync batch 18.10 integrated state
-Code 18.10  : b445b70b02d2c4af4b24a86ccfbdeff6f18a75e9
-Batch 18.11 : patch local livré, non intégré
+HEAD GitHub : c02b9e8edd52b416969922f12a17e32f047d3989
+Message     : feat: add operator guide and contextual help
+Batch 18.11 : INTÉGRÉ / VALIDÉ
 ```
-
-Le commit `e280762` synchronise uniquement la documentation après l'intégration de 18.10.
 
 ## Décisions Batch 18.9A toujours actives
 
@@ -81,11 +78,11 @@ exécution Broker.
 Les commandes `run-cycle`, Start et Stop restent les commandes canoniques du backend. Fermer ou
 recharger le frontend ne déclenche aucun Stop implicite.
 
-## Décisions Batch 18.11 — patch local
+## Décisions Batch 18.11 — intégrées
 
 ### ADR-193 — Structurer l'aide en trois niveaux sans créer une seconde application
 
-**PROPOSÉ / LIVRÉ DANS LE PATCH.** L'aide opérateur suit la même architecture Option A :
+**INTÉGRÉ.** L'aide opérateur suit la même architecture Option A :
 
 1. démarrage rapide directement dans la Vue d'ensemble ;
 2. aide contextuelle courte uniquement aux endroits ambigus ;
@@ -96,9 +93,9 @@ runtime parallèle.
 
 ### ADR-194 — Réutiliser les explications existantes et garder les règles métier au backend
 
-**PROPOSÉ / LIVRÉ DANS LE PATCH.** Le Control Plane contient déjà des explications utiles sur
-Strategy/StrategyRevision, validation backend, Risk, activation/reprise et PERPETUAL `ISOLATED`.
-Le Batch 18.11 les conserve au lieu d'ajouter des tooltips répétitifs.
+**INTÉGRÉ.** Le Control Plane contient déjà des explications utiles sur Strategy/StrategyRevision,
+validation backend, Risk, activation/reprise et PERPETUAL `ISOLATED`. Le Batch 18.11 les conserve au
+lieu d'ajouter des tooltips répétitifs.
 
 Les nouveaux blocs d'aide utilisent des cartes existantes et des `<details>` natifs. Ils décrivent
 le comportement sans implémenter de validation métier, de logique Risk, de calcul de portefeuille ou
@@ -106,8 +103,8 @@ de commande Broker.
 
 ### ADR-195 — Versionner un guide opérateur distinct du Project Master
 
-**PROPOSÉ / LIVRÉ DANS LE PATCH.** `docs/01_PROJECT_MASTER.md` reste la spécification principale et
-technique. `docs/11_GUIDE_OPERATEUR.md` devient la référence pédagogique destinée à l'opérateur.
+**INTÉGRÉ.** `docs/01_PROJECT_MASTER.md` reste la spécification principale et technique.
+`docs/11_GUIDE_OPERATEUR.md` devient la référence pédagogique destinée à l'opérateur.
 
 Le guide rappelle explicitement :
 
@@ -181,12 +178,12 @@ git diff --check : OK hors avertissements LF -> CRLF
 working tree propre après push
 ```
 
-## Changelog — 2026-09-24 — Batch 18.11 guide opérateur livré à validation
+## Changelog — 2026-09-24 — Batch 18.11 guide opérateur intégré et validé
 
-Audit du cockpit 18.10 : l'architecture Option A est lisible, mais les concepts Control Plane et la
-séquence du premier test restent difficiles à découvrir sans connaître l'architecture interne.
+Le commit `c02b9e8edd52b416969922f12a17e32f047d3989` est intégré sur `main` avec le guide opérateur et
+l'aide contextuelle du cockpit PAPER.
 
-Patch livré :
+Contenu intégré :
 
 - nouvelle vue **Guide** dans la navigation principale ;
 - démarrage rapide PAPER en trois phases dans la Vue d'ensemble ;
@@ -196,15 +193,16 @@ Patch livré :
 - nouveau document `docs/11_GUIDE_OPERATEUR.md` ;
 - aucun changement backend.
 
-Validation exécutée dans l'environnement de livraison :
+Le premier passage `pnpm lint` a identifié 45 occurrences `react/no-unescaped-entities`, uniquement
+liées à des apostrophes ASCII dans les nouveaux textes JSX. Un correctif typographique limité à
+`cockpit-shell.tsx` et `operator-guide.tsx` a été appliqué avant intégration.
+
+Validation locale finale après correctif :
 
 ```text
-TypeScript transpile/syntax check des fichiers frontend 18.11 : OK
-TypeScript ciblé avec stubs locaux des dépendances : OK
-harness structure/invariants + ancres Guide : OK
-heuristique secrets sur les fichiers livrés : OK
-git diff --cached --check sur les fichiers livrés : OK
+pnpm lint : OK, 0 erreur
+pnpm typecheck : OK
+pnpm build : OK
+git diff --check : OK hors avertissements LF -> CRLF
+working tree propre avant et après push
 ```
-
-Les validations `pnpm lint`, `pnpm typecheck` et `pnpm build` restent à exécuter localement avec les
-dépendances du repository avant intégration.

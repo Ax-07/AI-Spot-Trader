@@ -6,19 +6,14 @@ AI Spot Trader est une application expérimentale de trading crypto PAPER pilot�
 Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement
 un cockpit de contrôle et de visualisation.
 
-Référence GitHub auditée au démarrage du Batch 18.11 :
+Référence GitHub intégrée après Batch 18.11 :
 
 ```text
-HEAD main : e2807621352219e355810bcd212844ea646c83da
-message   : docs: sync batch 18.10 integrated state
+HEAD main : c02b9e8edd52b416969922f12a17e32f047d3989
+message   : feat: add operator guide and contextual help
 ```
 
-Le commit fonctionnel de la refonte cockpit 18.10 est
-`b445b70b02d2c4af4b24a86ccfbdeff6f18a75e9`. Le commit `e280762` synchronise uniquement la
-documentation après son intégration.
-
-Les Batches 18.9A, 18.9B, 18.9C et 18.10 sont intégrés. Le Batch 18.11 — guide opérateur et aide
-intégrée — est livré comme patch local dans cette livraison et n'est pas encore intégré à GitHub.
+Les Batches 18.9A, 18.9B, 18.9C, 18.10 et 18.11 sont intégrés et validés.
 
 ## 2. Invariants fonctionnels
 
@@ -190,9 +185,9 @@ La direction **Option A — Vue d'ensemble** est intégrée :
 - PAPER, Campaign active et état moteur visibles dans le header ;
 - panneaux canoniques réutilisés comme vues secondaires.
 
-### Batch 18.11 — aide opérateur livrée en patch local
+### Batch 18.11 — aide opérateur intégrée
 
-Le patch 18.11 ajoute sans modifier les contrats backend :
+Le Batch 18.11 ajoute sans modifier les contrats backend :
 
 - une vue principale **Guide** dans la navigation du `CockpitShell` ;
 - un démarrage rapide depuis la Vue d'ensemble ;
@@ -202,6 +197,9 @@ Le patch 18.11 ajoute sans modifier les contrats backend :
 
 Les aides contextuelles déjà présentes dans `ControlPlanePanel`, `CockpitDashboard`,
 `AnalyticsPanel` et `ChatPanel` sont conservées et réutilisées plutôt que dupliquées.
+
+Validation locale finale 18.11 : `pnpm lint`, `pnpm typecheck` et `pnpm build` passent ;
+`git diff --check` ne relève aucune erreur hors avertissements de conversion LF → CRLF.
 
 ## 11. Validation comportementale — Batch 18.9C
 
@@ -241,7 +239,7 @@ commandes de trading restent exclusivement `/api/v1/engine/*`. `/api/v1/paper-ru
 
 ## 15. État du jalon et périmètre suivant
 
-Les Batches 18.9 et 18.10 sont intégrés et validés sur les parcours PAPER actuels. Le Batch 18.11 est
-livré comme patch frontend/documentation à valider localement avant intégration. Aucun périmètre LIVE
-n'est implicitement ouvert : tout passage LIVE reste un projet/batch séparé avec permissions,
-barrières et validation dédiées.
+Les Batches 18.9, 18.10 et 18.11 sont intégrés et validés sur les parcours PAPER actuels. Aucun
+périmètre LIVE n'est implicitement ouvert : tout passage LIVE reste un projet/batch séparé avec
+permissions, barrières et validation dédiées. Tout nouveau batch doit repartir du `main` GitHub
+courant.

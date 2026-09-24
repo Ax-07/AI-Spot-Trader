@@ -1,15 +1,11 @@
 # 09 — Roadmap de développement
 
-## Référence auditée
+## Référence intégrée
 
 ```text
-HEAD GitHub au démarrage du Batch 18.11 : e2807621352219e355810bcd212844ea646c83da
-Message                                : docs: sync batch 18.10 integrated state
-HEAD fonctionnel 18.10                  : b445b70b02d2c4af4b24a86ccfbdeff6f18a75e9
+HEAD GitHub : c02b9e8edd52b416969922f12a17e32f047d3989
+Message     : feat: add operator guide and contextual help
 ```
-
-Le commit `e280762` est une synchronisation documentaire post-18.10 et ne modifie pas le cockpit ou
-le backend.
 
 ## Jalons intégrés
 
@@ -27,16 +23,17 @@ le backend.
 - Batch 18.9C : validation comportementale réelle via cockpit, correctif JSON `market_type` et
   nettoyage mypy des frontières API ;
 - Batch 18.10 : refonte UX/UI du cockpit selon l'Option A, `CockpitShell`, vue d'ensemble opérateur
-  et réutilisation des panneaux canoniques.
+  et réutilisation des panneaux canoniques ;
+- Batch 18.11 : guide opérateur, démarrage rapide et aide contextuelle progressive dans le cockpit.
 
-## État intégré / livré
+## État intégré
 
 ```text
 18.9A  — Control Plane + persistence + stratégie/prompt backend     INTÉGRÉ
 18.9B  — Cockpit de configuration + PERPETUAL UI                   INTÉGRÉ / VALIDÉ
 18.9C  — Validation comportementale via cockpit                    INTÉGRÉ / VALIDÉ
 18.10  — Refonte UX/UI cockpit — Option A                          INTÉGRÉ / VALIDÉ
-18.11  — Guide opérateur + aide intégrée                           PATCH LOCAL LIVRÉ
+18.11  — Guide opérateur + aide intégrée                           INTÉGRÉ / VALIDÉ
 ```
 
 ## Batch 18.9C — validation comportementale réelle
@@ -133,11 +130,11 @@ git diff --check : OK hors avertissements LF -> CRLF
 working tree propre après push
 ```
 
-## Batch 18.11 — guide opérateur et aide intégrée — PATCH LOCAL LIVRÉ
+## Batch 18.11 — guide opérateur et aide intégrée — INTÉGRÉ / VALIDÉ
 
 Objectif : rendre l'architecture Option A compréhensible sans afficher un manuel technique massif.
 
-### Architecture d'aide livrée
+### Architecture d'aide intégrée
 
 Trois niveaux complémentaires :
 
@@ -162,29 +159,21 @@ La vue Guide couvre :
 Le batch ne modifie pas le backend et ne duplique aucune logique Risk, Broker ou validation de
 Campaign dans le frontend.
 
-### Validation de livraison 18.11
+### Validation opérateur 18.11
 
-Exécuté dans l'environnement de livraison :
+Validation locale finale effectuée avant le push de `c02b9e8` :
 
 ```text
-TypeScript transpile/syntax check des fichiers frontend 18.11 : OK
-TypeScript ciblé avec stubs locaux des dépendances : OK
-harness structure/invariants + ancres Guide : OK
-heuristique secrets sur les fichiers livrés : OK
-git diff --cached --check sur les fichiers livrés : OK
+pnpm lint : OK, 0 erreur
+pnpm typecheck : OK
+pnpm build : OK
+git diff --check : OK hors avertissements LF -> CRLF
+working tree propre avant et après push
 ```
 
-Les commandes officielles restent à exécuter localement avec les dépendances du repository :
-
-```powershell
-cd frontend
-pnpm lint
-pnpm typecheck
-pnpm build
-cd ..
-git diff --check
-git status --short
-```
+Un premier passage ESLint avait identifié uniquement des apostrophes JSX non échappées dans les
+nouveaux textes frontend. Ce défaut typographique a été corrigé, puis l'ensemble des validations a
+été relancé avec succès avant intégration.
 
 ## Plus tard
 
