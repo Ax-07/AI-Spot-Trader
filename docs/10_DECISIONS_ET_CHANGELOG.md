@@ -9,13 +9,16 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 Broker/Risk, SPOT sans short/levier, PERPETUAL avec protections déterministes, audit durable,
 no-look-ahead, backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE séparé.
 
-## Référence GitHub intégrée
+## Référence fonctionnelle intégrée
 
 ```text
-HEAD GitHub : c02b9e8edd52b416969922f12a17e32f047d3989
-Message     : feat: add operator guide and contextual help
-Batch 18.11 : INTÉGRÉ / VALIDÉ
+Commit fonctionnel 18.11 : c02b9e8edd52b416969922f12a17e32f047d3989
+Message                  : feat: add operator guide and contextual help
+Batch 18.11              : INTÉGRÉ / VALIDÉ
 ```
+
+Le HEAD GitHub courant est vérifié à chaque reprise. Les commits de synchronisation documentaire
+peuvent être postérieurs à cette référence sans changement fonctionnel.
 
 ## Décisions Batch 18.9A toujours actives
 

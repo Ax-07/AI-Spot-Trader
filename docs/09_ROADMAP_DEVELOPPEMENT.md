@@ -1,11 +1,14 @@
 # 09 — Roadmap de développement
 
-## Référence intégrée
+## Référence fonctionnelle intégrée
 
 ```text
-HEAD GitHub : c02b9e8edd52b416969922f12a17e32f047d3989
-Message     : feat: add operator guide and contextual help
+Commit fonctionnel 18.11 : c02b9e8edd52b416969922f12a17e32f047d3989
+Message                  : feat: add operator guide and contextual help
 ```
+
+Le HEAD GitHub courant est vérifié au démarrage de chaque nouveau batch. Une synchronisation
+documentaire postérieure peut donc avancer `main` sans modifier cette référence fonctionnelle.
 
 ## Jalons intégrés
 

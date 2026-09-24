@@ -6,9 +6,11 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub intégré :
+- Commit fonctionnel de référence du Batch 18.11 :
   `c02b9e8edd52b416969922f12a17e32f047d3989`
   (`feat: add operator guide and contextual help`).
+- Le HEAD GitHub courant doit être vérifié au démarrage de chaque nouveau batch ; les commits
+  documentaires postérieurs ne changent pas l’état fonctionnel.
 - Batches 18.9A, 18.9B, 18.9C, 18.10 et 18.11 : **intégrés et validés**.
 - Batch 18.11 — guide opérateur et aide intégrée : **INTÉGRÉ / VALIDÉ**.
 

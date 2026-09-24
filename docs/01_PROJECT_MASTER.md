@@ -6,14 +6,16 @@ AI Spot Trader est une application expérimentale de trading crypto PAPER pilot�
 Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement
 un cockpit de contrôle et de visualisation.
 
-Référence GitHub intégrée après Batch 18.11 :
+Référence fonctionnelle intégrée du Batch 18.11 :
 
 ```text
-HEAD main : c02b9e8edd52b416969922f12a17e32f047d3989
-message   : feat: add operator guide and contextual help
+Commit fonctionnel : c02b9e8edd52b416969922f12a17e32f047d3989
+message             : feat: add operator guide and contextual help
 ```
 
-Les Batches 18.9A, 18.9B, 18.9C, 18.10 et 18.11 sont intégrés et validés.
+Les Batches 18.9A, 18.9B, 18.9C, 18.10 et 18.11 sont intégrés et validés. Le HEAD GitHub courant
+est contrôlé à chaque reprise ; il peut être postérieur au commit fonctionnel de référence à cause
+d’une synchronisation documentaire.
 
 ## 2. Invariants fonctionnels
 
