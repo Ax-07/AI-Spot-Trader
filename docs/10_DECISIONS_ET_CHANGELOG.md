@@ -9,12 +9,12 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 Broker/Risk, SPOT sans short/levier, PERPETUAL avec protections déterministes, audit durable,
 no-look-ahead, backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE séparé.
 
-## Référence avant Batch 18.13
+## Référence après Batch 18.13
 
 ```text
-HEAD main audité             : b491719edd7cbeeada0be2905e63af7dd20dd06d
-Commit fonctionnel 18.12     : b491719edd7cbeeada0be2905e63af7dd20dd06d
-Batch 18.13                  : PATCH PRÉPARÉ / NON INTÉGRÉ
+HEAD main courant            : 4cb0567cae6ff100c5ad9ad1df9e3f68b8f7ffd7
+Commit fonctionnel 18.13     : 4cb0567cae6ff100c5ad9ad1df9e3f68b8f7ffd7
+Batch 18.13                  : INTÉGRÉ / VALIDÉ
 ```
 
 ## Décisions historiques toujours actives
@@ -29,17 +29,17 @@ Batch 18.13                  : PATCH PRÉPARÉ / NON INTÉGRÉ
 - ADR-196 à ADR-200 : navigation orientée tâches, orchestration des objets canoniques, profils Risk UX,
   absence de comptabilité SPOT parallèle et bloc `Action suivante` comme porte d'entrée.
 
-## Décisions Batch 18.13 — patch proposé
+## Décisions Batch 18.13 — intégrées
 
 ### ADR-201 — Utiliser `next-themes` comme couche unique de sélection de thème
 
-**PATCH PROPOSÉ.** Le cockpit supporte `light`, `dark` et `system` via `next-themes`. Le thème est
+**INTÉGRÉE.** Le cockpit supporte `light`, `dark` et `system` via `next-themes`. Le thème est
 appliqué par classe sur `<html>`, persiste côté navigateur et ne crée aucun système parallèle à
 Tailwind/shadcn.
 
 ### ADR-202 — Centraliser les contrastes dans des tokens sémantiques
 
-**PATCH PROPOSÉ.** Les variantes partagées utilisent des couples explicites :
+**INTÉGRÉE.** Les variantes partagées utilisent des couples explicites :
 `primary/primary-foreground`, `secondary/secondary-foreground`, `destructive`, `success`, `warning`,
 `info`, `muted`, `border`, `input`, `ring` et tokens de sidebar. Les écrans métier consomment ces
 tokens autant que possible.
@@ -49,17 +49,20 @@ une compatibilité dark globale afin d'éviter une duplication de patch écran p
 
 ### ADR-203 — Ne jamais encoder un état métier par la couleur seule
 
-**PATCH PROPOSÉ.** Les valeurs financières conservent un signe `+`/`−`; BUY/SELL/HOLD et
+**INTÉGRÉE.** Les valeurs financières conservent un signe `+`/`−`; BUY/SELL/HOLD et
 ALLOW/MODIFY/REJECT restent textuels ; l'Historique affiche explicitement `Exécuté` ou
 `Non exécuté`. La couleur reste un renfort visuel et non l'unique information.
 
 ### ADR-204 — Moderniser sans réintroduire de complexité opérateur
 
-**PATCH PROPOSÉ.** La navigation 18.12 reste inchangée. La modernisation porte sur hiérarchie,
+**INTÉGRÉE.** La navigation 18.12 reste inchangée. La modernisation porte sur hiérarchie,
 espacements, rayons, bordures, ombres légères, focus et états interactifs. Aucun dashboard parallèle,
 aucun effet néon et aucune logique de trading ne sont ajoutés.
 
-## Changelog — 2026-09-24 — Batch 18.13 préparé
+## Changelog — 2026-09-24 — Batch 18.13 intégré / validé
+
+Commit fonctionnel : `4cb0567cae6ff100c5ad9ad1df9e3f68b8f7ffd7`
+(`feat: add dark mode and modernize cockpit UI`).
 
 - ajout de `next-themes` et d'un `ThemeProvider` ;
 - sélecteur Clair / Sombre / Système dans la barre supérieure et Réglages ;
@@ -72,5 +75,6 @@ aucun effet néon et aucune logique de trading ne sont ajoutés.
 - compatibilité dark des états historiques dans les vues avancées ;
 - aucun changement backend.
 
-La validation `pnpm lint`, `pnpm typecheck` et `pnpm build` reste à exécuter localement après
-installation de `next-themes`, l'environnement de génération n'ayant pas accès au registre npm.
+Validation locale réellement exécutée avec succès avant commit/push : `pnpm install`, `pnpm lint`,
+`pnpm typecheck`, `pnpm build`, `git diff --check` et `git status --short`. Le statut Git final après
+commit/push était propre.

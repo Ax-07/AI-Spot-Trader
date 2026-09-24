@@ -3,8 +3,8 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub audité pour 18.13 : b491719edd7cbeeada0be2905e63af7dd20dd06d
-Commit fonctionnel 18.12      : b491719edd7cbeeada0be2905e63af7dd20dd06d
+HEAD GitHub courant          : 4cb0567cae6ff100c5ad9ad1df9e3f68b8f7ffd7
+Commit fonctionnel 18.13     : 4cb0567cae6ff100c5ad9ad1df9e3f68b8f7ffd7
 ```
 
 Le HEAD doit être revérifié au démarrage de chaque nouveau batch.
@@ -23,7 +23,8 @@ Le HEAD doit être revérifié au démarrage de chaque nouveau batch.
 - 18.9C : validation comportementale réelle via cockpit ;
 - 18.10 : refonte UX/UI Option A, `CockpitShell` et Vue d'ensemble ;
 - 18.11 : guide opérateur et aide contextuelle ;
-- 18.12 : simplification radicale de l'expérience opérateur.
+- 18.12 : simplification radicale de l'expérience opérateur ;
+- 18.13 : dark mode, contrastes et modernisation du cockpit.
 
 ## État
 
@@ -34,17 +35,17 @@ Le HEAD doit être revérifié au démarrage de chaque nouveau batch.
 18.10  — Refonte UX/UI Option A                               INTÉGRÉ / VALIDÉ
 18.11  — Guide opérateur                                      INTÉGRÉ / VALIDÉ
 18.12  — Simplification radicale expérience opérateur         INTÉGRÉ
-18.13  — Dark mode, contrastes et modernisation               PATCH PRÉPARÉ / À VALIDER
+18.13  — Dark mode, contrastes et modernisation               INTÉGRÉ / VALIDÉ
 ```
 
 ## Batch 18.13 — dark mode, accessibilité et modernisation
 
-### Objectif
+### Objectif atteint
 
 Conserver le parcours simplifié de 18.12 tout en donnant au cockpit une qualité visuelle plus
 professionnelle, lisible et cohérente en clair comme en sombre.
 
-### Architecture visuelle
+### Architecture visuelle intégrée
 
 - `next-themes` pilote `light`, `dark` et `system` ;
 - les couleurs métier reposent sur des tokens sémantiques plutôt que sur des couleurs dispersées ;
@@ -60,7 +61,9 @@ professionnelle, lisible et cohérente en clair comme en sombre.
 - aucune reprise silencieuse ;
 - frontend toujours non requis pour que la boucle backend continue.
 
-### Validation attendue avant intégration
+### Validation exécutée avant intégration
+
+Les validations locales suivantes ont été réellement exécutées avec succès :
 
 ```powershell
 cd frontend
@@ -68,12 +71,13 @@ pnpm install
 pnpm lint
 pnpm typecheck
 pnpm build
+
 cd ..
 git diff --check
 git status --short
 ```
 
-`pnpm install` est nécessaire une fois pour installer `next-themes` et mettre à jour le lockfile local.
+Le `git status --short` final après commit/push était vide.
 
 ## Plus tard
 

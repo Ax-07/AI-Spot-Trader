@@ -6,18 +6,19 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub audité à l'ouverture du Batch 18.13 :
-  `b491719edd7cbeeada0be2905e63af7dd20dd06d`
-- Commit fonctionnel intégré du Batch 18.12 :
-  `b491719edd7cbeeada0be2905e63af7dd20dd06d`
-  (`feat: simplify PAPER operator experience`).
-- Batch 18.13 : **PATCH PRÉPARÉ / NON INTÉGRÉ AU MOMENT DE CETTE LIVRAISON**.
+- HEAD GitHub courant :
+  `4cb0567cae6ff100c5ad9ad1df9e3f68b8f7ffd7`
+- Commit fonctionnel intégré du Batch 18.13 :
+  `4cb0567cae6ff100c5ad9ad1df9e3f68b8f7ffd7`
+  (`feat: add dark mode and modernize cockpit UI`).
+- Batch 18.13 : **INTÉGRÉ / VALIDÉ**.
 
 ## État fonctionnel confirmé
 
 - un seul Agent IA stratégique ; Kraken ; PAPER uniquement ; SPOT + PERPETUAL linéaire ;
 - navigation principale : **Accueil / Configurer / Positions / Historique / Réglages** ;
 - assistant PAPER simple : marché, capital, IA, sécurité, résumé ;
+- thèmes **clair / sombre / système** via `next-themes`, avec sélecteur dans la barre supérieure et Réglages ;
 - activation fraîche, `run-cycle`, Start/Stop et recovery restent des commandes backend explicites ;
 - Risk Engine déterministe = autorité finale ; aucune sortie LLM ne déclenche directement un ordre ;
 - coûts PAPER, positions, P&L, drawdown, exposition et audit durable viennent du backend ;
@@ -26,18 +27,17 @@
 
 ## Batch 18.13 — thème, contrastes et modernisation
 
-Le patch 18.13 ajoute :
+Le Batch 18.13 intégré apporte :
 
-- `next-themes` avec thèmes **clair / sombre / système**, persistance locale et absence de flash/hydratation via `suppressHydrationWarning` ;
-- tokens sémantiques light/dark pour `primary`, `secondary`, `muted`, `destructive`, `success`, `warning`, `info`, `border`, `input`, `ring` et sidebar ;
-- variantes partagées Button/Badge/Card corrigées pour éviter les couples texte/fond trop proches ;
-- sélecteur de thème dans la barre supérieure et Réglages ;
-- modernisation sobre du cockpit, sans modifier l'architecture UX du Batch 18.12 ;
+- `next-themes` avec thèmes **clair / sombre / système** et persistance locale ;
+- tokens sémantiques light/dark pour les états et composants partagés ;
+- variantes Button/Badge/Card corrigées pour renforcer les contrastes ;
+- modernisation visuelle du cockpit sans modifier l'architecture UX du Batch 18.12 ;
 - P&L affiché avec signe `+`/`−` en plus de la couleur ;
-- pipeline Historique explicitant `Exécuté` / `Non exécuté` ;
-- compatibilité dark des anciens états rouge/ambre/vert/bleu encore utilisés dans les panneaux avancés.
+- Historique explicitant `Exécuté` / `Non exécuté` ;
+- compatibilité dark des anciens états rouge/ambre/vert/bleu des panneaux avancés.
 
-Aucun changement backend n'est nécessaire.
+Aucun changement backend n'a été introduit par ce batch.
 
 ## Limite de contrat volontairement respectée
 
@@ -45,18 +45,24 @@ Le contrat portefeuille SPOT canonique expose `asset`, `quantity` et `available`
 d'entrée moyen ni un P&L par position SPOT. Le frontend continue donc d'afficher `—` pour ces champs
 au lieu de reconstruire un portefeuille parallèle.
 
-## Validation de cette livraison
+## Validation du Batch 18.13
 
-Dans l'environnement de génération :
+Validation locale réellement exécutée avec succès avant commit/push :
 
-- audit du HEAD GitHub et de la désynchronisation documentaire 18.12 : effectué ;
-- audit statique des couleurs/contrastes et des états light/dark : effectué ;
-- vérification du ZIP root-relative et absence de secrets : à enregistrer dans le compte-rendu ;
-- `pnpm lint`, `pnpm typecheck`, `pnpm build` : non exécutables ici tant que `next-themes` ne peut pas être installé, car l'environnement n'a pas accès au registre npm.
+```powershell
+cd frontend
+pnpm install
+pnpm lint
+pnpm typecheck
+pnpm build
 
-Après extraction, exécuter `pnpm install` dans `frontend`, puis les validations frontend.
+cd ..
+git diff --check
+git status --short
+```
+
+Le `git status --short` final après commit/push était vide.
 
 ## Suite
 
-Après validation locale, intégrer le patch 18.13 sur `main`, mettre à jour ce document avec le commit
-fonctionnel réel et le statut **INTÉGRÉ / VALIDÉ**. LIVE reste un périmètre séparé et ultérieur.
+Le Batch 18.13 est intégré sur `main`. LIVE reste un périmètre séparé et ultérieur.
