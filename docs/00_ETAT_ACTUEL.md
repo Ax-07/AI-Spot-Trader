@@ -6,14 +6,11 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub audité au démarrage du Batch 18.10 :
-  `34145a904c07af90e1c9ed370479cd5e5a0c0139`
-  (`docs: sync batch 18.9C integrated state`).
-- Le HEAD de référence encore mentionné dans la documentation intégrée était
-  `5fc7704e7ca43ded4c2565b21871b81fe2161b0a` ; le commit `34145a9` est un commit de
-  synchronisation documentaire post-18.9C, sans modification du code frontend/backend.
-- Batches 18.9A, 18.9B et 18.9C : **intégrés et validés**.
-- Batch 18.10 — refonte UX/UI cockpit : **patch local livré, non intégré à GitHub**.
+- HEAD GitHub intégré :
+  `b445b70b02d2c4af4b24a86ccfbdeff6f18a75e9`
+  (`feat: redesign PAPER cockpit UX`).
+- Batches 18.9A, 18.9B, 18.9C et 18.10 : **intégrés et validés**.
+- Batch 18.10 — refonte UX/UI cockpit : **INTÉGRÉ / VALIDÉ**.
 
 ## État fonctionnel confirmé
 
@@ -30,53 +27,31 @@
 
 ## Batch 18.10 — refonte UX/UI cockpit
 
-Direction retenue : **Option A — Vue d'ensemble**.
+Direction intégrée : **Option A — Vue d'ensemble**.
 
-Le patch frontend :
+- `CockpitShell` avec navigation latérale simple ;
+- Vue d'ensemble comme landing screen ;
+- PAPER, Campaign active et état moteur visibles dans le header ;
+- commandes canoniques `run-cycle`, Start et Stop exposées sans logique métier parallèle ;
+- KPI PAPER, Marché & activité, Actions rapides, dernières décisions IA et alertes regroupés ;
+- `ControlPlanePanel`, `CockpitDashboard`, `AnalyticsPanel` et `ChatPanel` conservés comme vues secondaires ;
+- aucun changement backend, Risk Engine, Broker ou persistence ;
+- aucun nouveau secret ou draft sensible persisté dans le navigateur.
 
-- ajoute une shell opérateur avec navigation latérale simple ;
-- fait de la Vue d'ensemble la landing screen ;
-- rend PAPER, Campaign active et état moteur visibles dans le header ;
-- expose les commandes canoniques `run-cycle`, Start et Stop sans reproduire de logique métier ;
-- regroupe les KPI PAPER, Marché & activité, Actions rapides, dernières décisions IA et alertes ;
-- conserve les panneaux canoniques existants comme vues secondaires : Pilotage, Activité,
-  Performance et Assistant ;
-- ne modifie ni backend, ni Risk Engine, ni Broker, ni persistence ;
-- ne persiste aucun nouveau secret ou draft sensible dans le navigateur.
+## Validation opérateur du Batch 18.10
 
-Fichiers frontend du patch :
-
-```text
-frontend/src/app/page.tsx
-frontend/src/app/globals.css
-frontend/src/components/cockpit/cockpit-shell.tsx
-```
-
-## Validation du patch 18.10
-
-Exécuté par ChatGPT dans l'environnement de livraison :
+Validation visuelle et locale effectuée avant intégration :
 
 ```text
-TypeScript transpile/syntax check : OK sur page.tsx et cockpit-shell.tsx
-typecheck ciblé avec contrats GitHub actuels : OK
-harness structure UX/invariants : OK
-git diff --check sur le contenu livré : OK
-```
-
-Les dépendances frontend du repository ne sont pas installables dans l'environnement de livraison ;
-les commandes officielles restent à exécuter localement après extraction :
-
-```powershell
-cd frontend
-pnpm lint
-pnpm typecheck
-pnpm build
-cd ..
-git diff --check
+validation visuelle opérateur : OK
+pnpm lint : OK, 0 erreur, 0 warning
+pnpm typecheck : OK
+pnpm build : OK
+git diff --check : OK hors avertissements LF -> CRLF
+working tree propre après push
 ```
 
 ## Suite
 
-Extraire le ZIP 18.10 à la racine du repository, exécuter les validations frontend ci-dessus, puis
-intégrer le batch uniquement après validation opérateur. Le projet reste exclusivement PAPER ; LIVE
-reste un périmètre séparé et ultérieur.
+Aucune étape d'intégration 18.10 ne reste à effectuer. Tout nouveau batch doit repartir du `main`
+GitHub courant. Le projet reste exclusivement PAPER ; LIVE reste un périmètre séparé et ultérieur.

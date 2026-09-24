@@ -3,13 +3,9 @@
 ## Référence auditée
 
 ```text
-HEAD GitHub audité pour 18.10 : 34145a904c07af90e1c9ed370479cd5e5a0c0139
-Message                        : docs: sync batch 18.9C integrated state
-HEAD code/validation 18.9C     : 5fc7704e7ca43ded4c2565b21871b81fe2161b0a
+HEAD GitHub intégré : b445b70b02d2c4af4b24a86ccfbdeff6f18a75e9
+Message             : feat: redesign PAPER cockpit UX
 ```
-
-Le commit `34145a9` synchronise la documentation de l'état 18.9C et ne modifie pas le code du
-cockpit ou du backend.
 
 ## Jalons intégrés
 
@@ -25,14 +21,17 @@ cockpit ou du backend.
 - Batch 18.9B : cockpit Control Plane frontend, configuration PAPER SPOT/PERPETUAL, Strategy,
   StrategyRevision, preview canonique, Campaigns, activation/reprise et commandes moteur ;
 - Batch 18.9C : validation comportementale réelle via cockpit, correctif JSON `market_type` et
-  nettoyage mypy des frontières API.
+  nettoyage mypy des frontières API ;
+- Batch 18.10 : refonte UX/UI du cockpit selon l'Option A, `CockpitShell`, vue d'ensemble opérateur
+  et réutilisation des panneaux canoniques.
 
-## Batch 18.9 — état intégré
+## État intégré
 
 ```text
-18.9A — Control Plane + persistence + stratégie/prompt backend      INTÉGRÉ
-18.9B — Cockpit de configuration + PERPETUAL UI                    INTÉGRÉ / VALIDÉ
-18.9C — validation comportementale via cockpit                     INTÉGRÉ / VALIDÉ
+18.9A  — Control Plane + persistence + stratégie/prompt backend     INTÉGRÉ
+18.9B  — Cockpit de configuration + PERPETUAL UI                   INTÉGRÉ / VALIDÉ
+18.9C  — Validation comportementale via cockpit                    INTÉGRÉ / VALIDÉ
+18.10  — Refonte UX/UI cockpit — Option A                          INTÉGRÉ / VALIDÉ
 ```
 
 ## Batch 18.9C — validation comportementale réelle
@@ -59,10 +58,10 @@ Validation effectuée depuis le cockpit et les routes backend canoniques :
 
 ### Correctif JSON intégré
 
-`CampaignConfiguration` adapte désormais à la frontière Control Plane les valeurs JSON canoniques
-`SPOT` / `PERPETUAL` vers `MarketType` avant validation du modèle `ExecutableMarket` strict.
-Les valeurs inconnues restent rejetées. Des tests de régression JSON couvrent SPOT, PERPETUAL et
-le rejet fail-closed.
+`CampaignConfiguration` adapte à la frontière Control Plane les valeurs JSON canoniques `SPOT` /
+`PERPETUAL` vers `MarketType` avant validation du modèle `ExecutableMarket` strict. Les valeurs
+inconnues restent rejetées. Des tests de régression JSON couvrent SPOT, PERPETUAL et le rejet
+fail-closed.
 
 ### Nettoyage mypy intégré
 
@@ -81,14 +80,14 @@ git diff --check : OK hors avertissements LF -> CRLF
 working tree propre avant push
 ```
 
-## Batch 18.10 — refonte UX/UI cockpit — livré, à valider localement
+## Batch 18.10 — refonte UX/UI cockpit — INTÉGRÉ / VALIDÉ
 
 Objectif : transformer l'interface 18.9B, fonctionnelle mais dense, en cockpit opérateur lisible sans
 modifier les contrats ou la logique du backend.
 
-Direction retenue : **Option A — Vue d'ensemble**.
+Direction retenue et intégrée : **Option A — Vue d'ensemble**.
 
-### Architecture UI cible livrée
+### Architecture UI intégrée
 
 ```text
 CockpitShell
@@ -116,26 +115,17 @@ Les composants `ControlPlanePanel`, `CockpitDashboard`, `AnalyticsPanel` et `Cha
 canoniques et sont réutilisés comme vues secondaires. Aucune implémentation parallèle de Strategy,
 Campaign, Risk, Broker ou moteur de trading n'est introduite.
 
-### Validation de livraison 18.10
+### Validation opérateur 18.10
 
-Exécuté par ChatGPT :
+Validation visuelle et locale effectuée avant le push de `b445b70` :
 
 ```text
-TypeScript transpile/syntax check : OK
-typecheck ciblé avec contrats GitHub actuels : OK
-harness structure UX/invariants : OK
-git diff --check du patch : OK
-```
-
-À exécuter localement avec les dépendances du repository :
-
-```powershell
-cd frontend
-pnpm lint
-pnpm typecheck
-pnpm build
-cd ..
-git diff --check
+validation visuelle opérateur : OK
+pnpm lint : OK, 0 erreur, 0 warning
+pnpm typecheck : OK
+pnpm build : OK
+git diff --check : OK hors avertissements LF -> CRLF
+working tree propre après push
 ```
 
 ## Plus tard

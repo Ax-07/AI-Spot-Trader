@@ -9,16 +9,13 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 Broker/Risk, SPOT sans short/levier, PERPETUAL avec protections déterministes, audit durable,
 no-look-ahead, backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE séparé.
 
-## Référence GitHub auditée pour le Batch 18.10
+## Référence GitHub intégrée
 
 ```text
-HEAD GitHub : 34145a904c07af90e1c9ed370479cd5e5a0c0139
-Message     : docs: sync batch 18.9C integrated state
-Base 18.9C  : intégrée et validée
-Batch 18.10 : patch local livré, non intégré
+HEAD GitHub : b445b70b02d2c4af4b24a86ccfbdeff6f18a75e9
+Message     : feat: redesign PAPER cockpit UX
+Batch 18.10 : INTÉGRÉ / VALIDÉ
 ```
-
-Le commit `34145a9` est documentaire ; le comportement intégré confirmé reste celui de 18.9C.
 
 ## Décisions Batch 18.9A toujours actives
 
@@ -57,12 +54,12 @@ La correction reste limitée aux frontières API :
 
 Aucune validation métier, décision Agent, règle Risk ou exécution Broker n'est modifiée.
 
-## Décisions Batch 18.10 — patch local
+## Décisions Batch 18.10 — intégrées
 
 ### ADR-191 — Faire de la Vue d'ensemble la surface opérateur principale
 
-**PROPOSÉ / LIVRÉ DANS LE PATCH.** La page racine n'empile plus directement Dashboard, Control Plane,
-Chat et Analytics. Elle instancie une `CockpitShell` qui applique une divulgation progressive :
+**INTÉGRÉ.** La page racine n'empile plus directement Dashboard, Control Plane, Chat et Analytics.
+Elle instancie une `CockpitShell` qui applique une divulgation progressive :
 
 - la landing ne montre que les états et actions nécessaires au pilotage immédiat ;
 - les détails de configuration, d'audit, de performance et de chat restent accessibles dans des vues
@@ -73,10 +70,10 @@ Cette décision est purement UX et ne modifie aucun contrat backend.
 
 ### ADR-192 — Réutiliser les panneaux canoniques plutôt que dupliquer leurs fonctions
 
-**PROPOSÉ / LIVRÉ DANS LE PATCH.** `ControlPlanePanel`, `CockpitDashboard`, `AnalyticsPanel` et
-`ChatPanel` sont conservés comme vues secondaires. La nouvelle Vue d'ensemble consomme les hooks/API
-existants pour afficher une synthèse ; elle ne recrée ni validation Campaign, ni logique Risk, ni
-calcul de trading, ni exécution Broker.
+**INTÉGRÉ.** `ControlPlanePanel`, `CockpitDashboard`, `AnalyticsPanel` et `ChatPanel` sont conservés
+comme vues secondaires. La nouvelle Vue d'ensemble consomme les hooks/API existants pour afficher
+une synthèse ; elle ne recrée ni validation Campaign, ni logique Risk, ni calcul de trading, ni
+exécution Broker.
 
 Les commandes `run-cycle`, Start et Stop restent les commandes canoniques du backend. Fermer ou
 recharger le frontend ne déclenche aucun Stop implicite.
@@ -118,13 +115,12 @@ git diff --check : OK hors avertissements LF -> CRLF
 working tree propre avant push
 ```
 
-## Changelog — 2026-09-24 — Batch 18.10 UX/UI livré à validation
+## Changelog — 2026-09-24 — Batch 18.10 UX/UI intégré et validé
 
-Audit du cockpit 18.9B : interface fonctionnelle mais trop linéaire et dense, avec Dashboard,
-Control Plane, Chat et Analytics empilés sur une seule page et de nombreuses informations techniques
-au même niveau visuel.
+Le commit `b445b70b02d2c4af4b24a86ccfbdeff6f18a75e9` est intégré sur `main` avec la refonte UX/UI du
+cockpit PAPER.
 
-Patch livré :
+Contenu intégré :
 
 - nouvelle `CockpitShell` opérateur ;
 - navigation latérale simple à cinq vues ;
@@ -136,14 +132,13 @@ Patch livré :
 - typographie globale remplacée par une stack système plus lisible ;
 - aucun changement backend.
 
-Validation de livraison exécutée par ChatGPT :
+Validation opérateur réelle avant intégration :
 
 ```text
-TypeScript transpile/syntax check : OK
-typecheck ciblé avec contrats GitHub actuels : OK
-harness structure UX/invariants : OK
-git diff --check du patch : OK
+validation visuelle opérateur : OK
+pnpm lint : OK, 0 erreur, 0 warning
+pnpm typecheck : OK
+pnpm build : OK
+git diff --check : OK hors avertissements LF -> CRLF
+working tree propre après push
 ```
-
-Les validations `pnpm lint`, `pnpm typecheck` et `pnpm build` restent à exécuter localement avec les
-dépendances frontend du repository.
