@@ -6,14 +6,19 @@ AI Spot Trader est une application expérimentale de trading crypto PAPER pilot�
 Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement
 un cockpit de contrôle et de visualisation.
 
-Référence GitHub intégrée après Batch 18.9C :
+Référence GitHub auditée au démarrage du Batch 18.11 :
 
 ```text
-HEAD main : 5fc7704e7ca43ded4c2565b21871b81fe2161b0a
-message   : fix: finalize batch 18.9C behavioral validation
+HEAD main : e2807621352219e355810bcd212844ea646c83da
+message   : docs: sync batch 18.10 integrated state
 ```
 
-Les Batches 18.9A, 18.9B et 18.9C sont intégrés.
+Le commit fonctionnel de la refonte cockpit 18.10 est
+`b445b70b02d2c4af4b24a86ccfbdeff6f18a75e9`. Le commit `e280762` synchronise uniquement la
+documentation après son intégration.
+
+Les Batches 18.9A, 18.9B, 18.9C et 18.10 sont intégrés. Le Batch 18.11 — guide opérateur et aide
+intégrée — est livré comme patch local dans cette livraison et n'est pas encore intégré à GitHub.
 
 ## 2. Invariants fonctionnels
 
@@ -150,10 +155,10 @@ composants canoniques : `TradingCycleRunner`, `AuditedTradingCycleRunner`, `Trad
 Activation/reprise est refusée pendant `RUNNING`. Un runtime `STOPPED` peut être fermé proprement
 avant passage vers une autre Campaign.
 
-## 10. Cockpit frontend — Batch 18.9B
+## 10. Cockpit frontend — Batches 18.9B, 18.10 et 18.11
 
-Le cockpit 18.9B est un client HTTP du Control Plane, pas un runtime de trading. Il réutilise le
-rewrite Next.js `/backend` et le client `frontend/src/lib/api/client.ts` existants.
+Le cockpit est un client HTTP du Control Plane, pas un runtime de trading. Il réutilise le rewrite
+Next.js `/backend` et le client `frontend/src/lib/api/client.ts` existants.
 
 Il permet :
 
@@ -174,6 +179,29 @@ Le frontend ne reproduit pas les validators métier de `CampaignConfiguration`. 
 
 Le Control Plane UI ne persiste ni prompt, ni Campaign, ni secret dans `localStorage` ou
 `sessionStorage`. Le stockage local historique du chat reste limité à un identifiant de session.
+
+### Batch 18.10 — architecture UX intégrée
+
+La direction **Option A — Vue d'ensemble** est intégrée :
+
+- `CockpitShell` comme shell opérateur ;
+- Vue d'ensemble comme landing ;
+- navigation vers Pilotage, Activité, Performance et Assistant ;
+- PAPER, Campaign active et état moteur visibles dans le header ;
+- panneaux canoniques réutilisés comme vues secondaires.
+
+### Batch 18.11 — aide opérateur livrée en patch local
+
+Le patch 18.11 ajoute sans modifier les contrats backend :
+
+- une vue principale **Guide** dans la navigation du `CockpitShell` ;
+- un démarrage rapide depuis la Vue d'ensemble ;
+- le pipeline pédagogique Agent → Risk → Broker PAPER ;
+- des explications progressives ciblées sur `run-cycle`/Start, HOLD/Risk et états moteur ;
+- un guide versionné dédié : `docs/11_GUIDE_OPERATEUR.md`.
+
+Les aides contextuelles déjà présentes dans `ControlPlanePanel`, `CockpitDashboard`,
+`AnalyticsPanel` et `ChatPanel` sont conservées et réutilisées plutôt que dupliquées.
 
 ## 11. Validation comportementale — Batch 18.9C
 
@@ -213,7 +241,7 @@ commandes de trading restent exclusivement `/api/v1/engine/*`. `/api/v1/paper-ru
 
 ## 15. État du jalon et périmètre suivant
 
-Le jalon 18.9 est intégré et validé sur les parcours PAPER actuels. Aucun périmètre LIVE n'est
-implicitement ouvert par cette validation : tout passage LIVE reste un projet/batch séparé avec
-permissions, barrières et validation dédiées. Le prochain batch fonctionnel doit être cadré
-explicitement à partir du `main` courant.
+Les Batches 18.9 et 18.10 sont intégrés et validés sur les parcours PAPER actuels. Le Batch 18.11 est
+livré comme patch frontend/documentation à valider localement avant intégration. Aucun périmètre LIVE
+n'est implicitement ouvert : tout passage LIVE reste un projet/batch séparé avec permissions,
+barrières et validation dédiées.

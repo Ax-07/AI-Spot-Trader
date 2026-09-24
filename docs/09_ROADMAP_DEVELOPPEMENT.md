@@ -3,9 +3,13 @@
 ## Référence auditée
 
 ```text
-HEAD GitHub intégré : b445b70b02d2c4af4b24a86ccfbdeff6f18a75e9
-Message             : feat: redesign PAPER cockpit UX
+HEAD GitHub au démarrage du Batch 18.11 : e2807621352219e355810bcd212844ea646c83da
+Message                                : docs: sync batch 18.10 integrated state
+HEAD fonctionnel 18.10                  : b445b70b02d2c4af4b24a86ccfbdeff6f18a75e9
 ```
+
+Le commit `e280762` est une synchronisation documentaire post-18.10 et ne modifie pas le cockpit ou
+le backend.
 
 ## Jalons intégrés
 
@@ -25,13 +29,14 @@ Message             : feat: redesign PAPER cockpit UX
 - Batch 18.10 : refonte UX/UI du cockpit selon l'Option A, `CockpitShell`, vue d'ensemble opérateur
   et réutilisation des panneaux canoniques.
 
-## État intégré
+## État intégré / livré
 
 ```text
 18.9A  — Control Plane + persistence + stratégie/prompt backend     INTÉGRÉ
 18.9B  — Cockpit de configuration + PERPETUAL UI                   INTÉGRÉ / VALIDÉ
 18.9C  — Validation comportementale via cockpit                    INTÉGRÉ / VALIDÉ
 18.10  — Refonte UX/UI cockpit — Option A                          INTÉGRÉ / VALIDÉ
+18.11  — Guide opérateur + aide intégrée                           PATCH LOCAL LIVRÉ
 ```
 
 ## Batch 18.9C — validation comportementale réelle
@@ -126,6 +131,59 @@ pnpm typecheck : OK
 pnpm build : OK
 git diff --check : OK hors avertissements LF -> CRLF
 working tree propre après push
+```
+
+## Batch 18.11 — guide opérateur et aide intégrée — PATCH LOCAL LIVRÉ
+
+Objectif : rendre l'architecture Option A compréhensible sans afficher un manuel technique massif.
+
+### Architecture d'aide livrée
+
+Trois niveaux complémentaires :
+
+1. **Démarrage rapide** dans la Vue d'ensemble pour le premier parcours PAPER ;
+2. **Aide contextuelle progressive** via quelques blocs `<details>` sur les notions réellement
+   ambiguës ;
+3. **Vue Guide** dans la navigation principale, complétée par `docs/11_GUIDE_OPERATEUR.md`.
+
+La vue Guide couvre :
+
+- architecture mentale Agent → Risk → Broker PAPER ;
+- Strategy / StrategyRevision / Campaign ;
+- configuration Agent et Risk ;
+- SPOT / PERPETUAL, marge `ISOLATED` et levier PAPER ;
+- activation fraîche / reprise ;
+- `run-cycle` / Start / Stop ;
+- restart backend et état `UNAVAILABLE` ;
+- HOLD et statuts ALLOW/MODIFY/REJECT ;
+- positions, coûts, performance et erreurs fréquentes ;
+- glossaire et rappel PAPER/LIVE.
+
+Le batch ne modifie pas le backend et ne duplique aucune logique Risk, Broker ou validation de
+Campaign dans le frontend.
+
+### Validation de livraison 18.11
+
+Exécuté dans l'environnement de livraison :
+
+```text
+TypeScript transpile/syntax check des fichiers frontend 18.11 : OK
+TypeScript ciblé avec stubs locaux des dépendances : OK
+harness structure/invariants + ancres Guide : OK
+heuristique secrets sur les fichiers livrés : OK
+git diff --cached --check sur les fichiers livrés : OK
+```
+
+Les commandes officielles restent à exécuter localement avec les dépendances du repository :
+
+```powershell
+cd frontend
+pnpm lint
+pnpm typecheck
+pnpm build
+cd ..
+git diff --check
+git status --short
 ```
 
 ## Plus tard

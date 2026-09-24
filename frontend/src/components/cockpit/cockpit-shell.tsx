@@ -4,9 +4,11 @@ import {
   Activity,
   AlertTriangle,
   BarChart3,
+  BookOpenText,
   Bot,
   ChartNoAxesCombined,
   CircleDollarSign,
+  CircleHelp,
   Gauge,
   LayoutDashboard,
   MessageSquareText,
@@ -26,6 +28,7 @@ import { AnalyticsPanel } from "@/components/cockpit/analytics-panel";
 import { ChatPanel } from "@/components/cockpit/chat-panel";
 import { CockpitDashboard } from "@/components/cockpit/cockpit-dashboard";
 import { ControlPlanePanel } from "@/components/cockpit/control-plane-panel";
+import { OperatorGuide } from "@/components/cockpit/operator-guide";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,7 +38,7 @@ import { useControlPlane } from "@/hooks/use-control-plane";
 import { formatDecimal, formatFailure, formatTimestamp, shortUuid } from "@/lib/api/format";
 import { cn } from "@/lib/utils";
 
-type ViewId = "overview" | "control" | "activity" | "analytics" | "assistant";
+type ViewId = "overview" | "guide" | "control" | "activity" | "analytics" | "assistant";
 type ControlPlaneController = ReturnType<typeof useControlPlane>;
 
 type NavItem = {
@@ -51,6 +54,12 @@ const NAV_ITEMS: NavItem[] = [
     label: "Vue d’ensemble",
     description: "Statut, activité et décisions",
     icon: LayoutDashboard,
+  },
+  {
+    id: "guide",
+    label: "Guide",
+    description: "Démarrage et notions clés",
+    icon: BookOpenText,
   },
   {
     id: "control",
@@ -147,6 +156,18 @@ function EmptyLine({ children }: { children: ReactNode }) {
   );
 }
 
+function ContextHelp({ summary, children }: { summary: string; children: ReactNode }) {
+  return (
+    <details className="group rounded-lg border bg-muted/15 px-3 py-2 text-xs text-muted-foreground">
+      <summary className="flex cursor-pointer list-none items-center gap-2 font-medium text-foreground marker:hidden">
+        <CircleHelp className="size-3.5" />
+        {summary}
+      </summary>
+      <div className="pt-2 leading-relaxed">{children}</div>
+    </details>
+  );
+}
+
 function Overview({
   control,
   onNavigate,
@@ -178,7 +199,7 @@ function Overview({
   const engine = control.engine;
   const commandBusy = control.busyAction?.startsWith("engine-") ?? false;
 
-  const riskByDecision = useMemo(() => {
+  const riskByDecision = useMemo<Map<string, string | null | undefined>>(() => {
     const riskAssessments =
       cockpit.resources.riskAssessments.kind === "ready"
         ? cockpit.resources.riskAssessments.data.items
@@ -259,6 +280,34 @@ function Overview({
           Actualiser la vue
         </Button>
       </div>
+
+      <Card className="border-foreground/10 bg-background shadow-none">
+        <CardContent className="grid gap-4 py-5 lg:grid-cols-[1fr_auto] lg:items-center">
+          <div>
+            <div className="flex items-center gap-2">
+              <BookOpenText className="size-4" />
+              <p className="font-semibold">Premier test PAPER</p>
+            </div>
+            <div className="mt-3 grid gap-3 text-xs text-muted-foreground sm:grid-cols-3">
+              <div className="rounded-lg border bg-muted/20 p-3">
+                <p className="font-semibold text-foreground">1 · Préparer</p>
+                <p className="mt-1 leading-relaxed">Strategy → StrategyRevision → Campaign.</p>
+              </div>
+              <div className="rounded-lg border bg-muted/20 p-3">
+                <p className="font-semibold text-foreground">2 · Vérifier</p>
+                <p className="mt-1 leading-relaxed">Marchés, capital, modèle, coûts et paramètres Risk.</p>
+              </div>
+              <div className="rounded-lg border bg-muted/20 p-3">
+                <p className="font-semibold text-foreground">3 · Exécuter & lire</p>
+                <p className="mt-1 leading-relaxed">Activer, run-cycle ou Start, puis lire Agent → Risk → PAPER.</p>
+              </div>
+            </div>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => onNavigate("guide")}>
+            <BookOpenText className="size-3.5" /> Ouvrir le guide
+          </Button>
+        </CardContent>
+      </Card>
 
       <section className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
         <KpiCard
@@ -413,6 +462,13 @@ function Overview({
             >
               <Square className="size-4" /> Arrêter explicitement
             </Button>
+            <ContextHelp summary="run-cycle ou Start ?">
+              <p>
+                <strong className="text-foreground">run-cycle</strong> exécute un seul cycle puis laisse
+                le moteur STOPPED. <strong className="text-foreground">Start</strong> lance la boucle
+                autonome backend à la cadence de la Campaign jusqu’à Stop.
+              </p>
+            </ContextHelp>
             <div className="my-3 border-t" />
             <Button className="w-full justify-start" variant="ghost" onClick={() => onNavigate("control")}>
               <Settings2 className="size-4" /> Configurer Strategy / Campaign
@@ -438,7 +494,7 @@ function Overview({
               Décisions stratégiques journalisées ; le statut Risk est affiché séparément.
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
             {decisions.length ? (
               <div className="overflow-hidden rounded-xl border">
                 <div className="divide-y">
@@ -468,6 +524,13 @@ function Overview({
             ) : (
               <EmptyLine>Aucune décision IA journalisée pour le moment.</EmptyLine>
             )}
+            <ContextHelp summary="HOLD et résultat Risk">
+              <p>
+                HOLD signifie que l’Agent ne propose aucun trade pour ce cycle : c’est une décision
+                normale et journalisée. Pour BUY/SELL, Risk peut ALLOW, MODIFY la proposition ou REJECT
+                l’exécution. L’IA ne déclenche jamais directement le Broker PAPER.
+              </p>
+            </ContextHelp>
           </CardContent>
         </Card>
 
@@ -514,6 +577,13 @@ function Overview({
                 <p className="mt-1 text-sm font-semibold">{engine?.status ?? "UNAVAILABLE"}</p>
               </div>
             </div>
+            <ContextHelp summary="Comprendre l’état moteur">
+              <p>
+                STOPPED = runtime disponible mais boucle arrêtée. RUNNING = boucle backend active.
+                UNAVAILABLE = aucun runtime Campaign contrôlable, notamment après un redémarrage avant
+                activation ou reprise explicite.
+              </p>
+            </ContextHelp>
           </CardContent>
         </Card>
       </section>
@@ -547,6 +617,7 @@ function ViewContent({
   onNavigate: (view: ViewId) => void;
 }) {
   if (view === "overview") return <Overview control={control} onNavigate={onNavigate} />;
+  if (view === "guide") return <OperatorGuide />;
   if (view === "control") return <ControlPlanePanel />;
   if (view === "analytics") return <AnalyticsPanel />;
   if (view === "assistant") return <ChatPanel />;

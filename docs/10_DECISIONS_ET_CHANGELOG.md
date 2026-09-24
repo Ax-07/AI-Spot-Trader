@@ -9,13 +9,16 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 Broker/Risk, SPOT sans short/levier, PERPETUAL avec protections déterministes, audit durable,
 no-look-ahead, backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE séparé.
 
-## Référence GitHub intégrée
+## Référence GitHub auditée pour le Batch 18.11
 
 ```text
-HEAD GitHub : b445b70b02d2c4af4b24a86ccfbdeff6f18a75e9
-Message     : feat: redesign PAPER cockpit UX
-Batch 18.10 : INTÉGRÉ / VALIDÉ
+HEAD GitHub : e2807621352219e355810bcd212844ea646c83da
+Message     : docs: sync batch 18.10 integrated state
+Code 18.10  : b445b70b02d2c4af4b24a86ccfbdeff6f18a75e9
+Batch 18.11 : patch local livré, non intégré
 ```
+
+Le commit `e280762` synchronise uniquement la documentation après l'intégration de 18.10.
 
 ## Décisions Batch 18.9A toujours actives
 
@@ -77,6 +80,41 @@ exécution Broker.
 
 Les commandes `run-cycle`, Start et Stop restent les commandes canoniques du backend. Fermer ou
 recharger le frontend ne déclenche aucun Stop implicite.
+
+## Décisions Batch 18.11 — patch local
+
+### ADR-193 — Structurer l'aide en trois niveaux sans créer une seconde application
+
+**PROPOSÉ / LIVRÉ DANS LE PATCH.** L'aide opérateur suit la même architecture Option A :
+
+1. démarrage rapide directement dans la Vue d'ensemble ;
+2. aide contextuelle courte uniquement aux endroits ambigus ;
+3. vue **Guide** dédiée dans la navigation principale pour l'explication complète.
+
+La vue Guide reste un composant du `CockpitShell`. Elle ne recrée aucun flux de navigation ou
+runtime parallèle.
+
+### ADR-194 — Réutiliser les explications existantes et garder les règles métier au backend
+
+**PROPOSÉ / LIVRÉ DANS LE PATCH.** Le Control Plane contient déjà des explications utiles sur
+Strategy/StrategyRevision, validation backend, Risk, activation/reprise et PERPETUAL `ISOLATED`.
+Le Batch 18.11 les conserve au lieu d'ajouter des tooltips répétitifs.
+
+Les nouveaux blocs d'aide utilisent des cartes existantes et des `<details>` natifs. Ils décrivent
+le comportement sans implémenter de validation métier, de logique Risk, de calcul de portefeuille ou
+de commande Broker.
+
+### ADR-195 — Versionner un guide opérateur distinct du Project Master
+
+**PROPOSÉ / LIVRÉ DANS LE PATCH.** `docs/01_PROJECT_MASTER.md` reste la spécification principale et
+technique. `docs/11_GUIDE_OPERATEUR.md` devient la référence pédagogique destinée à l'opérateur.
+
+Le guide rappelle explicitement :
+
+**L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
+
+Il documente PAPER, SPOT/PERPETUAL, Campaigns, recovery, lecture des décisions et performances, sans
+ouvrir le périmètre LIVE.
 
 ## Changelog — 2026-09-24 — Batch 18.9C intégré et validé
 
@@ -142,3 +180,31 @@ pnpm build : OK
 git diff --check : OK hors avertissements LF -> CRLF
 working tree propre après push
 ```
+
+## Changelog — 2026-09-24 — Batch 18.11 guide opérateur livré à validation
+
+Audit du cockpit 18.10 : l'architecture Option A est lisible, mais les concepts Control Plane et la
+séquence du premier test restent difficiles à découvrir sans connaître l'architecture interne.
+
+Patch livré :
+
+- nouvelle vue **Guide** dans la navigation principale ;
+- démarrage rapide PAPER en trois phases dans la Vue d'ensemble ;
+- guide complet couvrant Strategy, StrategyRevision, Campaign, Agent, Risk, SPOT, PERPETUAL,
+  activation, `run-cycle`, Start/Stop, recovery, décisions, positions, performance et erreurs ;
+- aide contextuelle progressive sur `run-cycle`/Start, HOLD/Risk et états moteur ;
+- nouveau document `docs/11_GUIDE_OPERATEUR.md` ;
+- aucun changement backend.
+
+Validation exécutée dans l'environnement de livraison :
+
+```text
+TypeScript transpile/syntax check des fichiers frontend 18.11 : OK
+TypeScript ciblé avec stubs locaux des dépendances : OK
+harness structure/invariants + ancres Guide : OK
+heuristique secrets sur les fichiers livrés : OK
+git diff --cached --check sur les fichiers livrés : OK
+```
+
+Les validations `pnpm lint`, `pnpm typecheck` et `pnpm build` restent à exécuter localement avec les
+dépendances du repository avant intégration.
