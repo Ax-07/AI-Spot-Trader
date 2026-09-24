@@ -40,6 +40,7 @@ router = APIRouter(prefix="/api/v1", tags=["audit"])
 CycleStatusFilter = Literal["COMPLETED", "FAILED"]
 ActionFilter = Literal["BUY", "SELL", "HOLD"]
 RiskStatusFilter = Literal["ALLOW", "MODIFY", "REJECT"]
+CycleMarketType = Literal["SPOT", "PERPETUAL", "FUTURE"]
 
 
 def _reader(request: Request) -> CycleAuditReader:
@@ -116,7 +117,7 @@ def _cycle_summary(value: CycleAuditSummary) -> CycleSummaryResponse:
         recorded_at=value.recorded_at,
         decision_action=value.decision_action,
         symbol=value.symbol,
-        market_type=value.market_type,
+        market_type=cast(CycleMarketType | None, value.market_type),
         risk_status=value.risk_status,
         execution_id=value.execution_id,
         fill_count=value.fill_count,

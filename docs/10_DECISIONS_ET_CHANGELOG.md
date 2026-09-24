@@ -9,15 +9,13 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 Broker/Risk, SPOT sans short/levier, PERPETUAL avec protections déterministes, audit durable,
 no-look-ahead, backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE séparé.
 
-## Référence intégrée après Batch 18.9B
+## Référence GitHub avant intégration du Batch 18.9C
 
 ```text
-Commit code 18.9B : 1eb94e79c3b14fea04faca67d6b2c695b9a27f51
-Message            : feat: add PAPER control plane cockpit
+HEAD GitHub audité      : 6e5dcdc1c33103bdd29e9c6fae5c1aca07856808
+Dernier commit code     : 1eb94e79c3b14fea04faca67d6b2c695b9a27f51
+Batch 18.9C             : validé localement, prêt à intégrer
 ```
-
-18.9A et 18.9B sont intégrés. Le cockpit 18.9B a été validé localement avec `pnpm lint`,
-`pnpm typecheck`, `pnpm build` et `git diff --check`.
 
 ## Décisions Batch 18.9A toujours actives
 
@@ -25,87 +23,72 @@ ADR-173 à ADR-181 restent applicables : StrategyRevision immuable, contrat Agen
 digest prompt déterministe, Campaign snapshot non sensible, `paper-experiment-v4`, distinction
 Campaign/paper_run, ownership runtime backend, preview canonique et lineage recovery exposé.
 
-## Décisions Batch 18.9B — intégrées
+## Décisions Batch 18.9B toujours actives
 
-### ADR-182 — Le frontend reste un client du Control Plane
+ADR-182 à ADR-188 restent applicables : frontend client du Control Plane, client API unique,
+validators métier backend, révisions lues via les contrats existants, preview non recomposé côté
+frontend, aucun draft Control Plane persistant dans le navigateur, activation fraîche et reprise
+explicitement distinctes.
 
-**INTÉGRÉ.** Le cockpit ne possède ni TradingEngine, ni RiskEngine, ni Broker, ni logique de
-sélection d'opportunité. Il envoie des commandes aux routes canoniques et affiche leurs réponses.
-Fermer ou redémarrer le frontend n'arrête pas le moteur backend.
+## Décisions Batch 18.9C
 
-### ADR-183 — Étendre le client API existant
+### ADR-189 — Adapter les enums JSON à la frontière Control Plane sans relâcher le domaine strict
 
-**INTÉGRÉ.** Les routes Strategy/Campaign/prompt-preview/paper-runs et `run-cycle` sont ajoutées
-à `frontend/src/lib/api/client.ts`, derrière le rewrite `/backend` déjà utilisé. Aucun second client,
-SDK ou proxy métier n'est créé.
+**VALIDÉ LOCALEMENT.** Une Campaign créée depuis le navigateur transporte `market_type` comme chaîne
+JSON. `ExecutableMarket` reste volontairement strict dans le domaine ; le Control Plane adapte donc
+uniquement les valeurs canoniques `SPOT` et `PERPETUAL` vers `MarketType` avant la validation du
+modèle imbriqué.
 
-### ADR-184 — Ne pas dupliquer CampaignConfiguration dans une logique métier frontend
+Une valeur inconnue n'est pas normalisée silencieusement et reste rejetée par la validation.
+Le frontend, le Risk Engine, le TradingEngine et le Broker ne sont pas modifiés par ce correctif.
 
-**INTÉGRÉ.** Le TypeScript décrit le payload pour la sûreté de compilation, mais les validators
-métier restent Pydantic/backend : univers, quote/règlement, whitelist, FUTURE, ISOLATED, levier et
-limites PERPETUAL, spread/slippage. L'UI affiche les refus 409/422/503 au lieu de les contourner.
+### ADR-190 — Corriger les frontières API mypy sans changer le runtime
 
-### ADR-185 — Charger les révisions via le contrat unitaire existant
+**VALIDÉ LOCALEMENT.** La validation mypy globale a exposé quatre incompatibilités de typing
+préexistantes entre valeurs `str` lues depuis les vues de persistence et schémas de réponse
+`Literal[...]`.
 
-**INTÉGRÉ.** 18.9A n'expose pas de route de listing des révisions. Comme les révisions sont créées
-séquentiellement de 1 à `latest_revision`, le cockpit lit chaque révision avec le GET canonique
-existant. Aucun endpoint backend parallèle n'est ajouté pour 18.9B.
+La correction reste limitée aux frontières API :
 
-### ADR-186 — Le preview visuel ne recompose pas le prompt
+- casts explicites pour `market_type` dans `paper_runs` ;
+- cast explicite du `market_type` dans les résumés d'audit ;
+- annotation explicite du type du modèle dynamique dans le prompt preview.
 
-**INTÉGRÉ.** Le frontend consomme `instructions` renvoyé par `/prompt-preview` et ne génère aucune
-instruction stratégique. Le découpage visuel s'appuie sur les marqueurs de la composition canonique ;
-en cas d'écart, le contenu retourné est affiché sans inventer de données. L'input futur reste
-explicitement `dynamic_input=null`.
+Aucune validation métier, décision Agent, règle Risk ou exécution Broker n'est modifiée.
 
-### ADR-187 — Ne pas persister les drafts Control Plane dans le navigateur
+## Changelog — 2026-09-24 — Batch 18.9C validé localement
 
-**INTÉGRÉ.** StrategyPrompt, CampaignConfiguration et paramètres Risk restent uniquement dans l'état
-React avant envoi. Le nouveau cockpit n'utilise ni `localStorage` ni `sessionStorage` pour ces
-données. Les secrets serveur ne sont ni demandés ni exposés.
+Validation comportementale réelle effectuée depuis le cockpit :
 
-### ADR-188 — Rendre l'activation et la reprise visiblement distinctes
+- Strategy créée, renommée, archivée ; révisions immuables, comparaison et preview confirmées ;
+- refus 409 confirmé lors d'une tentative de révision sur Strategy archivée ;
+- bug de création Campaign identifié sur l'adaptation JSON de `market_type`, puis corrigé ;
+- Campaign SPOT créée et activée avec Luna ;
+- sélection multi-marchés réelle BTC/ETH/SOL par le même Agent ;
+- BUY SPOT naturel sur SOL/USD : quantité proposée par l'Agent réduite par Risk pour respecter le
+  max order notional, puis fill PAPER avec frais, spread et slippage ;
+- HOLD naturels observés et journalisés sans exécution ;
+- `run-cycle` isolé confirmé : un cycle et moteur restant `STOPPED` ;
+- Start/Stop confirmés sur la boucle autonome backend ;
+- après restart backend : aucune Campaign ni moteur repris automatiquement ;
+- `run-cycle` sans runtime confirmé en 503 fail-closed ;
+- reprise explicite confirmée avec nouveau `paper_run_id`, lineage correct et restauration exacte
+  du ledger USD/ETH/SOL ;
+- Campaign PERPETUAL BTC/ETH/SOL créée avec levier 2, marge `ISOLATED`, caps de position et
+  d'exposition ;
+- cycle PERPETUAL réel : sélection SOL/USD, BUY naturel, Risk `MODIFY`, fill PAPER, marge isolée,
+  position LONG, maintenance margin et liquidation price persistés ;
+- 422 confirmé pour un levier PAPER supérieur au plafond Risk ;
+- Campaign `gpt-5.6-sol` persistée avec digests distincts ; aucune exécution Sol n'a été lancée
+  dans ce batch ;
+- aucun SELL naturel observé et aucun SELL forcé.
 
-**INTÉGRÉ.** Chaque Campaign propose deux actions distinctes : activation fraîche et reprise
-explicite. Le cockpit ne déduit pas silencieusement laquelle utiliser ; le backend conserve les
-règles de conflit/recovery et l'autorité fail-closed.
-
-## Changelog — 2026-09-23 — Batch 18.9B intégré
-
-Audit et intégration confirmés :
-
-- commit code intégré `1eb94e79c3b14fea04faca67d6b2c695b9a27f51` ;
-- Control Plane 18.9A fournit les contrats backend consommés par le cockpit ;
-- aucun patch backend requis par 18.9B ;
-- types API frontend alignés sur les contrats backend actuels ;
-- client API existant étendu ;
-- hook `use-control-plane` ajouté ;
-- panneau Control Plane complet monté dans la page principale ;
-- Strategy/StrategyRevision, prompt preview et Campaign builder exposés ;
-- PAPER SPOT/PERPETUAL, Luna/Sol, Risk, levier déterministe et `ISOLATED` exposés ;
-- activation fraîche, reprise explicite, `run-cycle`, Start et Stop exposés ;
-- lineage Campaign/paper_run/recovery et digests affichés ;
-- erreurs 409/422/503 rendues explicitement ;
-- aucun stockage navigateur des prompts/Campaigns/secrets du Control Plane.
-
-Validation ChatGPT réellement exécutée avant livraison :
+Validation locale opérateur finale :
 
 ```text
-harness source : 50 assertions passées
-node --experimental-strip-types --check types.ts : OK
-node --experimental-strip-types --check client.ts : OK
-node --experimental-strip-types --check use-control-plane.ts : OK
-tsc ciblé avec stubs de dépendances : OK
-```
-
-Validation locale opérateur réellement exécutée après correctif ESLint :
-
-```text
-pnpm lint : OK
-pnpm typecheck : OK
-pnpm build : OK (Next.js 16.3.3)
+pytest backend : 506 passed, 2 warnings de dépréciation dépendances
+ruff check backend : All checks passed
+mypy backend/src : Success: no issues found in 89 source files
 git diff --check : OK hors avertissements LF -> CRLF
+git status --short : 8 fichiers attendus uniquement
 ```
-
-Aucun fichier backend n'est modifié par 18.9B ; `pytest backend`, Ruff et mypy ne sont donc pas
-rejoués pour ce batch.

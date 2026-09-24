@@ -3,7 +3,8 @@
 ## Référence auditée
 
 ```text
-HEAD/code 18.9B intégré : 1eb94e79c3b14fea04faca67d6b2c695b9a27f51
+HEAD GitHub de départ 18.9C : 6e5dcdc1c33103bdd29e9c6fae5c1aca07856808
+Dernier commit code intégré : 1eb94e79c3b14fea04faca67d6b2c695b9a27f51
 ```
 
 ## Jalons intégrés
@@ -25,66 +26,64 @@ HEAD/code 18.9B intégré : 1eb94e79c3b14fea04faca67d6b2c695b9a27f51
 ```text
 18.9A — Control Plane + persistence + stratégie/prompt backend      INTÉGRÉ
 18.9B — Cockpit de configuration + PERPETUAL UI                    INTÉGRÉ / VALIDÉ
-18.9C — validation comportementale via cockpit                     PRÊT À LANCER
+18.9C — validation comportementale via cockpit                     VALIDÉ LOCALEMENT / PRÊT À INTÉGRER
 ```
 
-## Batch 18.9B — intégré
+## Batch 18.9C — validation comportementale réelle
 
-Périmètre frontend :
+Validation effectuée depuis le cockpit et les routes backend canoniques :
 
-- extension du client API existant, sans seconde couche transport ;
-- types TS alignés sur les réponses backend 18.9A et sur le lineage `paper_run` ;
-- création/liste/renommage/archivage Strategy ;
-- lecture des révisions séquentielles, création d'une nouvelle StrategyRevision, comparaison ;
-- prompt preview canonique avec sections visuelles ;
-- builder Campaign SPOT/PERPETUAL ;
-- Luna/Sol, agressivité, cadence, capital, règlement ;
-- frais, spread, slippage ;
-- limites Risk SPOT/PERPETUAL ;
-- levier déterministe, marge `ISOLATED` ;
-- activation fraîche et reprise explicite ;
-- `run-cycle`, Start, Stop via les routes moteur canoniques ;
-- vue Campaign active, `campaign_id`, `paper_run_id`, `resumed_from_paper_run_id`,
-  `recovery_version` et digests ;
-- rendu explicite des 409/422/503 backend ;
-- aucun stockage local de prompt/Campaign, aucun secret, aucune logique Risk/Trading frontend.
+- création, renommage et archivage de Strategy ;
+- création de StrategyRevision immuable, comparaison et prompt preview ;
+- Campaign SPOT avec Luna, agressivité, capital, coûts et limites Risk ;
+- Campaign PERPETUAL avec marge `ISOLATED`, levier déterministe et caps dérivés ;
+- Campaign Sol persistée avec digests distincts, sans activation Sol dans ce batch ;
+- activation fraîche et nouveau `paper_run_id` ;
+- `run-cycle` isolé : un cycle puis retour à `STOPPED` ;
+- Start/Stop : boucle autonome backend puis arrêt coopératif ;
+- restart backend : moteur `UNAVAILABLE` et aucune Campaign active avant action opérateur ;
+- reprise explicite : nouveau run, lineage `resumed_from_paper_run_id` et ledger exact restauré ;
+- SPOT : BUY naturel SOL/USD, Risk `MODIFY` pour `MAX_ORDER_NOTIONAL_LIMIT`, fill PAPER,
+  coûts appliqués, puis HOLD naturels ;
+- PERPETUAL : BUY naturel SOL/USD, Risk `MODIFY`, levier 2, `ISOLATED`, marge, fill PAPER,
+  position LONG et prix de liquidation persistés ;
+- refus fail-closed validés : 409 sur Strategy archivée, 422 sur configuration invalide,
+  503 sur `run-cycle` sans runtime ;
+- aucun SELL naturel observé ; aucune décision stratégique n'a été forcée.
 
-Validation exécutée par ChatGPT avant livraison :
+### Correctif JSON découvert pendant 18.9C
+
+Le cockpit envoyait correctement `market_type` en JSON (`"SPOT"` / `"PERPETUAL"`), mais
+`CampaignConfiguration` réutilisait directement le modèle domaine strict `ExecutableMarket`.
+Pydantic refusait alors la chaîne JSON avant conversion vers `MarketType`.
+
+Correction :
+
+- adaptation des seules valeurs JSON canoniques `SPOT` / `PERPETUAL` vers `MarketType` à la
+  frontière Control Plane ;
+- modèle domaine `ExecutableMarket` conservé strict ;
+- valeur inconnue conservée fail-closed et rejetée ;
+- tests de régression JSON ajoutés.
+
+### Nettoyage mypy découvert en validation finale
+
+Le mypy global révélait quatre erreurs de typage déjà présentes sur le `main` intégré dans trois
+routes API. Les valeurs runtime étaient valides mais typées `str` alors que les schémas de réponse
+attendent des `Literal[...]`.
+
+Correction locale sans changement fonctionnel :
+
+- casts ciblés aux frontières de sérialisation `paper_runs` et `audit` ;
+- annotation `Literal["MarketSelectionInput", "AgentInput"]` pour le prompt preview.
+
+Validation locale finale :
 
 ```text
-harness source : 50 assertions passées
-Node strip-types syntax checks : OK
-TypeScript ciblé avec stubs de dépendances : OK
-```
-
-Validation locale opérateur après correctif ESLint :
-
-```text
-pnpm lint : OK
-pnpm typecheck : OK
-pnpm build : OK (Next.js 16.3.3)
+pytest backend : 506 passed, 2 warnings
+ruff check backend : OK
+mypy backend/src : OK, 89 source files
 git diff --check : OK hors avertissements LF -> CRLF
 ```
-
-Le backend n'a pas été modifié par 18.9B ; la suite backend n'a donc pas été rejouée pour ce batch.
-
-## Batch 18.9C — validation comportementale via cockpit
-
-Validation comportementale réelle via navigateur :
-
-- création Strategy puis nouvelles révisions ;
-- comparaison et preview ;
-- Campaign SPOT ;
-- Campaign PERPETUAL avec limites obligatoires ;
-- activation fraîche ;
-- run-cycle réel ;
-- Start/Stop ;
-- restart backend puis reprise explicite et vérification du lineage ;
-- changement structurel => nouvelle Campaign, jamais resume ;
-- observation de BUY/SELL naturels si le marché/Agent en produit, sans forcer artificiellement une
-  décision stratégique ;
-- comparaison Luna/Sol et audit des digests ;
-- contrôle de l'absence de secrets et de replay.
 
 ## Plus tard
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import cast
+from typing import Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
@@ -413,7 +413,7 @@ async def preview_prompt(
         strategy_prompt=revision.strategy_prompt,
         aggressiveness_context=context,
     )
-    dynamic_model = (
+    dynamic_model: Literal["MarketSelectionInput", "AgentInput"] = (
         "MarketSelectionInput" if payload.phase == "MARKET_SELECTION" else "AgentInput"
     )
     return PromptPreviewResponse(

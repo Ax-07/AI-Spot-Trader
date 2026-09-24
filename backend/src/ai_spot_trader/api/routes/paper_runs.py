@@ -1,5 +1,5 @@
 from collections.abc import Awaitable
-from typing import Annotated, cast
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
@@ -20,6 +20,8 @@ from ai_spot_trader.persistence.runs import (
 )
 
 router = APIRouter(prefix="/api/v1/paper-runs", tags=["paper-runs"])
+PaperRunMarketType = Literal["SPOT", "PERPETUAL", "FUTURE"]
+ExecutableMarketType = Literal["SPOT", "PERPETUAL"]
 
 
 def _runtime(request: Request) -> AppRuntime:
@@ -71,12 +73,12 @@ def _response(
         campaign_id=getattr(value, "campaign_id", None),
         started_at=value.started_at,
         ended_at=value.ended_at,
-        market_type=value.market_type,
+        market_type=cast(PaperRunMarketType | None, value.market_type),
         symbol=value.symbol,
         execution_universe=tuple(
             ExecutableMarketResponse(
                 symbol=item.symbol,
-                market_type=item.market_type.value,
+                market_type=cast(ExecutableMarketType, item.market_type.value),
             )
             for item in universe
         ),

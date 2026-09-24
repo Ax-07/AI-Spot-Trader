@@ -6,49 +6,46 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub audité après intégration du Batch 18.9B :
-  `1eb94e79c3b14fea04faca67d6b2c695b9a27f51`
-  (`feat: add PAPER control plane cockpit`).
+- HEAD GitHub de départ audité pour le Batch 18.9C :
+  `6e5dcdc1c33103bdd29e9c6fae5c1aca07856808`
+  (`docs: finalize batch 18.9B integration reference`).
 - Dernier commit code intégré :
   `1eb94e79c3b14fea04faca67d6b2c695b9a27f51`
   (`feat: add PAPER control plane cockpit`).
-- Batch 18.9A : **intégré et validé**.
-- Batch 18.9B : **intégré et validé localement** (`lint`, `typecheck`, `build`, `git diff --check`).
+- Batch 18.9C : **validé localement, prêt à intégrer**.
+- Correctif local 18.9C : adaptation JSON `market_type` à la frontière Control Plane, sans relâcher
+  les modèles domaine stricts.
+- Dette mypy préexistante sur trois routes API corrigée localement par typage `Literal`/`cast`
+  uniquement, sans changement fonctionnel.
 
-## État intégré
+## État confirmé par la validation 18.9C
 
-- un seul Agent IA ; Kraken ; PAPER ; SPOT + PERPETUAL linéaire ;
-- Risk autorité finale ; aucun LLM/tool -> Broker/Risk ;
-- Control Plane backend persistant Strategy/StrategyRevision/Campaign ;
-- `paper-experiment-v4` et recovery `paper-ledger-recovery-v1` ;
-- cockpit 18.9B réutilisant le client API `/backend` existant ;
-- gestion Strategy : création, renommage, archivage, révisions immuables, comparaison ;
-- prompt preview canonique séparant contrat protégé, stratégie, agressivité et input dynamique futur ;
-- builder Campaign PAPER SPOT/PERPETUAL avec Luna/Sol, capital, coûts, Risk, levier et marge `ISOLATED` ;
-- activation fraîche / reprise explicite ;
-- commandes moteur canoniques `run-cycle`, `start`, `stop` ;
-- affichage `campaign_id`, `paper_run_id`, `resumed_from_paper_run_id`, `recovery_version` ;
-- aucune Campaign, stratégie ou secret persisté par le nouveau cockpit dans `localStorage`/`sessionStorage` ;
-- aucune logique de trading ou Risk dupliquée dans le frontend.
+- Strategy : création, renommage, archivage, révisions immuables, comparaison et preview canonique ;
+- Campaign PAPER SPOT et PERPETUAL créées depuis le cockpit ;
+- Luna et Sol sélectionnables et persistés dans des Campaigns immuables ;
+- activation fraîche, `run-cycle`, Start et Stop validés ;
+- restart backend : aucun runtime repris silencieusement ;
+- reprise explicite : nouveau `paper_run_id`, `resumed_from_paper_run_id` correct et ledger restauré ;
+- SPOT réel : BUY naturel observé puis Risk `MODIFY`, fill PAPER et HOLD naturels ;
+- PERPETUAL réel : BUY naturel sur SOL/USD, Risk `MODIFY`, levier 2, marge `ISOLATED`, fill PAPER
+  et position LONG persistée ;
+- frais, spread, slippage, marge et limites Risk observés dans les artefacts de cycle ;
+- refus fail-closed observés : 409, 422 et 503 ;
+- aucun SELL naturel n'a été observé et aucun SELL n'a été forcé.
 
-## Validation Batch 18.9B
+## Validation locale opérateur réellement exécutée
 
 ```text
-Validation ChatGPT avant livraison :
-harness source frontend : 50 assertions passées
-Node --experimental-strip-types --check : 3 fichiers .ts OK
-typecheck ciblé avec stubs de dépendances : OK
-
-Validation locale opérateur après correctif ESLint :
-pnpm lint : OK
-pnpm typecheck : OK
-pnpm build : OK (Next.js 16.3.3)
+pytest backend : 506 passed, 2 warnings de dépréciation dépendances
+ruff check backend : All checks passed
+mypy backend/src : Success: no issues found in 89 source files
 git diff --check : OK hors avertissements LF -> CRLF
-backend : non modifié, suite pytest/ruff/mypy non rejouée pour 18.9B
+git status --short : exactement 8 fichiers attendus
+validation comportementale réelle via cockpit : SPOT + PERPETUAL + recovery + erreurs
 ```
 
-## Suite
+## Reste avant intégration
 
-Ouvrir le **Batch 18.9C** dans une nouvelle discussion pour la validation comportementale réelle via
-frontend : Strategy/révisions, preview, Campaign SPOT/PERPETUAL, activation/reprise, cycles moteur,
-lineage recovery, digests et refus backend fail-closed.
+- relire le diff synthétique si souhaité ;
+- créer le commit 18.9C ;
+- pousser vers GitHub `main` uniquement après décision explicite de l'opérateur.

@@ -74,6 +74,34 @@ class CampaignConfiguration(ControlPlaneModel):
             raise ValueError("paper_settlement_asset cannot be empty")
         return normalized
 
+    @field_validator("paper_executable_markets", mode="before")
+    @classmethod
+    def adapt_market_type_json_values(cls, value: object) -> object:
+        """Adapt transport enum strings before strict ExecutableMarket validation."""
+
+        if not isinstance(value, (list, tuple)):
+            return value
+
+        adapted: list[object] = []
+        for item in value:
+            if not isinstance(item, dict):
+                adapted.append(item)
+                continue
+
+            raw_market_type = item.get("market_type")
+            if not isinstance(raw_market_type, str):
+                adapted.append(item)
+                continue
+
+            try:
+                market_type = MarketType(raw_market_type)
+            except ValueError:
+                adapted.append(item)
+                continue
+
+            adapted.append({**item, "market_type": market_type})
+        return tuple(adapted)
+
     @field_validator("risk_allowed_pairs")
     @classmethod
     def normalize_allowed_pairs(cls, value: tuple[str, ...]) -> tuple[str, ...]:

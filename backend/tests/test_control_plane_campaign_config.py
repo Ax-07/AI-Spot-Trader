@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 from uuid import UUID
 
@@ -40,6 +41,20 @@ def _spot_config(**overrides: object) -> CampaignConfiguration:
     return CampaignConfiguration.model_validate(values)
 
 
+def _perpetual_config() -> CampaignConfiguration:
+    return _spot_config(
+        paper_executable_markets=(
+            ExecutableMarket(symbol="ETH/USD", market_type=MarketType.PERPETUAL),
+        ),
+        risk_allowed_pairs=("ETH/USD",),
+        paper_derivative_leverage=Decimal("2"),
+        risk_max_derivative_leverage=Decimal("3"),
+        risk_max_derivative_position_notional=Decimal("500"),
+        risk_max_total_derivative_exposure=Decimal("750"),
+        risk_derivative_liquidation_buffer_ratio=Decimal("1.20"),
+    )
+
+
 def test_spot_configuration_digest_is_canonical_and_secret_free() -> None:
     left = _spot_config(risk_allowed_pairs=("BTC/USD", "ETH/USD"))
     right = _spot_config(risk_allowed_pairs=("ETH/USD", "BTC/USD"))
@@ -52,18 +67,28 @@ def test_spot_configuration_digest_is_canonical_and_secret_free() -> None:
     assert "password" not in encoded
 
 
+def test_campaign_configuration_accepts_json_market_type_values() -> None:
+    for expected in (_spot_config(), _perpetual_config()):
+        decoded = CampaignConfiguration.model_validate_json(
+            json.dumps(expected.canonical_payload())
+        )
+
+        assert decoded == expected
+        assert decoded.digest == expected.digest
+
+
+def test_campaign_configuration_json_market_type_adapter_stays_fail_closed() -> None:
+    payload = _spot_config().canonical_payload()
+    markets = payload["paper_executable_markets"]
+    assert isinstance(markets, list)
+    markets[0]["market_type"] = "UNKNOWN"
+
+    with pytest.raises(ValidationError):
+        CampaignConfiguration.model_validate_json(json.dumps(payload))
+
+
 def test_perpetual_configuration_captures_all_effective_risk_limits() -> None:
-    config = _spot_config(
-        paper_executable_markets=(
-            ExecutableMarket(symbol="ETH/USD", market_type=MarketType.PERPETUAL),
-        ),
-        risk_allowed_pairs=("ETH/USD",),
-        paper_derivative_leverage=Decimal("2"),
-        risk_max_derivative_leverage=Decimal("3"),
-        risk_max_derivative_position_notional=Decimal("500"),
-        risk_max_total_derivative_exposure=Decimal("750"),
-        risk_derivative_liquidation_buffer_ratio=Decimal("1.20"),
-    )
+    config = _perpetual_config()
 
     payload = config.canonical_payload()
     assert payload["paper_derivative_leverage"] == "2"
