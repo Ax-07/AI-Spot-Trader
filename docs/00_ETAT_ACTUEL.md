@@ -6,63 +6,57 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub audité à l'ouverture du Batch 18.12 :
-  `c6cf03e62ce49ad6b294ea1d4c44d933b4688b0a`
-- Commit fonctionnel intégré du Batch 18.11 :
-  `c02b9e8edd52b416969922f12a17e32f047d3989`
-  (`feat: add operator guide and contextual help`).
-- Les deux commits entre `c02b9e8...` et `c6cf03e...` sont documentaires uniquement.
-- Batch 18.12 : **PATCH PRÉPARÉ / NON INTÉGRÉ AU MOMENT DE CETTE LIVRAISON**.
+- HEAD GitHub audité à l'ouverture du Batch 18.13 :
+  `b491719edd7cbeeada0be2905e63af7dd20dd06d`
+- Commit fonctionnel intégré du Batch 18.12 :
+  `b491719edd7cbeeada0be2905e63af7dd20dd06d`
+  (`feat: simplify PAPER operator experience`).
+- Batch 18.13 : **PATCH PRÉPARÉ / NON INTÉGRÉ AU MOMENT DE CETTE LIVRAISON**.
 
-## État fonctionnel confirmé avant Batch 18.12
+## État fonctionnel confirmé
 
 - un seul Agent IA stratégique ; Kraken ; PAPER uniquement ; SPOT + PERPETUAL linéaire ;
-- Strategy, StrategyRevision immuable, Campaign PAPER et recovery explicite ;
-- activation fraîche, `run-cycle`, Start/Stop et restart backend sans reprise silencieuse ;
+- navigation principale : **Accueil / Configurer / Positions / Historique / Réglages** ;
+- assistant PAPER simple : marché, capital, IA, sécurité, résumé ;
+- activation fraîche, `run-cycle`, Start/Stop et recovery restent des commandes backend explicites ;
 - Risk Engine déterministe = autorité finale ; aucune sortie LLM ne déclenche directement un ordre ;
-- coûts PAPER, positions, P&L, drawdown, exposition et audit durable disponibles via le backend ;
+- coûts PAPER, positions, P&L, drawdown, exposition et audit durable viennent du backend ;
 - frontend indépendant du moteur : fermer le cockpit n'arrête pas le trading ;
 - LIVE reste indisponible.
 
-## Batch 18.12 — simplification radicale de l'expérience opérateur
+## Batch 18.13 — thème, contrastes et modernisation
 
-Le patch 18.12 remplace le modèle mental technique du cockpit par un parcours orienté tâches :
+Le patch 18.13 ajoute :
 
-- navigation principale : **Accueil / Configurer / Positions / Historique / Réglages** ;
-- bloc **Action suivante** sur l'accueil selon l'état réel du backend ;
-- assistant de configuration PAPER en étapes simples : marché, capital, IA, sécurité, résumé ;
-- création orchestrée côté frontend via les routes canoniques existantes :
-  `Strategy -> StrategyRevision r1 -> Campaign`, sans exposer ces objets au parcours débutant ;
-- profils Risk UX `Prudent`, `Équilibré`, `Agressif`, `Personnalisé` traduits uniquement en champs
-  explicites de `CampaignConfiguration` ;
-- activation fraîche, reprise et Start restent des commandes backend distinctes et explicites ;
-- surface Positions dédiée utilisant exclusivement `/portfolio` et les analytics backend ;
-- surface Historique corrélant visuellement `Décision IA -> Risk -> Exécution PAPER` ;
-- ancien Control Plane, guide et assistant conservés sous **Réglages**, avec les concepts techniques
-  accessibles en mode avancé ;
-- aucun changement backend, Risk Engine, Broker, persistence ou contrat API requis.
+- `next-themes` avec thèmes **clair / sombre / système**, persistance locale et absence de flash/hydratation via `suppressHydrationWarning` ;
+- tokens sémantiques light/dark pour `primary`, `secondary`, `muted`, `destructive`, `success`, `warning`, `info`, `border`, `input`, `ring` et sidebar ;
+- variantes partagées Button/Badge/Card corrigées pour éviter les couples texte/fond trop proches ;
+- sélecteur de thème dans la barre supérieure et Réglages ;
+- modernisation sobre du cockpit, sans modifier l'architecture UX du Batch 18.12 ;
+- P&L affiché avec signe `+`/`−` en plus de la couleur ;
+- pipeline Historique explicitant `Exécuté` / `Non exécuté` ;
+- compatibilité dark des anciens états rouge/ambre/vert/bleu encore utilisés dans les panneaux avancés.
+
+Aucun changement backend n'est nécessaire.
 
 ## Limite de contrat volontairement respectée
 
-Le contrat portefeuille SPOT canonique expose actuellement `asset`, `quantity` et `available`, mais
-pas le prix d'entrée moyen ni un P&L par position SPOT. Le frontend 18.12 affiche donc `—` pour ces
-champs au lieu de reconstruire un portefeuille parallèle. Le P&L global reste celui des analytics
-backend.
+Le contrat portefeuille SPOT canonique expose `asset`, `quantity` et `available`, mais pas le prix
+d'entrée moyen ni un P&L par position SPOT. Le frontend continue donc d'afficher `—` pour ces champs
+au lieu de reconstruire un portefeuille parallèle.
 
 ## Validation de cette livraison
 
-Validation réalisable dans l'environnement de génération :
+Dans l'environnement de génération :
 
-- audit du HEAD GitHub et des contrats backend/frontend : effectué ;
-- vérification de syntaxe/transpilation TypeScript/TSX : à enregistrer dans le compte-rendu de
-  livraison ;
-- contrôle du ZIP root-relative et absence de secrets : à enregistrer dans le compte-rendu.
+- audit du HEAD GitHub et de la désynchronisation documentaire 18.12 : effectué ;
+- audit statique des couleurs/contrastes et des états light/dark : effectué ;
+- vérification du ZIP root-relative et absence de secrets : à enregistrer dans le compte-rendu ;
+- `pnpm lint`, `pnpm typecheck`, `pnpm build` : non exécutables ici tant que `next-themes` ne peut pas être installé, car l'environnement n'a pas accès au registre npm.
 
-Les commandes projet `pnpm lint`, `pnpm typecheck` et `pnpm build` doivent être exécutées localement
-après extraction. L'environnement de génération ne dispose pas de `pnpm` ni d'un accès registre
-permettant de l'installer.
+Après extraction, exécuter `pnpm install` dans `frontend`, puis les validations frontend.
 
 ## Suite
 
-Après validation locale, intégrer le patch 18.12 sur `main`, puis mettre à jour ce document avec le
-commit fonctionnel réel et le statut **INTÉGRÉ / VALIDÉ**. LIVE reste un périmètre séparé et ultérieur.
+Après validation locale, intégrer le patch 18.13 sur `main`, mettre à jour ce document avec le commit
+fonctionnel réel et le statut **INTÉGRÉ / VALIDÉ**. LIVE reste un périmètre séparé et ultérieur.
