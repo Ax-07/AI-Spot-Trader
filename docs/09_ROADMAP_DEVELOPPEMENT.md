@@ -3,9 +3,9 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub vérifié au démarrage 19.8 : 130429eca6c7c8385c1caf4b2eb2870bef61ec3e
-Référence fonctionnelle Batch 19.7      : 8b969b434916d89f6b6aa127c3bac9c27e990966
-Batch 19.8                              : patch proposé localement, non intégré
+HEAD GitHub post-push Batch 19.8 : f3a8eae8528648c07723aa97350852428254acc7
+Batch 19.8 intégré                 : feat: add user-facing Sessions workflow
+Validation locale                  : backend 606 passed ; frontend tests/lint/typecheck/build passés
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -22,13 +22,14 @@ Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batc
 - 19.5 : explicabilité Agent/Risk/exécution depuis les faits persistés ;
 - 19.6A : backend candles, cache borné, recovery et streaming partagé ;
 - 19.6B : vue Marchés, Lightweight Charts et markers de fills persistés ;
-- 19.7 : overlays de position canoniques `Prix moyen`, `Mark backend`, `Liquidation`.
+- 19.7 : overlays de position canoniques `Prix moyen`, `Mark backend`, `Liquidation` ;
+- 19.8 : façade utilisateur **Session**, CRUD/lifecycle versionné, configurateur simple/avancé et choix de marchés Automatique IA / Manuel.
 
 ## Batch 19.8 — Sessions v1
 
-**État : patch proposé, à valider localement avant intégration.**
+**État : intégré à GitHub `main` et validé localement.**
 
-Objectif : remplacer dans le parcours normal les concepts techniques Strategy/Revision/Campaign/paper_run par une façade utilisateur **Session** sans casser les faits canoniques existants.
+Objectif atteint : remplacer dans le parcours normal les concepts techniques Strategy/Revision/Campaign/paper_run par une façade utilisateur **Session** sans casser les faits canoniques existants.
 
 ### Backend
 
@@ -65,9 +66,14 @@ Archivée
 
 Ils sont dérivés des faits persistés et du runtime, jamais stockés comme une vérité concurrente.
 
-### Critères de validation
+### Validation obtenue
 
-Backend ciblé : création/list/detail/update/versioning/duplicate/archive/lifecycle/status/modes marchés/recovery. Frontend : tests de construction de configuration puis `pnpm test`, `pnpm lint`, `pnpm typecheck`, `pnpm build`. Racine : `git diff --check` et `git status --short`.
+- backend complet : `606 passed`, 2 warnings de dépendances ;
+- frontend : `21/21` tests passés ;
+- `pnpm lint` : passé ;
+- `pnpm typecheck` : passé ;
+- `pnpm build` : passé ;
+- `git diff --check` : aucune erreur de whitespace.
 
 ## Cadences à maintenir distinctes
 

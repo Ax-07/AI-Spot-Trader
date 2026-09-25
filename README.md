@@ -132,10 +132,18 @@ Le Batch 19.8 n'introduit **aucune table `sessions`** et ne nécessite pas de mi
 
 ## Référence de travail
 
-Au démarrage du Batch 19.8, GitHub `main` a été revérifié au HEAD :
+Le Batch 19.8 — Sessions v1 est intégré à GitHub `main` au commit :
 
 ```text
-130429eca6c7c8385c1caf4b2eb2870bef61ec3e
+f3a8eae8528648c07723aa97350852428254acc7
+feat: add user-facing Sessions workflow
 ```
 
-Le patch 19.8 livré séparément doit être validé localement avant intégration explicite par l'opérateur.
+Validation locale opérateur du 25 septembre 2026 :
+
+- backend : `606 passed`, 2 warnings de dépendances ;
+- frontend : `21/21` tests passés ;
+- `pnpm lint` : passé ;
+- `pnpm typecheck` : passé ;
+- `pnpm build` : passé ;
+- `git diff --check` : aucune erreur de whitespace.
