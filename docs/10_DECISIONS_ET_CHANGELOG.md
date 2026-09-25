@@ -9,11 +9,11 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 ## Référence courante
 
 ```text
-HEAD GitHub vérifié                    : 321ce2d19105046af1f11295d67130402c09f2c5
+HEAD GitHub vérifié après push 19.6B     : b5a26f77d1951f8eb39df30b5b6f3b5b81f4d585
 Référence fonctionnelle Batch 19.6A  : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
 Batch 19.5                            : intégré
 Batch 19.6A                           : intégré
-Batch 19.6B                           : patch proposé, non intégré
+Batch 19.6B                           : intégré sur GitHub main
 ```
 
 ## Décisions historiques toujours actives
@@ -39,7 +39,7 @@ L'Historique consomme le détail corrélé du cycle. Positions expose seulement 
 
 ## ADR-211 — Kraken/backend restent la source canonique des charts
 
-**INTÉGRÉ AU BATCH 19.6A ; consommé par le patch 19.6B.**
+**INTÉGRÉ AU BATCH 19.6A ; consommé par le frontend intégré au Batch 19.6B.**
 
 Le frontend consomme uniquement les contrats backend candles. Il n'ouvre pas de connexion directe parallèle à Kraken. Le backend normalise les données fournisseur, maintient le cache et diffuse les updates cockpit.
 
@@ -92,25 +92,25 @@ Spot OHLC est borné à 720 rows. PERPETUAL vise jusqu'à 1000 rows via Futures 
 
 ## ADR-235 — La vue Marchés reste un consommateur strict du backend
 
-**VALIDÉ LOCALEMENT AU BATCH 19.6B — COMMIT `a446628`.**
+**INTÉGRÉ AU BATCH 19.6B — COMMIT FONCTIONNEL `a446628`.**
 
 Le frontend charge uniquement le marché/timeframe actif depuis les contrats 19.6A. Il utilise le proxy same-origin `/backend` pour REST et WebSocket, n'ouvre aucune connexion Kraken directe, conserve un petit cache mémoire borné et nettoie socket/listeners/timers à chaque changement ou démontage.
 
 ## ADR-236 — L'univers Marchés ne crée aucun ranking frontend
 
-**VALIDÉ LOCALEMENT AU BATCH 19.6B — COMMIT `a446628`.**
+**INTÉGRÉ AU BATCH 19.6B — COMMIT FONCTIONNEL `a446628`.**
 
 Ordre des faits utilisés : watchlist effective de l'explicabilité discovery lorsqu'elle existe ; univers de campagne actif seulement comme bootstrap si la watchlist manque ; positions ouvertes toujours réinjectées. Le frontend déduplique mais ne classe pas stratégiquement les marchés.
 
 ## ADR-237 — Markers uniquement depuis les fills persistés
 
-**VALIDÉ LOCALEMENT AU BATCH 19.6B — COMMIT `a446628`.**
+**INTÉGRÉ AU BATCH 19.6B — COMMIT FONCTIONNEL `a446628`.**
 
 Un marker n'existe que si un fill PAPER réel est retourné par `/executions`. BUY/SELL viennent du payload canonique du fill. `reduce_only=true` peut annoter une réduction. Aucune clôture n'est inférée depuis une variation de position ou une candle. Le détail d'un marker recharge `/cycles/{cycle_id}` afin de réutiliser l'explicabilité 19.5 ; si la projection manque, l'UI reste explicitement partielle.
 
 ## ADR-238 — Lightweight Charts est une couche de rendu, pas une source métier
 
-**VALIDÉ LOCALEMENT AU BATCH 19.6B — COMMIT `a446628`.**
+**INTÉGRÉ AU BATCH 19.6B — COMMIT FONCTIONNEL `a446628`.**
 
 TradingView Lightweight Charts rend OHLC/volume/markers à partir des faits backend. Les timeframes autorisés sont centralisés selon les capacités 19.6A. Le frontend n'utilise pas les candles pour recalculer P&L, exposition, liquidation, Risk ou stratégie.
 
@@ -177,4 +177,5 @@ TradingView Lightweight Charts rend OHLC/volume/markers à partir des faits back
 - markers issus uniquement des fills persistés et détails via l'explicabilité 19.5 ;
 - aucune connexion Kraken frontend, aucun ranking, aucun calcul Risk/P&L parallèle ;
 - validation opérateur : `pnpm test` **6/6**, `pnpm lint`, `pnpm typecheck` et `pnpm build` passés ; `git diff --check` sans erreur de whitespace ;
-- commit fonctionnel local `main` : `a446628` (`feat: add cockpit market charts and trade markers`) ; présence sur GitHub `main` à confirmer après push.
+- commit fonctionnel intégré sur GitHub `main` : `a446628918a614d2ae0ac3b55243881aad5ef410` (`feat: add cockpit market charts and trade markers`) ;
+- clôture documentaire poussée sur GitHub `main` : `b5a26f77d1951f8eb39df30b5b6f3b5b81f4d585` (`docs: finalize Batch 19.6B integration state`).

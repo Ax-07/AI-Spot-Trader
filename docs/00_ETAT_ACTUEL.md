@@ -6,15 +6,16 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub vérifié au lancement du Batch 19.6B :
-  `321ce2d19105046af1f11295d67130402c09f2c5`
-  (`docs: finalize Batch 19.6A integration state`).
+- HEAD GitHub vérifié après push du Batch 19.6B, avant cette synchronisation documentaire :
+  `b5a26f77d1951f8eb39df30b5b6f3b5b81f4d585`
+  (`docs: finalize Batch 19.6B integration state`).
 - Référence fonctionnelle intégrée du Batch 19.6A :
   `3c53af3bdb1ef53c574e26afe9b6178a374d9f06`
   (`feat: add backend candle cache and streaming`).
-- Référence fonctionnelle du Batch 19.6B validée localement :
-  `a446628` (`feat: add cockpit market charts and trade markers`).
-- Batch 19.6B : **validation locale complète et commit fonctionnel créé sur `main` local** ; présence sur GitHub à revérifier après push.
+- Référence fonctionnelle intégrée du Batch 19.6B :
+  `a446628918a614d2ae0ac3b55243881aad5ef410`
+  (`feat: add cockpit market charts and trade markers`).
+- Batch 19.6B : **intégré sur GitHub `main`** ; validation locale complète confirmée avant push.
 
 ## État fonctionnel
 
@@ -41,9 +42,9 @@ Le warning Node `MODULE_TYPELESS_PACKAGE_JSON` du test runner reste non bloquant
 
 ## Prochaine priorité
 
-1. pousser les commits 19.6B sur GitHub `main` ;
-2. au démarrage du prochain batch, revérifier le HEAD GitHub réel ;
-3. poursuivre avec le prochain batch uniquement depuis cet état resynchronisé.
+1. démarrer le prochain batch dans une nouvelle discussion avec resynchronisation obligatoire sur GitHub `main` ;
+2. revérifier le HEAD GitHub réel et relire ce document ;
+3. poursuivre uniquement depuis cet état intégré, en distinguant toute modification locale ultérieure.
 
 ## Règle de reprise
 

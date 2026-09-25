@@ -3,11 +3,11 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub vérifié                    : 321ce2d19105046af1f11295d67130402c09f2c5
+HEAD GitHub vérifié après push 19.6B     : b5a26f77d1951f8eb39df30b5b6f3b5b81f4d585
 Référence fonctionnelle Batch 19.6A  : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
 Batch 19.5                            : intégré sur GitHub main
 Batch 19.6A                           : intégré sur GitHub main
-Batch 19.6B                           : validé localement, commit fonctionnel a446628
+Batch 19.6B                           : intégré sur GitHub main, commit fonctionnel a446628
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch. Le document détaillé des améliorations est `docs/11_AMELIORATIONS_PLANIFIEES.md`.
@@ -63,9 +63,9 @@ Validation opérateur 19.6A : 53 tests ciblés passés ; suite backend 604 tests
 
 ## Batch 19.6B — Vue Marchés, Lightweight Charts et markers
 
-**État : validation locale complète ; commit fonctionnel `a446628` sur `main` local.**
+**État : intégré sur GitHub `main`.**
 
-Référence fonctionnelle : `a446628` (`feat: add cockpit market charts and trade markers`). La présence de ce commit sur GitHub `main` doit être confirmée après push.
+Référence fonctionnelle : `a446628918a614d2ae0ac3b55243881aad5ef410` (`feat: add cockpit market charts and trade markers`). Clôture documentaire poussée ensuite au commit `b5a26f77d1951f8eb39df30b5b6f3b5b81f4d585`.
 
 Périmètre intégré dans le commit fonctionnel :
 
