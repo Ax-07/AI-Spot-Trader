@@ -92,6 +92,10 @@ function signedDecimal(value: string | number | null | undefined) {
   return formatted;
 }
 
+function codeLabel(value: string | null | undefined) {
+  return value ? value.replaceAll("_", " ") : "—";
+}
+
 function KpiCard({
   label,
   value,
@@ -128,8 +132,6 @@ function HomePanel({ control, onNavigate }: { control: ControlPlaneController; o
   const portfolio = cockpit.resources.portfolio.kind === "ready" ? cockpit.resources.portfolio.data : null;
   const latestCycle = cockpit.resources.latestCycle.kind === "ready" ? cockpit.resources.latestCycle.data : null;
   const latestError = cockpit.resources.latestError.kind === "ready" ? cockpit.resources.latestError.data : null;
-  const decisions = cockpit.resources.decisions.kind === "ready" ? cockpit.resources.decisions.data.items : [];
-  const risks = cockpit.resources.riskAssessments.kind === "ready" ? cockpit.resources.riskAssessments.data.items : [];
   const summary = analytics.state.kind === "ready" ? analytics.state.data.summary : null;
   const activeCampaign = control.activeCampaign?.campaign ?? null;
   const engine = control.engine;
@@ -150,10 +152,12 @@ function HomePanel({ control, onNavigate }: { control: ControlPlaneController; o
   const recoverableCampaign = !activeCampaign && latestRun?.campaign_id
     ? control.campaigns.find((item) => item.campaign_id === latestRun.campaign_id) ?? null
     : null;
-  const latestDecision = decisions[0] ?? null;
-  const latestRisk = latestDecision
-    ? risks.find((item) => item.decision_id === latestDecision.decision_id) ?? null
-    : null;
+  const latestExplanation = latestCycle?.explainability ?? null;
+  const latestDecision = latestExplanation?.agent ?? null;
+  const latestRisk = latestExplanation?.risk ?? null;
+  const latestExecution = latestExplanation?.execution ?? null;
+  const latestContext = latestExplanation?.context ?? null;
+  const latestSelection = latestExplanation?.market_selection ?? null;
   const openPositions = portfolio ? portfolio.positions.length + portfolio.derivative_positions.length : 0;
   const busy = control.busyAction !== null;
 
@@ -301,17 +305,73 @@ function HomePanel({ control, onNavigate }: { control: ControlPlaneController; o
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>Dernière décision</CardTitle><CardDescription>Lecture rapide sans entrer dans l’audit détaillé.</CardDescription></CardHeader>
+          <CardHeader><CardTitle>Dernière décision</CardTitle><CardDescription>Synthèse explicable de l’Agent, Risk et de l’exécution PAPER.</CardDescription></CardHeader>
           <CardContent>
             {latestDecision ? (
               <div className="space-y-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge tone={latestDecision.action === "BUY" ? "success" : latestDecision.action === "SELL" ? "danger" : "neutral"}>{latestDecision.action}</Badge>
                   <span className="font-semibold">{latestDecision.symbol}</span>
+                  {latestContext?.mode ? <Badge tone={latestContext.mode === "MANAGEMENT" ? "warning" : "info"}>{latestContext.mode}</Badge> : null}
                   {latestRisk ? <Badge tone={latestRisk.status === "ALLOW" ? "success" : latestRisk.status === "MODIFY" ? "warning" : latestRisk.status === "REJECT" ? "danger" : "neutral"}>Risk {latestRisk.status}</Badge> : null}
                 </div>
-                <p className="text-xs text-muted-foreground">{formatTimestamp(latestDecision.created_at)}</p>
+
+                <div className="rounded-xl border bg-muted/20 p-3">
+                  <p className="text-xs font-semibold">Pourquoi l’IA ?</p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {latestDecision.rationale ?? "Rationale non disponible pour cet historique"}
+                  </p>
+                  {latestSelection?.rationale ? (
+                    <p className="mt-2 border-t pt-2 text-[11px] leading-relaxed text-muted-foreground">
+                      <strong className="text-foreground">Pourquoi ce marché ?</strong> {latestSelection.rationale}
+                    </p>
+                  ) : null}
+                </div>
+
+                {latestRisk ? (
+                  <div className="space-y-2 text-xs">
+                    {latestRisk.reasons.length ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {latestRisk.reasons.slice(0, 3).map((reason) => <Badge key={reason} tone={latestRisk.status === "REJECT" ? "danger" : "warning"}>{codeLabel(reason)}</Badge>)}
+                      </div>
+                    ) : (
+                      <p className="text-muted-foreground">Aucune raison de modification/refus persistée.</p>
+                    )}
+                    {latestRisk.requested_quantity ? (
+                      <p>
+                        Quantité IA <strong>{formatDecimal(latestRisk.requested_quantity)}</strong>
+                        {latestRisk.authorized_quantity ? <> · autorisée <strong>{formatDecimal(latestRisk.authorized_quantity)}</strong></> : null}
+                      </p>
+                    ) : latestDecision.action === "HOLD" && latestRisk.status === "ALLOW" ? (
+                      <p className="text-muted-foreground">HOLD autorisé : aucune quantité ni exécution attendue.</p>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                <div className="rounded-lg border bg-background p-3 text-xs">
+                  <span className="font-semibold">Exécution PAPER : </span>
+                  {latestExecution?.outcome === "FILLED"
+                    ? `${latestExecution.fill_count} fill(s) réel(s)`
+                    : latestExecution?.outcome === "INTENT_CREATED_NO_FILL"
+                      ? "intent créé, aucun fill persisté"
+                      : latestExecution?.outcome === "NOT_CREATED_RISK_REJECT"
+                        ? "aucun intent après REJECT"
+                        : latestExecution?.outcome === "NOT_CREATED_HOLD"
+                          ? "aucune exécution attendue pour HOLD"
+                          : latestCycle?.failure
+                            ? `aucune exécution avant échec ${latestCycle.failure.stage}`
+                            : "aucune exécution persistée"}
+                </div>
+
+                <p className="text-xs text-muted-foreground">{formatTimestamp(latestCycle?.recorded_at ?? null)}</p>
                 <Button variant="outline" size="sm" onClick={() => onNavigate("history")}>Voir le parcours complet</Button>
+              </div>
+            ) : latestCycle ? (
+              <div className="space-y-3">
+                <p className="rounded-xl border border-dashed p-5 text-sm text-muted-foreground">
+                  Ce dernier cycle ne contient aucune décision IA exploitable. Aucun rationale n’est inventé.
+                </p>
+                <Button variant="outline" size="sm" onClick={() => onNavigate("history")}>Voir le cycle</Button>
               </div>
             ) : <p className="rounded-xl border border-dashed p-5 text-sm text-muted-foreground">Aucune décision IA journalisée.</p>}
           </CardContent>

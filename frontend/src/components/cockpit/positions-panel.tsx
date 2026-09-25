@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleDollarSign, Gauge, RefreshCw, TrendingUp, WalletCards } from "lucide-react";
+import { CircleDollarSign, Gauge, History, RefreshCw, TrendingUp, WalletCards } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,12 +32,39 @@ function pnlClass(value: string | number | null | undefined) {
   return parsed > 0 ? "text-success-foreground" : "text-destructive-subtle-foreground";
 }
 
+function actionTone(action: string | null | undefined) {
+  if (action === "BUY") return "success" as const;
+  if (action === "SELL") return "danger" as const;
+  return "neutral" as const;
+}
+
+function riskTone(status: string | null | undefined) {
+  if (status === "ALLOW") return "success" as const;
+  if (status === "MODIFY") return "warning" as const;
+  if (status === "REJECT") return "danger" as const;
+  return "neutral" as const;
+}
+
 export function PositionsPanel() {
   const cockpit = useCockpit();
   const portfolio = cockpit.resources.portfolio.kind === "ready" ? cockpit.resources.portfolio.data : null;
+  const cycles = cockpit.resources.cycles.kind === "ready" ? cockpit.resources.cycles.data.items : [];
   const refreshing = cockpit.refreshing;
   const spotPositions = portfolio?.positions ?? [];
   const derivativePositions = portfolio?.derivative_positions ?? [];
+
+  const openMarketKeys = new Set<string>();
+  if (portfolio?.settlement_asset) {
+    for (const position of spotPositions) {
+      openMarketKeys.add(`SPOT:${position.asset}/${portfolio.settlement_asset}`);
+    }
+  }
+  for (const position of derivativePositions) {
+    openMarketKeys.add(`PERPETUAL:${position.symbol}`);
+  }
+  const relatedActivity = cycles
+    .filter((cycle) => cycle.symbol && cycle.market_type && openMarketKeys.has(`${cycle.market_type}:${cycle.symbol}`))
+    .slice(0, 8);
 
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-6 px-4 py-6 sm:px-6 xl:px-8">
@@ -155,6 +182,58 @@ export function PositionsPanel() {
               </table>
             </div>
           ) : <p className="rounded-xl border border-dashed p-5 text-sm text-muted-foreground">Aucune position PERPETUAL ouverte.</p>}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle className="flex items-center gap-2"><History className="size-4" /> Activité auditée liée à ces marchés</CardTitle>
+              <CardDescription>
+                Corrélation récente par symbole + type de marché uniquement. Elle ne constitue pas la provenance directe d’une position.
+              </CardDescription>
+            </div>
+            <Badge tone="neutral">{relatedActivity.length} cycle(s) récent(s)</Badge>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {relatedActivity.length ? (
+            <div className="divide-y divide-border/80 rounded-xl border border-border/80">
+              {relatedActivity.map((cycle) => (
+                <div key={cycle.cycle_id} className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold">{cycle.symbol}</span>
+                      {cycle.market_type ? <Badge tone={cycle.market_type === "PERPETUAL" ? "warning" : "info"}>{cycle.market_type}</Badge> : null}
+                      {cycle.decision_action ? <Badge tone={actionTone(cycle.decision_action)}>{cycle.decision_action}</Badge> : null}
+                      {cycle.risk_status ? <Badge tone={riskTone(cycle.risk_status)}>Risk {cycle.risk_status}</Badge> : null}
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">{formatTimestamp(cycle.recorded_at)}</p>
+                  </div>
+                  <div className="text-xs text-muted-foreground sm:text-right">
+                    {cycle.failure ? (
+                      <span className="text-destructive-subtle-foreground">Échec {cycle.failure.stage}</span>
+                    ) : cycle.fill_count > 0 ? (
+                      <span>{cycle.fill_count} fill(s) PAPER</span>
+                    ) : cycle.execution_id ? (
+                      <span>ExecutionIntent sans fill</span>
+                    ) : cycle.decision_action === "HOLD" ? (
+                      <span>HOLD · non exécuté</span>
+                    ) : cycle.risk_status === "REJECT" ? (
+                      <span>REJECT · non exécuté</span>
+                    ) : (
+                      <span>Non exécuté</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-xl border border-dashed p-5 text-sm text-muted-foreground">
+              Aucune activité récente de la page d’audit courante ne correspond aux marchés actuellement détenus.
+            </p>
+          )}
         </CardContent>
       </Card>
 

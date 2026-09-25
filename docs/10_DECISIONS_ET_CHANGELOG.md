@@ -13,145 +13,81 @@ séparé.
 ## Référence intégrée du Batch 19.4
 
 ```text
+HEAD GitHub main observé           : e7e4c8248406516eada576b3907e77dc8b72a0e4
 Référence fonctionnelle Batch 19.4 : de65c6677ce01f9c75da5545fe81553a021f588d
-Commit                            : feat: add dynamic audited market discovery
-Clôture documentaire observée     : 62adc9bd2293ad94050b209de1897c4290a673f7
+Commit fonctionnel                 : feat: add dynamic audited market discovery
 ```
 
-Les Batches 19.1, 19.2, 19.3 et 19.4 sont intégrés. Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
+Les Batches 19.1, 19.2, 19.3 et 19.4 sont intégrés. Le Batch 19.5 ci-dessous a passé la validation automatisée locale ; son intégration GitHub reste en attente du commit/push et de la clôture opérateur.
 
 Validation opérateur communiquée pour 19.4 : `tests/test_market_discovery.py` = 12 tests passés ; suite backend complète = 578 tests passés avec 2 warnings de dépréciation ; frontend = `pnpm lint`, `pnpm typecheck` et `pnpm build` passés.
 
 ## Décisions historiques toujours actives
 
-- ADR-173 à ADR-181 : StrategyRevision immuable, contrat Agent protégé, digests, Campaign snapshot,
-  identité expérimentale, distinction Campaign/paper_run, runtime backend et recovery ;
-- ADR-182 à ADR-188 : frontend client du Control Plane, API unique, validators backend, preview
-  canonique, activation et reprise distinctes ;
+- ADR-173 à ADR-181 : StrategyRevision immuable, contrat Agent protégé, digests, Campaign snapshot, identité expérimentale, distinction Campaign/paper_run, runtime backend et recovery ;
+- ADR-182 à ADR-188 : frontend client du Control Plane, API unique, validators backend, preview canonique, activation et reprise distinctes ;
 - ADR-189/190 : adaptation JSON `market_type` à la frontière API et typing sans changement runtime ;
 - ADR-191/192 : Vue d'ensemble comme surface principale et réutilisation des panneaux canoniques ;
 - ADR-193 à ADR-195 : aide progressive, règles métier au backend et guide opérateur ;
-- ADR-196 à ADR-204 : simplification opérateur, navigation orientée tâches, profils Risk UX,
-  `next-themes`, tokens sémantiques et modernisation du cockpit.
-
-## ADR-205 — Comptabilité SPOT canonique backend
-
-**INTÉGRÉE AU BATCH 19.1.**
-
-Méthode : coût moyen pondéré économique. `average_entry_price = remaining_cost_basis / quantity`; le coût restant utilise les débits cash BUY réels frais inclus ; les SELL libèrent la base au prorata et réalisent le P&L sur le crédit net. Spread/slippage sont déjà incorporés dans les prix de fill et ne sont jamais recomptés.
-
-Les snapshots antérieurs sans base de coût restent `accounting_complete=false` sans reconstruction historique.
-
-## ADR-206 / ADR-215 / ADR-216 / ADR-217 — Monitoring et valorisation
-
-**INTÉGRÉS AU BATCH 19.2.**
-
-- monitors SPOT/PERPETUAL backend indépendants du LLM ;
-- mark SPOT causal `LAST_PRICE` ;
-- staleness fail-closed ;
-- agrégats cash, valeur SPOT, P&L latent/réalisé, equity et exposition calculés dans le ledger ;
-- aucun calcul financier canonique dupliqué dans le frontend.
-
-## ADR-207 — Saturation d'exposition = restriction déterministe du champ des actions
-
-**INTÉGRÉE AU BATCH 19.3.**
-
-`CapacityEvaluator` constate uniquement si une augmentation d'exposition est théoriquement possible avant acquisition du `MarketState`.
-
-```text
-NORMAL      -> sélection stratégique normale + tools read-only éventuels
-MANAGEMENT  -> positions ouvertes uniquement + recherche d'ouverture désactivée
-```
-
-Le même Agent choisit encore le marché parmi les positions ouvertes et décide HOLD/réduction/clôture. Le déterministe ne classe pas les positions et ne crée pas une stratégie de sortie.
-
-## ADR-218 — CapacityEvaluator partage exactement la RiskPolicy active
-
-**INTÉGRÉE AU BATCH 19.3.**
-
-Une seule instance `RiskPolicy` est transmise à `CapacityEvaluator` et `RiskEngine`. Les contrôles dépendant du `MarketState` restent exclusivement chez Risk.
-
-## ADR-219 — MANAGEMENT est fail-closed et Risk interdit les hausses d'exposition
-
-**INTÉGRÉE AU BATCH 19.3.**
-
-Une valorisation incomplète produit MANAGEMENT avec raison explicite. Risk rejette toute action augmentant l'exposition avec `MANAGEMENT_EXPOSURE_INCREASE`. Le mode est recalculé à chaque cycle et n'est pas un état durable.
-
-## ADR-220 — Économie IA mesurée uniquement avec des faits observables
-
-**INTÉGRÉE AU BATCH 19.3.**
-
-En MANAGEMENT, la boucle de tools d'ouverture est désactivée et `new_opening_research_skipped=true` est audité. Aucun compteur de tokens fictif n'est introduit.
-
-## ADR-221 — Le catalogue Kraken existant devient la source canonique de discovery
-
-**INTÉGRÉE AU BATCH 19.4.**
-
-`MarketResearchService` et `KrakenMarketResearchBackend` sont réutilisés. Aucun scanner parallèle Kraken n'est ajouté. Le cache de catalogue est process-local, 15 min par défaut.
-
-Le déterministe peut éliminer un marché pour des raisons factuelles : type, quote settlement, statut, contrat linéaire, snapshot absent/périmé, historique causal insuffisant ou whitelist Risk explicite. Il ne calcule aucun score d'opportunité. Un refresh complet est borné à 45 s par défaut et `MarketDiscoveryInput.created_at` est fixé après acquisition des candidats afin de préserver la causalité.
-
-## ADR-222 — La watchlist est une sélection périodique du même Agent
-
-**INTÉGRÉE AU BATCH 19.4.**
-
-Un `OpenAIWatchlistSelector` est un adaptateur sur la même instance `OpenAIDecisionProvider` : même client de stratégie, même modèle et même horloge. Il n'existe pas de second Agent.
-
-La sortie structurée contient plusieurs marchés et leurs rationales. Le backend impose :
-
-- au moins un marché ;
-- maximum `watchlist_limit` ;
-- unicité ;
-- appartenance stricte à l'univers candidat ;
-- SPOT/PERPETUAL uniquement.
-
-La watchlist n'est jamais une instruction d'ordre.
-
-## ADR-223 — Watchlist process-local, audit durable, reconstruction après restart
-
-**INTÉGRÉE AU BATCH 19.4.**
-
-Aucune table SQL mutable de watchlist n'est introduite. Chaque cycle transporte dans l'audit : statut de discovery, taille du catalogue, candidats avec leurs snapshots factuels, timestamps de l'input/sélection, watchlist précédente/effective, ajouts, maintiens, retraits, rationales et erreur éventuelle.
-
-Après restart :
-
-- en `NORMAL`, la watchlist est reconstruite au premier refresh utile ;
-- en `MANAGEMENT`, la discovery d'ouverture est ignorée et les positions restaurées sont gérées immédiatement ;
-- la dernière watchlist n'est pas rejouée comme décision stratégique historique.
-
-Ce choix réduit la surface de persistence et évite de transformer un cache stratégique en état métier autoritaire. Une persistence dédiée pourra être reconsidérée si un besoin produit mesuré l'exige.
-
-## ADR-224 — Univers effectif = watchlist + positions ouvertes, avec bootstrap immuable
-
-**INTÉGRÉE AU BATCH 19.4.**
-
-`paper_executable_markets` reste dans la Campaign comme bootstrap/garde-fou/fallback. Pour une Campaign dynamique :
-
-```text
-univers admissible factuel -> watchlist Agent
-univers cycle NORMAL       -> watchlist + positions ouvertes
-univers cycle MANAGEMENT   -> positions ouvertes uniquement au transport Agent
-```
-
-Une position ouverte reste donc gérable si son marché est retiré de la watchlist. Le routeur d'exécution dynamique n'autorise que le type configuré et la quote settlement de Campaign, puis exige toujours un snapshot Kraken canonique.
-
-## ADR-225 — `risk_allowed_pairs=null` est réservé aux Campaigns dynamiques
-
-**INTÉGRÉE AU BATCH 19.4.**
-
-Une Campaign statique conserve l'obligation de whitelist explicite couvrant tous ses marchés. Une Campaign dynamique peut utiliser `null` pour laisser la frontière Kraken/type/quote définir l'adresse admissible ; une whitelist non nulle reste un garde-fou additionnel qui restreint aussi les candidats de discovery.
-
-Les autres limites Risk restent inchangées et autoritaires.
-
-## ADR-226 — Recovery dynamique étend le lifecycle canonique, sans second ledger
-
-**INTÉGRÉE AU BATCH 19.4.**
-
-`DynamicCampaignPaperRunLifecycle` réutilise `CampaignPaperRunLifecycle`. Lors d'une reprise explicite, il ajoute au nouvel univers de run les marchés correspondant aux positions durables avant de laisser les validations de recovery existantes s'exécuter. Aucune nouvelle table, aucun replay d'ordres et aucun ledger parallèle.
+- ADR-196 à ADR-204 : simplification opérateur, navigation orientée tâches, profils Risk UX, `next-themes`, tokens sémantiques et modernisation du cockpit ;
+- ADR-205 : comptabilité SPOT canonique backend ;
+- ADR-206 / ADR-215 / ADR-216 / ADR-217 : monitoring et valorisation ;
+- ADR-207 / ADR-218 / ADR-219 / ADR-220 : `NORMAL` / `MANAGEMENT`, `CapacityEvaluator` et économie IA ;
+- ADR-221 à ADR-226 : discovery/watchlist dynamique, audit, univers effectif, whitelist et recovery.
 
 ## ADR-210 — Exposer le `rationale` sans le confondre avec Risk
 
-**PLANIFIÉ 19.5.** L'UI doit montrer séparément rationale stratégique et `ALLOW / MODIFY / REJECT` avec raisons déterministes. Le rationale de watchlist 19.4 devient une source supplémentaire à présenter clairement comme **sélection de surveillance**, pas comme justification d'ordre.
+**BATCH 19.5 VALIDÉ AUTOMATIQUEMENT EN LOCAL — INTÉGRATION GITHUB EN ATTENTE.**
+
+Le cockpit expose séparément :
+
+- rationale de sélection de watchlist quand une vraie sélection `REFRESHED` existe ;
+- rationale de sélection du marché du cycle ;
+- rationale de la décision BUY / SELL / HOLD ;
+- statut et raisons déterministes Risk ;
+- exécution PAPER réelle éventuelle.
+
+`CACHE_REUSED`, `FALLBACK` et `SKIPPED_MANAGEMENT` ne sont jamais présentés comme une nouvelle sélection IA.
+
+## ADR-227 — L'explicabilité est une projection de lecture, pas une nouvelle source de vérité
+
+**BATCH 19.5 VALIDÉ AUTOMATIQUEMENT EN LOCAL — INTÉGRATION GITHUB EN ATTENTE.**
+
+Aucune table SQL, aucun ledger et aucune mutation des payloads persistés ne sont ajoutés. La projection est construite à la frontière API à partir des détails de cycle existants.
+
+Elle peut présenter les faits, mais ne doit jamais :
+
+- recalculer la décision Agent ;
+- reconstituer approximativement la logique Risk ;
+- recalculer le P&L ;
+- inventer une rationale absente ;
+- transformer un cache ou une corrélation par symbole en causalité métier.
+
+## ADR-228 — L'Historique se base sur les détails corrélés de cycle
+
+**BATCH 19.5 VALIDÉ AUTOMATIQUEMENT EN LOCAL — INTÉGRATION GITHUB EN ATTENTE.**
+
+La liste `/cycles` sert d'index. Pour chaque cycle visible, le cockpit lit `/cycles/{cycle_id}` afin d'obtenir le graphe corrélé persistant. Il ne joint plus les pages indépendantes `/decisions`, `/risk-assessments` et `/executions` pour fabriquer un parcours.
+
+Les JSON canoniques restent disponibles dans les détails techniques.
+
+## ADR-229 — Positions : corrélation par marché uniquement en l'absence de provenance directe
+
+**BATCH 19.5 VALIDÉ AUTOMATIQUEMENT EN LOCAL — INTÉGRATION GITHUB EN ATTENTE.**
+
+Les modèles de position ne portent pas de `decision_id`, `execution_id` ou `fill_id` d'origine. Le cockpit affiche donc seulement une **activité auditée récente liée au même symbole + type de marché**.
+
+Cette activité n'est jamais intitulée ou décrite comme « décision à l'origine de cette position ».
+
+## ADR-230 — HOLD, REJECT et FAILED conservent des sémantiques distinctes
+
+**BATCH 19.5 VALIDÉ AUTOMATIQUEMENT EN LOCAL — INTÉGRATION GITHUB EN ATTENTE.**
+
+- HOLD + ALLOW : décision métier normale sans exécution attendue ;
+- REJECT : décision Risk déterministe, aucun `ExecutionIntent` ;
+- FAILED : échec technique à son stage propre ;
+- si un intent existe déjà avant un échec Broker, cet artefact reste visible ;
+- MODIFY expose séparément quantité demandée/proposée et quantité autorisée.
 
 ## ADR-211 à ADR-214 — Charts, données et cadences
 
@@ -184,7 +120,6 @@ Les autres limites Risk restent inchangées et autoritaires.
 
 ## Changelog — 2026-09-25 — Batch 19.4
 
-- base de travail initiale resynchronisée sur `bfef06d78dc34089541272c2944518499d4a1530` ;
 - `MarketDiscoveryPolicy`, cache catalogue et coordinateur de discovery ;
 - présélection factuelle Kraken sans ranking algorithmique ;
 - watchlist multi-marchés sélectionnée par le même Agent ;
@@ -192,9 +127,23 @@ Les autres limites Risk restent inchangées et autoritaires.
 - interaction explicite avec NORMAL/MANAGEMENT ;
 - positions ouvertes réinjectées dans l'univers effectif ;
 - routeur/mark-to-market/recovery adaptés aux marchés dynamiques ;
-- audit détaillé des faits candidats, timestamps et diffs de watchlist sans migration SQL ;
+- audit détaillé sans migration SQL ;
 - configurateur simple orienté « paire de départ/secours » ;
-- correctif `OpenAIWatchlistSelector` validé après conversion naturelle JSON array -> liste Pydantic ;
-- validation finale : 12 tests discovery passés, 578 tests backend passés avec 2 warnings de dépréciation, frontend lint/typecheck/build passés ;
-- intégré sur GitHub au commit `de65c6677ce01f9c75da5545fe81553a021f588d` ;
-- clôture documentaire finalisée ensuite, sans changement fonctionnel.
+- validation finale opérateur : 12 tests discovery, 578 tests backend avec 2 warnings, frontend lint/typecheck/build ;
+- intégré sur GitHub au commit `de65c6677ce01f9c75da5545fe81553a021f588d`.
+
+## Changelog — 2026-09-25 — Batch 19.5 (validation locale réussie, intégration en attente)
+
+- resynchronisation sur le HEAD GitHub `e7e4c8248406516eada576b3907e77dc8b72a0e4` ;
+- projection API d'explicabilité construite depuis les payloads canoniques persistés ;
+- séparation discovery/contexte, sélection marché, Agent, Risk et PAPER ;
+- traitement explicite de HOLD, MODIFY, REJECT, FAILED et legacy partiel ;
+- faits de fills PAPER exposés dans la projection ;
+- Accueil enrichi avec rationale IA, raisons Risk et résultat d'exécution ;
+- Historique basé sur les détails corrélés par cycle ;
+- Positions enrichies d'une activité récente liée au marché sans causalité inventée ;
+- validation opérateur ciblée `pytest tests/test_cycle_explainability.py` : **8 tests passés** ;
+- suite backend complète `pytest` : **586 tests passés**, 2 warnings de dépréciation ;
+- frontend : `pnpm lint`, `pnpm typecheck` et `pnpm build` **passés** ;
+- `git diff --check` sans erreur de whitespace, avec seulement des avertissements LF -> CRLF ;
+- revue visuelle light/dark + responsive encore à distinguer de la validation automatisée avant clôture définitive.

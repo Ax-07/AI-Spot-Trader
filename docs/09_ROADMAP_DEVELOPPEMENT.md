@@ -3,8 +3,9 @@
 ## Référence de reprise
 
 ```text
+HEAD GitHub main observé          : e7e4c8248406516eada576b3907e77dc8b72a0e4
 Référence fonctionnelle Batch 19.4 : de65c6677ce01f9c75da5545fe81553a021f588d
-Clôture documentaire observée      : 62adc9bd2293ad94050b209de1897c4290a673f7
+État Batch 19.5                    : validation automatisée locale réussie, commit/push en attente
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch. Le document détaillé des améliorations est `docs/11_AMELIORATIONS_PLANIFIEES.md`.
@@ -39,31 +40,51 @@ Résultat intégré :
 - catalogue canonique réutilisé via `MarketResearchService` + adaptateurs Kraken existants ;
 - cache catalogue 15 min par défaut ;
 - refresh watchlist 15 min par défaut, déclenché uniquement par un cycle `NORMAL`, borné à 45 s ;
-- filtrage factuel sans ranking : type, quote settlement, statut, contrat PERPETUAL linéaire, disponibilité/fraîcheur snapshot et historique causal ;
-- rotation déterministe du sous-ensemble sondé pour couvrir progressivement un catalogue trop large ;
-- limites par défaut : 24 marchés sondés, 12 candidats Agent, 6 marchés watchlist ;
+- filtrage factuel sans ranking ;
 - sélection multi-marchés par le même Agent stratégique, avec rationale global et par marché ;
-- validation fail-closed : toute sortie LLM hors candidats, dupliquée ou trop grande est refusée ;
 - fallback explicite : dernière watchlist valide, sinon bootstrap Campaign ;
-- panne Kraken/LLM temporisée par la cadence de refresh au lieu de relancer à chaque cycle ;
 - univers effectif : watchlist + toutes les positions ouvertes ;
-- positions existantes toujours gérables après retrait de watchlist ;
-- `MANAGEMENT` évalué avant discovery : aucun refresh destiné à ouvrir de nouvelles expositions ;
-- recovery Campaign canonique conservé avec extension de l'univers au moment de la reprise pour les positions dynamiques durables ;
-- audit sans migration SQL via extension persistée de `MarketSelectionInput` : statut, candidats et leurs snapshots factuels, watchlist, ajouts/maintiens/retraits, rationale, erreur et prochain refresh ;
-- configurateur simple : paire de départ/secours seulement, discovery activée par défaut ;
+- `MANAGEMENT` évalué avant discovery ;
+- audit sans migration SQL via extension persistée de `MarketSelectionInput` ;
 - aucun second Agent, aucun ordre déclenché par la watchlist, aucun changement de l'autorité Risk.
 
-Le Batch 19.4 ne comprend ni explicabilité produit 19.5, ni candles/WebSocket/charts 19.6, ni LIVE.
+## Batch 19.5 — Explicabilité opérateur
+
+**État : validation automatisée locale réussie ; intégration GitHub en attente du commit/push.**
+
+Architecture mise en place :
+
+```text
+faits canoniques persistés du cycle
+-> projection backend typée d'explicabilité
+-> /cycles/latest et /cycles/{cycle_id}
+-> cockpit Accueil / Historique
+```
+
+Le Batch 19.5 :
+
+- n'ajoute aucune table SQL ni ledger ;
+- ne recalcule ni stratégie, ni Risk, ni P&L ;
+- sépare discovery/watchlist, contexte `NORMAL` / `MANAGEMENT`, sélection du marché du cycle, décision Agent, résultat Risk et exécution PAPER ;
+- expose quantité proposée, demandée et autorisée sans faire croire que Risk change l'action ou le marché ;
+- distingue HOLD, REJECT et échec technique ;
+- conserve les artefacts produits avant un `FAILED`, notamment un intent existant avant un échec Broker ;
+- affiche explicitement l'absence de rationale sur les historiques legacy ;
+- fait charger à l'Historique les détails corrélés de chaque cycle au lieu de joindre des pages indépendantes ;
+- présente dans Positions uniquement une **activité auditée liée au même marché**, pas une provenance de position.
+
+Validation locale exécutée par l'opérateur sur le repository complet :
+
+- `pytest tests/test_cycle_explainability.py` : **8 tests passés** ;
+- `pytest` : **586 tests passés**, 2 warnings de dépréciation ;
+- `pnpm lint` : **passé** ;
+- `pnpm typecheck` : **passé** ;
+- `pnpm build` : **passé** ;
+- `git diff --check` : aucune erreur, seulement des avertissements LF -> CRLF.
+
+La revue visuelle light/dark + responsive reste la dernière validation opérateur à distinguer des tests automatisés avant clôture définitive.
 
 ## Prochaine séquence
-
-### Batch 19.5 — Explicabilité opérateur
-
-- afficher le `rationale` de l'Agent ;
-- séparer explicitement rationale stratégique et résultat Risk ;
-- corréler décisions/trades/positions/historique ;
-- exploiter aussi l'audit de watchlist 19.4 sans confondre sélection de marché et décision de trade.
 
 ### Batch 19.6A — Backend candles, cache et streaming cockpit
 
@@ -85,12 +106,12 @@ Le Batch 19.4 ne comprend ni explicabilité produit 19.5, ni candles/WebSocket/c
 
 ## Pourquoi cet ordre
 
-La comptabilité 19.1 et le mark-to-market 19.2 fournissent un état portfolio exploitable. Le Batch 19.3 supprime la recherche d'ouverture quand elle est déterministement inutile ou incertaine. Le Batch 19.4 renouvelle désormais un univers stratégique plus large sans gaspiller d'IA en MANAGEMENT et sans déplacer le choix d'opportunité hors de l'Agent. L'explicabilité puis les charts peuvent s'appuyer sur ces traces canoniques.
+La comptabilité 19.1 et le mark-to-market 19.2 fournissent un état portfolio exploitable. Le Batch 19.3 supprime la recherche d'ouverture quand elle est déterministement inutile ou incertaine. Le Batch 19.4 renouvelle un univers stratégique plus large sans gaspiller d'IA en MANAGEMENT. Le Batch 19.5 rend ces traces canoniques lisibles avant que 19.6 n'ajoute les charts et markers.
 
 ## Cadences à maintenir distinctes
 
 1. **monitoring / mark-to-market** : rapide, déterministe, sans LLM ;
-2. **cycle stratégique IA** : plus lent, décision BUY / SELL / HOLD, avec restriction MANAGEMENT si nécessaire ;
+2. **cycle stratégique IA** : plus lent, décision BUY / SELL / HOLD ;
 3. **découverte/révision de watchlist IA** : beaucoup plus lente, 15 min par défaut.
 
 ## Périmètres ultérieurs
@@ -98,5 +119,5 @@ La comptabilité 19.1 et le mark-to-market 19.2 fournissent un état portfolio e
 - LIVE reste séparé et ultérieur ;
 - FUTURE daté reste hors exécution tant qu'un domaine dédié n'est pas décidé ;
 - multi-quote/FX reste à traiter explicitement ;
-- enrichissement research additionnel (volume/spread/depth dédiés) uniquement sur besoin mesuré ;
+- enrichissement research additionnel uniquement sur besoin mesuré ;
 - persistence mutable autonome de watchlist à reconsidérer seulement si le cache process-local + audit de cycle devient insuffisant.

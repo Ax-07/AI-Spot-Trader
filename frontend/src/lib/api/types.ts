@@ -127,6 +127,117 @@ export type FillResponse = {
   payload: JsonObject;
 };
 
+export type ExplainabilityMarketResponse = {
+  symbol: string;
+  market_type: string | null;
+};
+
+export type ExplainabilityWatchlistEntryResponse = {
+  market: ExplainabilityMarketResponse;
+  rationale: string | null;
+};
+
+export type ExplainabilityContextResponse = {
+  mode: string | null;
+  reason: string | null;
+  spot_opening_capacity: string | null;
+  perpetual_opening_capacity: string | null;
+  new_opening_research_skipped: boolean | null;
+};
+
+export type ExplainabilityDiscoveryResponse = {
+  status: string;
+  discovery_id: string | null;
+  observed_at: string | null;
+  selection_rationale: string | null;
+  selection_entries: ExplainabilityWatchlistEntryResponse[];
+  previous_watchlist: ExplainabilityMarketResponse[];
+  effective_watchlist: ExplainabilityMarketResponse[];
+  added_markets: ExplainabilityMarketResponse[];
+  maintained_markets: ExplainabilityMarketResponse[];
+  removed_markets: ExplainabilityMarketResponse[];
+  error_type: string | null;
+  next_refresh_at: string | null;
+};
+
+export type ExplainabilityMarketSelectionResponse = {
+  selection_id: string | null;
+  symbol: string;
+  market_type: string | null;
+  rationale: string | null;
+};
+
+export type ExplainabilityAgentResponse = {
+  decision_id: string | null;
+  action: string;
+  symbol: string;
+  market_type: string | null;
+  proposed_quantity: string | null;
+  rationale: string | null;
+};
+
+export type ExplainabilityRiskResponse = {
+  risk_assessment_id: string | null;
+  status: string;
+  requested_quantity: string | null;
+  authorized_quantity: string | null;
+  reasons: string[];
+  evaluated_limits: string[];
+};
+
+export type ExplainabilityFillResponse = {
+  fill_id: string;
+  execution_id: string;
+  filled_at: string;
+  action: string | null;
+  symbol: string | null;
+  market_type: string | null;
+  quantity: string | null;
+  reference_price: string | null;
+  price: string | null;
+  notional: string | null;
+  fee: string | null;
+  spread_cost: string | null;
+  slippage_cost: string | null;
+};
+
+export type ExplainabilityExecutionOutcome =
+  | "FILLED"
+  | "INTENT_CREATED_NO_FILL"
+  | "NOT_CREATED_HOLD"
+  | "NOT_CREATED_RISK_REJECT"
+  | "NOT_CREATED_FAILURE"
+  | "NOT_CREATED";
+
+export type ExplainabilityExecutionResponse = {
+  outcome: ExplainabilityExecutionOutcome;
+  execution_id: string | null;
+  action: string | null;
+  symbol: string | null;
+  market_type: string | null;
+  quantity: string | null;
+  fill_count: number;
+  fills: ExplainabilityFillResponse[];
+};
+
+export type ExplainabilityCorrelationResponse = {
+  cycle_id: string;
+  decision_id: string | null;
+  risk_assessment_id: string | null;
+  execution_id: string | null;
+  fill_ids: string[];
+};
+
+export type CycleExplainabilityResponse = {
+  context: ExplainabilityContextResponse | null;
+  discovery: ExplainabilityDiscoveryResponse | null;
+  market_selection: ExplainabilityMarketSelectionResponse | null;
+  agent: ExplainabilityAgentResponse | null;
+  risk: ExplainabilityRiskResponse | null;
+  execution: ExplainabilityExecutionResponse;
+  correlation: ExplainabilityCorrelationResponse;
+};
+
 export type DecisionResponse = {
   decision_id: string;
   cycle_id: string;
@@ -178,6 +289,7 @@ export type CycleDetailResponse = {
   execution_intent: JsonObject | null;
   fills: FillResponse[];
   portfolio_state_after: JsonObject | null;
+  explainability: CycleExplainabilityResponse | null;
 };
 
 export type PageResponse<T> = {

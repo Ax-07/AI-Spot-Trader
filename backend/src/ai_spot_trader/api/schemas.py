@@ -42,6 +42,116 @@ class FillResponse(ApiModel):
     payload: JsonObject
 
 
+class ExplainabilityMarketResponse(ApiModel):
+    symbol: str
+    market_type: str | None = None
+
+
+class ExplainabilityWatchlistEntryResponse(ApiModel):
+    market: ExplainabilityMarketResponse
+    rationale: str | None = None
+
+
+class ExplainabilityContextResponse(ApiModel):
+    mode: str | None = None
+    reason: str | None = None
+    spot_opening_capacity: str | None = None
+    perpetual_opening_capacity: str | None = None
+    new_opening_research_skipped: bool | None = None
+
+
+class ExplainabilityDiscoveryResponse(ApiModel):
+    status: str
+    discovery_id: UUID | None = None
+    observed_at: datetime | None = None
+    selection_rationale: str | None = None
+    selection_entries: tuple[ExplainabilityWatchlistEntryResponse, ...] = ()
+    previous_watchlist: tuple[ExplainabilityMarketResponse, ...] = ()
+    effective_watchlist: tuple[ExplainabilityMarketResponse, ...] = ()
+    added_markets: tuple[ExplainabilityMarketResponse, ...] = ()
+    maintained_markets: tuple[ExplainabilityMarketResponse, ...] = ()
+    removed_markets: tuple[ExplainabilityMarketResponse, ...] = ()
+    error_type: str | None = None
+    next_refresh_at: datetime | None = None
+
+
+class ExplainabilityMarketSelectionResponse(ApiModel):
+    selection_id: UUID | None = None
+    symbol: str
+    market_type: str | None = None
+    rationale: str | None = None
+
+
+class ExplainabilityAgentResponse(ApiModel):
+    decision_id: UUID | None = None
+    action: str
+    symbol: str
+    market_type: str | None = None
+    proposed_quantity: str | None = None
+    rationale: str | None = None
+
+
+class ExplainabilityRiskResponse(ApiModel):
+    risk_assessment_id: UUID | None = None
+    status: str
+    requested_quantity: str | None = None
+    authorized_quantity: str | None = None
+    reasons: tuple[str, ...] = ()
+    evaluated_limits: tuple[str, ...] = ()
+
+
+class ExplainabilityFillResponse(ApiModel):
+    fill_id: UUID
+    execution_id: UUID
+    filled_at: datetime
+    action: str | None = None
+    symbol: str | None = None
+    market_type: str | None = None
+    quantity: str | None = None
+    reference_price: str | None = None
+    price: str | None = None
+    notional: str | None = None
+    fee: str | None = None
+    spread_cost: str | None = None
+    slippage_cost: str | None = None
+
+
+class ExplainabilityExecutionResponse(ApiModel):
+    outcome: Literal[
+        "FILLED",
+        "INTENT_CREATED_NO_FILL",
+        "NOT_CREATED_HOLD",
+        "NOT_CREATED_RISK_REJECT",
+        "NOT_CREATED_FAILURE",
+        "NOT_CREATED",
+    ]
+    execution_id: UUID | None = None
+    action: str | None = None
+    symbol: str | None = None
+    market_type: str | None = None
+    quantity: str | None = None
+    fill_count: int = Field(ge=0)
+    fills: tuple[ExplainabilityFillResponse, ...] = ()
+
+
+class ExplainabilityCorrelationResponse(ApiModel):
+    cycle_id: UUID
+    decision_id: UUID | None = None
+    risk_assessment_id: UUID | None = None
+    execution_id: UUID | None = None
+    fill_ids: tuple[UUID, ...] = ()
+
+
+class CycleExplainabilityResponse(ApiModel):
+    context: ExplainabilityContextResponse | None = None
+    discovery: ExplainabilityDiscoveryResponse | None = None
+    market_selection: ExplainabilityMarketSelectionResponse | None = None
+    agent: ExplainabilityAgentResponse | None = None
+    risk: ExplainabilityRiskResponse | None = None
+    execution: ExplainabilityExecutionResponse
+    correlation: ExplainabilityCorrelationResponse
+
+
 class CycleDetailResponse(ApiModel):
     cycle_id: UUID
     paper_run_id: UUID | None = None
@@ -63,6 +173,7 @@ class CycleDetailResponse(ApiModel):
     execution_intent: JsonObject | None = None
     fills: tuple[FillResponse, ...] = ()
     portfolio_state_after: JsonObject | None = None
+    explainability: CycleExplainabilityResponse | None = None
 
 
 class DecisionResponse(ApiModel):

@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
+from ai_spot_trader.api.explainability import build_cycle_explainability
 from ai_spot_trader.api.schemas import (
     CycleDetailResponse,
     CycleFailureResponse,
@@ -147,6 +148,7 @@ def _cycle_detail(value: CycleAuditDetail) -> CycleDetailResponse:
         execution_intent=value.execution_intent,
         fills=tuple(_fill(item) for item in value.fills),
         portfolio_state_after=value.portfolio_state_after,
+        explainability=build_cycle_explainability(value),
     )
 
 

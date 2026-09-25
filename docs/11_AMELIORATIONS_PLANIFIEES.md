@@ -1,15 +1,16 @@
 # 11 — Améliorations planifiées
 
-> Référence de reprise des chantiers 19.x. Ce document distingue ce qui est **intégré**, ce qui reste **planifié** et ce qui reste **à décider**.
+> Référence de reprise des chantiers 19.x. Ce document distingue ce qui est **intégré**, ce qui est **validé localement en attente d'intégration** et ce qui reste **planifié**.
 
 ## 1. Référence
 
 ```text
 Repository                         : Ax-07/AI-Spot-Trader
 Branche                            : main
+HEAD GitHub main observé           : e7e4c8248406516eada576b3907e77dc8b72a0e4
 Référence fonctionnelle Batch 19.4 : de65c6677ce01f9c75da5545fe81553a021f588d
-Clôture documentaire observée      : 62adc9bd2293ad94050b209de1897c4290a673f7
-Date Batch 19.4                    : 2026-09-25
+État Batch 19.5                    : validation automatisée locale réussie, commit/push en attente
+Date                               : 2026-09-25
 ```
 
 Les Batches 19.1, 19.2, 19.3 et 19.4 sont intégrés. Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -48,187 +49,132 @@ Confirmé : coût économique moyen pondéré, coût restant frais BUY inclus, v
 
 # 5. Monitoring / mark-to-market — INTÉGRÉ 19.2
 
-Confirmé :
-
-- source de mark SPOT : dernier ticker Kraken causal (`LAST_PRICE`) ;
-- `mark_price`, `mark_observed_at`, `mark_source`, `market_value`, `unrealized_pnl`, `valuation_complete` ;
-- P&L latent calculé uniquement côté backend avec `market_value - remaining_cost_basis` ;
-- mark absent ou périmé => valeurs indisponibles ;
-- position legacy avec coût inconnu => valeur de marché possible, P&L latent interdit ;
-- agrégats portfolio : cash, coût restant, valeur SPOT, P&L réalisé/latent, equity, exposition ;
-- monitor backend indépendant de l'Agent et du frontend ;
-- snapshot/recovery compatible sans migration SQL ;
-- Agent et Risk reçoivent le `PortfolioState` enrichi sans calcul financier parallèle ;
-- cockpit Positions branché sur les champs backend.
+Confirmé : marks SPOT causaux, P&L latent backend, agrégats portfolio, monitors backend indépendants de l'Agent et cockpit branché sur les champs canoniques.
 
 # 6. Mode gestion lorsque l'exposition est saturée — INTÉGRÉ 19.3
 
-Objectif : lorsque le backend sait qu'une nouvelle augmentation d'exposition est impossible ou qu'il ne peut pas établir une capacité sûre, éviter la recherche IA d'ouverture et concentrer le même Agent sur l'existant.
-
-Architecture :
-
-```text
-Portfolio mark-to-market + RiskPolicy partagé
--> CapacityEvaluator déterministe
-   -> NORMAL
-   -> MANAGEMENT
-```
-
-Confirmé :
-
-- une seule instance `RiskPolicy` alimente CapacityEvaluator et RiskEngine ;
-- `NORMAL` conserve le chemin de sélection actuel ;
-- `MANAGEMENT` limite la sélection transportée aux positions ouvertes ;
-- tools read-only de recherche d'ouverture désactivés dans cette phase ;
-- même `OpenAIDecisionProvider` pour sélection MANAGEMENT et décision finale ;
-- HOLD, réduction partielle et clôture restent des décisions stratégiques ;
-- Risk reçoit le mode et refuse toute hausse d'exposition avec `MANAGEMENT_EXPOSURE_INCREASE` ;
-- réduction PERPETUAL conserve `reduce_only`/anti-reversal ;
-- retour à NORMAL automatique au cycle suivant dès qu'une capacité certaine réapparaît ;
-- portefeuille mixte SPOT/PERPETUAL pris en compte ;
-- `valuation_complete=false` => MANAGEMENT explicite, sans capacité inventée ;
-- mode, raison, capacité SPOT/PERP et `new_opening_research_skipped` audités ;
-- aucun nouvel état durable de mode et aucune migration SQL.
+Confirmé : `CapacityEvaluator`, `NORMAL` / `MANAGEMENT`, même `RiskPolicy`, recherche d'ouverture désactivée en MANAGEMENT, Risk bloque les hausses d'exposition et aucun nouvel état durable n'est créé.
 
 # 7. Discovery automatique et watchlist — INTÉGRÉ 19.4
 
-Objectif : supprimer l'obligation de maintenir manuellement toute la liste des paires à surveiller sans créer de scanner algorithmique qui décide des trades.
+Confirmé : catalogue `MarketResearchService`, filtrage factuel sans ranking, watchlist sélectionnée par le même Agent, fallback, interaction avec MANAGEMENT, univers effectif incluant les positions, audit durable sans table mutable dédiée et recovery canonique.
 
-Architecture :
+Validation opérateur communiquée : 12 tests discovery, 578 tests backend avec 2 warnings de dépréciation, `pnpm lint`, `pnpm typecheck`, `pnpm build` passés.
 
-```text
-Kraken MarketResearchService
--> catalogue factuel mis en cache
--> filtre déterministe d'admissibilité
--> sous-ensemble candidat borné
--> même Agent IA -> watchlist multi-marchés
--> univers effectif = watchlist + positions ouvertes
--> cycle canonique BUY/SELL/HOLD -> Risk -> Broker PAPER
-```
+# 8. Explicabilité des décisions IA — VALIDÉE LOCALEMENT 19.5
 
-## 7.1 Univers disponible
+Le `rationale` et les autres faits nécessaires existaient déjà dans le journal de cycle. Le Batch 19.5 les transforme en une vue de présentation typée et défensive sans créer de nouvelle source de vérité.
 
-Le catalogue canonique reste `MarketResearchService` avec `KrakenMarketResearchBackend`. Il n'existe pas de second client/scanner stratégique.
-
-Filtres déterministes :
-
-- `SPOT` / `PERPETUAL` configurés ;
-- même quote que `paper_settlement_asset` ;
-- statut Kraken exploitable ;
-- PERPETUAL linéaire uniquement ;
-- éventuelle `risk_allowed_pairs` non nulle ;
-- snapshot disponible et causal ;
-- fraîcheur maximale ;
-- historique/candles suffisant selon la policy.
-
-Ces filtres n'attribuent aucun score de qualité de trade.
-
-## 7.2 Univers candidat
-
-Valeurs par défaut :
-
-- cache catalogue : 900 s ;
-- refresh watchlist : 900 s ;
-- timeout global d'un refresh : 45 s ;
-- probe : 24 marchés max ;
-- candidats Agent : 12 max ;
-- watchlist : 6 max ;
-- âge snapshot : 120 s max ;
-- au moins 2 observations d'historique par défaut.
-
-Le probe tourne déterministement dans le catalogue compatible afin qu'un catalogue plus large puisse être couvert au fil des refreshs sans classer les opportunités.
-
-## 7.3 Watchlist stratégique
-
-`OpenAIWatchlistSelector` est un adaptateur sur **la même instance `OpenAIDecisionProvider`**. Il réutilise :
-
-- le même modèle Luna/Sol ;
-- le même `StrategyInstructionsClient` ;
-- la même horloge ;
-- la même stratégie opérateur.
-
-La sortie est structurée et contient plusieurs `symbol + market_type + rationale`. Le backend refuse toute sélection hors candidats, dupliquée ou supérieure à la limite.
-
-La sélection d'une watchlist ne produit aucun `ExecutionIntent`.
-
-## 7.4 NORMAL / MANAGEMENT
-
-Le runner dynamique évalue `CapacityEvaluator` **avant** tout refresh de discovery.
+## 8.1 Architecture backend mise en place
 
 ```text
-NORMAL
-  -> refresh si dû
-  -> watchlist Agent
-  -> cycle canonique
-
-MANAGEMENT
-  -> aucun refresh destiné à ouvrir de nouveaux marchés
-  -> positions ouvertes uniquement pour la sélection de gestion
-  -> même Agent -> HOLD/réduction/clôture
-  -> Risk reste autoritaire
+CycleAuditDetail existant
+  + market_selection_input.capacity_context
+  + market_selection_input.market_discovery
+  + MarketSelection persisté
+  + DecisionCandidate persisté
+  + RiskAssessment persisté
+  + ExecutionIntent / Fill persistés
+-> CycleExplainabilityResponse
+-> /api/v1/cycles/latest
+-> /api/v1/cycles/{cycle_id}
 ```
 
-L'économie d'IA est donc structurelle : la cadence de discovery ne contourne jamais 19.3.
+Décisions :
 
-## 7.5 Positions hors watchlist
+- aucune nouvelle table SQL ;
+- aucun ledger parallèle ;
+- aucune mutation du contenu canonique ;
+- aucun nouveau calcul stratégique ou financier ;
+- aucune reconstitution approximative de Risk ;
+- parsing tolérant des historiques partiels ;
+- les absences restent `null`/vides au lieu d'être inventées.
 
-Invariant intégré :
+## 8.2 Discovery / contexte
+
+La projection distingue :
+
+- `REFRESHED` : nouvelle sélection IA de watchlist, avec rationale global et par entrée si persisté ;
+- `CACHE_REUSED` : watchlist réutilisée, aucun nouvel appel IA de sélection ;
+- `FALLBACK` : refresh en échec, watchlist précédente/bootstrap maintenu ;
+- `SKIPPED_MANAGEMENT` : discovery volontairement non lancée en MANAGEMENT.
+
+Le contexte `NORMAL` / `MANAGEMENT`, sa raison et les capacités SPOT/PERP sont présentés séparément.
+
+## 8.3 Agent IA / Risk
+
+L'UI présente séparément :
+
+- marché du cycle et rationale de `MarketSelection` ;
+- BUY / SELL / HOLD et `DecisionCandidate.rationale` ;
+- quantité proposée ;
+- `RiskAssessment.status` ;
+- quantité demandée et quantité autorisée ;
+- raisons et limites évaluées.
+
+Pour `MODIFY`, l'action, le symbole et le type de marché ne sont jamais présentés comme modifiés par Risk : seule la quantité autorisée diffère.
+
+## 8.4 Exécution PAPER
+
+La projection expose l'état dérivé uniquement de la présence des artefacts persistés :
+
+- fill(s) réel(s) ;
+- intent créé sans fill ;
+- absence attendue pour HOLD ;
+- absence après REJECT ;
+- absence avant un échec technique ;
+- absence sans cause plus précise disponible.
+
+Les fills exposent leurs faits persistés utiles : quantité, prix de référence, prix exécuté, notional, frais, spread et slippage lorsqu'ils existent.
+
+## 8.5 FAILED et legacy
+
+Un `FAILED` reste distinct d'un `REJECT`.
+
+- échec Agent : aucun artefact aval n'est inventé ;
+- échec Risk : les artefacts Agent déjà produits restent visibles ;
+- échec Broker après intent : l'intent reste visible même sans fill ;
+- rationale absente : affichage explicite « Rationale non disponible pour cet historique ».
+
+## 8.6 Accueil
+
+La carte « Dernière décision » affiche : action, marché, contexte éventuel, rationale IA, rationale de sélection de marché si disponible, statut/raisons Risk, quantité demandée/autorisée et état d'exécution PAPER.
+
+## 8.7 Historique
+
+La page `/cycles` reste l'index récent. Chaque carte charge ensuite `/cycles/{cycle_id}` afin d'utiliser un graphe corrélé unique plutôt que de joindre trois pages indépendantes.
+
+Parcours affiché :
 
 ```text
-univers effectif = watchlist IA actuelle + toutes les positions ouvertes
+Discovery / contexte
+-> Agent IA
+-> Risk Engine
+-> Exécution PAPER
 ```
 
-Une position SPOT/PERPETUAL reste gérable même si son marché est retiré au refresh suivant.
+Les JSON canoniques restent accessibles dans « Détails techniques ».
 
-## 7.6 Fallback et indisponibilités
+## 8.8 Positions
 
-- Kraken/LLM de discovery indisponible + watchlist précédente : maintien de la dernière watchlist valide ;
-- aucune watchlist précédente : utilisation du bootstrap `paper_executable_markets` ;
-- l'échec est audité avec son type ;
-- un échec sans watchlist est temporisé par la cadence de refresh, il n'est pas retenté à chaque cycle ;
-- une panne du LLM final ou de la source d'exécution reste un échec technique du cycle : le fallback de discovery ne fabrique ni décision ni prix.
+En l'absence de provenance directe sur le modèle de position, le cockpit affiche uniquement une **activité auditée récente liée au même symbole + type de marché**.
 
-## 7.7 Persistence et recovery
+Il ne présente jamais cette corrélation comme la décision ou le fill ayant créé la position.
 
-Décision 19.4 : **pas de table mutable dédiée de watchlist**.
+## 8.9 Validation locale
 
-La watchlist est un cache process-local. Chaque cycle enregistre dans `market_selection_input.market_discovery` les faits nécessaires à l'audit : statut, tailles catalogue/candidats, faits candidats, watchlist précédente/effective, ajouts/maintiens/retraits, rationale, erreur et prochain refresh.
+Exécuté par l'opérateur sur le repository complet le 2026-09-25 :
 
-Après restart :
+- `pytest tests/test_cycle_explainability.py` : **8 tests passés** ;
+- `pytest` : **586 tests passés**, avec 2 warnings de dépréciation ;
+- `pnpm lint` : **passé** ;
+- `pnpm typecheck` : **passé** ;
+- `pnpm build` : **passé** ;
+- `git diff --check` : aucune erreur de whitespace, uniquement des avertissements LF -> CRLF.
 
-- `NORMAL` reconstruit la watchlist ;
-- `MANAGEMENT` gère d'abord les positions durables sans refresh d'ouverture ;
-- `DynamicCampaignPaperRunLifecycle` étend le lifecycle canonique uniquement pour ajouter les marchés des positions restaurées à l'univers du nouveau run avant validation.
+Les cas ciblés couvrent BUY+ALLOW+fill, MODIFY, REJECT, HOLD, FAILED avant/après intent, legacy sans rationale, NORMAL/MANAGEMENT, les quatre statuts discovery, les corrélations d'IDs et l'absence de mutation des payloads.
 
-Aucun ordre historique n'est rejoué et aucune décision IA historique n'est réutilisée comme nouvelle décision.
-
-## 7.8 Control Plane / UX
-
-- `MarketDiscoveryPolicy` est optionnel : absence = Campaign statique historique ;
-- `paper_executable_markets` reste obligatoire comme bootstrap immuable ;
-- `risk_allowed_pairs=null` est accepté uniquement avec discovery ;
-- une whitelist non nulle continue à restreindre Risk et la discovery ;
-- le configurateur simple active la discovery et demande seulement une paire de départ/secours ;
-- le mode Control Plane avancé peut toujours créer des Campaigns statiques reproductibles.
-
-## 7.9 Validation intégrée
-
-Validation opérateur communiquée :
-
-- `tests/test_market_discovery.py` : 12 tests passés ;
-- suite backend complète : 578 tests passés, 2 warnings de dépréciation ;
-- frontend : `pnpm lint`, `pnpm typecheck`, `pnpm build` passés.
-
-# 8. Explicabilité des décisions IA — PLANIFIÉ 19.5
-
-Le `rationale` existe déjà. Le chantier porte sur son exposition produit :
-
-- Accueil : dernière décision + « Pourquoi l'IA ? » ;
-- Positions : décisions/trades corrélés ;
-- Historique : lecture synthétique avant JSON ;
-- watchlist : distinguer « pourquoi surveiller ce marché » de « pourquoi BUY/SELL/HOLD » ;
-- chart : rationale associé aux markers ;
-- Risk toujours affiché séparément.
+Reste à effectuer comme validation opérateur distincte avant clôture définitive : revue visuelle light/dark, desktop/mobile, rationales longues/absentes, nombreuses raisons Risk et longs symboles/identifiants.
 
 # 9. Nouvel espace Marchés — PLANIFIÉ 19.6B
 
@@ -267,7 +213,7 @@ Le backend doit gérer déduplication, candle courante mutable, reconnect/backfi
 | 2 | 19.2 — Monitoring | P&L latent et état vivant sans LLM | intégré |
 | 3 | 19.3 — Mode gestion | évite recherche IA inutile quand ouverture indisponible | intégré |
 | 4 | 19.4 — Discovery/watchlist | univers dynamique audité, même Agent | intégré |
-| 5 | 19.5 — Explicabilité | rationale visible vs Risk | planifié |
+| 5 | 19.5 — Explicabilité | rationale visible vs Risk | validation automatisée locale réussie / intégration en attente |
 | 6 | 19.6A — Candles/streaming | données chart canoniques | planifié |
 | 7 | 19.6B — Marchés/charts | rendu, onglets, markers | planifié |
 
@@ -275,9 +221,11 @@ Le backend doit gérer déduplication, candle courante mutable, reconnect/backfi
 
 ### 19.5
 
-- API/audit ;
-- lint/typecheck/build frontend ;
-- rationale watchlist, décision et Risk clairement séparés.
+- suite backend complète : **passée (586 tests, 2 warnings)** ;
+- lint/typecheck/build frontend : **passés** ;
+- rationale watchlist, décision et Risk clairement séparés : **couvert par les tests ciblés et la projection** ;
+- HOLD/MODIFY/REJECT/FAILED/legacy : **couverts par les tests ciblés ; revue visuelle restante** ;
+- aucune causalité de position inventée : **invariant conservé**.
 
 ### 19.6A
 
