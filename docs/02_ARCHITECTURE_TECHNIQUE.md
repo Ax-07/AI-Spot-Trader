@@ -2,251 +2,151 @@
 
 ## 1. Référence
 
-Base GitHub auditée pour le Batch 19.3 :
-
 ```text
-HEAD GitHub main : 44670a249ba662b2afd50a0a9e2a0e63ea4ed76d
+Repository : Ax-07/AI-Spot-Trader
+Branche    : main
+HEAD audité avant Batch 19.4 : bfef06d78dc34089541272c2944518499d4a1530
 ```
 
-Le HEAD doit être revérifié au démarrage de chaque batch. Le Batch 19.3 décrit ci-dessous est un patch local tant qu'il n'a pas été validé/intégré explicitement par l'opérateur.
+Le Batch 19.3 est intégré. Le Batch 19.4 est livré comme patch à valider/intégrer localement.
 
-## 2. Architecture générale actuelle
+## 2. Architecture générale
 
 ```text
 Next.js cockpit
-  |
-  +-- /backend rewrite -> FastAPI
-        |
-        +-- Control Plane persistence (PostgreSQL)
-        |     +-- Strategy / StrategyRevision
-        |     +-- Campaign
-        |     +-- campaign_id -> paper_runs
-        |
-        +-- CampaignRuntimeManager
-              |
-              +-- runtime actif optionnel
-                    +-- TradingEngine
-                    +-- AuditedTradingCycleRunner
-                    +-- TradingCycleRunner
-                    +-- CapacityEvaluator
-                    +-- OpenAIDecisionProvider
-                    +-- RiskEngine
-                    +-- PaperBroker
-                    +-- PaperPortfolioLedger
-                    +-- PaperSpotMarkToMarketMonitor
-                    +-- PaperDerivativeMarkToMarketMonitor
-                    +-- Kraken public research/execution sources
+  -> FastAPI
+     -> Control Plane PostgreSQL
+     -> CampaignRuntimeManager
+        -> TradingEngine
+        -> AuditedTradingCycleRunner
+        -> DynamicMarketTradingCycleRunner (si market_discovery)
+           -> MarketDiscoveryCoordinator
+              -> MarketResearchService
+                 -> KrakenMarketResearchBackend
+              -> OpenAIWatchlistSelector
+                 -> même OpenAIDecisionProvider / même client / même modèle
+           -> TradingCycleRunner canonique
+        -> CapacityEvaluator
+        -> RiskEngine
+        -> PaperBroker
+        -> PaperPortfolioLedger
+        -> monitors mark-to-market SPOT/PERPETUAL
 ```
 
-Le frontend n'est pas dans la chaîne d'exécution. Le backend possède la source de vérité trading et la valorisation live.
+Le frontend n'est jamais dans la chaîne d'exécution.
 
-## 3. Comptabilité SPOT canonique — Batch 19.1
+## 3. Séparation catalogue / candidat / watchlist / exécution
 
-Le chemin comptable reste :
+`MarketResearchService` reste la frontière canonique de recherche publique Kraken. Le Batch 19.4 ne crée pas un nouveau scanner fournisseur.
 
 ```text
-MarketState
--> Risk
--> ExecutionIntent
--> PaperBroker
--> PaperExecutionCostModel
--> Fill
--> PaperPortfolioLedger
--> PortfolioState JSON durable
--> recovery / AgentInput / API / cockpit
+Kraken catalogue
+-> compatibilité déterministe
+-> rotation bornée de marchés à sonder
+-> snapshots de recherche causaux
+-> candidats factuels
+-> même Agent -> watchlist
+-> watchlist + positions ouvertes
+-> RoutedExecutableMarketDataSource
 ```
 
-`PaperExecutionCostModel` produit un prix de fill déjà dégradé par le spread et le slippage. Les coûts explicatifs `spread_cost` et `slippage_cost` restent enregistrés séparément mais ne sont pas réajoutés à la base de coût.
+Le filtrage déterministe vérifie uniquement des propriétés techniques/factuelles : type, quote, statut, contrat PERPETUAL linéaire, fraîcheur et profondeur minimale d'observation. Aucun indicateur n'est converti en score d'opportunité.
 
-Pour un BUY SPOT :
+## 4. `MarketDiscoveryPolicy`
+
+La politique est persistée dans la Campaign quand la découverte est activée. Elle borne les appels et la taille des inputs LLM : cadence catalogue/watchlist, timeout global de refresh, nombre maximum de marchés sondés, candidats et éléments de watchlist, fraîcheur et observations minimales.
+
+Le champ `market_discovery` est `exclude_if=None` dans le modèle Pydantic. Une ancienne Campaign statique sérialisée avant 19.4 conserve donc son payload et son digest historique.
+
+## 5. `MarketDiscoveryCoordinator`
+
+Le coordinateur détient uniquement un cache process-local :
+
+- catalogue ;
+- timestamp de refresh ;
+- curseur de probe rotatif ;
+- dernière watchlist stratégique valide ;
+- dernier audit de découverte.
+
+Le probe rotatif évite qu'une taille candidate bornée sélectionne toujours le même préfixe lexical. Ce mécanisme assure une couverture technique progressive ; il ne classe pas les marchés.
+
+Le refresh est borné par `asyncio.timeout`. Une erreur Kraken, LLM ou validation entraîne un fallback vers la watchlist précédente, ou vers le bootstrap si aucune watchlist n'existe encore. L'échec est temporisé jusqu'à la prochaine cadence au lieu d'être réessayé à chaque cycle.
+
+## 6. Même Agent IA
+
+`OpenAIWatchlistSelector` est un adaptateur sur **la même instance** `OpenAIDecisionProvider`. Il réutilise son client, son modèle et son horloge. La phase watchlist n'expose pas de tools : toutes les données présentées ont déjà été collectées par le pipeline déterministe de discovery.
+
+Sortie structurée : une liste bornée de `(symbol, market_type, rationale)` exclusivement parmi les candidats. La sélection d'une watchlist ne crée aucun `ExecutionIntent`.
+
+`StrategyInstructionsClient` ajoute le contrat discovery seulement lorsqu'un `market_discovery_context` est présent ; les prompts des cycles statiques restent inchangés.
+
+## 7. Runner dynamique et CapacityEvaluator
+
+`DynamicMarketTradingCycleRunner` est un orchestrateur mince qui prépare l'univers puis délègue le cycle de trading au `TradingCycleRunner` canonique. Risk/Broker/validations causales ne sont pas dupliqués.
+
+Avant discovery, le runner calcule une première évaluation de capacité sur :
 
 ```text
-coût de revient restant += fill.notional + fill.fee
-prix/coût moyen d'entrée = coût de revient restant / quantité
+bootstrap + watchlist en cache + positions ouvertes
 ```
 
-Pour un SELL partiel :
+Si le mode est `MANAGEMENT`, il enregistre `SKIPPED_MANAGEMENT` et ne déclenche aucune révision IA de watchlist. Le runner canonique recalcule ensuite la capacité sur l'univers effectif et applique les barrières 19.3.
+
+En NORMAL :
 
 ```text
-base libérée = coût restant avant vente * quantité vendue / quantité avant vente
-P&L réalisé du fill = (fill.notional - fill.fee) - base libérée
-coût restant après vente = coût restant avant vente - base libérée
+univers effectif = watchlist courante + marchés des positions ouvertes
 ```
 
-`AssetPosition.accounting_complete` distingue les positions possédant une base de coût fiable des snapshots historiques incomplets.
+Les positions ouvertes gagnent toujours sur la sortie de watchlist afin de rester gérables.
 
-## 4. Mark-to-market SPOT canonique — Batch 19.2
+## 8. Exécution dynamique
 
-Deux chemins alimentent le **même** ledger :
+`RoutedExecutableMarketDataSource` conserve son mode statique historique par défaut. En mode dynamique, une adresse hors bootstrap est acceptée uniquement si :
 
-```text
-cycle d'exécution SPOT
-KrakenMarketDataSource.snapshot()
--> MarketState causal validé
--> PaperPortfolioLedger.mark_spot_market()
+- symbole canonique ;
+- type autorisé par `market_discovery.market_types` ;
+- quote identique à `paper_settlement_asset` ;
+- source Kraken capable de fournir le snapshot exact ;
+- PERPETUAL effectivement linéaire.
 
-monitor indépendant du LLM
-PaperSpotMarkToMarketMonitor
--> KrakenMarketDataSource.observation()
--> MarketObservation causal
--> PaperPortfolioLedger.mark_spot_observation()
+L'existence/exécutabilité réelle reste prouvée par la source canonique, jamais par le texte LLM.
 
-PaperDerivativeMarkToMarketMonitor
--> KrakenDerivativesMarketDataSource.snapshot()
--> MarketState dérivé causal
--> PaperPortfolioLedger.mark_derivative_market()
-```
+## 9. RiskPolicy et whitelist
 
-La source retenue est le dernier prix ticker Kraken SPOT (`LAST_PRICE`). La date de l'observation est conservée. Aucun prix futur n'est accepté et un mark plus ancien ne remplace jamais un mark plus récent.
+`risk_allowed_pairs` devient nullable uniquement pour une Campaign dynamique. Valeur non nulle = whitelist supplémentaire ferme. Valeur nulle = pas de whitelist symbolique explicite, mais toutes les autres contraintes Risk restent actives.
 
-Pour une position complète :
+Une Campaign statique continue d'exiger `risk_allowed_pairs` et tous ses bootstrap markets doivent y être présents.
 
-```text
-market_value   = quantity * mark_price
-unrealized_pnl = market_value - remaining_cost_basis
-```
+## 10. Monitoring dynamique
 
-Le mark ne simule pas une vente. Les frais/spread/slippage déjà supportés au BUY restent dans `remaining_cost_basis`; ils ne sont pas ajoutés une seconde fois.
+Les monitors existants restent déterministes :
 
-Un mark périmé est masqué lors du `snapshot()` selon `paper_mark_to_market_stale_after_seconds` (30 s par défaut). Les champs deviennent indisponibles plutôt que de publier une valeur actuelle trompeuse.
+- SPOT : lorsqu'une position dynamique est détenue, le symbole `ASSET/settlement_asset` est dérivé uniquement pour demander un mark Kraken ;
+- PERPETUAL : une position dynamique peut être marquée même si son symbole n'était pas dans le bootstrap initial.
 
-## 5. Agrégats `PortfolioState`
+Ces monitors ne modifient jamais la watchlist et n'appellent jamais le LLM.
 
-Le ledger calcule les agrégats au moment du snapshot, avant l'API :
+## 11. Persistence / audit
 
-```text
-cash_available
-spot_remaining_cost_basis_total
-spot_market_value_total
-spot_realized_pnl_total
-spot_unrealized_pnl_total
-equity
-exposure_value
-exposure_fraction
-valuation_complete
-```
+Aucune migration SQL en 19.4. `DiscoveredMarketSelectionInput` étend `MarketSelectionInput` avec un `MarketDiscoveryAudit`. Le repository existant sérialise déjà le modèle complet dans `market_selection_input_payload` ; les faits de discovery entrent donc automatiquement dans l'audit et son digest.
 
-Définition d'equity lorsque toutes les composantes nécessaires sont fraîches :
+L'audit indique au minimum : statut, counts, faits candidats, ancienne/nouvelle watchlist, ajout/maintien/retrait, rationales, erreur éventuelle et date du prochain refresh.
 
-```text
-equity = cash settlement
-       + valeur de marché SPOT
-       + Σ(margin_used + unrealized_pnl + cumulative_funding) des dérivés
-```
+## 12. Recovery
 
-Le réalisé SPOT n'est pas rajouté à l'equity car il est déjà dans le cash. `exposure_value = valeur SPOT + Σ notional dérivé`. `PortfolioState.valuation_complete` qualifie la complétude de la valorisation de marché/equity, pas la connaissance de la base de coût de chaque position.
+`DynamicCampaignPaperRunLifecycle` sous-classe le lifecycle canonique uniquement pour la reprise dynamique. Avant la validation du parent, il lit le `current_portfolio_payload` durable et élargit l'univers du nouveau run avec les marchés des positions réellement ouvertes. Le base lifecycle effectue ensuite le handoff, les validations et la restauration habituels.
 
-## 6. CapacityEvaluator et mode MANAGEMENT — Batch 19.3
+La watchlist n'est pas replayée ni persistée comme table mutable. Après reprise : positions d'abord ; watchlist reconstruite ensuite en NORMAL.
 
-Le chemin multi-marchés devient :
+## 13. Comptabilité et Risk inchangés
 
-```text
-PortfolioState marqué + RiskPolicy partagé
-        |
-        v
-CapacityEvaluator
-   | NORMAL
-   |   -> MarketSelectionInput complet
-   |   -> même Agent + tools read-only éventuels
-   |
-   | MANAGEMENT
-   |   -> positions ouvertes intersectées avec l'univers exécutable
-   |   -> même Agent, sans tools de recherche d'ouverture
-   v
-MarketSelection -> MarketState exact -> AgentInput -> même Agent -> RiskEngine
-```
+Les Batches 19.1 à 19.3 restent canoniques : comptabilité SPOT, mark-to-market, equity/exposition, CapacityEvaluator partagé avec la même RiskPolicy et veto d'augmentation d'exposition en MANAGEMENT.
 
-`CapacityEvaluator` et `RiskEngine` reçoivent **la même instance `RiskPolicy`** dans `composition.py` et `campaign_composition.py`. Le premier ne possède donc pas une seconde configuration de limites.
+## 14. Frontend
 
-Le pré-calcul ne prétend pas reproduire Risk. Il peut établir avant sélection :
+Le configurateur simple produit une Campaign dynamique avec un bootstrap/secours. Les écrans avancés restent compatibles avec les Campaigns statiques. Aucune logique d'admissibilité, de ranking ou de Risk n'est introduite en TypeScript.
 
-- disponibilité du cash settlement ;
-- présence d'une valorisation canonique complète ;
-- notional dérivé total déjà utilisé par rapport à `max_total_derivative_exposure` ;
-- saturation des positions existantes par rapport à `max_derivative_position_notional` ;
-- marchés correspondant aux positions actuellement ouvertes.
+## 15. Hors périmètre
 
-Il ne possède pas encore le `MarketState` du marché sélectionné. Les contrôles suivants restent donc chez Risk : minimum de quantité, caractéristiques du contrat, levier maximum instrument, marge effective/frais, fraîcheur du marché et buffer de liquidation.
-
-Le SPOT ne reçoit aucun plafond d'exposition global inventé : la politique actuelle ne possède pas un tel champ. Avant sélection, du cash settlement positif signifie donc qu'une ouverture SPOT est théoriquement possible ; l'ordre proposé reste ensuite borné/refusé par Risk.
-
-Une valorisation incomplète produit `MANAGEMENT` avec raison explicite plutôt qu'une capacité fictive. Si aucune position ouverte exécutable n'existe dans ce cas, la sélection MANAGEMENT échoue explicitement au lieu de créer un HOLD synthétique déterministe.
-
-### Barrière Risk
-
-Le contexte `MANAGEMENT` est transmis à Risk. Après les contraintes communes, Risk rejette toute action qui augmenterait l'exposition avec `MANAGEMENT_EXPOSURE_INCREASE` :
-
-- SPOT : `BUY` augmente, `SELL` réduit ;
-- PERPETUAL : action de même sens ou ouverture sans position augmente ; action opposée à la position existante réduit et conserve la logique `reduce_only`/anti-reversal existante.
-
-HOLD passe toujours sans intention d'exécution. Le mode n'autorise jamais Broker directement.
-
-### Économie IA et audit
-
-`OpenAIDecisionProvider` conserve ses surfaces normales. Pour MANAGEMENT, deux surfaces dédiées du **même objet Agent** :
-
-- désactivent la boucle de tools pendant la sélection ;
-- remplacent uniquement l'univers transporté par les positions ouvertes ;
-- ajoutent un `capacity_context` indiquant mode, raison et `new_opening_research_skipped=true` ;
-- gardent la décision finale stratégique sur le `MarketState` exact.
-
-Aucune estimation de tokens n'est inventée : aucune donnée `input_tokens`/`output_tokens` canonique n'existe aujourd'hui dans l'infrastructure.
-
-## 7. Persistence / recovery
-
-Aucune migration SQL n'est requise. Les snapshots `PortfolioState` sont déjà stockés sous forme JSON et le `market_selection_input_payload` du cycle peut porter le `capacity_context`.
-
-Le digest du résultat audité inclut l'évaluation de capacité. Le mode n'est pas un état durable mutable : après recovery, il est recalculé depuis le nouveau `PortfolioState` à chaque cycle. Il n'existe donc aucun replay ni snapshot de « mode courant » à restaurer.
-
-Compatibilité 19.1/19.2 conservée : aucun replay Agent/Risk/Broker, aucune reconstruction rétrospective de base de coût/P&L et staleness réévaluée au snapshot.
-
-## 8. Lifecycle et rafraîchissement
-
-`AppRuntime` possède des `background_services`. Le lifecycle reste :
-
-```text
-initialize()
--> recovery paper_run
--> start monitor(s)
-
-close()
--> stop TradingEngine
--> stop monitor(s)
--> close paper_run
--> close ressources réseau
--> close database
-```
-
-Les monitors SPOT et PERPETUAL sont indépendants du frontend et du cycle stratégique.
-
-## 9. API / Agent / Risk / frontend
-
-L'API portfolio continue de sérialiser le snapshot canonique. Le frontend affiche les valeurs du backend sans recalcul financier.
-
-Le Batch 19.3 n'ajoute aucune dépendance frontend et ne modifie pas le cockpit : mode et raison sont déjà auditables dans les payloads de cycle. Une exposition UI dédiée pourra être ajoutée ultérieurement si elle apporte une valeur opérateur mesurée, sans déplacer le calcul de capacité dans TypeScript.
-
-## 10. Cadences futures
-
-Les trois boucles restent séparées :
-
-```text
-A. monitoring / mark-to-market : rapide, déterministe, zéro LLM
-B. cycle stratégique            : même Agent, BUY/SELL/HOLD
-C. discovery/watchlist          : même Agent, cadence plus lente
-```
-
-## 11. Discovery, watchlist et Marchés
-
-Architecture cible :
-
-```text
-Kraken metadata
-  -> filtre déterministe d'admissibilité
-      -> univers admissible versionné
-          -> même Agent IA de découverte
-              -> watchlist stratégique versionnée
-                  + positions ouvertes forcées
-                      -> univers surveillé effectif
-```
-
-Pour les charts : Kraken/backend restent canoniques ; le cockpit consommera historique REST + mises à jour WebSocket normalisées côté backend et rendues via Lightweight Charts.
+Explicabilité dédiée, candles/WebSocket/charts, LIVE, multi-agent, ranking algorithmique stratégique et nouvelle stratégie de trading restent hors Batch 19.4.

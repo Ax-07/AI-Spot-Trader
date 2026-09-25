@@ -1,40 +1,55 @@
 # 00 — État actuel
 
-> Mémoire courte de reprise. À garder synthétique, factuelle et alignée avec la base GitHub auditée et le patch local en cours.
+> Mémoire courte de reprise. À garder synthétique, factuelle et alignée avec GitHub `main` et le patch local en cours.
 
 ## Référence technique
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub `main` audité avant le Batch 19.3 :
-  `44670a249ba662b2afd50a0a9e2a0e63ea4ed76d`
-  (`feat: add canonical mark-to-market and unrealized pnl`).
-- Le HEAD de référence encore écrit dans ce document au début du batch était `01ca1e857947d969556481e5593c5712d137f5ad` ; le Batch 19.2 a donc été intégré à GitHub depuis cette référence documentaire.
-- Batches 19.1 et 19.2 intégrés ; Batch 19.3 livré ici comme patch local, non intégré à GitHub par ChatGPT.
+- HEAD GitHub `main` audité avant le Batch 19.4 :
+  `bfef06d78dc34089541272c2944518499d4a1530`
+  (`feat: add deterministic capacity management mode`).
+- Batch 19.3 **intégré** sur GitHub à ce HEAD.
+- Validation locale communiquée pour 19.3 : `tests/test_capacity_management.py` = 18 tests passés ; suite backend complète = 552 tests passés ; frontend inchangé.
+- Batch 19.4 livré ici comme **patch local proposé**, non intégré à GitHub par ChatGPT.
 
-## État fonctionnel après application du patch Batch 19.3
+## État fonctionnel visé après application du patch Batch 19.4
 
 - un seul Agent IA stratégique ; Kraken ; PAPER uniquement ; SPOT + PERPETUAL linéaire ;
 - Risk Engine déterministe = autorité finale ; aucune sortie LLM ne déclenche directement un ordre ;
-- comptabilité SPOT 19.1 et mark-to-market/equity/exposition 19.2 restent les sources canoniques ;
-- un `CapacityEvaluator` déterministe partage la même instance `RiskPolicy` que le `RiskEngine` ;
-- chaque cycle multi-marchés recalcule un mode `NORMAL` ou `MANAGEMENT` depuis le `PortfolioState` courant et les limites déjà connues avant sélection ;
-- `NORMAL` conserve la sélection stratégique existante et les tools read-only ;
-- `MANAGEMENT` limite la sélection du même Agent aux marchés correspondant aux positions réellement ouvertes et désactive les tools de recherche d'ouverture ;
-- HOLD, réduction partielle et clôture restent proposés par le même Agent puis soumis à Risk ;
-- Risk refuse explicitement toute action qui augmenterait l'exposition pendant un cycle `MANAGEMENT` ;
-- une valorisation incomplète ne crée aucune capacité fictive : le mode devient `MANAGEMENT` avec raison explicite ;
-- les contraintes nécessitant le `MarketState` exact (minimum d'ordre, marge effective, levier instrument, liquidation) restent exclusivement évaluées par Risk ;
-- le mode n'est pas persisté comme état mutable : il est recalculé après recovery à chaque cycle ;
-- le mode, sa raison et le fait que la recherche d'ouverture a été évitée sont intégrés à l'audit JSON du cycle ;
-- aucune métrique de tokens n'est inventée : l'infrastructure actuelle n'expose pas d'usage tokens canonique ;
-- frontend inchangé pour 19.3 ; aucune nouvelle dépendance du moteur au cockpit.
+- Batch 19.3 `NORMAL` / `MANAGEMENT` conservé ; `MANAGEMENT` est évalué avant tout renouvellement de watchlist et évite donc l'appel IA de discovery destiné aux nouvelles ouvertures ;
+- `paper_executable_markets` reste un bootstrap/garde-fou immuable de Campaign, utile notamment en fallback ;
+- un `MarketDiscoveryPolicy` optionnel active la découverte dynamique sans casser les Campaigns statiques existantes ;
+- le catalogue Kraken est lu via le `MarketResearchService` canonique et mis en cache ;
+- filtrage déterministe : type autorisé, quote settlement, statut exploitable, PERPETUAL linéaire, snapshot disponible/frais au sens de fraîcheur et historique causal suffisant ;
+- aucun score d'opportunité déterministe n'est calculé ; la présélection réduit seulement l'univers factuel ;
+- le **même** `OpenAIDecisionProvider` fournit le modèle/client/horloge à l'adaptateur de sélection de watchlist ; aucun second Agent n'est créé ;
+- la watchlist IA est multi-marchés, bornée et validée strictement comme sous-ensemble de l'univers candidat ;
+- l'univers effectif d'un cycle normal = watchlist IA + marchés des positions ouvertes ;
+- les positions ouvertes restent gérables même si leur marché a quitté la nouvelle watchlist ;
+- en panne Kraken ou LLM de discovery, la dernière watchlist valide est conservée ; sans watchlist précédente, le bootstrap de Campaign sert de fallback explicite ;
+- les échecs de discovery sont temporisés par la cadence de renouvellement et ne provoquent pas un nouvel appel à chaque cycle ;
+- la watchlist reste un cache process-local : après restart, `NORMAL` la reconstruit au premier renouvellement utile ; `MANAGEMENT` gère d'abord les positions restaurées sans relancer la discovery ;
+- le recovery canonique de Campaign est réutilisé ; une sous-classe élargit uniquement l'univers de reprise aux marchés des positions durables avant les validations existantes ;
+- l'audit de cycle transporte le statut de discovery, catalogue/candidats avec faits candidats, watchlist effective, ajouts/maintiens/retraits, rationale structuré et erreur éventuelle, sans nouvelle table SQL ;
+- le configurateur simple active la discovery par défaut : l'opérateur fournit seulement une paire bootstrap/secours au lieu de saisir toute la watchlist ;
+- frontend toujours sans autorité trading ni calcul financier parallèle.
+
+## Décisions Batch 19.4
+
+- catalogue canonique : `MarketResearchService` + adaptateurs Kraken existants ;
+- cache catalogue par défaut : 15 min ;
+- renouvellement watchlist par défaut : 15 min, déclenché par un cycle `NORMAL`, refresh borné à 45 s ;
+- probe factuel max : 24 marchés par renouvellement ; candidats IA max : 12 ; watchlist max : 6 ;
+- pas de persistence mutable dédiée de watchlist en 19.4 : audit durable par cycle + reconstruction après restart ;
+- `risk_allowed_pairs=null` est permis uniquement pour une Campaign dynamique ; une whitelist non nulle reste un garde-fou déterministe additionnel ;
+- aucun ranking algorithmique d'opportunité, aucun second Agent, aucun LIVE, aucun chart/candle cockpit dans ce batch.
 
 ## Prochaine priorité
 
-1. Batch 19.4 — découverte dynamique des marchés et watchlist auditée ;
-2. Batch 19.5 — explicabilité dédiée IA / Risk ;
-3. Batch 19.6A/19.6B — candles/WebSocket puis vue Marchés et charts.
+1. Batch 19.5 — explicabilité dédiée IA / Risk ;
+2. Batch 19.6A — backend candles/cache/streaming ;
+3. Batch 19.6B — vue Marchés/charts/markers.
 
 Le cadrage détaillé reste centralisé dans `docs/11_AMELIORATIONS_PLANIFIEES.md`.
 

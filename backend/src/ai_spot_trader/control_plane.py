@@ -12,6 +12,7 @@ from ai_spot_trader.agent.prompt import BASE_AGENT_CONTRACT_VERSION
 from ai_spot_trader.domain.enums import LLMModel, MarginMode, MarketType
 from ai_spot_trader.domain.models import ExecutableMarket
 from ai_spot_trader.domain.symbols import parse_canonical_symbol
+from ai_spot_trader.market.discovery import MarketDiscoveryPolicy
 
 CONTROL_PLANE_CONFIGURATION_VERSION = "paper-control-plane-config-v1"
 CAMPAIGN_EXPERIMENT_PROTOCOL_VERSION = "paper-experiment-v4"
@@ -44,7 +45,12 @@ class CampaignConfiguration(ControlPlaneModel):
 
     paper_initial_capital: PositiveDecimal
     paper_settlement_asset: str = Field(min_length=1, max_length=16)
+    # In Batch 19.4 this remains an immutable bootstrap/safety universe. When
+    # market_discovery is configured, the strategic watchlist may add Kraken markets at runtime.
     paper_executable_markets: tuple[ExecutableMarket, ...]
+    market_discovery: MarketDiscoveryPolicy | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     paper_fee_rate: NonNegativeDecimal = Field(lt=1)
     paper_spread_bps: NonNegativeDecimal
@@ -54,7 +60,7 @@ class CampaignConfiguration(ControlPlaneModel):
     paper_derivative_margin_mode: MarginMode = MarginMode.ISOLATED
 
     risk_max_order_notional: PositiveDecimal
-    risk_allowed_pairs: tuple[str, ...]
+    risk_allowed_pairs: tuple[str, ...] | None
     risk_allow_quantity_reduction: bool
 
     risk_max_derivative_leverage: PositiveDecimal = Decimal(1)
@@ -104,9 +110,13 @@ class CampaignConfiguration(ControlPlaneModel):
 
     @field_validator("risk_allowed_pairs")
     @classmethod
-    def normalize_allowed_pairs(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+    def normalize_allowed_pairs(
+        cls, value: tuple[str, ...] | None
+    ) -> tuple[str, ...] | None:
+        if value is None:
+            return None
         if not value:
-            raise ValueError("risk_allowed_pairs cannot be empty")
+            raise ValueError("risk_allowed_pairs cannot be empty; use null for dynamic discovery")
         stripped = tuple(item.strip() for item in value)
         if any(not item for item in stripped):
             raise ValueError("risk_allowed_pairs cannot contain empty values")
@@ -129,13 +139,14 @@ class CampaignConfiguration(ControlPlaneModel):
         return ordered
 
     @model_validator(mode="after")
-    def validate_structural_configuration(self) -> CampaignConfiguration:
+    def validate_structural_configuration(self) -> "CampaignConfiguration":
         if self.configuration_version != CONTROL_PLANE_CONFIGURATION_VERSION:
             raise ValueError("unsupported control-plane configuration version")
         if self.paper_spread_bps + self.paper_slippage_bps >= Decimal(10_000):
             raise ValueError("combined paper spread and slippage must be below 10000 bps")
 
         executable_symbols: set[str] = set()
+        bootstrap_types: set[MarketType] = set()
         has_perpetual = False
         for market in self.paper_executable_markets:
             if market.market_type is MarketType.FUTURE:
@@ -146,10 +157,26 @@ class CampaignConfiguration(ControlPlaneModel):
                     "all executable markets must quote the configured settlement asset"
                 )
             executable_symbols.add(market.symbol)
+            bootstrap_types.add(market.market_type)
             has_perpetual = has_perpetual or market.market_type is MarketType.PERPETUAL
 
-        if not executable_symbols.issubset(set(self.risk_allowed_pairs)):
-            raise ValueError("every executable symbol must be present in risk_allowed_pairs")
+        if self.market_discovery is None:
+            if self.risk_allowed_pairs is None:
+                raise ValueError("static campaigns require risk_allowed_pairs")
+        else:
+            discovery_types = set(self.market_discovery.market_types)
+            if not discovery_types.issubset(bootstrap_types):
+                raise ValueError(
+                    "each dynamic discovery market type requires a bootstrap executable market"
+                )
+            has_perpetual = has_perpetual or MarketType.PERPETUAL in discovery_types
+
+        if self.risk_allowed_pairs is not None and not executable_symbols.issubset(
+            set(self.risk_allowed_pairs)
+        ):
+            raise ValueError(
+                "every bootstrap executable symbol must be present in risk_allowed_pairs"
+            )
 
         if self.paper_derivative_margin_mode is not MarginMode.ISOLATED:
             raise ValueError("PAPER PERPETUAL supports ISOLATED margin only")
@@ -208,5 +235,6 @@ __all__ = [
     "CAMPAIGN_EXPERIMENT_PROTOCOL_VERSION",
     "CONTROL_PLANE_CONFIGURATION_VERSION",
     "CampaignConfiguration",
+    "MarketDiscoveryPolicy",
     "campaign_identity_digest",
 ]

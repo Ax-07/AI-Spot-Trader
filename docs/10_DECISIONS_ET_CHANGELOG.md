@@ -10,14 +10,14 @@ Broker/Kraken, SPOT sans short/levier, PERPETUAL linéaire avec protections dét
 durable, no-look-ahead, backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE
 séparé.
 
-## Référence auditée du Batch 19.3
+## Référence auditée du Batch 19.4
 
 ```text
-HEAD GitHub main audité : 44670a249ba662b2afd50a0a9e2a0e63ea4ed76d
-Commit                 : feat: add canonical mark-to-market and unrealized pnl
+HEAD GitHub main audité : bfef06d78dc34089541272c2944518499d4a1530
+Commit                 : feat: add deterministic capacity management mode
 ```
 
-Les Batches 19.1 et 19.2 sont intégrés. Le Batch 19.3 est livré comme patch local ; son intégration GitHub reste explicite et postérieure à la validation opérateur.
+Les Batches 19.1, 19.2 et 19.3 sont intégrés. Le Batch 19.4 est livré comme patch local ; son intégration GitHub reste explicite et postérieure à la validation opérateur.
 
 ## Décisions historiques toujours actives
 
@@ -39,42 +39,21 @@ Méthode : coût moyen pondéré économique. `average_entry_price = remaining_c
 
 Les snapshots antérieurs sans base de coût restent `accounting_complete=false` sans reconstruction historique.
 
-## ADR-206 — Séparer le monitoring déterministe du cycle stratégique IA
+## ADR-206 / ADR-215 / ADR-216 / ADR-217 — Monitoring et valorisation
 
-**INTÉGRÉE AU BATCH 19.2.**
+**INTÉGRÉS AU BATCH 19.2.**
 
-`PaperSpotMarkToMarketMonitor` et `PaperDerivativeMarkToMarketMonitor` sont des services backend indépendants du `TradingEngine` et du LLM. Ils ne sélectionnent aucun trade et ne produisent aucun ordre.
-
-## ADR-215 — Mark SPOT = dernier prix ticker Kraken causal
-
-**INTÉGRÉE AU BATCH 19.2.**
-
-La référence de valorisation SPOT est `LAST_PRICE` issue d'une observation Kraken datée. Une observation future par rapport à l'horloge du ledger est rejetée ; une observation plus ancienne ne remplace pas un mark plus récent.
-
-```text
-market_value   = quantity * mark_price
-unrealized_pnl = market_value - remaining_cost_basis
-```
-
-## ADR-216 — Staleness fail-closed pour la valorisation live
-
-**INTÉGRÉE AU BATCH 19.2.**
-
-Un mark plus ancien que le seuil configuré n'est plus exposé dans le snapshot. Le backend ne prolonge pas artificiellement la validité d'un prix lors d'une panne de données.
-
-## ADR-217 — Agrégats portefeuille calculés dans le ledger
-
-**INTÉGRÉE AU BATCH 19.2.**
-
-Le ledger expose cash, coût restant SPOT, valeur SPOT, P&L réalisé/latent SPOT, equity et exposition lorsque les données nécessaires existent. Le frontend ne recalcule pas ces métriques financières.
+- monitors SPOT/PERPETUAL backend indépendants du LLM ;
+- mark SPOT causal `LAST_PRICE` ;
+- staleness fail-closed ;
+- agrégats cash, valeur SPOT, P&L latent/réalisé, equity et exposition calculés dans le ledger ;
+- aucun calcul financier canonique dupliqué dans le frontend.
 
 ## ADR-207 — Saturation d'exposition = restriction déterministe du champ des actions
 
-**IMPLÉMENTÉE DANS LE PATCH BATCH 19.3.**
+**INTÉGRÉE AU BATCH 19.3.**
 
-Le backend introduit `CapacityEvaluator` avant la sélection de marché. Son rôle est uniquement de constater si une nouvelle augmentation d'exposition est théoriquement possible avec les faits déjà disponibles avant `MarketState`.
-
-Deux états :
+`CapacityEvaluator` constate uniquement si une augmentation d'exposition est théoriquement possible avant acquisition du `MarketState`.
 
 ```text
 NORMAL      -> sélection stratégique normale + tools read-only éventuels
@@ -85,59 +64,102 @@ Le même Agent choisit encore le marché parmi les positions ouvertes et décide
 
 ## ADR-218 — CapacityEvaluator partage exactement la RiskPolicy active
 
-**IMPLÉMENTÉE DANS LE PATCH BATCH 19.3.**
+**INTÉGRÉE AU BATCH 19.3.**
 
-`composition.py` et `campaign_composition.py` construisent une seule instance `RiskPolicy`, transmise à `CapacityEvaluator` et `RiskEngine`. Il n'existe pas de deuxième copie de configuration Risk susceptible de diverger.
-
-Le CapacityEvaluator ne duplique pas les contrôles qui dépendent du `MarketState` : minimum d'ordre, contrat, levier instrument, marge exacte, frais, fraîcheur et liquidation restent exclusivement sous l'autorité de Risk.
-
-Aucun plafond global SPOT n'est inventé car la politique actuelle n'en possède pas.
+Une seule instance `RiskPolicy` est transmise à `CapacityEvaluator` et `RiskEngine`. Les contrôles dépendant du `MarketState` restent exclusivement chez Risk.
 
 ## ADR-219 — MANAGEMENT est fail-closed et Risk interdit les hausses d'exposition
 
-**IMPLÉMENTÉE DANS LE PATCH BATCH 19.3.**
+**INTÉGRÉE AU BATCH 19.3.**
 
-Une valorisation incomplète produit MANAGEMENT avec raison explicite. Risk reçoit le mode du cycle et rejette toute action augmentant l'exposition avec `MANAGEMENT_EXPOSURE_INCREASE`.
-
-HOLD reste autorisé. Les actions réductrices continuent dans les chemins SPOT SELL et PERPETUAL `reduce_only` existants. Aucune sortie Agent ne contourne Risk.
-
-Le mode n'est pas un état persistant : il est recalculé à chaque cycle, y compris après recovery.
+Une valorisation incomplète produit MANAGEMENT avec raison explicite. Risk rejette toute action augmentant l'exposition avec `MANAGEMENT_EXPOSURE_INCREASE`. Le mode est recalculé à chaque cycle et n'est pas un état durable.
 
 ## ADR-220 — Économie IA mesurée uniquement avec des faits observables
 
-**IMPLÉMENTÉE DANS LE PATCH BATCH 19.3.**
+**INTÉGRÉE AU BATCH 19.3.**
 
-En MANAGEMENT, `OpenAIDecisionProvider` désactive la boucle de tools pendant la sélection et expose `new_opening_research_skipped=true` dans le contexte audité. Les traces de tools du cycle restent vides.
+En MANAGEMENT, la boucle de tools d'ouverture est désactivée et `new_opening_research_skipped=true` est audité. Aucun compteur de tokens fictif n'est introduit.
 
-Aucun compteur de tokens n'existe actuellement dans l'infrastructure durable. Le Batch 19.3 n'invente donc ni estimation de tokens ni nombre fictif d'appels économisés.
+## ADR-221 — Le catalogue Kraken existant devient la source canonique de discovery
 
-## ADR-208/209 — Univers admissible, watchlist stratégique et révisions
+**IMPLÉMENTÉE DANS LE PATCH BATCH 19.4.**
 
-**PLANIFIÉ.** Cible :
+`MarketResearchService` et `KrakenMarketResearchBackend` sont réutilisés. Aucun scanner parallèle Kraken n'est ajouté. Le cache de catalogue est process-local, 15 min par défaut.
+
+Le déterministe peut éliminer un marché pour des raisons factuelles : type, quote settlement, statut, contrat linéaire, snapshot absent/périmé, historique causal insuffisant ou whitelist Risk explicite. Il ne calcule aucun score d'opportunité. Un refresh complet est borné à 45 s par défaut et `MarketDiscoveryInput.created_at` est fixé après acquisition des candidats afin de préserver la causalité.
+
+## ADR-222 — La watchlist est une sélection périodique du même Agent
+
+**IMPLÉMENTÉE DANS LE PATCH BATCH 19.4.**
+
+Un `OpenAIWatchlistSelector` est un adaptateur sur la même instance `OpenAIDecisionProvider` : même client de stratégie, même modèle et même horloge. Il n'existe pas de second Agent.
+
+La sortie structurée contient plusieurs marchés et leurs rationales. Le backend impose :
+
+- au moins un marché ;
+- maximum `watchlist_limit` ;
+- unicité ;
+- appartenance stricte à l'univers candidat ;
+- SPOT/PERPETUAL uniquement.
+
+La watchlist n'est jamais une instruction d'ordre.
+
+## ADR-223 — Watchlist process-local, audit durable, reconstruction après restart
+
+**IMPLÉMENTÉE DANS LE PATCH BATCH 19.4.**
+
+Aucune table SQL mutable de watchlist n'est introduite. Chaque cycle transporte dans l'audit : statut de discovery, taille du catalogue, candidats avec leurs snapshots factuels, timestamps de l'input/sélection, watchlist précédente/effective, ajouts, maintiens, retraits, rationales et erreur éventuelle.
+
+Après restart :
+
+- en `NORMAL`, la watchlist est reconstruite au premier refresh utile ;
+- en `MANAGEMENT`, la discovery d'ouverture est ignorée et les positions restaurées sont gérées immédiatement ;
+- la dernière watchlist n'est pas rejouée comme décision stratégique historique.
+
+Ce choix réduit la surface de persistence et évite de transformer un cache stratégique en état métier autoritaire. Une persistence dédiée pourra être reconsidérée si un besoin produit mesuré l'exige.
+
+## ADR-224 — Univers effectif = watchlist + positions ouvertes, avec bootstrap immuable
+
+**IMPLÉMENTÉE DANS LE PATCH BATCH 19.4.**
+
+`paper_executable_markets` reste dans la Campaign comme bootstrap/garde-fou/fallback. Pour une Campaign dynamique :
 
 ```text
-univers techniquement admissible = filtrage backend déterministe
-watchlist                         = sélection du même Agent stratégique
-univers surveillé                 = watchlist + toutes les positions ouvertes
+univers admissible factuel -> watchlist Agent
+univers cycle NORMAL       -> watchlist + positions ouvertes
+univers cycle MANAGEMENT   -> positions ouvertes uniquement au transport Agent
 ```
 
-Le schéma de persistence/watchlist reste à décider au batch dédié.
+Une position ouverte reste donc gérable si son marché est retiré de la watchlist. Le routeur d'exécution dynamique n'autorise que le type configuré et la quote settlement de Campaign, puis exige toujours un snapshot Kraken canonique.
+
+## ADR-225 — `risk_allowed_pairs=null` est réservé aux Campaigns dynamiques
+
+**IMPLÉMENTÉE DANS LE PATCH BATCH 19.4.**
+
+Une Campaign statique conserve l'obligation de whitelist explicite couvrant tous ses marchés. Une Campaign dynamique peut utiliser `null` pour laisser la frontière Kraken/type/quote définir l'adresse admissible ; une whitelist non nulle reste un garde-fou additionnel qui restreint aussi les candidats de discovery.
+
+Les autres limites Risk restent inchangées et autoritaires.
+
+## ADR-226 — Recovery dynamique étend le lifecycle canonique, sans second ledger
+
+**IMPLÉMENTÉE DANS LE PATCH BATCH 19.4.**
+
+`DynamicCampaignPaperRunLifecycle` réutilise `CampaignPaperRunLifecycle`. Lors d'une reprise explicite, il ajoute au nouvel univers de run les marchés correspondant aux positions durables avant de laisser les validations de recovery existantes s'exécuter. Aucune nouvelle table, aucun replay d'ordres et aucun ledger parallèle.
 
 ## ADR-210 — Exposer le `rationale` sans le confondre avec Risk
 
-**PLANIFIÉ.** L'UI doit montrer séparément le rationale stratégique et `ALLOW / MODIFY / REJECT` avec raisons déterministes.
+**PLANIFIÉ 19.5.** L'UI doit montrer séparément rationale stratégique et `ALLOW / MODIFY / REJECT` avec raisons déterministes. Le rationale de watchlist 19.4 devient une source supplémentaire à présenter clairement comme **sélection de surveillance**, pas comme justification d'ordre.
 
 ## ADR-211 à ADR-214 — Charts, données et cadences
 
-**PLANIFIÉS.** Kraken/backend restent la source canonique des charts ; Lightweight Charts est le renderer privilégié ; historique REST + temps réel WebSocket + accumulation backend éventuelle ; monitoring, stratégie et discovery restent trois cadences distinctes ; les charts sont chargés à la demande.
+**PLANIFIÉS 19.6.** Kraken/backend restent la source canonique des charts ; Lightweight Charts est le renderer privilégié ; historique REST + temps réel WebSocket + accumulation backend éventuelle ; monitoring, stratégie et discovery restent trois cadences distinctes ; les charts sont chargés à la demande.
 
 ## Changelog — 2026-09-24 — Batch 19.1
 
 - comptabilité SPOT canonique au coût moyen pondéré ;
 - coût restant all-in, ventes partielles et P&L réalisé ;
 - compatibilité historique via `accounting_complete=false` ;
-- API/types/cockpit enrichis ;
-- intégration GitHub clôturée au HEAD `01ca1e8...`.
+- API/types/cockpit enrichis.
 
 ## Changelog — 2026-09-24 — Batch 19.2
 
@@ -145,21 +167,29 @@ Le schéma de persistence/watchlist reste à décider au batch dédié.
 - agrégats portefeuille et equity/exposition backend ;
 - monitor SPOT/PERPETUAL sans LLM ;
 - séparation exécution/valorisation ;
-- compatibilité snapshot/recovery sans migration SQL ;
-- API et cockpit Positions branchés uniquement sur les valeurs backend ;
-- intégration GitHub au HEAD `44670a2...`.
+- compatibilité snapshot/recovery sans migration SQL.
 
 ## Changelog — 2026-09-25 — Batch 19.3
 
-- resynchronisation sur le HEAD GitHub `44670a249b...` ;
-- audit TradingCycleRunner/Agent/tools/Risk/PortfolioState/Control Plane/audit ;
-- ajout de `CapacityEvaluator` déterministe avec `NORMAL` / `MANAGEMENT` ;
+- `CapacityEvaluator` déterministe avec `NORMAL` / `MANAGEMENT` ;
 - même `RiskPolicy` partagée entre CapacityEvaluator et RiskEngine ;
 - sélection MANAGEMENT limitée aux positions ouvertes ;
 - tools de recherche d'ouverture désactivés en MANAGEMENT ;
-- même Agent conservé pour sélection de gestion et décision finale ;
 - Risk bloque explicitement toute augmentation d'exposition en MANAGEMENT ;
-- mode/reason/search-skip audités sans nouvel état durable ni migration SQL ;
-- aucune métrique tokens inventée ;
-- frontend inchangé ;
+- mode/reason/search-skip audités sans état durable ;
+- intégré sur GitHub au commit `bfef06d78dc34089541272c2944518499d4a1530`.
+
+## Changelog — 2026-09-25 — Batch 19.4
+
+- resynchronisation sur le HEAD GitHub `bfef06d78dc34089541272c2944518499d4a1530` ;
+- correction documentaire : 19.3 n'est plus décrit comme patch local ;
+- `MarketDiscoveryPolicy`, cache catalogue et coordinateur de discovery ;
+- présélection factuelle Kraken sans ranking algorithmique ;
+- watchlist multi-marchés sélectionnée par le même Agent ;
+- fallback dernière watchlist/bootstrap, timeout 45 s et cadence de retry bornée ;
+- interaction explicite avec NORMAL/MANAGEMENT ;
+- positions ouvertes réinjectées dans l'univers effectif ;
+- routeur/mark-to-market/recovery adaptés aux marchés dynamiques ;
+- audit détaillé des faits candidats, timestamps et diffs de watchlist sans migration SQL ;
+- configurateur simple orienté « paire de départ/secours » ;
 - aucune modification GitHub effectuée par ChatGPT.

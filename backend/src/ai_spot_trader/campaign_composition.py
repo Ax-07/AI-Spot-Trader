@@ -9,6 +9,7 @@ from uuid import uuid4
 from ai_spot_trader.agent.openai_client import OpenAIResponsesClient
 from ai_spot_trader.agent.provider import OpenAIDecisionProvider
 from ai_spot_trader.agent.strategy_client import StrategyInstructionsClient
+from ai_spot_trader.agent.watchlist import OpenAIWatchlistSelector
 from ai_spot_trader.broker.paper import PaperBroker
 from ai_spot_trader.broker.pricing import PaperExecutionCostModel
 from ai_spot_trader.chat.provider import OpenAIChatProvider
@@ -17,6 +18,7 @@ from ai_spot_trader.core.clock import SystemClock
 from ai_spot_trader.core.config import PaperRuntimeConfigurationError, Settings
 from ai_spot_trader.core.runtime import AppRuntime
 from ai_spot_trader.domain.enums import MarketType
+from ai_spot_trader.domain.experiments import aggressiveness_context
 from ai_spot_trader.domain.models import AssetBalance, PortfolioState
 from ai_spot_trader.domain.ports import MarketDataSource
 from ai_spot_trader.integrations.kraken.derivatives import (
@@ -29,6 +31,7 @@ from ai_spot_trader.integrations.kraken.market_data import (
 )
 from ai_spot_trader.integrations.kraken.research import KrakenMarketResearchBackend
 from ai_spot_trader.integrations.kraken.resilience import RetryingKrakenDerivativesRestSource
+from ai_spot_trader.market.discovery import MarketDiscoveryCoordinator
 from ai_spot_trader.market.execution import RoutedExecutableMarketDataSource
 from ai_spot_trader.market.research import MarketResearchService
 from ai_spot_trader.persistence.analytics import SqlAlchemyPaperAnalyticsQueryService
@@ -39,6 +42,7 @@ from ai_spot_trader.persistence.campaign_runs import (
 )
 from ai_spot_trader.persistence.control_plane import CampaignView, StrategyRevisionView
 from ai_spot_trader.persistence.db import Database
+from ai_spot_trader.persistence.dynamic_campaign_runs import DynamicCampaignPaperRunLifecycle
 from ai_spot_trader.persistence.query import SqlAlchemyCycleAuditQueryService
 from ai_spot_trader.persistence.repository import SqlAlchemyCycleAuditRepository
 from ai_spot_trader.portfolio.ledger import PaperPortfolioLedger
@@ -51,6 +55,7 @@ from ai_spot_trader.risk.engine import RiskEngine
 from ai_spot_trader.risk.policy import RiskPolicy
 from ai_spot_trader.tools.market_research import build_market_research_tool_registry
 from ai_spot_trader.tools.read_only import ReadOnlyToolRegistry
+from ai_spot_trader.trading.discovery_runner import DynamicMarketTradingCycleRunner
 from ai_spot_trader.trading.engine import TradingCycleRunner, TradingCycleTimeouts, TradingEngine
 
 
@@ -72,7 +77,7 @@ class CampaignRuntimeComposition:
     risk_engine: RiskEngine
     broker: PaperBroker
     cost_model: PaperExecutionCostModel
-    cycle_runner: TradingCycleRunner
+    cycle_runner: TradingCycleRunner | DynamicMarketTradingCycleRunner
     audited_runner: AuditedTradingCycleRunner
     trading_engine: TradingEngine
     paper_run_lifecycle: CampaignPaperRunLifecycle
@@ -109,6 +114,8 @@ def build_campaign_runtime(
         raise PaperRuntimeConfigurationError("campaign Agent contract version mismatch")
 
     config = campaign.configuration
+    dynamic_policy = config.market_discovery
+    dynamic_enabled = dynamic_policy is not None
     clock = SystemClock()
     database = Database(database_url)
     audit_repository = SqlAlchemyCycleAuditRepository(database.sessions)
@@ -144,15 +151,28 @@ def build_campaign_runtime(
             seconds=settings.paper_mark_to_market_stale_after_seconds
         ),
     )
-    paper_run_lifecycle = CampaignPaperRunLifecycle(
-        database.sessions,
-        campaign_id=campaign.campaign_id,
-        execution_universe=config.paper_executable_markets,
-        initial_portfolio=initial_portfolio,
-        portfolio_sink=portfolio,
-        resume=resume,
-        clock=clock,
-    )
+    if dynamic_policy is None:
+        paper_run_lifecycle: CampaignPaperRunLifecycle = CampaignPaperRunLifecycle(
+            database.sessions,
+            campaign_id=campaign.campaign_id,
+            execution_universe=config.paper_executable_markets,
+            initial_portfolio=initial_portfolio,
+            portfolio_sink=portfolio,
+            resume=resume,
+            clock=clock,
+        )
+    else:
+        paper_run_lifecycle = DynamicCampaignPaperRunLifecycle(
+            database.sessions,
+            campaign_id=campaign.campaign_id,
+            execution_universe=config.paper_executable_markets,
+            initial_portfolio=initial_portfolio,
+            portfolio_sink=portfolio,
+            resume=resume,
+            clock=clock,
+            settlement_asset=config.paper_settlement_asset,
+            dynamic_market_types=dynamic_policy.market_types,
+        )
 
     # Research sources remain distinct from executable sources and never reach the ledger.
     research_spot: KrakenMarketDataSource = build_kraken_market_data_source(
@@ -245,6 +265,9 @@ def build_campaign_runtime(
         spot=execution_spot,
         derivatives=execution_derivatives,
         allowed_markets=config.paper_executable_markets,
+        allow_dynamic_markets=dynamic_enabled,
+        settlement_asset=config.paper_settlement_asset if dynamic_enabled else None,
+        dynamic_market_types=dynamic_policy.market_types if dynamic_policy is not None else (),
     )
     mark_to_market = PaperSpotMarkToMarketMonitor(
         market_data=monitoring_spot,
@@ -257,6 +280,9 @@ def build_campaign_runtime(
         ),
         cadence_seconds=settings.paper_mark_to_market_cadence_seconds,
         timeout_seconds=settings.paper_mark_to_market_timeout_seconds,
+        allow_dynamic_markets=(
+            dynamic_policy is not None and MarketType.SPOT in dynamic_policy.market_types
+        ),
     )
 
     derivative_mark_to_market = PaperDerivativeMarkToMarketMonitor(
@@ -269,6 +295,9 @@ def build_campaign_runtime(
         ),
         cadence_seconds=settings.paper_derivative_mark_to_market_cadence_seconds,
         timeout_seconds=settings.paper_mark_to_market_timeout_seconds,
+        allow_dynamic_markets=(
+            dynamic_policy is not None and MarketType.PERPETUAL in dynamic_policy.market_types
+        ),
     )
 
     cost_model = PaperExecutionCostModel(
@@ -278,7 +307,11 @@ def build_campaign_runtime(
     )
     risk_policy = RiskPolicy(
         max_order_notional=config.risk_max_order_notional,
-        allowed_pairs=frozenset(config.risk_allowed_pairs),
+        allowed_pairs=(
+            None
+            if config.risk_allowed_pairs is None
+            else frozenset(config.risk_allowed_pairs)
+        ),
         allow_quantity_reduction=config.risk_allow_quantity_reduction,
         derivative_leverage=config.paper_derivative_leverage,
         max_derivative_leverage=config.risk_max_derivative_leverage,
@@ -296,23 +329,57 @@ def build_campaign_runtime(
         clock=clock,
     )
     broker = PaperBroker(ledger=portfolio, cost_model=cost_model, clock=clock)
-    cycle_runner = TradingCycleRunner(
-        executable_market_data=market_data,
-        executable_markets=config.paper_executable_markets,
-        capacity_evaluator=capacity_evaluator,
-        portfolio=portfolio,
-        agent=agent,
-        risk_engine=risk_engine,
-        broker=broker,
-        aggressiveness=config.aggressiveness,
-        timeouts=TradingCycleTimeouts(
-            market_seconds=config.cycle_market_timeout_seconds,
-            agent_seconds=config.cycle_agent_timeout_seconds,
-            broker_seconds=config.cycle_broker_timeout_seconds,
-        ),
-        experiment_manifest=None,
-        clock=clock,
+    cycle_timeouts = TradingCycleTimeouts(
+        market_seconds=config.cycle_market_timeout_seconds,
+        agent_seconds=config.cycle_agent_timeout_seconds,
+        broker_seconds=config.cycle_broker_timeout_seconds,
     )
+    if dynamic_policy is None:
+        cycle_runner: TradingCycleRunner | DynamicMarketTradingCycleRunner = TradingCycleRunner(
+            executable_market_data=market_data,
+            executable_markets=config.paper_executable_markets,
+            capacity_evaluator=capacity_evaluator,
+            portfolio=portfolio,
+            agent=agent,
+            risk_engine=risk_engine,
+            broker=broker,
+            aggressiveness=config.aggressiveness,
+            timeouts=cycle_timeouts,
+            experiment_manifest=None,
+            clock=clock,
+        )
+    else:
+        watchlist_selector = OpenAIWatchlistSelector(agent)
+        discovery = MarketDiscoveryCoordinator(
+            research=market_research,
+            agent=watchlist_selector,
+            policy=dynamic_policy,
+            settlement_asset=config.paper_settlement_asset,
+            bootstrap_markets=config.paper_executable_markets,
+            aggressiveness=config.aggressiveness,
+            aggressiveness_context=aggressiveness_context(config.aggressiveness),
+            risk_allowed_pairs=(
+                None
+                if config.risk_allowed_pairs is None
+                else frozenset(config.risk_allowed_pairs)
+            ),
+            clock=clock,
+        )
+        cycle_runner = DynamicMarketTradingCycleRunner(
+            executable_market_data=market_data,
+            bootstrap_markets=config.paper_executable_markets,
+            capacity_evaluator=capacity_evaluator,
+            discovery=discovery,
+            settlement_asset=config.paper_settlement_asset,
+            portfolio=portfolio,
+            agent=agent,
+            risk_engine=risk_engine,
+            broker=broker,
+            aggressiveness=config.aggressiveness,
+            timeouts=cycle_timeouts,
+            clock=clock,
+        )
+
     run_bound_writer = RunBoundCycleAuditWriter(
         delegate=audit_repository,
         run_provider=paper_run_lifecycle,

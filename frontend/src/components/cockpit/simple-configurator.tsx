@@ -29,6 +29,22 @@ import { cn } from "@/lib/utils";
 
 type RiskProfile = "prudent" | "balanced" | "aggressive" | "custom";
 type WizardStep = 1 | 2 | 3 | 4 | 5;
+type DynamicCampaignConfiguration = Omit<CampaignConfiguration, "risk_allowed_pairs"> & {
+  risk_allowed_pairs: string[] | null;
+  market_discovery: {
+    protocol_version: "market-discovery-v1";
+    market_types: ExecutableMarketResponse["market_type"][];
+    catalog_refresh_seconds: number;
+    watchlist_refresh_seconds: number;
+    refresh_timeout_seconds: number;
+    candidate_probe_limit: number;
+    candidate_limit: number;
+    watchlist_limit: number;
+    max_snapshot_age_seconds: number;
+    min_window_observations: number;
+    require_complete_window: boolean;
+  };
+};
 
 const inputClass =
   "h-11 w-full rounded-lg border bg-background px-3 text-sm shadow-sm outline-none transition focus:border-foreground/40 focus:ring-2 focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-60";
@@ -66,7 +82,7 @@ function parseMarkets(value: string, marketType: ExecutableMarketResponse["marke
         .filter(Boolean),
     ),
   );
-  if (!symbols.length) throw new Error("Ajoute au moins une paire, par exemple BTC/USD.");
+  if (!symbols.length) throw new Error("Ajoute au moins une paire de départ, par exemple BTC/USD.");
   const quotes = new Set<string>();
   for (const symbol of symbols) {
     const parts = symbol.split("/");
@@ -76,7 +92,7 @@ function parseMarkets(value: string, marketType: ExecutableMarketResponse["marke
     quotes.add(parts[1]);
   }
   if (quotes.size !== 1) {
-    throw new Error("Toutes les paires d’un même test doivent utiliser le même actif de règlement.");
+    throw new Error("Toutes les paires de départ doivent utiliser le même actif de règlement.");
   }
   return {
     settlementAsset: Array.from(quotes)[0],
@@ -242,9 +258,9 @@ export function SimpleConfigurator({
                   .filter(Boolean),
               ),
             )
-          : marketPlan.markets.map((item) => item.symbol);
+          : null;
 
-      const configuration: CampaignConfiguration = {
+      const configuration: DynamicCampaignConfiguration = {
         configuration_version: "paper-control-plane-config-v1",
         llm_model: model,
         aggressiveness,
@@ -252,6 +268,19 @@ export function SimpleConfigurator({
         paper_initial_capital: capital.trim(),
         paper_settlement_asset: marketPlan.settlementAsset,
         paper_executable_markets: marketPlan.markets,
+        market_discovery: {
+          protocol_version: "market-discovery-v1",
+          market_types: [marketType],
+          catalog_refresh_seconds: 900,
+          watchlist_refresh_seconds: 900,
+          refresh_timeout_seconds: 45,
+          candidate_probe_limit: 24,
+          candidate_limit: 12,
+          watchlist_limit: 6,
+          max_snapshot_age_seconds: 120,
+          min_window_observations: 2,
+          require_complete_window: false,
+        },
         paper_fee_rate: feeRate.trim(),
         paper_spread_bps: spreadBps.trim(),
         paper_slippage_bps: slippageBps.trim(),
@@ -268,7 +297,7 @@ export function SimpleConfigurator({
         cycle_agent_timeout_seconds: Number(agentTimeout),
         cycle_broker_timeout_seconds: Number(brokerTimeout),
       };
-      return { configuration, error: null };
+      return { configuration: configuration as unknown as CampaignConfiguration, error: null };
     } catch (error) {
       return {
         configuration: null,
@@ -375,15 +404,15 @@ export function SimpleConfigurator({
           <>
             <CardHeader>
               <CardTitle className="flex items-center gap-2"><Waves className="size-4" /> Quel marché tester ?</CardTitle>
-              <CardDescription>Un test simple utilise un seul type de marché et une ou plusieurs paires partageant le même actif de règlement.</CardDescription>
+              <CardDescription>Choisis le type de marché et une paire de départ/secours. Le backend découvrira ensuite périodiquement les marchés Kraken admissibles et le même Agent IA construira la watchlist.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
               <div className="grid gap-3 sm:grid-cols-2">
                 <ChoiceCard active={marketType === "SPOT"} title="SPOT" detail="Achat et vente d’actifs détenus. Aucun short, aucun levier." onClick={() => setMarketType("SPOT")} />
                 <ChoiceCard active={marketType === "PERPETUAL"} title="PERPETUAL" detail="Contrats linéaires PAPER, LONG/SHORT, marge isolée et limites de levier imposées par Risk." onClick={() => setMarketType("PERPETUAL")} />
               </div>
-              <Field label="Paires à surveiller" hint="Sépare plusieurs paires par des virgules. Exemple : BTC/USD, ETH/USD, SOL/USD.">
-                <input className={inputClass} value={pairs} onChange={(event) => setPairs(event.target.value)} placeholder="BTC/USD, ETH/USD" />
+              <Field label="Paire de départ / secours" hint="Tu n’as plus besoin de renseigner toute la watchlist. Cette paire sert de bootstrap et de repli si Kraken ou l’IA de découverte est indisponible.">
+                <input className={inputClass} value={pairs} onChange={(event) => setPairs(event.target.value)} placeholder="BTC/USD" />
               </Field>
             </CardContent>
           </>
@@ -409,7 +438,7 @@ export function SimpleConfigurator({
           <>
             <CardHeader>
               <CardTitle className="flex items-center gap-2"><Bot className="size-4" /> Comment l’IA doit-elle travailler ?</CardTitle>
-              <CardDescription>Le modèle propose BUY, SELL ou HOLD. Ses instructions restent subordonnées au contrat Agent protégé et au Risk Engine.</CardDescription>
+              <CardDescription>Le même Agent sélectionne périodiquement une watchlist, puis propose BUY, SELL ou HOLD dans les cycles. Risk reste l’autorité finale.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
               <div className="grid gap-3 sm:grid-cols-2">
@@ -455,7 +484,7 @@ export function SimpleConfigurator({
                   {riskProfile === "custom" ? (
                     <>
                       <Field label="Ordre max (notional)"><input className={inputClass} value={customMaxOrder} onChange={(e) => setCustomMaxOrder(e.target.value)} /></Field>
-                      <Field label="Paires autorisées" hint="Vide = paires sélectionnées à l’étape Marché."><input className={inputClass} value={customAllowedPairs} onChange={(e) => setCustomAllowedPairs(e.target.value)} placeholder={pairs} /></Field>
+                      <Field label="Whitelist Risk optionnelle" hint="Vide = la découverte Kraken reste autorisée dans le type de marché et l’actif de règlement configurés. Une liste non vide devient un garde-fou supplémentaire et doit inclure la paire de départ."><input className={inputClass} value={customAllowedPairs} onChange={(e) => setCustomAllowedPairs(e.target.value)} placeholder="BTC/USD, ETH/USD" /></Field>
                       {marketType === "PERPETUAL" ? (
                         <>
                           <Field label="Levier PAPER"><input className={inputClass} value={customLeverage} onChange={(e) => setCustomLeverage(e.target.value)} /></Field>
@@ -482,14 +511,14 @@ export function SimpleConfigurator({
             <CardContent className="space-y-5">
               <Field label="Nom de la configuration de test"><input className={inputClass} value={testName} onChange={(event) => setTestName(event.target.value)} /></Field>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded-xl border p-4"><p className="text-xs text-muted-foreground">Marché</p><p className="mt-1 font-semibold">{marketType}</p><p className="mt-1 text-xs text-muted-foreground">{pairs}</p></div>
+                <div className="rounded-xl border p-4"><p className="text-xs text-muted-foreground">Marché</p><p className="mt-1 font-semibold">{marketType}</p><p className="mt-1 text-xs text-muted-foreground">Découverte auto · secours {pairs}</p></div>
                 <div className="rounded-xl border p-4"><p className="text-xs text-muted-foreground">Capital</p><p className="mt-1 font-semibold">{capital}</p><p className="mt-1 text-xs text-muted-foreground">PAPER</p></div>
                 <div className="rounded-xl border p-4"><p className="text-xs text-muted-foreground">IA</p><p className="mt-1 font-semibold">{model.replace("gpt-5.6-", "")}</p><p className="mt-1 text-xs text-muted-foreground">Agressivité {aggressiveness}/10</p></div>
                 <div className="rounded-xl border p-4"><p className="text-xs text-muted-foreground">Risk</p><p className="mt-1 font-semibold">{riskProfile === "custom" ? "Personnalisé" : PROFILE_COPY[riskProfile].label}</p><p className="mt-1 text-xs text-muted-foreground">Backend autoritaire</p></div>
               </div>
               <div className="rounded-xl border bg-muted/20 p-4 text-sm">
-                <p className="font-semibold">Pipeline inchangé</p>
-                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Agent IA → Risk Engine déterministe → Broker PAPER. Une sortie LLM ne déclenche jamais directement une exécution.</p>
+                <p className="font-semibold">Découverte + pipeline canonique</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Kraken → présélection factuelle → watchlist du même Agent IA → cycle BUY/SELL/HOLD → Risk Engine déterministe → Broker PAPER. Une sélection de watchlist ne déclenche jamais directement une exécution.</p>
               </div>
               {plan.configuration ? (
                 <details className="rounded-xl border px-4 py-3 text-xs">
@@ -498,7 +527,7 @@ export function SimpleConfigurator({
                 </details>
               ) : null}
               {control.engine?.status === "RUNNING" ? (
-                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
                   Une session est déjà en cours. Tu peux créer la configuration maintenant, mais il faut arrêter la session active avant de la démarrer.
                 </p>
               ) : null}
@@ -516,7 +545,7 @@ export function SimpleConfigurator({
       </Card>
 
       {(validationError || (step === 5 && plan.error)) ? (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200">
           {validationError ?? plan.error}
         </div>
       ) : null}

@@ -4,12 +4,15 @@
 
 **L'Agent propose. Le Risk Engine autorise, modifie ou refuse.**
 
-L'Agent est stratégique. Risk, Broker, comptabilité, monitoring, capacité et contraintes structurelles restent déterministes.
+Le Batch 19.4 ne change pas cette hiérarchie. Le déterministe décrit et borne l'univers ; l'Agent conserve le jugement stratégique ; Risk conserve l'autorité finale.
 
-## 2. Agent unique aujourd'hui
+## 2. Un seul Agent, trois phases possibles
 
 ```text
-NORMAL
+DISCOVERY (cadence lente)
+MarketDiscoveryInput -> même Agent -> WatchlistSelection
+
+NORMAL (cycle stratégique)
 MarketSelectionInput -> select_market() -> MarketSelection
 AgentInput           -> generate_decision() -> DecisionCandidate
 
@@ -18,146 +21,107 @@ MarketSelectionInput -> select_management_market() -> MarketSelection
 AgentInput           -> generate_management_decision() -> DecisionCandidate
 ```
 
-Ces quatre surfaces appartiennent au même `OpenAIDecisionProvider`, au même modèle et au même rôle stratégique. MANAGEMENT n'introduit pas un second Agent.
+La phase discovery utilise un adaptateur sur le même `OpenAIDecisionProvider`, le même modèle et le même client. Elle ne constitue pas un second Agent.
 
-## 3. Trois rythmes, toujours un seul Agent
+## 3. Contrat de découverte
 
-1. monitoring/mark-to-market déterministe — **sans LLM** ;
-2. décision stratégique de trading — **même Agent IA** ;
-3. découverte/révision de watchlist — **même Agent IA**, cadence plus lente.
+L'input discovery contient uniquement des candidats déjà validés factuellement par le backend. Pour chaque candidat, l'Agent reçoit l'adresse de marché et un snapshot public normalisé.
 
-Cette séparation ne crée pas un second agent.
+Le contrat exige :
 
-## 4. Contrat Agent protégé
+- choisir de 1 à `watchlist_limit` marchés ;
+- choisir uniquement parmi `candidates` ;
+- ne jamais inventer un symbole ou un type ;
+- fournir une justification structurée ;
+- comprendre que la watchlist est une liste de surveillance et ne déclenche aucun ordre.
 
-Le contrat applicatif impose notamment :
+La sortie est validée fail-closed. Un marché hors candidat, un doublon, une liste vide ou une sortie structurée invalide provoque un fallback audité.
 
-- PAPER uniquement ;
-- sorties structurées BUY/SELL/HOLD ;
-- décision limitée au contexte exécutable fourni ;
-- SPOT sans short/levier/marge ;
-- sémantique LONG/SHORT PERPETUAL ;
-- levier et `reduce_only` déterministes ;
-- aucune invention de faits absents ;
-- aucun LLM -> Broker/Kraken ;
-- aucun tool -> Broker/Risk ;
-- Risk final.
+## 4. Ce que fait le déterministe
 
-En MANAGEMENT, le transport ajoute un `capacity_context` déterministe et n'expose à la sélection que les positions ouvertes. Il indique explicitement que les tools de recherche d'ouverture sont désactivés et qu'une augmentation d'exposition sera refusée par Risk.
+Il peut éliminer un marché pour raisons objectives : type non supporté, quote incompatible, statut non tradable, contrat non linéaire, snapshot manquant/trop ancien, historique insuffisant ou whitelist Risk explicite.
 
-## 5. Rationale et explicabilité
+Il ne calcule pas de score d'opportunité, ne recommande pas BUY/SELL et ne choisit pas la watchlist à la place de l'Agent.
 
-Le `DecisionCandidate.rationale` reste une explication stratégique explicite et persistée, jamais une instruction d'exécution. L'UI doit le distinguer des raisons déterministes `ALLOW / MODIFY / REJECT` produites par Risk.
-
-## 6. SPOT
-
-`BUY` acquiert la base. `SELL` réduit un actif détenu. Risk vérifie notamment symbole/type, whitelist, chronologie/fraîcheur, cash quote, position disponible, max notional et coûts PAPER.
-
-Aucun short, leverage ou margin SPOT.
-
-### Comptabilité Batch 19.1
-
-Le `PortfolioState` transmis à l'Agent contient la comptabilité backend : quantité, disponible, `average_entry_price`, `remaining_cost_basis`, `realized_pnl`, `accounting_complete`.
-
-### Valorisation Batch 19.2
-
-Le même `PortfolioState` peut désormais contenir :
-
-- `mark_price`, `mark_observed_at`, `mark_source` ;
-- `market_value` ;
-- `unrealized_pnl` ;
-- `valuation_complete` ;
-- les agrégats cash/coût/valeur/P&L/equity/exposition du portefeuille.
-
-Ces valeurs sont calculées exclusivement par le backend déterministe. L'Agent et Risk ne doivent pas recalculer un autre P&L latent.
-
-`accounting_complete=false` signifie qu'une position historique ne dispose pas d'une base de coût suffisamment fiable. Même avec un mark, son P&L latent reste indisponible. Un mark absent/périmé rend également la valorisation indisponible.
-
-## 7. PERPETUAL
-
-`BUY` exprime/augmente LONG ou réduit SHORT. `SELL` exprime/augmente SHORT ou réduit LONG.
-
-Risk garde le contrôle du contrat, taille, levier, marge, notional, exposition, buffer liquidation, `reduce_only`, anti-reversal et marge `ISOLATED`. Le LLM ne choisit jamais le levier effectif.
-
-La comptabilité/valorisation dérivée existante reste canonique ; le Batch 19.3 ne crée pas une seconde implémentation parallèle.
-
-## 8. Monitoring déterministe
-
-`PaperSpotMarkToMarketMonitor` et `PaperDerivativeMarkToMarketMonitor` alimentent le ledger canonique sans référence stratégique à l'Agent. Ils ne peuvent pas produire d'ordre.
-
-Le monitor reste actif avec le runtime backend même si le TradingEngine est `STOPPED`. Fermer le frontend n'arrête donc pas la valorisation du runtime actif.
-
-## 9. Mode gestion lorsque la capacité de nouvelle exposition n'est pas certaine
-
-Le Batch 19.3 implémente :
-
-```text
-PortfolioState valorisé + RiskPolicy partagé
--> CapacityEvaluator
-   -> NORMAL
-   -> MANAGEMENT
-```
+## 5. NORMAL et MANAGEMENT
 
 ### NORMAL
 
-- univers exécutable normal ;
-- `select_market()` et tools read-only comme avant ;
-- même Agent final ;
-- BUY/SELL/HOLD restent soumis à Risk.
+Lorsque la capacité de nouvelle exposition est théoriquement disponible :
+
+- la discovery peut renouveler la watchlist si sa cadence est échue ;
+- le cycle de trading sélectionne ensuite **un** marché dans l'univers effectif ;
+- l'Agent produit BUY/SELL/HOLD ;
+- Risk évalue la décision sur le `MarketState` exact.
 
 ### MANAGEMENT
 
-- aucune recherche/tool de découverte destinée à de nouvelles ouvertures ;
-- univers de sélection du même Agent = marchés correspondant aux positions ouvertes ;
-- HOLD, réduction partielle et clôture restent stratégiques ;
-- le déterministe ne classe ni ne choisit la position à fermer ;
-- Risk reçoit explicitement le mode et refuse toute hausse d'exposition par `MANAGEMENT_EXPOSURE_INCREASE` ;
-- une réduction PERPETUAL conserve la logique `reduce_only` et anti-reversal existante ;
-- le mode est recalculé à chaque cycle et disparaît automatiquement dès qu'une capacité redevient disponible.
+Lorsque la capacité est indisponible ou incertaine :
 
-### Ce que CapacityEvaluator sait avant sélection
+- aucun refresh de discovery destiné à ouvrir de nouvelles expositions ;
+- aucun appel LLM de watchlist ;
+- le même Agent choisit seulement parmi les positions ouvertes ;
+- HOLD/réduction/clôture restent stratégiques ;
+- Risk rejette toute hausse d'exposition avec la barrière 19.3.
 
-Il réutilise la même `RiskPolicy` et peut constater le cash settlement, la complétude de valorisation, le plafond d'exposition dérivée totale et le plafond de notional par position déjà ouverte.
+Le statut `SKIPPED_MANAGEMENT` est audité pour la discovery.
 
-Il **ne** recalcule pas les contraintes dépendant du marché exact : quantité minimum, contract metadata, levier maximum instrument, marge/frais précis, fraîcheur ou liquidation. Ces contrôles restent exclusivement dans Risk après acquisition de `MarketState`.
+## 6. Watchlist + positions ouvertes
 
-Il n'existe pas de plafond global d'exposition SPOT dans la politique actuelle ; 19.3 n'en invente pas un. Pour SPOT, une capacité théorique pré-sélection existe tant que du cash settlement positif existe, puis Risk décide l'exécutabilité de l'ordre proposé.
-
-### Valorisation incertaine
-
-`valuation_complete=false` produit un mode MANAGEMENT explicite plutôt qu'une capacité inventée. Si aucune position ouverte exécutable n'existe, le cycle échoue de manière technique/visible à la sélection au lieu de générer artificiellement un HOLD.
-
-### Économie IA
-
-Le fait `new_opening_research_skipped=true` est audité. Les `AgentToolTrace` restent vides pour une sélection MANAGEMENT. L'infrastructure actuelle ne persiste pas de compteurs de tokens ; aucun chiffre estimé n'est fabriqué.
-
-## 10. Découverte périodique des marchés
-
-Le backend fournit un univers techniquement admissible ; le même Agent produit la sélection stratégique/watchlist. Le déterministe ne doit pas calculer un score d'opportunité qui remplace le choix stratégique de l'Agent.
-
-## 11. Watchlist et positions ouvertes
-
-Invariant cible :
+Invariant :
 
 ```text
-univers surveillé = watchlist IA actuelle + toutes les positions ouvertes
+univers effectif = watchlist IA actuelle + toutes les positions ouvertes
 ```
+
+Un retrait de watchlist n'est donc jamais une clôture forcée et ne rend jamais une position ingérable. Une position peut continuer à être sélectionnée en MANAGEMENT ou dans l'univers effectif NORMAL jusqu'à sa clôture.
+
+## 7. SPOT
+
+`BUY` acquiert la base ; `SELL` réduit uniquement un actif réellement détenu. Aucun short, levier ou margin SPOT.
+
+La discovery n'affaiblit pas ces règles. Une paire SPOT dynamique doit utiliser le settlement asset de la Campaign et exister réellement via la source Kraken canonique avant toute décision finale.
+
+## 8. PERPETUAL
+
+Seuls les PERPETUAL linéaires sont admissibles dynamiquement. Le LLM ne choisit toujours jamais levier, marge ou `reduce_only`. Risk conserve le contrôle de taille, levier, marge, notional, exposition, liquidation et anti-reversal.
+
+## 9. Risk whitelist dynamique
+
+Une whitelist `risk_allowed_pairs` explicite reste un filtre déterministe fort et réduit aussi l'univers discovery. Pour une Campaign dynamique, elle peut être omise (`null`) afin d'autoriser la découverte Kraken au-delà du bootstrap ; cela ne désactive aucune autre règle Risk.
+
+Une Campaign statique continue d'exiger une whitelist.
+
+## 10. Rationale et audit
+
+Deux rationales restent conceptuellement distincts :
+
+- rationale de watchlist : pourquoi l'Agent souhaite surveiller ce marché ;
+- rationale de décision : pourquoi l'Agent propose BUY/SELL/HOLD sur le marché sélectionné.
+
+Les raisons Risk sont encore une troisième catégorie, déterministe. Le Batch 19.5 traitera leur exposition UI dédiée.
+
+Le cycle auditera la watchlist précédente/effective, les ajouts/maintiens/retraits, les rationales et les erreurs/fallbacks sans prétendre qu'une sélection de watchlist est un ordre.
+
+## 11. Causalité / no-look-ahead
+
+Aucun candidat ne peut contenir un snapshot ou une observation postérieure à `MarketDiscoveryInput.created_at`. Le `MarketSelection` et le `AgentInput` conservent leurs contrôles chronologiques existants. Aucun choix n'est réécrit après observation du futur.
 
 ## 12. Recovery
 
-Le recovery restaure un `PortfolioState` durable et ne réexécute jamais sélection, Agent, Risk, Broker ou Fill.
+Le recovery ne rejoue jamais une ancienne sélection IA. Les positions sont restaurées par le ledger durable. En reprise dynamique, leurs marchés sont réintroduits dans l'univers du run pour rester gérables. La watchlist est reconstruite plus tard lorsque le mode NORMAL et la cadence le permettent.
 
-Pour 19.3, aucun état `NORMAL/MANAGEMENT` n'est restauré : `CapacityEvaluator` le recalcule au prochain cycle depuis le snapshot courant. Le mode et sa raison restent des faits audités du cycle qui les a produits.
+## 13. Économie IA
 
-## 13. Interdits maintenus
+La discovery possède une cadence lente indépendante. Les erreurs sont temporisées. En MANAGEMENT, elle est explicitement sautée. Aucune économie de tokens chiffrée n'est inventée tant que l'infrastructure ne persiste pas de métriques d'usage canoniques.
+
+## 14. Interdits maintenus
 
 - aucun LIVE ;
 - aucun second Agent ;
-- aucun scanner/ranking déterministe choisissant le trade ;
+- aucun ranking déterministe remplaçant le jugement stratégique ;
 - aucun ordre direct LLM/tool ;
-- aucune modification post-hoc d'une décision ;
+- aucun contournement Risk ;
 - aucun look-ahead ;
 - aucune obligation de trader ;
 - aucun calcul stratégique ou financier canonique déporté dans le frontend.
-
-Le séquencement détaillé est documenté dans `docs/11_AMELIORATIONS_PLANIFIEES.md`.

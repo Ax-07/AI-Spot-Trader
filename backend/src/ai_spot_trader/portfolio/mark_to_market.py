@@ -19,6 +19,7 @@ class PaperSpotMarkToMarketMonitor:
         executable_symbols: Iterable[str],
         cadence_seconds: float,
         timeout_seconds: float,
+        allow_dynamic_markets: bool = False,
     ) -> None:
         for name, value in (
             ("cadence_seconds", cadence_seconds),
@@ -29,10 +30,13 @@ class PaperSpotMarkToMarketMonitor:
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be a positive finite number")
 
+        normalized_settlement = settlement_asset.strip().upper()
+        if not normalized_settlement:
+            raise ValueError("settlement_asset cannot be empty")
         by_asset: dict[str, str] = {}
         for symbol in executable_symbols:
             base_asset, quote_asset = parse_canonical_symbol(symbol)
-            if quote_asset != settlement_asset:
+            if quote_asset != normalized_settlement:
                 raise ValueError("mark-to-market symbols must use the settlement asset")
             existing = by_asset.get(base_asset)
             if existing is not None and existing != symbol:
@@ -41,7 +45,9 @@ class PaperSpotMarkToMarketMonitor:
 
         self._market_data = market_data
         self._portfolio = portfolio
+        self._settlement_asset = normalized_settlement
         self._symbols_by_asset = by_asset
+        self._allow_dynamic_markets = allow_dynamic_markets
         self._cadence_seconds = float(cadence_seconds)
         self._timeout_seconds = float(timeout_seconds)
         self._task: asyncio.Task[None] | None = None
@@ -71,6 +77,12 @@ class PaperSpotMarkToMarketMonitor:
         saw_error = False
         for position in snapshot.positions:
             symbol = self._symbols_by_asset.get(position.asset)
+            if symbol is None and self._allow_dynamic_markets:
+                symbol = f"{position.asset}/{self._settlement_asset}"
+                try:
+                    parse_canonical_symbol(symbol)
+                except ValueError:
+                    symbol = None
             if symbol is None:
                 self._portfolio.clear_spot_mark(position.asset)
                 saw_error = True
@@ -127,6 +139,7 @@ class PaperDerivativeMarkToMarketMonitor:
         executable_symbols: Iterable[str],
         cadence_seconds: float,
         timeout_seconds: float,
+        allow_dynamic_markets: bool = False,
     ) -> None:
         for name, value in (
             ("cadence_seconds", cadence_seconds),
@@ -139,6 +152,7 @@ class PaperDerivativeMarkToMarketMonitor:
         self._market_data = market_data
         self._portfolio = portfolio
         self._symbols = frozenset(executable_symbols)
+        self._allow_dynamic_markets = allow_dynamic_markets
         self._cadence_seconds = float(cadence_seconds)
         self._timeout_seconds = float(timeout_seconds)
         self._task: asyncio.Task[None] | None = None
@@ -165,11 +179,12 @@ class PaperDerivativeMarkToMarketMonitor:
         refreshed = 0
         saw_error = False
         for position in snapshot.derivative_positions:
-            if position.symbol not in self._symbols:
+            if position.symbol not in self._symbols and not self._allow_dynamic_markets:
                 saw_error = True
                 self._last_error_type = "MarkMarketUnavailable"
                 continue
             try:
+                parse_canonical_symbol(position.symbol)
                 async with asyncio.timeout(self._timeout_seconds):
                     market_state = await self._market_data.snapshot(position.symbol)
                 if market_state.symbol != position.symbol:
