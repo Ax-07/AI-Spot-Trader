@@ -14,7 +14,6 @@ import {
   Server,
   Settings2,
   ShieldCheck,
-  SlidersHorizontal,
   Square,
   WalletCards,
 } from "lucide-react";
@@ -22,6 +21,7 @@ import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 
 import { HistoryPanel } from "@/components/cockpit/history-panel";
+import { MarketsPanel } from "@/components/cockpit/markets-panel";
 import { PositionsPanel } from "@/components/cockpit/positions-panel";
 import { SettingsPanel } from "@/components/cockpit/settings-panel";
 import { SimpleConfigurator } from "@/components/cockpit/simple-configurator";
@@ -35,7 +35,7 @@ import { useControlPlane, type ControlPlaneController } from "@/hooks/use-contro
 import { formatDecimal, formatFailure, formatTimestamp } from "@/lib/api/format";
 import { cn } from "@/lib/utils";
 
-type ViewId = "home" | "configure" | "positions" | "history" | "settings";
+type ViewId = "home" | "configure" | "markets" | "positions" | "history" | "settings";
 
 type NavItem = {
   id: ViewId;
@@ -46,7 +46,7 @@ type NavItem = {
 
 const NAV_ITEMS: NavItem[] = [
   { id: "home", label: "Accueil", description: "État et action suivante", icon: Home },
-  { id: "configure", label: "Configurer", description: "Créer un test PAPER", icon: SlidersHorizontal },
+  { id: "markets", label: "Marchés", description: "Charts, positions et fills PAPER", icon: Activity },
   { id: "positions", label: "Positions", description: "Portefeuille et P&L", icon: WalletCards },
   { id: "history", label: "Historique", description: "Agent → Risk → PAPER", icon: History },
   { id: "settings", label: "Réglages", description: "Aide et mode avancé", icon: Settings2 },
@@ -413,6 +413,7 @@ function HomePanel({ control, onNavigate }: { control: ControlPlaneController; o
 function ViewContent({ view, control, onNavigate }: { view: ViewId; control: ControlPlaneController; onNavigate: (view: ViewId) => void }) {
   if (view === "home") return <HomePanel control={control} onNavigate={onNavigate} />;
   if (view === "configure") return <SimpleConfigurator control={control} onCreated={() => onNavigate("home")} />;
+  if (view === "markets") return <MarketsPanel control={control} />;
   if (view === "positions") return <PositionsPanel />;
   if (view === "history") return <HistoryPanel />;
   return <SettingsPanel />;
@@ -483,7 +484,7 @@ export function CockpitShell() {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="text-lg font-semibold tracking-tight">{currentNav.label}</h1>
+                  <h1 className="text-lg font-semibold tracking-tight">{view === "configure" ? "Configurer" : currentNav.label}</h1>
                   <Badge tone="info">PAPER</Badge>
                   <Badge tone={engineTone(engine?.status)}>{engineLabel(engine?.status)}</Badge>
                 </div>

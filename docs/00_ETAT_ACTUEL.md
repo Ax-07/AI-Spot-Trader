@@ -6,13 +6,15 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
+- HEAD GitHub vérifié au lancement du Batch 19.6B :
+  `321ce2d19105046af1f11295d67130402c09f2c5`
+  (`docs: finalize Batch 19.6A integration state`).
 - Référence fonctionnelle intégrée du Batch 19.6A :
   `3c53af3bdb1ef53c574e26afe9b6178a374d9f06`
   (`feat: add backend candle cache and streaming`).
 - Batch 19.5 : **intégré** au commit `07050faea54bbed89cf250b34f8e97bd10d94bd3`.
-- Batch 19.6A : **intégré sur GitHub `main`** ; la référence fonctionnelle ci-dessus reste le commit de code du batch.
-- Validation automatisée 19.5 communiquée par l'opérateur : 8 tests ciblés ; suite backend complète 586 tests passés avec 2 warnings de dépréciation ; frontend `pnpm lint`, `pnpm typecheck`, `pnpm build` passés.
-- La revue visuelle 19.5 light/dark + desktop/mobile reste une validation opérateur distincte si elle n'a pas encore été réalisée.
+- Batch 19.6A : **intégré sur GitHub `main`**.
+- Batch 19.6B : **patch proposé, non intégré** tant que la validation opérateur, le commit et le push ne sont pas réalisés.
 
 ## État fonctionnel intégré
 
@@ -20,29 +22,34 @@
 - Risk Engine déterministe = autorité finale ; aucune sortie LLM ne déclenche directement un ordre ;
 - `NORMAL` / `MANAGEMENT`, discovery dynamique et watchlist auditée sont intégrés ;
 - l'explicabilité 19.5 expose séparément contexte/discovery, sélection de marché, Agent, Risk et exécution PAPER depuis les faits persistés ;
-- frontend toujours sans autorité trading ni calcul financier parallèle.
+- backend candles 19.6A : historique, cache process-local, recovery et WebSocket cockpit partagé ;
+- frontend sans autorité trading, calcul Risk ou P&L parallèle.
 
-## Batch 19.6A — intégré
+## Batch 19.6B — patch proposé
 
-Le Batch 19.6A ajoute la couche backend canonique pour les futurs charts :
+Le patch frontend ajoute :
 
-```text
-Kraken REST / charts -> historique initial
-Kraken WebSocket -> updates temps réel
-backend -> normalisation OHLCV + cache borné + recovery
-FastAPI -> historique + WebSocket cockpit
-```
+- navigation visible `Accueil | Marchés | Positions | Historique | Réglages` ;
+- vue Marchés alimentée en priorité par la watchlist effective, avec ajout des positions ouvertes ;
+- onglets marchés responsive et chargement du seul marché actif ;
+- TradingView Lightweight Charts pour chandeliers OHLC et volume ;
+- historique initial REST 19.6A puis mises à jour WebSocket cockpit, reconnexion et cleanup ;
+- timeframes bornés aux capacités backend SPOT/PERPETUAL ;
+- petit cache client non persistant ;
+- contexte de position affiché uniquement depuis les faits portefeuille backend ;
+- markers construits uniquement depuis les fills PAPER persistés ; `reduce_only` est affiché lorsqu'il existe, sans déduire une clôture ;
+- sélection d'un fill -> chargement de l'explicabilité 19.5 du cycle corrélé ;
+- aucune connexion frontend directe à Kraken et aucune candle/fill/causalité inventée.
 
-Principes : cache process-local sans nouvelle table SQL ; clé `(symbol, market_type, timeframe)` ; ordre/déduplication/candle courante ; backfill sans invention de données ; un stream backend partagé par plusieurs consommateurs ; lifecycle backend indépendant du frontend ; aucune IA, stratégie ou logique Risk dans ce pipeline.
-
-Limites fournisseur retenues : historique Spot borné à 720 rows par l'endpoint OHLC ; PERPETUAL via Kraken Futures charts avec cible jusqu'à 1000 rows, sans supposer que le fournisseur renvoie toujours cette profondeur.
-
-Validation opérateur locale avant intégration : tests ciblés candles/Kraken = **53 passés**, 2 warnings de dépréciation ; suite backend complète = **604 passés**, 2 warnings de dépréciation ; `git diff --check` sans erreur de whitespace, uniquement les avertissements LF -> CRLF. Validation ChatGPT préalable : 18 tests 19.6A ciblés + `py_compile` passés.
+Validation ChatGPT du patch : **6 tests frontend ciblés passés** ; parsing/transpilation TypeScript des nouveaux/modifiés `.ts/.tsx` passé. `pnpm lint`, `pnpm typecheck`, `pnpm build`, la validation WebSocket avec backend réel et la revue visuelle light/dark desktop/mobile restent à exécuter localement par l'opérateur.
 
 ## Prochaine priorité
 
-1. Batch 19.6B — vue Marchés, charts et markers consommant exclusivement les contrats backend 19.6A ;
-2. conserver séparément la revue visuelle 19.5 si elle reste à faire.
+1. extraire le ZIP 19.6B à la racine ;
+2. installer/mettre à jour les dépendances frontend et le lockfile ;
+3. exécuter tests, lint, typecheck et build ;
+4. réaliser la revue visuelle et runtime ;
+5. seulement après validation réelle, commit/push et clôture documentaire de 19.6B.
 
 ## Règle de reprise
 

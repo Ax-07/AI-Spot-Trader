@@ -9,12 +9,12 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 ## Référence courante
 
 ```text
-Référence fonctionnelle Batch 19.6A      : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
-Batch 19.5                               : intégré
-Batch 19.6A                              : intégré
+HEAD GitHub vérifié                    : 321ce2d19105046af1f11295d67130402c09f2c5
+Référence fonctionnelle Batch 19.6A  : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
+Batch 19.5                            : intégré
+Batch 19.6A                           : intégré
+Batch 19.6B                           : patch proposé, non intégré
 ```
-
-Validation opérateur communiquée pour 19.5 : 8 tests ciblés ; suite backend complète 586 tests passés avec 2 warnings ; frontend lint/typecheck/build passés. La revue visuelle 19.5 reste une validation séparée si elle n'a pas été réalisée.
 
 ## Décisions historiques toujours actives
 
@@ -26,7 +26,8 @@ Validation opérateur communiquée pour 19.5 : 8 tests ciblés ; suite backend c
 - ADR-206 / ADR-215 / ADR-216 / ADR-217 : monitoring et valorisation ;
 - ADR-207 / ADR-218 / ADR-219 / ADR-220 : `NORMAL` / `MANAGEMENT`, `CapacityEvaluator` et économie IA ;
 - ADR-221 à ADR-226 : discovery/watchlist dynamique, audit, univers effectif, whitelist et recovery ;
-- ADR-227 à ADR-230 : projection d'explicabilité, corrélation par cycle et distinction HOLD/REJECT/FAILED.
+- ADR-227 à ADR-230 : projection d'explicabilité, corrélation par cycle et distinction HOLD/REJECT/FAILED ;
+- ADR-231 à ADR-234 : pipeline candles 19.6A, cache/process, causalité et streams backend partagés.
 
 ## ADR-210 / ADR-227 à ADR-230 — Explicabilité opérateur
 
@@ -38,33 +39,25 @@ L'Historique consomme le détail corrélé du cycle. Positions expose seulement 
 
 ## ADR-211 — Kraken/backend restent la source canonique des charts
 
-**INTÉGRÉ AU BATCH 19.6A.**
+**INTÉGRÉ AU BATCH 19.6A ; consommé par le patch 19.6B.**
 
-Le frontend futur 19.6B consomme uniquement les contrats backend candles. Il n'ouvre pas de connexion directe parallèle à Kraken.
-
-Le backend normalise les données fournisseur vers `Candle`, maintient le cache et diffuse les updates cockpit.
+Le frontend consomme uniquement les contrats backend candles. Il n'ouvre pas de connexion directe parallèle à Kraken. Le backend normalise les données fournisseur, maintient le cache et diffuse les updates cockpit.
 
 ## ADR-212 — Historique REST + streaming fournisseur, sans candle inventée
 
 **INTÉGRÉ AU BATCH 19.6A.**
 
-SPOT : historique `/0/public/OHLC` + WebSocket v2 `ohlc`.
-
-PERPETUAL : Futures charts pour l'historique/backfill + feed public `trade` pour la candle courante. Les trades sont agrégés sans créer de candle pour un intervalle sans donnée réelle.
-
-Un trou ou une reconnexion déclenche un backfill. Les rows récupérées sont fusionnées/dédupliquées ; un trou non récupérable reste visible comme trou.
+SPOT : historique `/0/public/OHLC` + WebSocket v2 `ohlc`. PERPETUAL : Futures charts + feed public `trade` agrégé. Un trou non récupérable reste visible comme trou ; aucune candle synthétique n'est créée.
 
 ## ADR-213 — Cache process-local borné, pas de table SQL 19.6A
 
-**INTÉGRÉE AU BATCH 19.6A.**
+**INTÉGRÉ AU BATCH 19.6A.**
 
-Le besoin actuel est une mémoire technique de diffusion/recovery, pas un nouveau ledger durable. `CandleCache` est donc process-local, borné par clé et dédupliqué.
-
-Ajouter une table SQL maintenant créerait une seconde responsabilité durable sans besoin démontré. La persistence sera réévaluée seulement si un besoin produit/recovery hors process l'exige.
+Le cache candles est une mémoire technique de diffusion/recovery, pas une nouvelle source durable. La persistence sera réévaluée seulement si un besoin produit/recovery hors process l'exige.
 
 ## ADR-214 — Quatre cadences distinctes
 
-**INTÉGRÉE AU BATCH 19.6A.**
+**INTÉGRÉ AU BATCH 19.6A.**
 
 1. monitoring / mark-to-market ;
 2. cycle stratégique IA ;
@@ -75,33 +68,51 @@ La quatrième cadence est purement technique, sans LLM et sans décision straté
 
 ## ADR-231 — Clé candle canonique et timeframes fermés
 
-**INTÉGRÉE AU BATCH 19.6A.**
+**INTÉGRÉ AU BATCH 19.6A.**
 
-Toute série est identifiée par `(symbol canonique, market_type, timeframe)`. Les timeframes sont énumérés et validés par famille fournisseur afin d'éviter une explosion d'abonnements ou des valeurs prétendument supportées.
-
-FUTURE daté est explicitement rejeté par le pipeline 19.6A.
+Toute série est identifiée par `(symbol canonique, market_type, timeframe)`. FUTURE daté est explicitement rejeté par ce pipeline.
 
 ## ADR-232 — La candle courante est mutable, la candle finale ne régresse pas
 
-**INTÉGRÉE AU BATCH 19.6A.**
+**INTÉGRÉ AU BATCH 19.6A.**
 
-Une update avec le même `open_time` remplace la candle courante si elle est plus récente. Une candle déjà finalisée ne peut pas être remplacée par une version non finalisée. Les séries sont conservées en ordre chronologique et tronquées à une profondeur maximale.
+Une update avec le même `open_time` remplace la candle courante si elle est plus récente. Une candle déjà finalisée ne peut pas régresser vers un état courant. Les séries restent chronologiques et bornées.
 
 ## ADR-233 — Le backend partage un seul stream par clé
 
-**INTÉGRÉE AU BATCH 19.6A.**
+**INTÉGRÉ AU BATCH 19.6A.**
 
-Plusieurs consommateurs cockpit reçoivent le même flux backend. Un nouveau navigateur ne crée pas un nouvel abonnement Kraken pour une clé déjà active.
-
-Le nombre de streams backend et la taille des queues clients sont bornés. Les streams appartiennent au lifespan backend et sont fermés proprement au shutdown.
+Plusieurs consommateurs cockpit reçoivent le même flux backend. Les streams appartiennent au lifespan backend ; fermer/redémarrer le frontend ne stoppe ni le moteur trading ni le service backend.
 
 ## ADR-234 — Limites historiques fournisseur explicites
 
-**INTÉGRÉE AU BATCH 19.6A.**
+**INTÉGRÉ AU BATCH 19.6A.**
 
-Le endpoint Spot OHLC est borné à 720 rows : 19.6A ne promet pas 1000 candles Spot qu'il ne peut pas obtenir réellement via cette API.
+Spot OHLC est borné à 720 rows. PERPETUAL vise jusqu'à 1000 rows via Futures charts mais conserve uniquement ce que le fournisseur renvoie réellement.
 
-Kraken Futures charts accepte une cible de profondeur plus grande ; 19.6A demande au maximum 1000 rows et conserve uniquement ce que le fournisseur renvoie effectivement.
+## ADR-235 — La vue Marchés reste un consommateur strict du backend
+
+**PATCH PROPOSÉ BATCH 19.6B — NON INTÉGRÉ.**
+
+Le frontend charge uniquement le marché/timeframe actif depuis les contrats 19.6A. Il utilise le proxy same-origin `/backend` pour REST et WebSocket, n'ouvre aucune connexion Kraken directe, conserve un petit cache mémoire borné et nettoie socket/listeners/timers à chaque changement ou démontage.
+
+## ADR-236 — L'univers Marchés ne crée aucun ranking frontend
+
+**PATCH PROPOSÉ BATCH 19.6B — NON INTÉGRÉ.**
+
+Ordre des faits utilisés : watchlist effective de l'explicabilité discovery lorsqu'elle existe ; univers de campagne actif seulement comme bootstrap si la watchlist manque ; positions ouvertes toujours réinjectées. Le frontend déduplique mais ne classe pas stratégiquement les marchés.
+
+## ADR-237 — Markers uniquement depuis les fills persistés
+
+**PATCH PROPOSÉ BATCH 19.6B — NON INTÉGRÉ.**
+
+Un marker n'existe que si un fill PAPER réel est retourné par `/executions`. BUY/SELL viennent du payload canonique du fill. `reduce_only=true` peut annoter une réduction. Aucune clôture n'est inférée depuis une variation de position ou une candle. Le détail d'un marker recharge `/cycles/{cycle_id}` afin de réutiliser l'explicabilité 19.5 ; si la projection manque, l'UI reste explicitement partielle.
+
+## ADR-238 — Lightweight Charts est une couche de rendu, pas une source métier
+
+**PATCH PROPOSÉ BATCH 19.6B — NON INTÉGRÉ.**
+
+TradingView Lightweight Charts rend OHLC/volume/markers à partir des faits backend. Les timeframes autorisés sont centralisés selon les capacités 19.6A. Le frontend n'utilise pas les candles pour recalculer P&L, exposition, liquidation, Risk ou stratégie.
 
 ## Changelog — 2026-09-24 — Batch 19.1
 
@@ -130,10 +141,8 @@ Kraken Futures charts accepte une cible de profondeur plus grande ; 19.6A demand
 ## Changelog — 2026-09-25 — Batch 19.4
 
 - discovery Kraken et watchlist multi-marchés par le même Agent ;
-- filtrage factuel sans ranking ;
-- fallback/recovery et interaction NORMAL/MANAGEMENT ;
-- positions ouvertes réinjectées dans l'univers effectif ;
-- audit détaillé sans migration SQL ;
+- filtrage factuel sans ranking ; fallback/recovery et interaction NORMAL/MANAGEMENT ;
+- positions ouvertes réinjectées dans l'univers effectif ; audit durable sans migration SQL ;
 - validation finale opérateur : 12 tests discovery, 578 tests backend avec 2 warnings, frontend lint/typecheck/build ;
 - intégré sur GitHub au commit `de65c6677ce01f9c75da5545fe81553a021f588d`.
 
@@ -142,23 +151,32 @@ Kraken Futures charts accepte une cible de profondeur plus grande ; 19.6A demand
 - projection API d'explicabilité depuis les payloads canoniques persistés ;
 - séparation discovery/contexte, sélection marché, Agent, Risk et PAPER ;
 - traitement explicite HOLD, MODIFY, REJECT, FAILED et legacy partiel ;
-- Accueil/Historiques/Positions enrichis sans causalité inventée ;
+- Accueil/Historique/Positions enrichis sans causalité inventée ;
 - validation opérateur : 8 tests ciblés, 586 tests backend avec 2 warnings, frontend lint/typecheck/build ;
-- intégré sur GitHub au commit `07050faea54bbed89cf250b34f8e97bd10d94bd3` ;
-- revue visuelle light/dark + responsive à conserver séparément si non réalisée.
+- intégré sur GitHub au commit `07050faea54bbed89cf250b34f8e97bd10d94bd3`.
 
 ## Changelog — 2026-09-25 — Batch 19.6A
 
 - modèle candle OHLCV canonique et timeframes fermés ;
 - cache process-local borné et dédupliqué ;
-- historique Spot OHLCV en conservant la candle courante ;
-- streaming Spot WebSocket v2 OHLC avec unsubscribe ;
-- historique PERPETUAL via Futures charts et stream via trades publics agrégés ;
-- hub backend partagé, reconnect/backfill, gap recovery et staleness ;
-- API historique + statut + WebSocket cockpit ;
-- lifecycle FastAPI indépendant du frontend ;
+- historique/streaming SPOT et PERPETUAL ; hub backend partagé, reconnect/backfill, gap recovery et staleness ;
+- API historique + statut + WebSocket cockpit ; lifecycle FastAPI indépendant du frontend ;
 - aucune table SQL, aucun LLM, aucun changement Risk ;
-- validation ChatGPT préalable : `tests/test_candle_streaming.py` = **18 passés**, `py_compile` = passé ;
-- validation opérateur finale : **53 tests ciblés passés**, puis **604 tests backend passés**, avec 2 warnings de dépréciation connus ;
-- `git diff --check` sans erreur de whitespace, uniquement les avertissements LF -> CRLF ;
-- intégré sur GitHub `main` au commit `3c53af3bdb1ef53c574e26afe9b6178a374d9f06` (`feat: add backend candle cache and streaming`).
+- validation ChatGPT préalable : 18 tests ciblés + `py_compile` ;
+- validation opérateur finale : 53 tests ciblés, 604 tests backend, 2 warnings de dépréciation ;
+- intégré sur GitHub `main` au commit `3c53af3bdb1ef53c574e26afe9b6178a374d9f06`.
+
+## Changelog — 2026-09-25 — Batch 19.6B
+
+**PATCH PROPOSÉ — NON INTÉGRÉ.**
+
+- vue Marchés et navigation cockpit dédiée ;
+- onglets watchlist/positions, marché actif lazy-loaded ;
+- chandeliers + volume Lightweight Charts ;
+- consommation REST + WebSocket cockpit 19.6A avec cache mémoire, reconnexion et cleanup ;
+- états loading/error/stale ;
+- contexte position backend SPOT/PERPETUAL ;
+- markers issus uniquement des fills persistés et détails via l'explicabilité 19.5 ;
+- aucune connexion Kraken frontend, aucun ranking, aucun calcul Risk/P&L parallèle ;
+- validation ChatGPT : 6 tests ciblés passés + parsing/transpilation TypeScript des fichiers modifiés passé ;
+- `pnpm lint`, `pnpm typecheck`, `pnpm build`, lockfile, runtime backend réel et revue visuelle restent à valider localement avant tout statut « intégré ».

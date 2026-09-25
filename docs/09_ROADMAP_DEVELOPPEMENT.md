@@ -3,9 +3,11 @@
 ## Référence de reprise
 
 ```text
-Référence fonctionnelle Batch 19.6A      : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
-Batch 19.5                               : intégré sur GitHub main
-Batch 19.6A                              : intégré sur GitHub main
+HEAD GitHub vérifié                    : 321ce2d19105046af1f11295d67130402c09f2c5
+Référence fonctionnelle Batch 19.6A  : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
+Batch 19.5                            : intégré sur GitHub main
+Batch 19.6A                           : intégré sur GitHub main
+Batch 19.6B                           : patch proposé, non intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch. Le document détaillé des améliorations est `docs/11_AMELIORATIONS_PLANIFIEES.md`.
@@ -28,21 +30,9 @@ Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batc
 
 Référence : `07050faea54bbed89cf250b34f8e97bd10d94bd3` (`feat: add operator AI and risk explainability`).
 
-Résultat intégré :
+Résultat : projection défensive depuis les faits persistés ; séparation contexte/discovery, sélection marché, Agent, Risk et exécution PAPER ; distinction HOLD/MODIFY/REJECT/FAILED ; aucune causalité inventée.
 
-- aucune table SQL ni ledger parallèle ;
-- `/api/v1/cycles/latest` et `/api/v1/cycles/{cycle_id}` séparent contexte/discovery, sélection du marché, décision Agent, résultat Risk et exécution PAPER ;
-- HOLD, MODIFY, REJECT et FAILED restent sémantiquement distincts ;
-- les historiques incomplets n'inventent ni rationale ni causalité ;
-- Accueil, Historique et Positions consomment une présentation défensive de faits canoniques.
-
-Validation automatisée locale communiquée par l'opérateur :
-
-- `pytest tests/test_cycle_explainability.py` : 8 tests passés ;
-- `pytest` : 586 tests passés, 2 warnings de dépréciation ;
-- `pnpm lint`, `pnpm typecheck`, `pnpm build` : passés.
-
-La revue visuelle light/dark + responsive reste une validation opérateur distincte si elle n'a pas encore été réalisée.
+Validation opérateur communiquée : 8 tests ciblés, 586 tests backend avec 2 warnings, `pnpm lint`, `pnpm typecheck` et `pnpm build` passés. La revue visuelle light/dark + responsive reste distincte si elle n'a pas été réalisée.
 
 ## Batch 19.6A — Backend candles, cache et streaming cockpit
 
@@ -66,50 +56,57 @@ PERPETUAL : Kraken Futures charts + WebSocket public trade agrégé
         API historique       WebSocket cockpit
 ```
 
-Choix :
+Choix actifs : clé `symbol + market_type + timeframe`, aucune persistence SQL candles, déduplication et candle courante causale, aucun trou inventé, backfill après reconnexion/gap, un stream backend partagé, timeframes fermés, aucune IA/Risk dans ce pipeline.
 
-- clé canonique `symbol + market_type + timeframe` ;
-- aucune persistence SQL ajoutée : le besoin est un cache de diffusion/recovery, pas une nouvelle source durable ;
-- profondeur cache par défaut bornée à 1000 ; historique Spot réellement borné à 720 rows par l'endpoint Kraken OHLC ;
-- PERPETUAL : cible jusqu'à 1000 candles via charts, profondeur effective laissée au fournisseur ;
-- déduplication, remplacement de la candle courante, finalisation causale et tri chronologique ;
-- aucune candle synthétique pour combler un trou ;
-- backfill REST après reconnexion ou gap détecté ;
-- un stream backend partagé par plusieurs consommateurs cockpit, avec nombre total de streams borné ;
-- streams détenus par le backend et nettoyés au shutdown ; fermer le frontend ne ferme pas le moteur ni le service de candles ;
-- timeframes explicites et bornés par capacités fournisseur ; FUTURE daté hors périmètre ;
-- aucune IA, aucun ranking stratégique et aucun changement Risk.
+Validation opérateur 19.6A : 53 tests ciblés passés ; suite backend 604 tests passés avec 2 warnings ; `git diff --check` sans erreur de whitespace. Validation ChatGPT préalable : 18 tests 19.6A et `py_compile` passés.
 
-Validation finale avant intégration :
+## Batch 19.6B — Vue Marchés, Lightweight Charts et markers
 
-- tests ciblés candles + Kraken REST/WebSocket/market data : **53 tests passés**, 2 warnings de dépréciation ;
-- suite backend complète `pytest` : **604 tests passés**, 2 warnings de dépréciation ;
-- `git diff --check` : aucune erreur de whitespace, uniquement les avertissements LF -> CRLF ;
-- validation ChatGPT préalable : **18 tests 19.6A ciblés** et `py_compile` passés.
+**État : patch proposé, non intégré.**
 
-## Prochaine séquence
+Périmètre implémenté dans le patch :
 
-### Batch 19.6B — Vue Marchés, Lightweight Charts et markers
+- navigation visible `Accueil | Marchés | Positions | Historique | Réglages` sans créer une seconde navigation ;
+- marchés = watchlist effective backend lorsqu'elle existe, sinon univers de campagne actif comme bootstrap, puis ajout des positions ouvertes ; aucune sélection/ranking stratégique TypeScript ;
+- onglets marché responsive, un seul marché/timeframe chargé à la demande ;
+- `lightweight-charts` pour chandeliers OHLC et volume ;
+- historique initial par `GET /api/v1/markets/candles`, puis WebSocket `/api/v1/markets/candles/stream` via le proxy cockpit `/backend` ;
+- reconnexion frontend bornée et cleanup lors du changement de marché/timeframe ou démontage ;
+- petit cache client process-local ; aucune nouvelle persistence ;
+- timeframes centralisés et strictement alignés sur 19.6A ;
+- contexte de position affiché depuis `/portfolio`, sans recalcul depuis les candles ;
+- markers BUY/SELL créés uniquement depuis les fills persistés `/executions` ; `reduce_only` peut annoter une réduction ; aucune clôture n'est déduite lorsqu'aucun fait canonique ne l'atteste ;
+- sélection d'un marker -> `/cycles/{cycle_id}` pour réutiliser l'explicabilité 19.5 ;
+- aucune connexion frontend directe à Kraken, aucun P&L/Risk parallèle, aucune candle/fill/causalité inventée.
 
-- navigation Marchés ;
-- onglets par marché surveillé ;
-- Lightweight Charts ;
-- overlays position/mark/liquidation ;
-- markers BUY/SELL/réduction/clôture ;
-- détails fill/rationale/Risk ;
-- lazy loading côté cockpit sans seconde connexion Kraken.
+Validation ChatGPT réellement exécutée sur le patch :
+
+- `node --test --experimental-strip-types src/lib/market-candles.test.mjs` : **6 tests passés** ;
+- parsing/transpilation TypeScript des six fichiers `.ts/.tsx` nouveaux/modifiés : **passé**.
+
+Restent à valider localement avant intégration :
+
+- mise à jour `pnpm-lock.yaml` après installation de `lightweight-charts` ;
+- `pnpm test` ;
+- `pnpm lint` ;
+- `pnpm typecheck` ;
+- `pnpm build` ;
+- runtime avec backend 19.6A réel : historique, snapshot WS, update, reconnexion/stale/error ;
+- revue visuelle light/dark, desktop/mobile, nombreuses paires/symbole long, position/sans position, rationale longue, raisons Risk multiples et markers rapprochés.
+
+Le Batch 19.6B ne devient « intégré » qu'après validation opérateur réelle puis commit/push.
 
 ## Cadences à maintenir distinctes
 
 1. **monitoring / mark-to-market** : rapide, déterministe, sans LLM ;
 2. **cycle stratégique IA** : plus lent, décision BUY / SELL / HOLD ;
-3. **discovery / watchlist IA** : lente, même Agent, 15 min par défaut ;
+3. **discovery / watchlist IA** : lente, même Agent ;
 4. **streaming marché / candles** : technique, déterministe, sans LLM et indépendant des trois précédentes.
 
 ## Périmètres ultérieurs
 
 - LIVE reste séparé et ultérieur ;
-- FUTURE daté reste hors exécution et hors streaming 19.6A ;
+- FUTURE daté reste hors exécution/streaming 19.6A/19.6B ;
 - multi-quote/FX reste à traiter explicitement ;
-- persistence durable des candles à reconsidérer seulement sur besoin démontré ;
+- persistence durable des candles uniquement sur besoin démontré ;
 - aucun ranking algorithmique stratégique ne doit être introduit silencieusement.
