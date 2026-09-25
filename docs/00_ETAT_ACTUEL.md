@@ -6,10 +6,13 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub `main` :
+- Référence fonctionnelle du Batch 19.4 :
   `de65c6677ce01f9c75da5545fe81553a021f588d`
   (`feat: add dynamic audited market discovery`).
-- Batch 19.4 **intégré** sur GitHub à ce HEAD.
+- Commit de clôture documentaire observé sur `main` :
+  `f8ad05eb221ab684a1376c5e319b8bc16f75667b`
+  (`docs: finalize Batch 19.4 integration state`).
+- Batch 19.4 **intégré** sur GitHub.
 - Validation locale Batch 19.4 : `tests/test_market_discovery.py` = 12 tests passés ; suite backend complète = 578 tests passés avec 2 warnings de dépréciation ; frontend = `pnpm lint`, `pnpm typecheck` et `pnpm build` passés.
 
 ## État fonctionnel intégré après Batch 19.4
