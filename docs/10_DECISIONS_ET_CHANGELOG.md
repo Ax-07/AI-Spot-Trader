@@ -9,9 +9,9 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 ## Référence courante
 
 ```text
-HEAD GitHub main observé au début 19.6A : 07050faea54bbed89cf250b34f8e97bd10d94bd3
+Référence fonctionnelle Batch 19.6A      : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
 Batch 19.5                               : intégré
-Batch 19.6A                              : patch proposé, non intégré
+Batch 19.6A                              : intégré
 ```
 
 Validation opérateur communiquée pour 19.5 : 8 tests ciblés ; suite backend complète 586 tests passés avec 2 warnings ; frontend lint/typecheck/build passés. La revue visuelle 19.5 reste une validation séparée si elle n'a pas été réalisée.
@@ -38,7 +38,7 @@ L'Historique consomme le détail corrélé du cycle. Positions expose seulement 
 
 ## ADR-211 — Kraken/backend restent la source canonique des charts
 
-**MATÉRIALISÉ DANS LE PATCH 19.6A.**
+**INTÉGRÉ AU BATCH 19.6A.**
 
 Le frontend futur 19.6B consomme uniquement les contrats backend candles. Il n'ouvre pas de connexion directe parallèle à Kraken.
 
@@ -46,7 +46,7 @@ Le backend normalise les données fournisseur vers `Candle`, maintient le cache 
 
 ## ADR-212 — Historique REST + streaming fournisseur, sans candle inventée
 
-**MATÉRIALISÉ DANS LE PATCH 19.6A.**
+**INTÉGRÉ AU BATCH 19.6A.**
 
 SPOT : historique `/0/public/OHLC` + WebSocket v2 `ohlc`.
 
@@ -56,7 +56,7 @@ Un trou ou une reconnexion déclenche un backfill. Les rows récupérées sont f
 
 ## ADR-213 — Cache process-local borné, pas de table SQL 19.6A
 
-**DÉCISION 19.6A.**
+**INTÉGRÉE AU BATCH 19.6A.**
 
 Le besoin actuel est une mémoire technique de diffusion/recovery, pas un nouveau ledger durable. `CandleCache` est donc process-local, borné par clé et dédupliqué.
 
@@ -64,7 +64,7 @@ Ajouter une table SQL maintenant créerait une seconde responsabilité durable s
 
 ## ADR-214 — Quatre cadences distinctes
 
-**DÉCISION 19.6A.**
+**INTÉGRÉE AU BATCH 19.6A.**
 
 1. monitoring / mark-to-market ;
 2. cycle stratégique IA ;
@@ -75,7 +75,7 @@ La quatrième cadence est purement technique, sans LLM et sans décision straté
 
 ## ADR-231 — Clé candle canonique et timeframes fermés
 
-**NOUVELLE DÉCISION 19.6A.**
+**INTÉGRÉE AU BATCH 19.6A.**
 
 Toute série est identifiée par `(symbol canonique, market_type, timeframe)`. Les timeframes sont énumérés et validés par famille fournisseur afin d'éviter une explosion d'abonnements ou des valeurs prétendument supportées.
 
@@ -83,13 +83,13 @@ FUTURE daté est explicitement rejeté par le pipeline 19.6A.
 
 ## ADR-232 — La candle courante est mutable, la candle finale ne régresse pas
 
-**NOUVELLE DÉCISION 19.6A.**
+**INTÉGRÉE AU BATCH 19.6A.**
 
 Une update avec le même `open_time` remplace la candle courante si elle est plus récente. Une candle déjà finalisée ne peut pas être remplacée par une version non finalisée. Les séries sont conservées en ordre chronologique et tronquées à une profondeur maximale.
 
 ## ADR-233 — Le backend partage un seul stream par clé
 
-**NOUVELLE DÉCISION 19.6A.**
+**INTÉGRÉE AU BATCH 19.6A.**
 
 Plusieurs consommateurs cockpit reçoivent le même flux backend. Un nouveau navigateur ne crée pas un nouvel abonnement Kraken pour une clé déjà active.
 
@@ -97,7 +97,7 @@ Le nombre de streams backend et la taille des queues clients sont bornés. Les s
 
 ## ADR-234 — Limites historiques fournisseur explicites
 
-**NOUVELLE DÉCISION 19.6A.**
+**INTÉGRÉE AU BATCH 19.6A.**
 
 Le endpoint Spot OHLC est borné à 720 rows : 19.6A ne promet pas 1000 candles Spot qu'il ne peut pas obtenir réellement via cette API.
 
@@ -147,7 +147,7 @@ Kraken Futures charts accepte une cible de profondeur plus grande ; 19.6A demand
 - intégré sur GitHub au commit `07050faea54bbed89cf250b34f8e97bd10d94bd3` ;
 - revue visuelle light/dark + responsive à conserver séparément si non réalisée.
 
-## Changelog — 2026-09-25 — Batch 19.6A (patch proposé, non intégré)
+## Changelog — 2026-09-25 — Batch 19.6A
 
 - modèle candle OHLCV canonique et timeframes fermés ;
 - cache process-local borné et dédupliqué ;
@@ -158,5 +158,7 @@ Kraken Futures charts accepte une cible de profondeur plus grande ; 19.6A demand
 - API historique + statut + WebSocket cockpit ;
 - lifecycle FastAPI indépendant du frontend ;
 - aucune table SQL, aucun LLM, aucun changement Risk ;
-- tests exécutés par ChatGPT sur le workspace reconstruit : `tests/test_candle_streaming.py` = **18 passés**, `py_compile` = passé ;
-- suite backend complète restant à exécuter par l'opérateur sur le repository complet avant intégration.
+- validation ChatGPT préalable : `tests/test_candle_streaming.py` = **18 passés**, `py_compile` = passé ;
+- validation opérateur finale : **53 tests ciblés passés**, puis **604 tests backend passés**, avec 2 warnings de dépréciation connus ;
+- `git diff --check` sans erreur de whitespace, uniquement les avertissements LF -> CRLF ;
+- intégré sur GitHub `main` au commit `3c53af3bdb1ef53c574e26afe9b6178a374d9f06` (`feat: add backend candle cache and streaming`).

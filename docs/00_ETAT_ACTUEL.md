@@ -6,10 +6,11 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub `main` observé au démarrage du Batch 19.6A :
-  `07050faea54bbed89cf250b34f8e97bd10d94bd3`
-  (`feat: add operator AI and risk explainability`).
-- Batch 19.5 : **intégré sur GitHub `main`** à cette référence.
+- Référence fonctionnelle intégrée du Batch 19.6A :
+  `3c53af3bdb1ef53c574e26afe9b6178a374d9f06`
+  (`feat: add backend candle cache and streaming`).
+- Batch 19.5 : **intégré** au commit `07050faea54bbed89cf250b34f8e97bd10d94bd3`.
+- Batch 19.6A : **intégré sur GitHub `main`** ; la référence fonctionnelle ci-dessus reste le commit de code du batch.
 - Validation automatisée 19.5 communiquée par l'opérateur : 8 tests ciblés ; suite backend complète 586 tests passés avec 2 warnings de dépréciation ; frontend `pnpm lint`, `pnpm typecheck`, `pnpm build` passés.
 - La revue visuelle 19.5 light/dark + desktop/mobile reste une validation opérateur distincte si elle n'a pas encore été réalisée.
 
@@ -21,9 +22,9 @@
 - l'explicabilité 19.5 expose séparément contexte/discovery, sélection de marché, Agent, Risk et exécution PAPER depuis les faits persistés ;
 - frontend toujours sans autorité trading ni calcul financier parallèle.
 
-## Batch 19.6A — patch proposé, non intégré
+## Batch 19.6A — intégré
 
-Le patch 19.6A ajoute la couche backend canonique pour les futurs charts :
+Le Batch 19.6A ajoute la couche backend canonique pour les futurs charts :
 
 ```text
 Kraken REST / charts -> historique initial
@@ -36,14 +37,12 @@ Principes : cache process-local sans nouvelle table SQL ; clé `(symbol, market_
 
 Limites fournisseur retenues : historique Spot borné à 720 rows par l'endpoint OHLC ; PERPETUAL via Kraken Futures charts avec cible jusqu'à 1000 rows, sans supposer que le fournisseur renvoie toujours cette profondeur.
 
-Validation exécutée par ChatGPT dans le workspace reconstruit du patch : `pytest -q tests/test_candle_streaming.py` = **18 tests passés** ; `py_compile` des fichiers modifiés = **passé**. La suite complète du repository n'a pas pu être exécutée dans cet environnement et reste à valider localement.
+Validation opérateur locale avant intégration : tests ciblés candles/Kraken = **53 passés**, 2 warnings de dépréciation ; suite backend complète = **604 passés**, 2 warnings de dépréciation ; `git diff --check` sans erreur de whitespace, uniquement les avertissements LF -> CRLF. Validation ChatGPT préalable : 18 tests 19.6A ciblés + `py_compile` passés.
 
 ## Prochaine priorité
 
-1. extraire le patch 19.6A à la racine du repository et exécuter les tests ciblés puis `pytest` sur le repository complet ;
-2. après validation opérateur, commit/push du 19.6A puis mise à jour de son état en « intégré » ;
-3. Batch 19.6B — vue Marchés, charts et markers ;
-4. conserver séparément la revue visuelle 19.5 si elle reste à faire.
+1. Batch 19.6B — vue Marchés, charts et markers consommant exclusivement les contrats backend 19.6A ;
+2. conserver séparément la revue visuelle 19.5 si elle reste à faire.
 
 ## Règle de reprise
 

@@ -3,9 +3,9 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub main observé au début 19.6A : 07050faea54bbed89cf250b34f8e97bd10d94bd3
+Référence fonctionnelle Batch 19.6A      : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
 Batch 19.5                               : intégré sur GitHub main
-Batch 19.6A                              : patch proposé, non intégré
+Batch 19.6A                              : intégré sur GitHub main
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch. Le document détaillé des améliorations est `docs/11_AMELIORATIONS_PLANIFIEES.md`.
@@ -19,7 +19,8 @@ Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batc
 - Batch 19.2 : mark-to-market canonique, equity/exposition backend et monitors SPOT/PERPETUAL sans LLM ;
 - Batch 19.3 : `CapacityEvaluator`, modes `NORMAL` / `MANAGEMENT`, économie IA et barrière Risk contre l'augmentation d'exposition en MANAGEMENT ;
 - Batch 19.4 : découverte dynamique Kraken, watchlist multi-marchés auditée, même Agent stratégique, fallback/recovery et configurateur simplifié ;
-- Batch 19.5 : projection d'explicabilité opérateur Agent/Risk/exécution depuis les faits persistés.
+- Batch 19.5 : projection d'explicabilité opérateur Agent/Risk/exécution depuis les faits persistés ;
+- Batch 19.6A : backend candles OHLCV, cache borné, recovery et streaming cockpit partagé.
 
 ## Batch 19.5 — Explicabilité opérateur
 
@@ -45,9 +46,11 @@ La revue visuelle light/dark + responsive reste une validation opérateur distin
 
 ## Batch 19.6A — Backend candles, cache et streaming cockpit
 
-**État : patch proposé, non intégré.**
+**État : intégré sur GitHub `main`.**
 
-Architecture proposée :
+Référence : `3c53af3bdb1ef53c574e26afe9b6178a374d9f06` (`feat: add backend candle cache and streaming`).
+
+Architecture intégrée :
 
 ```text
 SPOT      : Kraken REST OHLC + WebSocket v2 OHLC
@@ -77,18 +80,14 @@ Choix :
 - timeframes explicites et bornés par capacités fournisseur ; FUTURE daté hors périmètre ;
 - aucune IA, aucun ranking stratégique et aucun changement Risk.
 
-Validation exécutée par ChatGPT sur le workspace reconstruit du patch :
+Validation finale avant intégration :
 
-- `pytest -q tests/test_candle_streaming.py` : **18 tests passés** ;
-- `python -m py_compile ...` sur les fichiers 19.6A : **passé** ;
-- `ruff` non disponible dans l'environnement ;
-- suite backend complète non exécutée, le repository complet ne pouvant pas être cloné dans cet environnement.
+- tests ciblés candles + Kraken REST/WebSocket/market data : **53 tests passés**, 2 warnings de dépréciation ;
+- suite backend complète `pytest` : **604 tests passés**, 2 warnings de dépréciation ;
+- `git diff --check` : aucune erreur de whitespace, uniquement les avertissements LF -> CRLF ;
+- validation ChatGPT préalable : **18 tests 19.6A ciblés** et `py_compile` passés.
 
 ## Prochaine séquence
-
-### Validation/intégration opérateur 19.6A
-
-Exécuter les tests ciblés Kraken/candles puis `pytest` sur le repository complet. Ne marquer 19.6A intégré qu'après commit/push réel.
 
 ### Batch 19.6B — Vue Marchés, Lightweight Charts et markers
 

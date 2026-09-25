@@ -1,19 +1,19 @@
 # 11 — Améliorations planifiées
 
-> Référence de reprise des chantiers 19.x. Ce document distingue ce qui est **intégré**, ce qui est un **patch proposé à valider/intégrer** et ce qui reste **planifié**.
+> Référence de reprise des chantiers 19.x. Ce document distingue ce qui est **intégré** et ce qui reste **planifié**.
 
 ## 1. Référence
 
 ```text
 Repository                   : Ax-07/AI-Spot-Trader
 Branche                      : main
-HEAD GitHub main observé     : 07050faea54bbed89cf250b34f8e97bd10d94bd3
+Référence fonctionnelle 19.6A : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
 État Batch 19.5              : intégré sur GitHub main
-État Batch 19.6A             : patch proposé, non intégré
+État Batch 19.6A             : intégré sur GitHub main
 Date                         : 2026-09-25
 ```
 
-Les Batches 19.1 à 19.5 sont intégrés. Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
+Les Batches 19.1 à 19.6A sont intégrés. Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
 
 ## 2. Invariants transverses
 
@@ -128,7 +128,7 @@ Renderer privilégié : **TradingView Lightweight Charts** avec données Kraken 
 
 Le frontend 19.6B doit consommer les endpoints 19.6A et ne pas se connecter directement à Kraken.
 
-# 11. Historique candles + WebSocket — PATCH PROPOSÉ 19.6A
+# 11. Historique candles + WebSocket — INTÉGRÉ 19.6A
 
 ## 11.1 Pipeline
 
@@ -226,16 +226,22 @@ WS  /api/v1/markets/candles/stream
 
 Le WebSocket cockpit envoie un snapshot initial puis les updates temps réel.
 
-## 11.9 Validation exécutée par ChatGPT
+## 11.9 Validation
 
-Dans le workspace reconstruit du patch :
+Validation ChatGPT préalable :
 
 - `pytest -q tests/test_candle_streaming.py` : **18 tests passés** ;
 - `py_compile` des fichiers 19.6A : **passé**.
 
+Validation opérateur finale avant intégration :
+
+- tests ciblés candles + Kraken REST/WebSocket/market data : **53 tests passés**, 2 warnings de dépréciation ;
+- suite backend complète `pytest` : **604 tests passés**, 2 warnings de dépréciation ;
+- `git diff --check` : aucune erreur de whitespace, uniquement les avertissements LF -> CRLF.
+
 Les tests ciblés couvrent parsing SPOT/Futures, ordre, déduplication, candle courante, nouvelle candle, profondeur, séparation des clés, historique incomplet, no-look-ahead, reconnect/backfill, absence de duplication, unsubscribe/cleanup, plusieurs consommateurs, staleness/erreur, API historique et WebSocket cockpit.
 
-La suite backend complète reste à exécuter localement sur le repository complet avant intégration. `ruff` n'était pas disponible dans l'environnement ChatGPT.
+Référence intégrée : `3c53af3bdb1ef53c574e26afe9b6178a374d9f06` (`feat: add backend candle cache and streaming`).
 
 # 12. Ordre global
 
@@ -246,19 +252,14 @@ La suite backend complète reste à exécuter localement sur le repository compl
 | 3 | 19.3 — Mode gestion | évite recherche IA inutile quand ouverture indisponible | intégré |
 | 4 | 19.4 — Discovery/watchlist | univers dynamique audité, même Agent | intégré |
 | 5 | 19.5 — Explicabilité | rationale visible vs Risk | intégré |
-| 6 | 19.6A — Candles/streaming | données chart canoniques | patch proposé, validation opérateur requise |
+| 6 | 19.6A — Candles/streaming | données chart canoniques | intégré |
 | 7 | 19.6B — Marchés/charts | rendu, onglets, markers | planifié |
 
-## 13. Validation restant à faire avant intégration 19.6A
+## 13. Prochaine étape — 19.6B
 
-Sur le repository complet :
+Le backend 19.6A étant intégré, la prochaine étape est la vue Marchés/charts consommant exclusivement ses contrats API/WebSocket. Le frontend ne doit pas ouvrir de seconde connexion directe à Kraken.
 
-- tests ciblés 19.6A + tests Kraken REST/WebSocket/market data existants ;
-- `pytest` complet ;
-- `git diff --check` ;
-- éventuelle vérification réseau manuelle Kraken en environnement de test si souhaitée.
-
-Le frontend n'est pas modifié par 19.6A : aucun `pnpm lint/typecheck/build` supplémentaire n'est requis pour ce patch.
+La revue visuelle 19.5 reste une validation opérateur séparée si elle n'a pas encore été réalisée.
 
 ## 14. Critères 19.6B ultérieurs
 

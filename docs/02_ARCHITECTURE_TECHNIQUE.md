@@ -5,10 +5,10 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD GitHub main audité au début du Batch 19.6A : 07050faea54bbed89cf250b34f8e97bd10d94bd3
+Référence fonctionnelle intégrée Batch 19.6A : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
 ```
 
-Les Batches 19.1 à 19.5 sont intégrés. Le Batch 19.6A décrit ci-dessous est un **patch proposé non intégré** tant que la validation et le commit/push opérateur n'ont pas été réalisés.
+Les Batches 19.1 à 19.6A sont intégrés. Le Batch 19.6A a été validé localement puis intégré sur GitHub `main` au commit `3c53af3bdb1ef53c574e26afe9b6178a374d9f06`.
 
 ## 2. Architecture générale
 
