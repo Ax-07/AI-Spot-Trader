@@ -5,10 +5,10 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD audité avant Batch 19.4 : bfef06d78dc34089541272c2944518499d4a1530
+HEAD GitHub main audité au début du Batch 19.6A : 07050faea54bbed89cf250b34f8e97bd10d94bd3
 ```
 
-Le Batch 19.3 est intégré. Le Batch 19.4 est livré comme patch à valider/intégrer localement.
+Les Batches 19.1 à 19.5 sont intégrés. Le Batch 19.6A décrit ci-dessous est un **patch proposé non intégré** tant que la validation et le commit/push opérateur n'ont pas été réalisés.
 
 ## 2. Architecture générale
 
@@ -19,25 +19,31 @@ Next.js cockpit
      -> CampaignRuntimeManager
         -> TradingEngine
         -> AuditedTradingCycleRunner
-        -> DynamicMarketTradingCycleRunner (si market_discovery)
+        -> DynamicMarketTradingCycleRunner
            -> MarketDiscoveryCoordinator
               -> MarketResearchService
                  -> KrakenMarketResearchBackend
-              -> OpenAIWatchlistSelector
-                 -> même OpenAIDecisionProvider / même client / même modèle
+              -> même Agent stratégique pour la watchlist
            -> TradingCycleRunner canonique
         -> CapacityEvaluator
         -> RiskEngine
         -> PaperBroker
         -> PaperPortfolioLedger
         -> monitors mark-to-market SPOT/PERPETUAL
+
+     -> CandleStreamService (19.6A)
+        -> KrakenCandleProvider
+           -> SPOT REST OHLC + WS v2 OHLC
+           -> PERPETUAL Futures charts + WS public trade
+        -> CandleCache borné
+        -> API historique / WebSocket cockpit
 ```
 
-Le frontend n'est jamais dans la chaîne d'exécution.
+Le frontend n'est jamais dans la chaîne d'exécution trading. Le service de candles appartient au processus backend et ne dépend pas du lifecycle d'un onglet cockpit.
 
-## 3. Séparation catalogue / candidat / watchlist / exécution
+## 3. Recherche de marché et discovery
 
-`MarketResearchService` reste la frontière canonique de recherche publique Kraken. Le Batch 19.4 ne crée pas un nouveau scanner fournisseur.
+`MarketResearchService` reste la frontière canonique de recherche publique Kraken. La discovery 19.4 ne crée aucun scanner stratégique parallèle.
 
 ```text
 Kraken catalogue
@@ -50,103 +56,170 @@ Kraken catalogue
 -> RoutedExecutableMarketDataSource
 ```
 
-Le filtrage déterministe vérifie uniquement des propriétés techniques/factuelles : type, quote, statut, contrat PERPETUAL linéaire, fraîcheur et profondeur minimale d'observation. Aucun indicateur n'est converti en score d'opportunité.
+Le filtrage déterministe vérifie uniquement des propriétés techniques/factuelles. Aucun indicateur n'est transformé en score d'opportunité.
 
-## 4. `MarketDiscoveryPolicy`
+## 4. `MarketDiscoveryPolicy` et coordinateur
 
-La politique est persistée dans la Campaign quand la découverte est activée. Elle borne les appels et la taille des inputs LLM : cadence catalogue/watchlist, timeout global de refresh, nombre maximum de marchés sondés, candidats et éléments de watchlist, fraîcheur et observations minimales.
+La policy persiste les bornes de discovery dans la Campaign. `MarketDiscoveryCoordinator` maintient un cache process-local du catalogue, du curseur de probe, de la dernière watchlist stratégique valide et de l'audit associé.
 
-Le champ `market_discovery` est `exclude_if=None` dans le modèle Pydantic. Une ancienne Campaign statique sérialisée avant 19.4 conserve donc son payload et son digest historique.
+Le refresh est borné par timeout. Une erreur Kraken, LLM ou validation déclenche le fallback documenté vers la dernière watchlist valide, puis vers le bootstrap si nécessaire. En `MANAGEMENT`, aucune révision IA de watchlist n'est lancée.
 
-## 5. `MarketDiscoveryCoordinator`
+## 5. Même Agent IA et exécution canonique
 
-Le coordinateur détient uniquement un cache process-local :
+`OpenAIWatchlistSelector` réutilise la même instance d'Agent stratégique. La sélection d'une watchlist ne crée aucun `ExecutionIntent`.
 
-- catalogue ;
-- timestamp de refresh ;
-- curseur de probe rotatif ;
-- dernière watchlist stratégique valide ;
-- dernier audit de découverte.
+`DynamicMarketTradingCycleRunner` prépare l'univers puis délègue au runner de trading canonique. Risk/Broker/validations causales ne sont pas dupliqués. Les positions ouvertes restent toujours dans l'univers gérable.
 
-Le probe rotatif évite qu'une taille candidate bornée sélectionne toujours le même préfixe lexical. Ce mécanisme assure une couverture technique progressive ; il ne classe pas les marchés.
+## 6. Monitoring / mark-to-market
 
-Le refresh est borné par `asyncio.timeout`. Une erreur Kraken, LLM ou validation entraîne un fallback vers la watchlist précédente, ou vers le bootstrap si aucune watchlist n'existe encore. L'échec est temporisé jusqu'à la prochaine cadence au lieu d'être réessayé à chaque cycle.
+Les monitors SPOT et PERPETUAL restent des boucles techniques déterministes, indépendantes du cycle stratégique et de la discovery. Ils n'appellent pas le LLM et ne modifient pas la watchlist.
 
-## 6. Même Agent IA
+Leur rôle est la valorisation PAPER : marks, P&L latent, exposition, marge/liquidation/funding selon le type de marché.
 
-`OpenAIWatchlistSelector` est un adaptateur sur **la même instance** `OpenAIDecisionProvider`. Il réutilise son client, son modèle et son horloge. La phase watchlist n'expose pas de tools : toutes les données présentées ont déjà été collectées par le pipeline déterministe de discovery.
+## 7. Explicabilité 19.5
 
-Sortie structurée : une liste bornée de `(symbol, market_type, rationale)` exclusivement parmi les candidats. La sélection d'une watchlist ne crée aucun `ExecutionIntent`.
+L'explicabilité est une projection de lecture à partir des faits déjà persistés. Elle sépare contexte/discovery, sélection de marché, Agent, Risk et exécution PAPER. Elle ne recalcule ni stratégie, ni Risk, ni P&L et n'invente aucune rationale absente.
 
-`StrategyInstructionsClient` ajoute le contrat discovery seulement lorsqu'un `market_discovery_context` est présent ; les prompts des cycles statiques restent inchangés.
+## 8. Domaine candle canonique — 19.6A
 
-## 7. Runner dynamique et CapacityEvaluator
-
-`DynamicMarketTradingCycleRunner` est un orchestrateur mince qui prépare l'univers puis délègue le cycle de trading au `TradingCycleRunner` canonique. Risk/Broker/validations causales ne sont pas dupliqués.
-
-Avant discovery, le runner calcule une première évaluation de capacité sur :
+Le Batch 19.6A introduit un domaine de présentation marché distinct du domaine stratégique :
 
 ```text
-bootstrap + watchlist en cache + positions ouvertes
+CandleKey = canonical symbol + MarketType + CandleTimeframe
+Candle    = open_time + close_time + OHLCV + is_final + updated_at
 ```
 
-Si le mode est `MANAGEMENT`, il enregistre `SKIPPED_MANAGEMENT` et ne déclenche aucune révision IA de watchlist. Le runner canonique recalcule ensuite la capacité sur l'univers effectif et applique les barrières 19.3.
+Règles :
 
-En NORMAL :
+- symbole canonique `BASE/QUOTE` en uppercase ;
+- timestamps timezone-aware et normalisés UTC ;
+- `close_time = open_time + timeframe` ;
+- une candle finalisée ne peut pas être disponible avant sa clôture ;
+- cohérence OHLC validée ;
+- volume non négatif ;
+- aucune candle avec `open_time` future n'entre dans le cache ;
+- les trous temporels restent des trous : aucune candle n'est synthétisée.
+
+Le champ `is_final` explicite la distinction entre candle courante mutable et candle clôturée.
+
+## 9. Timeframes bornés
+
+Les timeframes sont un ensemble explicite, pas une valeur libre.
+
+SPOT supporté par 19.6A : `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1d`, `1w`, `15d` selon l'endpoint Kraken OHLC.
+
+PERPETUAL supporté par 19.6A : `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `12h`, `1d`, `1w` selon Kraken Futures charts.
+
+Un timeframe non supporté pour le type de marché est rejeté avant abonnement fournisseur. FUTURE daté reste hors périmètre.
+
+## 10. Historique initial et limites fournisseur
+
+### SPOT
+
+`KrakenPublicRestClient` conserve son API close-only existante pour les consommateurs historiques et ajoute une lecture OHLCV dédiée au cockpit. L'endpoint Spot OHLC fournit au maximum 720 rows ; le backend ne prétend donc pas fournir 1000 candles Spot à partir d'un seul appel.
+
+La dernière row retournée est conservée comme candle courante non finalisée au lieu d'être supprimée dans le contrat chart.
+
+### PERPETUAL
+
+Le provider réutilise le catalogue `KrakenDerivativesPublicClient` pour résoudre le `venue_symbol` d'un PERPETUAL linéaire puis interroge le endpoint public Futures charts `mark/<venue>/<resolution>`.
+
+La cible de requête est bornée à 1000 rows, mais la profondeur effective reste celle réellement retournée par Kraken. Aucun row manquant n'est inventé.
+
+## 11. Cache backend
+
+`CandleCache` est process-local et borné. Il n'ajoute aucune table SQL.
+
+Pour chaque `CandleKey` :
+
+- ordre chronologique garanti ;
+- déduplication par `open_time` ;
+- remplacement d'une candle courante par une version plus récente ;
+- une candle finalisée ne peut pas être rétrogradée en candle courante ;
+- profondeur maximale bornée, 1000 par défaut ;
+- aucune croissance mémoire non bornée.
+
+La persistence durable des candles n'est pas justifiée pour 19.6A : PostgreSQL reste réservé aux faits métier/audit qui doivent survivre au process.
+
+## 12. Streaming Kraken SPOT
+
+`KrakenOhlcWebSocketClient` réutilise l'infrastructure publique WebSocket Kraken existante et le même protocole de connexion abstrait.
+
+Il :
+
+- souscrit au canal v2 `ohlc` pour un symbole/timeframe ;
+- met à jour la candle courante ;
+- marque la candle précédente finalisée lorsque l'intervalle suivant apparaît ;
+- rejette symbole/timeframe incohérents ;
+- envoie un unsubscribe best-effort au cleanup ;
+- ferme toujours la connexion détenue par le générateur.
+
+La reconnexion globale et le backfill appartiennent au hub `CandleStreamService`, afin de ne pas dupliquer cette politique dans chaque adaptateur.
+
+## 13. Streaming Kraken PERPETUAL
+
+Kraken Futures ne fournit pas un flux OHLC public équivalent au canal Spot v2 utilisé ici. Le provider 19.6A réutilise donc le WebSocket public Futures `trade` et agrège uniquement les trades réellement reçus pour construire la candle courante.
+
+À la transition d'intervalle, la candle précédente est finalisée. Si aucun trade n'existe pour un intervalle, aucune candle synthétique n'est créée.
+
+Après reconnexion ou gap détecté, le hub demande un backfill au endpoint Futures charts puis fusionne/déduplique avant de poursuivre le flux.
+
+## 14. `CandleStreamService`
+
+Le service est le propriétaire backend des streams :
 
 ```text
-univers effectif = watchlist courante + marchés des positions ouvertes
+premier besoin sur une CandleKey
+-> backfill REST
+-> création d'un seul task provider pour cette clé
+-> fan-out vers N consommateurs cockpit
+-> cache partagé
 ```
 
-Les positions ouvertes gagnent toujours sur la sortie de watchlist afin de rester gérables.
+Propriétés :
 
-## 8. Exécution dynamique
+- un seul stream provider par clé ;
+- nombre total de streams actifs borné, 32 par défaut ;
+- queues consommateurs bornées ;
+- backfill initial et après reconnexion ;
+- détection d'un trou avant une update et tentative de recovery ;
+- merge/déduplication avant publication ;
+- statut `connected`, `stale`, `last_update_at`, `last_error` ;
+- fermeture de tous les tasks et transports au shutdown backend.
 
-`RoutedExecutableMarketDataSource` conserve son mode statique historique par défaut. En mode dynamique, une adresse hors bootstrap est acceptée uniquement si :
+Un client cockpit qui se déconnecte est retiré du fan-out, mais le stream backend déjà démarré reste propriétaire du backend jusqu'au shutdown. Fermer/redémarrer le frontend n'arrête ni le moteur de trading ni la collecte déjà ouverte.
 
-- symbole canonique ;
-- type autorisé par `market_discovery.market_types` ;
-- quote identique à `paper_settlement_asset` ;
-- source Kraken capable de fournir le snapshot exact ;
-- PERPETUAL effectivement linéaire.
+## 15. API cockpit 19.6A
 
-L'existence/exécutabilité réelle reste prouvée par la source canonique, jamais par le texte LLM.
+Le backend expose :
 
-## 9. RiskPolicy et whitelist
+```text
+GET /api/v1/markets/candles
+GET /api/v1/markets/candles/status
+WS  /api/v1/markets/candles/stream
+```
 
-`risk_allowed_pairs` devient nullable uniquement pour une Campaign dynamique. Valeur non nulle = whitelist supplémentaire ferme. Valeur nulle = pas de whitelist symbolique explicite, mais toutes les autres contraintes Risk restent actives.
+Le GET retourne l'historique canonique et le statut technique. Le WebSocket envoie d'abord un snapshot, puis les updates de candles provenant du hub partagé.
 
-Une Campaign statique continue d'exiger `risk_allowed_pairs` et tous ses bootstrap markets doivent y être présents.
+Le futur Batch 19.6B consommera ces contrats ; il ne doit pas ouvrir une seconde connexion directe à Kraken.
 
-## 10. Monitoring dynamique
+## 16. Lifecycle FastAPI
 
-Les monitors existants restent déterministes :
+Le service de candles est créé dans le lifespan FastAPI avec les URLs/timeouts Kraken déjà présents dans `Settings`. Aucun nouveau secret ni paramètre stratégique n'est introduit.
 
-- SPOT : lorsqu'une position dynamique est détenue, le symbole `ASSET/settlement_asset` est dérivé uniquement pour demander un mark Kraken ;
-- PERPETUAL : une position dynamique peut être marquée même si son symbole n'était pas dans le bootstrap initial.
+Au shutdown : CandleStreamService ferme ses tasks/provider, puis le runtime trading poursuit son cleanup canonique.
 
-Ces monitors ne modifient jamais la watchlist et n'appellent jamais le LLM.
+Les cadences restent distinctes :
 
-## 11. Persistence / audit
+1. monitoring / mark-to-market ;
+2. cycle stratégique IA ;
+3. discovery / watchlist IA ;
+4. streaming marché / candles sans LLM.
 
-Aucune migration SQL en 19.4. `DiscoveredMarketSelectionInput` étend `MarketSelectionInput` avec un `MarketDiscoveryAudit`. Le repository existant sérialise déjà le modèle complet dans `market_selection_input_payload` ; les faits de discovery entrent donc automatiquement dans l'audit et son digest.
+## 17. Persistence / audit
 
-L'audit indique au minimum : statut, counts, faits candidats, ancienne/nouvelle watchlist, ajout/maintien/retrait, rationales, erreur éventuelle et date du prochain refresh.
+Aucune migration SQL en 19.6A. L'audit trading 19.4/19.5 reste inchangé. Le cache candles n'est pas utilisé comme source de vérité d'exécution, de Risk, de portfolio ou de décision Agent.
 
-## 12. Recovery
+## 18. Hors périmètre 19.6A
 
-`DynamicCampaignPaperRunLifecycle` sous-classe le lifecycle canonique uniquement pour la reprise dynamique. Avant la validation du parent, il lit le `current_portfolio_payload` durable et élargit l'univers du nouveau run avec les marchés des positions réellement ouvertes. Le base lifecycle effectue ensuite le handoff, les validations et la restauration habituels.
-
-La watchlist n'est pas replayée ni persistée comme table mutable. Après reprise : positions d'abord ; watchlist reconstruite ensuite en NORMAL.
-
-## 13. Comptabilité et Risk inchangés
-
-Les Batches 19.1 à 19.3 restent canoniques : comptabilité SPOT, mark-to-market, equity/exposition, CapacityEvaluator partagé avec la même RiskPolicy et veto d'augmentation d'exposition en MANAGEMENT.
-
-## 14. Frontend
-
-Le configurateur simple produit une Campaign dynamique avec un bootstrap/secours. Les écrans avancés restent compatibles avec les Campaigns statiques. Aucune logique d'admissibilité, de ranking ou de Risk n'est introduite en TypeScript.
-
-## 15. Hors périmètre
-
-Explicabilité dédiée, candles/WebSocket/charts, LIVE, multi-agent, ranking algorithmique stratégique et nouvelle stratégie de trading restent hors Batch 19.4.
+Restent hors du batch : vue Marchés complète, Lightweight Charts, onglets frontend définitifs, markers BUY/SELL/fills, overlays position/liquidation, nouvelle logique stratégique IA, ranking algorithmique, modification Risk et LIVE.

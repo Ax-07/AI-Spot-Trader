@@ -29,3 +29,35 @@ class KrakenOhlcCandle:
     started_at: datetime
     closed_at: datetime
     close_price: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class KrakenOhlcvCandle:
+    """Full Kraken Spot OHLCV candle used by the cockpit candle pipeline."""
+
+    started_at: datetime
+    closed_at: datetime
+    open_price: Decimal
+    high_price: Decimal
+    low_price: Decimal
+    close_price: Decimal
+    volume: Decimal
+    is_final: bool
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class KrakenOhlcUpdate:
+    """Full Kraken Spot WebSocket v2 OHLC update for the current/finalized candle."""
+
+    symbol: str
+    interval_minutes: int
+    started_at: datetime
+    closed_at: datetime
+    open_price: Decimal
+    high_price: Decimal
+    low_price: Decimal
+    close_price: Decimal
+    volume: Decimal
+    is_final: bool
+    updated_at: datetime

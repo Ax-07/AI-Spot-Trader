@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
 from fastapi import FastAPI
 
@@ -7,6 +8,7 @@ from ai_spot_trader import __version__
 from ai_spot_trader.agent.openai_client import OpenAIResponsesClient
 from ai_spot_trader.api.routes.analytics import router as analytics_router
 from ai_spot_trader.api.routes.audit import router as audit_router
+from ai_spot_trader.api.routes.candles import router as candles_router
 from ai_spot_trader.api.routes.chat import router as chat_router
 from ai_spot_trader.api.routes.control_plane import router as control_plane_router
 from ai_spot_trader.api.routes.engine import router as engine_router
@@ -26,6 +28,8 @@ from ai_spot_trader.core.runtime import (
     PortfolioSnapshotSource,
     StoppableTradingEngine,
 )
+from ai_spot_trader.integrations.kraken.candles import KrakenCandleProvider
+from ai_spot_trader.market.candles import CandleCache, CandleStreamService
 from ai_spot_trader.persistence.analytics import (
     PaperAnalyticsReader,
     SqlAlchemyPaperAnalyticsQueryService,
@@ -52,9 +56,10 @@ def create_app(
     analytics_reader: PaperAnalyticsReader | None = None,
     paper_run_reader: PaperRunReader | None = None,
     chat_service: OperatorChatService | None = None,
+    candle_service: CandleStreamService | None = None,
     compose_paper: bool = False,
 ) -> FastAPI:
-    """Create FastAPI; Batch 18.9A keeps infrastructure alive without a campaign."""
+    """Create FastAPI; market-data streams remain backend-owned and campaign-independent."""
 
     resolved_settings = settings or get_settings()
     injected_dependencies = (
@@ -64,6 +69,7 @@ def create_app(
         analytics_reader,
         paper_run_reader,
         chat_service,
+        candle_service,
     )
     if compose_paper and any(value is not None for value in injected_dependencies):
         raise ValueError("compose_paper cannot be combined with injected runtime dependencies")
@@ -165,13 +171,35 @@ def create_app(
                     context_source=RuntimeChatContextSource(runtime),
                 )
 
+        resolved_candle_service = candle_service
+        if resolved_candle_service is None:
+            stale_seconds = resolved_settings.kraken_stale_after_seconds or 90.0
+            resolved_candle_service = CandleStreamService(
+                KrakenCandleProvider(
+                    spot_rest_url=resolved_settings.kraken_rest_url,
+                    spot_ws_url=resolved_settings.kraken_ws_url,
+                    derivatives_rest_url=resolved_settings.kraken_derivatives_rest_url,
+                    timeout_seconds=resolved_settings.kraken_rest_timeout_seconds,
+                    ws_receive_timeout_seconds=max(
+                        resolved_settings.kraken_ws_receive_timeout_seconds,
+                        30.0,
+                    ),
+                ),
+                cache=CandleCache(max_depth=1000),
+                max_streams=32,
+                stale_after=timedelta(seconds=stale_seconds),
+                reconnect_delay_seconds=resolved_settings.kraken_ws_reconnect_delay_seconds,
+            )
+
         app.state.runtime = runtime
         app.state.chat_service = resolved_chat_service
         app.state.control_plane_store = control_plane_store
+        app.state.candle_service = resolved_candle_service
         try:
             await runtime.initialize()
             yield
         finally:
+            await resolved_candle_service.aclose()
             await runtime.close()
 
     app = FastAPI(
@@ -188,6 +216,7 @@ def create_app(
     app.include_router(paper_runs_router)
     app.include_router(control_plane_router)
     app.include_router(chat_router)
+    app.include_router(candles_router)
     return app
 
 

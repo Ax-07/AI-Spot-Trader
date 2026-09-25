@@ -6,57 +6,44 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub `main` observé au démarrage du Batch 19.5 :
-  `e7e4c8248406516eada576b3907e77dc8b72a0e4`
-  (`docs: synchronize Batch 19.4 completion`).
-- Référence fonctionnelle du Batch 19.4 :
-  `de65c6677ce01f9c75da5545fe81553a021f588d`
-  (`feat: add dynamic audited market discovery`).
-- Batch 19.4 **intégré** sur GitHub.
-- Validation locale Batch 19.4 communiquée par l'opérateur : `tests/test_market_discovery.py` = 12 tests passés ; suite backend complète = 578 tests passés avec 2 warnings de dépréciation ; frontend = `pnpm lint`, `pnpm typecheck` et `pnpm build` passés.
-- Batch 19.5 : **validation automatisée locale réussie ; prêt à intégrer, commit/push GitHub encore à effectuer**.
+- HEAD GitHub `main` observé au démarrage du Batch 19.6A :
+  `07050faea54bbed89cf250b34f8e97bd10d94bd3`
+  (`feat: add operator AI and risk explainability`).
+- Batch 19.5 : **intégré sur GitHub `main`** à cette référence.
+- Validation automatisée 19.5 communiquée par l'opérateur : 8 tests ciblés ; suite backend complète 586 tests passés avec 2 warnings de dépréciation ; frontend `pnpm lint`, `pnpm typecheck`, `pnpm build` passés.
+- La revue visuelle 19.5 light/dark + desktop/mobile reste une validation opérateur distincte si elle n'a pas encore été réalisée.
 
-## État fonctionnel intégré avant Batch 19.5
+## État fonctionnel intégré
 
 - un seul Agent IA stratégique ; Kraken ; PAPER uniquement ; SPOT + PERPETUAL linéaire ;
 - Risk Engine déterministe = autorité finale ; aucune sortie LLM ne déclenche directement un ordre ;
-- Batch 19.3 `NORMAL` / `MANAGEMENT` conservé ; `MANAGEMENT` est évalué avant tout renouvellement de watchlist ;
-- Batch 19.4 discovery dynamique conservé : catalogue Kraken canonique, watchlist IA bornée, fallback et audit durable sans table SQL dédiée ;
-- les positions ouvertes restent gérables hors watchlist ;
-- le configurateur simple active la discovery par défaut ;
+- `NORMAL` / `MANAGEMENT`, discovery dynamique et watchlist auditée sont intégrés ;
+- l'explicabilité 19.5 expose séparément contexte/discovery, sélection de marché, Agent, Risk et exécution PAPER depuis les faits persistés ;
 - frontend toujours sans autorité trading ni calcul financier parallèle.
 
-## Batch 19.5 — validation locale
+## Batch 19.6A — patch proposé, non intégré
 
-- nouvelle projection backend d'explicabilité construite exclusivement depuis les faits déjà persistés ;
-- aucune migration SQL, aucun nouveau ledger et aucun calcul stratégique/financier ;
-- `/api/v1/cycles/latest` et `/api/v1/cycles/{cycle_id}` exposent une vue typée séparant contexte/discovery, sélection de marché, Agent IA, Risk, exécution PAPER et corrélation d'IDs ;
-- HOLD, REJECT, MODIFY et FAILED restent sémantiquement distincts ;
-- les anciens historiques incomplets restent explicites : aucune rationale ou causalité n'est inventée ;
-- Accueil : dernière décision réellement explicable ;
-- Historique : détail corrélé de cycle au lieu du croisement de pages décisions/Risk/exécutions ;
-- Positions : activité auditée récente corrélée par symbole + type de marché, explicitement **sans** prétendre établir la provenance directe d'une position.
+Le patch 19.6A ajoute la couche backend canonique pour les futurs charts :
 
-## Validation locale Batch 19.5
+```text
+Kraken REST / charts -> historique initial
+Kraken WebSocket -> updates temps réel
+backend -> normalisation OHLCV + cache borné + recovery
+FastAPI -> historique + WebSocket cockpit
+```
 
-Exécuté par l'opérateur sur le repository complet le 2026-09-25 :
+Principes : cache process-local sans nouvelle table SQL ; clé `(symbol, market_type, timeframe)` ; ordre/déduplication/candle courante ; backfill sans invention de données ; un stream backend partagé par plusieurs consommateurs ; lifecycle backend indépendant du frontend ; aucune IA, stratégie ou logique Risk dans ce pipeline.
 
-- `pytest tests/test_cycle_explainability.py` : **8 tests passés** ;
-- `pytest` : **586 tests passés**, avec 2 warnings de dépréciation déjà connus ;
-- `pnpm lint` : **passé** ;
-- `pnpm typecheck` : **passé** ;
-- `pnpm build` : **passé** ;
-- `git diff --check` : aucune erreur de whitespace, uniquement des avertissements LF -> CRLF.
+Limites fournisseur retenues : historique Spot borné à 720 rows par l'endpoint OHLC ; PERPETUAL via Kraken Futures charts avec cible jusqu'à 1000 rows, sans supposer que le fournisseur renvoie toujours cette profondeur.
 
-La revue visuelle ciblée light/dark, desktop/mobile, rationales longues/absentes, nombreuses raisons Risk et longs identifiants reste à distinguer de cette validation automatisée avant clôture documentaire définitive.
+Validation exécutée par ChatGPT dans le workspace reconstruit du patch : `pytest -q tests/test_candle_streaming.py` = **18 tests passés** ; `py_compile` des fichiers modifiés = **passé**. La suite complète du repository n'a pas pu être exécutée dans cet environnement et reste à valider localement.
 
 ## Prochaine priorité
 
-1. effectuer la revue visuelle ciblée puis committer/pousser le Batch 19.5 ;
-2. Batch 19.6A — backend candles/cache/streaming ;
-3. Batch 19.6B — vue Marchés/charts/markers.
-
-Le cadrage détaillé reste centralisé dans `docs/11_AMELIORATIONS_PLANIFIEES.md`.
+1. extraire le patch 19.6A à la racine du repository et exécuter les tests ciblés puis `pytest` sur le repository complet ;
+2. après validation opérateur, commit/push du 19.6A puis mise à jour de son état en « intégré » ;
+3. Batch 19.6B — vue Marchés, charts et markers ;
+4. conserver séparément la revue visuelle 19.5 si elle reste à faire.
 
 ## Règle de reprise
 

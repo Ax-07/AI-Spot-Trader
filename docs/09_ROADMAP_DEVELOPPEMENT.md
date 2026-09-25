@@ -3,9 +3,9 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub main observé          : e7e4c8248406516eada576b3907e77dc8b72a0e4
-Référence fonctionnelle Batch 19.4 : de65c6677ce01f9c75da5545fe81553a021f588d
-État Batch 19.5                    : validation automatisée locale réussie, commit/push en attente
+HEAD GitHub main observé au début 19.6A : 07050faea54bbed89cf250b34f8e97bd10d94bd3
+Batch 19.5                               : intégré sur GitHub main
+Batch 19.6A                              : patch proposé, non intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch. Le document détaillé des améliorations est `docs/11_AMELIORATIONS_PLANIFIEES.md`.
@@ -17,82 +17,78 @@ Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batc
 - 18.10 à 18.13 : refonte UX, guide opérateur, simplification, dark mode et modernisation ;
 - Batch 19.1 : comptabilité SPOT canonique ;
 - Batch 19.2 : mark-to-market canonique, equity/exposition backend et monitors SPOT/PERPETUAL sans LLM ;
-- Batch 19.3 : `CapacityEvaluator`, modes `NORMAL` / `MANAGEMENT`, désactivation de la recherche d'ouverture inutile et barrière Risk contre les hausses d'exposition en MANAGEMENT ;
-- Batch 19.4 : découverte dynamique Kraken, watchlist multi-marchés auditée, même Agent stratégique, fallback/recovery et configurateur simplifié.
-
-## Batch 19.4 — Découverte dynamique et watchlist auditée
-
-**État : intégré sur GitHub.**
-
-Référence fonctionnelle : `de65c6677ce01f9c75da5545fe81553a021f588d` (`feat: add dynamic audited market discovery`).
-
-Validation opérateur communiquée :
-
-- `tests/test_market_discovery.py` : 12 tests passés ;
-- suite backend complète : 578 tests passés, 2 warnings de dépréciation ;
-- frontend : `pnpm lint`, `pnpm typecheck`, `pnpm build` passés.
-
-Résultat intégré :
-
-- `MarketDiscoveryPolicy` optionnel et versionné dans `CampaignConfiguration` ;
-- compatibilité ascendante : une Campaign sans policy conserve son univers statique ;
-- `paper_executable_markets` reste le bootstrap/garde-fou immuable d'une Campaign dynamique ;
-- catalogue canonique réutilisé via `MarketResearchService` + adaptateurs Kraken existants ;
-- cache catalogue 15 min par défaut ;
-- refresh watchlist 15 min par défaut, déclenché uniquement par un cycle `NORMAL`, borné à 45 s ;
-- filtrage factuel sans ranking ;
-- sélection multi-marchés par le même Agent stratégique, avec rationale global et par marché ;
-- fallback explicite : dernière watchlist valide, sinon bootstrap Campaign ;
-- univers effectif : watchlist + toutes les positions ouvertes ;
-- `MANAGEMENT` évalué avant discovery ;
-- audit sans migration SQL via extension persistée de `MarketSelectionInput` ;
-- aucun second Agent, aucun ordre déclenché par la watchlist, aucun changement de l'autorité Risk.
+- Batch 19.3 : `CapacityEvaluator`, modes `NORMAL` / `MANAGEMENT`, économie IA et barrière Risk contre l'augmentation d'exposition en MANAGEMENT ;
+- Batch 19.4 : découverte dynamique Kraken, watchlist multi-marchés auditée, même Agent stratégique, fallback/recovery et configurateur simplifié ;
+- Batch 19.5 : projection d'explicabilité opérateur Agent/Risk/exécution depuis les faits persistés.
 
 ## Batch 19.5 — Explicabilité opérateur
 
-**État : validation automatisée locale réussie ; intégration GitHub en attente du commit/push.**
+**État : intégré sur GitHub `main`.**
 
-Architecture mise en place :
+Référence : `07050faea54bbed89cf250b34f8e97bd10d94bd3` (`feat: add operator AI and risk explainability`).
+
+Résultat intégré :
+
+- aucune table SQL ni ledger parallèle ;
+- `/api/v1/cycles/latest` et `/api/v1/cycles/{cycle_id}` séparent contexte/discovery, sélection du marché, décision Agent, résultat Risk et exécution PAPER ;
+- HOLD, MODIFY, REJECT et FAILED restent sémantiquement distincts ;
+- les historiques incomplets n'inventent ni rationale ni causalité ;
+- Accueil, Historique et Positions consomment une présentation défensive de faits canoniques.
+
+Validation automatisée locale communiquée par l'opérateur :
+
+- `pytest tests/test_cycle_explainability.py` : 8 tests passés ;
+- `pytest` : 586 tests passés, 2 warnings de dépréciation ;
+- `pnpm lint`, `pnpm typecheck`, `pnpm build` : passés.
+
+La revue visuelle light/dark + responsive reste une validation opérateur distincte si elle n'a pas encore été réalisée.
+
+## Batch 19.6A — Backend candles, cache et streaming cockpit
+
+**État : patch proposé, non intégré.**
+
+Architecture proposée :
 
 ```text
-faits canoniques persistés du cycle
--> projection backend typée d'explicabilité
--> /cycles/latest et /cycles/{cycle_id}
--> cockpit Accueil / Historique
+SPOT      : Kraken REST OHLC + WebSocket v2 OHLC
+PERPETUAL : Kraken Futures charts + WebSocket public trade agrégé
+                         |
+                         v
+              Candle canonique OHLCV
+                         |
+              cache process-local borné
+                         |
+             hub partagé par market key
+                  /               \
+        API historique       WebSocket cockpit
 ```
 
-Le Batch 19.5 :
+Choix :
 
-- n'ajoute aucune table SQL ni ledger ;
-- ne recalcule ni stratégie, ni Risk, ni P&L ;
-- sépare discovery/watchlist, contexte `NORMAL` / `MANAGEMENT`, sélection du marché du cycle, décision Agent, résultat Risk et exécution PAPER ;
-- expose quantité proposée, demandée et autorisée sans faire croire que Risk change l'action ou le marché ;
-- distingue HOLD, REJECT et échec technique ;
-- conserve les artefacts produits avant un `FAILED`, notamment un intent existant avant un échec Broker ;
-- affiche explicitement l'absence de rationale sur les historiques legacy ;
-- fait charger à l'Historique les détails corrélés de chaque cycle au lieu de joindre des pages indépendantes ;
-- présente dans Positions uniquement une **activité auditée liée au même marché**, pas une provenance de position.
+- clé canonique `symbol + market_type + timeframe` ;
+- aucune persistence SQL ajoutée : le besoin est un cache de diffusion/recovery, pas une nouvelle source durable ;
+- profondeur cache par défaut bornée à 1000 ; historique Spot réellement borné à 720 rows par l'endpoint Kraken OHLC ;
+- PERPETUAL : cible jusqu'à 1000 candles via charts, profondeur effective laissée au fournisseur ;
+- déduplication, remplacement de la candle courante, finalisation causale et tri chronologique ;
+- aucune candle synthétique pour combler un trou ;
+- backfill REST après reconnexion ou gap détecté ;
+- un stream backend partagé par plusieurs consommateurs cockpit, avec nombre total de streams borné ;
+- streams détenus par le backend et nettoyés au shutdown ; fermer le frontend ne ferme pas le moteur ni le service de candles ;
+- timeframes explicites et bornés par capacités fournisseur ; FUTURE daté hors périmètre ;
+- aucune IA, aucun ranking stratégique et aucun changement Risk.
 
-Validation locale exécutée par l'opérateur sur le repository complet :
+Validation exécutée par ChatGPT sur le workspace reconstruit du patch :
 
-- `pytest tests/test_cycle_explainability.py` : **8 tests passés** ;
-- `pytest` : **586 tests passés**, 2 warnings de dépréciation ;
-- `pnpm lint` : **passé** ;
-- `pnpm typecheck` : **passé** ;
-- `pnpm build` : **passé** ;
-- `git diff --check` : aucune erreur, seulement des avertissements LF -> CRLF.
-
-La revue visuelle light/dark + responsive reste la dernière validation opérateur à distinguer des tests automatisés avant clôture définitive.
+- `pytest -q tests/test_candle_streaming.py` : **18 tests passés** ;
+- `python -m py_compile ...` sur les fichiers 19.6A : **passé** ;
+- `ruff` non disponible dans l'environnement ;
+- suite backend complète non exécutée, le repository complet ne pouvant pas être cloné dans cet environnement.
 
 ## Prochaine séquence
 
-### Batch 19.6A — Backend candles, cache et streaming cockpit
+### Validation/intégration opérateur 19.6A
 
-- historique initial Kraken REST ;
-- mises à jour Kraken WebSocket ;
-- normalisation/cache/persistence éventuelle ;
-- API historique et WebSocket cockpit ;
-- backfill/recovery sans look-ahead.
+Exécuter les tests ciblés Kraken/candles puis `pytest` sur le repository complet. Ne marquer 19.6A intégré qu'après commit/push réel.
 
 ### Batch 19.6B — Vue Marchés, Lightweight Charts et markers
 
@@ -102,22 +98,19 @@ La revue visuelle light/dark + responsive reste la dernière validation opérate
 - overlays position/mark/liquidation ;
 - markers BUY/SELL/réduction/clôture ;
 - détails fill/rationale/Risk ;
-- lazy loading/cache.
-
-## Pourquoi cet ordre
-
-La comptabilité 19.1 et le mark-to-market 19.2 fournissent un état portfolio exploitable. Le Batch 19.3 supprime la recherche d'ouverture quand elle est déterministement inutile ou incertaine. Le Batch 19.4 renouvelle un univers stratégique plus large sans gaspiller d'IA en MANAGEMENT. Le Batch 19.5 rend ces traces canoniques lisibles avant que 19.6 n'ajoute les charts et markers.
+- lazy loading côté cockpit sans seconde connexion Kraken.
 
 ## Cadences à maintenir distinctes
 
 1. **monitoring / mark-to-market** : rapide, déterministe, sans LLM ;
 2. **cycle stratégique IA** : plus lent, décision BUY / SELL / HOLD ;
-3. **découverte/révision de watchlist IA** : beaucoup plus lente, 15 min par défaut.
+3. **discovery / watchlist IA** : lente, même Agent, 15 min par défaut ;
+4. **streaming marché / candles** : technique, déterministe, sans LLM et indépendant des trois précédentes.
 
 ## Périmètres ultérieurs
 
 - LIVE reste séparé et ultérieur ;
-- FUTURE daté reste hors exécution tant qu'un domaine dédié n'est pas décidé ;
+- FUTURE daté reste hors exécution et hors streaming 19.6A ;
 - multi-quote/FX reste à traiter explicitement ;
-- enrichissement research additionnel uniquement sur besoin mesuré ;
-- persistence mutable autonome de watchlist à reconsidérer seulement si le cache process-local + audit de cycle devient insuffisant.
+- persistence durable des candles à reconsidérer seulement sur besoin démontré ;
+- aucun ranking algorithmique stratégique ne doit être introduit silencieusement.
