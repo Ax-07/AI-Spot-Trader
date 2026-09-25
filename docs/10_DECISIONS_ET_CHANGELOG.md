@@ -10,14 +10,17 @@ Broker/Kraken, SPOT sans short/levier, PERPETUAL linéaire avec protections dét
 durable, no-look-ahead, backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE
 séparé.
 
-## Référence auditée du Batch 19.4
+## Référence intégrée du Batch 19.4
 
 ```text
-HEAD GitHub main audité : bfef06d78dc34089541272c2944518499d4a1530
-Commit                 : feat: add deterministic capacity management mode
+Référence fonctionnelle Batch 19.4 : de65c6677ce01f9c75da5545fe81553a021f588d
+Commit                            : feat: add dynamic audited market discovery
+Clôture documentaire observée     : 62adc9bd2293ad94050b209de1897c4290a673f7
 ```
 
-Les Batches 19.1, 19.2 et 19.3 sont intégrés. Le Batch 19.4 est livré comme patch local ; son intégration GitHub reste explicite et postérieure à la validation opérateur.
+Les Batches 19.1, 19.2, 19.3 et 19.4 sont intégrés. Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
+
+Validation opérateur communiquée pour 19.4 : `tests/test_market_discovery.py` = 12 tests passés ; suite backend complète = 578 tests passés avec 2 warnings de dépréciation ; frontend = `pnpm lint`, `pnpm typecheck` et `pnpm build` passés.
 
 ## Décisions historiques toujours actives
 
@@ -82,7 +85,7 @@ En MANAGEMENT, la boucle de tools d'ouverture est désactivée et `new_opening_r
 
 ## ADR-221 — Le catalogue Kraken existant devient la source canonique de discovery
 
-**IMPLÉMENTÉE DANS LE PATCH BATCH 19.4.**
+**INTÉGRÉE AU BATCH 19.4.**
 
 `MarketResearchService` et `KrakenMarketResearchBackend` sont réutilisés. Aucun scanner parallèle Kraken n'est ajouté. Le cache de catalogue est process-local, 15 min par défaut.
 
@@ -90,7 +93,7 @@ Le déterministe peut éliminer un marché pour des raisons factuelles : type, q
 
 ## ADR-222 — La watchlist est une sélection périodique du même Agent
 
-**IMPLÉMENTÉE DANS LE PATCH BATCH 19.4.**
+**INTÉGRÉE AU BATCH 19.4.**
 
 Un `OpenAIWatchlistSelector` est un adaptateur sur la même instance `OpenAIDecisionProvider` : même client de stratégie, même modèle et même horloge. Il n'existe pas de second Agent.
 
@@ -106,7 +109,7 @@ La watchlist n'est jamais une instruction d'ordre.
 
 ## ADR-223 — Watchlist process-local, audit durable, reconstruction après restart
 
-**IMPLÉMENTÉE DANS LE PATCH BATCH 19.4.**
+**INTÉGRÉE AU BATCH 19.4.**
 
 Aucune table SQL mutable de watchlist n'est introduite. Chaque cycle transporte dans l'audit : statut de discovery, taille du catalogue, candidats avec leurs snapshots factuels, timestamps de l'input/sélection, watchlist précédente/effective, ajouts, maintiens, retraits, rationales et erreur éventuelle.
 
@@ -120,7 +123,7 @@ Ce choix réduit la surface de persistence et évite de transformer un cache str
 
 ## ADR-224 — Univers effectif = watchlist + positions ouvertes, avec bootstrap immuable
 
-**IMPLÉMENTÉE DANS LE PATCH BATCH 19.4.**
+**INTÉGRÉE AU BATCH 19.4.**
 
 `paper_executable_markets` reste dans la Campaign comme bootstrap/garde-fou/fallback. Pour une Campaign dynamique :
 
@@ -134,7 +137,7 @@ Une position ouverte reste donc gérable si son marché est retiré de la watchl
 
 ## ADR-225 — `risk_allowed_pairs=null` est réservé aux Campaigns dynamiques
 
-**IMPLÉMENTÉE DANS LE PATCH BATCH 19.4.**
+**INTÉGRÉE AU BATCH 19.4.**
 
 Une Campaign statique conserve l'obligation de whitelist explicite couvrant tous ses marchés. Une Campaign dynamique peut utiliser `null` pour laisser la frontière Kraken/type/quote définir l'adresse admissible ; une whitelist non nulle reste un garde-fou additionnel qui restreint aussi les candidats de discovery.
 
@@ -142,7 +145,7 @@ Les autres limites Risk restent inchangées et autoritaires.
 
 ## ADR-226 — Recovery dynamique étend le lifecycle canonique, sans second ledger
 
-**IMPLÉMENTÉE DANS LE PATCH BATCH 19.4.**
+**INTÉGRÉE AU BATCH 19.4.**
 
 `DynamicCampaignPaperRunLifecycle` réutilise `CampaignPaperRunLifecycle`. Lors d'une reprise explicite, il ajoute au nouvel univers de run les marchés correspondant aux positions durables avant de laisser les validations de recovery existantes s'exécuter. Aucune nouvelle table, aucun replay d'ordres et aucun ledger parallèle.
 
@@ -181,8 +184,7 @@ Les autres limites Risk restent inchangées et autoritaires.
 
 ## Changelog — 2026-09-25 — Batch 19.4
 
-- resynchronisation sur le HEAD GitHub `bfef06d78dc34089541272c2944518499d4a1530` ;
-- correction documentaire : 19.3 n'est plus décrit comme patch local ;
+- base de travail initiale resynchronisée sur `bfef06d78dc34089541272c2944518499d4a1530` ;
 - `MarketDiscoveryPolicy`, cache catalogue et coordinateur de discovery ;
 - présélection factuelle Kraken sans ranking algorithmique ;
 - watchlist multi-marchés sélectionnée par le même Agent ;
@@ -192,4 +194,7 @@ Les autres limites Risk restent inchangées et autoritaires.
 - routeur/mark-to-market/recovery adaptés aux marchés dynamiques ;
 - audit détaillé des faits candidats, timestamps et diffs de watchlist sans migration SQL ;
 - configurateur simple orienté « paire de départ/secours » ;
-- aucune modification GitHub effectuée par ChatGPT.
+- correctif `OpenAIWatchlistSelector` validé après conversion naturelle JSON array -> liste Pydantic ;
+- validation finale : 12 tests discovery passés, 578 tests backend passés avec 2 warnings de dépréciation, frontend lint/typecheck/build passés ;
+- intégré sur GitHub au commit `de65c6677ce01f9c75da5545fe81553a021f588d` ;
+- clôture documentaire finalisée ensuite, sans changement fonctionnel.

@@ -3,29 +3,39 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub main audité : bfef06d78dc34089541272c2944518499d4a1530
+Référence fonctionnelle Batch 19.4 : de65c6677ce01f9c75da5545fe81553a021f588d
+Clôture documentaire observée      : 62adc9bd2293ad94050b209de1897c4290a673f7
 ```
 
-Le HEAD doit être revérifié au démarrage de chaque nouveau batch. Le document détaillé des améliorations est `docs/11_AMELIORATIONS_PLANIFIEES.md`.
+Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch. Le document détaillé des améliorations est `docs/11_AMELIORATIONS_PLANIFIEES.md`.
 
-## Jalons intégrés avant 19.4
+## Jalons intégrés
 
 - 18.1 à 18.8 : tools Agent read-only, sélection multi-marchés, expérimentation, recovery et résilience réseau ;
 - 18.9A à 18.9C : Control Plane backend/frontend et validation comportementale ;
 - 18.10 à 18.13 : refonte UX, guide opérateur, simplification, dark mode et modernisation ;
 - Batch 19.1 : comptabilité SPOT canonique ;
 - Batch 19.2 : mark-to-market canonique, equity/exposition backend et monitors SPOT/PERPETUAL sans LLM ;
-- Batch 19.3 : `CapacityEvaluator`, modes `NORMAL` / `MANAGEMENT`, désactivation de la recherche d'ouverture inutile et barrière Risk contre les hausses d'exposition en MANAGEMENT ; intégré au HEAD `bfef06d...`.
+- Batch 19.3 : `CapacityEvaluator`, modes `NORMAL` / `MANAGEMENT`, désactivation de la recherche d'ouverture inutile et barrière Risk contre les hausses d'exposition en MANAGEMENT ;
+- Batch 19.4 : découverte dynamique Kraken, watchlist multi-marchés auditée, même Agent stratégique, fallback/recovery et configurateur simplifié.
 
 ## Batch 19.4 — Découverte dynamique et watchlist auditée
 
-**État du patch : implémenté par ChatGPT, à valider/intégrer localement par l'opérateur.**
+**État : intégré sur GitHub.**
 
-Résultat visé :
+Référence fonctionnelle : `de65c6677ce01f9c75da5545fe81553a021f588d` (`feat: add dynamic audited market discovery`).
+
+Validation opérateur communiquée :
+
+- `tests/test_market_discovery.py` : 12 tests passés ;
+- suite backend complète : 578 tests passés, 2 warnings de dépréciation ;
+- frontend : `pnpm lint`, `pnpm typecheck`, `pnpm build` passés.
+
+Résultat intégré :
 
 - `MarketDiscoveryPolicy` optionnel et versionné dans `CampaignConfiguration` ;
-- compatibilité ascendante : une Campaign sans policy conserve exactement son univers statique ;
-- `paper_executable_markets` devient le bootstrap/garde-fou immuable d'une Campaign dynamique ;
+- compatibilité ascendante : une Campaign sans policy conserve son univers statique ;
+- `paper_executable_markets` reste le bootstrap/garde-fou immuable d'une Campaign dynamique ;
 - catalogue canonique réutilisé via `MarketResearchService` + adaptateurs Kraken existants ;
 - cache catalogue 15 min par défaut ;
 - refresh watchlist 15 min par défaut, déclenché uniquement par un cycle `NORMAL`, borné à 45 s ;
@@ -75,13 +85,13 @@ Le Batch 19.4 ne comprend ni explicabilité produit 19.5, ni candles/WebSocket/c
 
 ## Pourquoi cet ordre
 
-La comptabilité 19.1 et le mark-to-market 19.2 fournissent un état portfolio exploitable. Le Batch 19.3 supprime la recherche d'ouverture quand elle est déterministement inutile ou incertaine. Le Batch 19.4 peut donc renouveler un univers stratégique plus large sans gaspiller d'IA en MANAGEMENT et sans déplacer le choix d'opportunité hors de l'Agent. L'explicabilité puis les charts peuvent s'appuyer sur ces traces canoniques.
+La comptabilité 19.1 et le mark-to-market 19.2 fournissent un état portfolio exploitable. Le Batch 19.3 supprime la recherche d'ouverture quand elle est déterministement inutile ou incertaine. Le Batch 19.4 renouvelle désormais un univers stratégique plus large sans gaspiller d'IA en MANAGEMENT et sans déplacer le choix d'opportunité hors de l'Agent. L'explicabilité puis les charts peuvent s'appuyer sur ces traces canoniques.
 
 ## Cadences à maintenir distinctes
 
 1. **monitoring / mark-to-market** : rapide, déterministe, sans LLM ;
-2. **cycle stratégique IA** : plus lent, décision BUY/SELL/HOLD, avec restriction MANAGEMENT si nécessaire ;
-3. **découverte/révision de watchlist IA** : beaucoup plus lente, 15 min par défaut dans 19.4.
+2. **cycle stratégique IA** : plus lent, décision BUY / SELL / HOLD, avec restriction MANAGEMENT si nécessaire ;
+3. **découverte/révision de watchlist IA** : beaucoup plus lente, 15 min par défaut.
 
 ## Périmètres ultérieurs
 

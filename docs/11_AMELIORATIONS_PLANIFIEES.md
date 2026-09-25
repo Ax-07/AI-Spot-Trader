@@ -1,17 +1,18 @@
 # 11 — Améliorations planifiées
 
-> Référence de reprise des chantiers 19.x. Ce document distingue ce qui est **intégré**, ce qui est **implémenté dans le patch 19.4**, ce qui reste **planifié** et ce qui reste **à décider**.
+> Référence de reprise des chantiers 19.x. Ce document distingue ce qui est **intégré**, ce qui reste **planifié** et ce qui reste **à décider**.
 
 ## 1. Référence
 
 ```text
-Repository              : Ax-07/AI-Spot-Trader
-Branche                 : main
-HEAD GitHub main audité : bfef06d78dc34089541272c2944518499d4a1530
-Date Batch 19.4         : 2026-09-25
+Repository                         : Ax-07/AI-Spot-Trader
+Branche                            : main
+Référence fonctionnelle Batch 19.4 : de65c6677ce01f9c75da5545fe81553a021f588d
+Clôture documentaire observée      : 62adc9bd2293ad94050b209de1897c4290a673f7
+Date Batch 19.4                    : 2026-09-25
 ```
 
-Les Batches 19.1, 19.2 et 19.3 sont intégrés. Le patch 19.4 n'est pas déclaré intégré à GitHub avant validation/commit explicites de l'opérateur.
+Les Batches 19.1, 19.2, 19.3 et 19.4 sont intégrés. Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
 
 ## 2. Invariants transverses
 
@@ -89,7 +90,7 @@ Confirmé :
 - mode, raison, capacité SPOT/PERP et `new_opening_research_skipped` audités ;
 - aucun nouvel état durable de mode et aucune migration SQL.
 
-# 7. Discovery automatique et watchlist — PATCH 19.4 IMPLÉMENTÉ
+# 7. Discovery automatique et watchlist — INTÉGRÉ 19.4
 
 Objectif : supprimer l'obligation de maintenir manuellement toute la liste des paires à surveiller sans créer de scanner algorithmique qui décide des trades.
 
@@ -109,7 +110,7 @@ Kraken MarketResearchService
 
 Le catalogue canonique reste `MarketResearchService` avec `KrakenMarketResearchBackend`. Il n'existe pas de second client/scanner stratégique.
 
-Filtres déterministes autorisés dans 19.4 :
+Filtres déterministes :
 
 - `SPOT` / `PERPETUAL` configurés ;
 - même quote que `paper_settlement_asset` ;
@@ -171,7 +172,7 @@ L'économie d'IA est donc structurelle : la cadence de discovery ne contourne ja
 
 ## 7.5 Positions hors watchlist
 
-Invariant implémenté :
+Invariant intégré :
 
 ```text
 univers effectif = watchlist IA actuelle + toutes les positions ouvertes
@@ -209,6 +210,14 @@ Aucun ordre historique n'est rejoué et aucune décision IA historique n'est ré
 - une whitelist non nulle continue à restreindre Risk et la discovery ;
 - le configurateur simple active la discovery et demande seulement une paire de départ/secours ;
 - le mode Control Plane avancé peut toujours créer des Campaigns statiques reproductibles.
+
+## 7.9 Validation intégrée
+
+Validation opérateur communiquée :
+
+- `tests/test_market_discovery.py` : 12 tests passés ;
+- suite backend complète : 578 tests passés, 2 warnings de dépréciation ;
+- frontend : `pnpm lint`, `pnpm typecheck`, `pnpm build` passés.
 
 # 8. Explicabilité des décisions IA — PLANIFIÉ 19.5
 
@@ -257,32 +266,12 @@ Le backend doit gérer déduplication, candle courante mutable, reconnect/backfi
 | 1 | 19.1 — Comptabilité SPOT | coût moyen, coût restant, P&L réalisé, recovery | intégré |
 | 2 | 19.2 — Monitoring | P&L latent et état vivant sans LLM | intégré |
 | 3 | 19.3 — Mode gestion | évite recherche IA inutile quand ouverture indisponible | intégré |
-| 4 | 19.4 — Discovery/watchlist | univers dynamique audité, même Agent | patch implémenté |
+| 4 | 19.4 — Discovery/watchlist | univers dynamique audité, même Agent | intégré |
 | 5 | 19.5 — Explicabilité | rationale visible vs Risk | planifié |
 | 6 | 19.6A — Candles/streaming | données chart canoniques | planifié |
 | 7 | 19.6B — Marchés/charts | rendu, onglets, markers | planifié |
 
 ## 13. Validation attendue
-
-### 19.4 — patch courant
-
-- catalogue Kraken valide ;
-- exclusion marchés incompatibles ;
-- univers candidat déterministe ;
-- aucun look-ahead ;
-- sélection IA uniquement dans les candidats ;
-- watchlist multi-marchés ;
-- ajout / maintien / retrait ;
-- réponse LLM invalide ou hors univers ;
-- indisponibilité Kraken / LLM ;
-- recovery des positions dynamiques ;
-- NORMAL / MANAGEMENT ;
-- aucun refresh d'ouverture inutile en MANAGEMENT ;
-- positions hors nouvelle watchlist toujours gérables ;
-- SPOT / PERPETUAL / portefeuille mixte ;
-- audit complet ;
-- aucune dépendance frontend du moteur ;
-- compatibilité Campaign statique.
 
 ### 19.5
 
