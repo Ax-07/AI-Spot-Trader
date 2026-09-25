@@ -6,18 +6,18 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub réel vérifié au lancement du Batch 19.7 :
-  `2d51cb68d55e34065626902d3792988976da11d9`
-  (`docs: sync Batch 19.6B post-push state`).
+- HEAD GitHub réel vérifié après le push du Batch 19.7 :
+  `9dcaf028de81b68ed357d1e6712fa833626353b9`
+  (`docs: finalize Batch 19.7 integration state`).
 - Référence fonctionnelle intégrée du Batch 19.6A :
   `3c53af3bdb1ef53c574e26afe9b6178a374d9f06`
   (`feat: add backend candle cache and streaming`).
 - Référence fonctionnelle intégrée du Batch 19.6B :
   `a446628918a614d2ae0ac3b55243881aad5ef410`
   (`feat: add cockpit market charts and trade markers`).
-- Le commit `2d51cb68` ne contient que la synchronisation documentaire post-19.6B par rapport à `b5a26f77d1951f8eb39df30b5b6f3b5b81f4d585` ; aucun code applicatif n'a changé entre ces deux références.
-- Batch 19.7 : **validé localement, commit fonctionnel créé sur `main` local ; non encore intégré à GitHub**.
-- Référence fonctionnelle locale Batch 19.7 :
+- Le commit `2d51cb68` reste la synchronisation documentaire post-19.6B ; le Batch 19.7 a ensuite été poussé sur GitHub `main`.
+- Batch 19.7 : **intégré sur GitHub `main`**.
+- Référence fonctionnelle intégrée Batch 19.7 :
   `8b969b434916d89f6b6aa127c3bac9c27e990966`
   (`feat: add canonical position overlays to market charts`).
 
@@ -31,7 +31,7 @@
 - frontend 19.6B : vue Marchés, Lightweight Charts, timeframes backend, cache client borné, reconnexion et markers issus uniquement des fills persistés ;
 - aucune connexion frontend directe à Kraken, aucun calcul Risk/P&L stratégique parallèle et aucune causalité inventée.
 
-## Batch 19.7 — validation locale
+## Batch 19.7 — validation intégrée
 
 Le Batch 19.7 ajoute uniquement des overlays de position sur le chart du marché actif :
 
@@ -51,7 +51,8 @@ Validation opérateur locale communiquée :
 - `pnpm typecheck` : **passé** ;
 - `pnpm build` : **passé** ;
 - `git diff --check` : **aucune erreur de whitespace** ; avertissements LF -> CRLF uniquement ;
-- commit fonctionnel local : `8b969b434916d89f6b6aa127c3bac9c27e990966`.
+- commit fonctionnel intégré : `8b969b434916d89f6b6aa127c3bac9c27e990966` ;
+- clôture documentaire intégrée : `9dcaf028de81b68ed357d1e6712fa833626353b9`.
 
 Validation ChatGPT préalable sur le patch : test runner Node de `market-candles.test.mjs`, **17/17 tests passés**.
 
@@ -70,10 +71,8 @@ Le warning Node `MODULE_TYPELESS_PACKAGE_JSON` du test runner reste non bloquant
 
 ## Prochaine priorité
 
-1. committer séparément la clôture documentaire du Batch 19.7 ;
-2. pousser le commit fonctionnel `8b969b4` puis le commit documentaire sur GitHub `main` ;
-3. revérifier le HEAD GitHub réel après push ;
-4. resynchroniser ce document si nécessaire pour confirmer l'état intégré.
+1. conserver séparées les modifications locales hors Batch 19.7 déjà présentes dans l'arbre de travail ;
+2. au prochain batch, revérifier le HEAD GitHub réel et choisir le prochain chantier fonctionnel à partir de l'état intégré 19.7.
 
 ## Règle de reprise
 

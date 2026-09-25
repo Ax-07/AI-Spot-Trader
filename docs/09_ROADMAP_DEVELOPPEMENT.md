@@ -3,13 +3,13 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub vérifié au lancement 19.7   : 2d51cb68d55e34065626902d3792988976da11d9
+HEAD GitHub vérifié après push 19.7       : 9dcaf028de81b68ed357d1e6712fa833626353b9
 Référence fonctionnelle Batch 19.6A     : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
 Référence fonctionnelle Batch 19.6B     : a446628918a614d2ae0ac3b55243881aad5ef410
 Batch 19.5                              : intégré sur GitHub main
 Batch 19.6A                             : intégré sur GitHub main
 Batch 19.6B                             : intégré sur GitHub main
-Batch 19.7                              : validé localement, commit fonctionnel 8b969b4
+Batch 19.7                              : intégré sur GitHub main, commit fonctionnel 8b969b4
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch. Le document détaillé des améliorations est `docs/11_AMELIORATIONS_PLANIFIEES.md`.
@@ -26,6 +26,7 @@ Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batc
 - Batch 19.5 : projection d'explicabilité opérateur Agent/Risk/exécution depuis les faits persistés ;
 - Batch 19.6A : backend candles OHLCV, cache borné, recovery et streaming cockpit partagé ;
 - Batch 19.6B : vue Marchés, Lightweight Charts, consommation REST/WS 19.6A et markers de fills persistés ; validation locale complète au commit `a446628`.
+- Batch 19.7 : overlays de position canoniques (`Prix moyen`, `Mark backend`, `Liquidation` PERPETUAL) depuis `/portfolio`, intégrés au commit `8b969b4`.
 
 ## Batch 19.5 — Explicabilité opérateur
 
@@ -96,9 +97,9 @@ Le warning `MODULE_TYPELESS_PACKAGE_JSON` du test runner reste non bloquant.
 
 ## Batch 19.7 — Overlays de position sur les charts Marchés
 
-**État : validation locale complète ; commit fonctionnel `8b969b4` sur `main` local, non encore poussé.**
+**État : intégré sur GitHub `main`.**
 
-Périmètre validé localement :
+Périmètre intégré :
 
 - projection frontend stricte des faits `/portfolio` déjà typés ; aucun nouveau contrat backend ;
 - ligne `Prix moyen` seulement si `average_entry_price` existe ;
@@ -111,7 +112,7 @@ Périmètre validé localement :
 - aucune règle frontend de staleness sur `mark_observed_at` ;
 - chandeliers, volumes et markers de fills 19.6B conservés.
 
-Référence fonctionnelle locale : `8b969b434916d89f6b6aa127c3bac9c27e990966` (`feat: add canonical position overlays to market charts`).
+Référence fonctionnelle intégrée : `8b969b434916d89f6b6aa127c3bac9c27e990966` (`feat: add canonical position overlays to market charts`). Clôture documentaire poussée au commit `9dcaf028de81b68ed357d1e6712fa833626353b9`.
 
 Validation opérateur locale :
 
@@ -121,7 +122,7 @@ Validation opérateur locale :
 - `pnpm build` : **passé** ;
 - `git diff --check` : **aucune erreur de whitespace**, avertissements LF -> CRLF uniquement.
 
-Validation ChatGPT préalable : `node --test --experimental-strip-types src/lib/market-candles.test.mjs` : **17/17 passés**. Le warning `MODULE_TYPELESS_PACKAGE_JSON` reste non bloquant. Présence du commit fonctionnel sur GitHub `main` à confirmer après push.
+Validation ChatGPT préalable : `node --test --experimental-strip-types src/lib/market-candles.test.mjs` : **17/17 passés**. Le warning `MODULE_TYPELESS_PACKAGE_JSON` reste non bloquant. Le push GitHub `main` a été vérifié au HEAD `9dcaf028de81b68ed357d1e6712fa833626353b9`.
 
 ## Cadences à maintenir distinctes
 

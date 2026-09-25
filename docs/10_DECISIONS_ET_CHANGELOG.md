@@ -9,13 +9,13 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 ## Référence courante
 
 ```text
-HEAD GitHub vérifié au lancement 19.7   : 2d51cb68d55e34065626902d3792988976da11d9
+HEAD GitHub vérifié après push 19.7       : 9dcaf028de81b68ed357d1e6712fa833626353b9
 Référence fonctionnelle Batch 19.6A     : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
 Référence fonctionnelle Batch 19.6B     : a446628918a614d2ae0ac3b55243881aad5ef410
 Batch 19.5                              : intégré
 Batch 19.6A                             : intégré
 Batch 19.6B                             : intégré sur GitHub main
-Batch 19.7                              : validé localement, commit fonctionnel 8b969b4
+Batch 19.7                              : intégré sur GitHub main, commit fonctionnel 8b969b4
 ```
 
 ## Décisions historiques toujours actives
@@ -119,7 +119,7 @@ TradingView Lightweight Charts rend OHLC/volume/markers à partir des faits back
 
 ## ADR-239 — Les overlays de position sont une projection stricte du portefeuille backend
 
-**VALIDÉ LOCALEMENT AU BATCH 19.7 — COMMIT FONCTIONNEL `8b969b4`, NON ENCORE POUSSÉ.**
+**INTÉGRÉ AU BATCH 19.7 — COMMIT FONCTIONNEL `8b969b4`.**
 
 Les lignes de prix de position du chart Marchés ne sont créées qu'à partir des champs déjà fournis par `/portfolio` : `average_entry_price`, `mark_price` et, uniquement pour PERPETUAL, `liquidation_price`. Une valeur absente ou non numérique n'est pas reconstruite. La conversion de la chaîne canonique en nombre sert uniquement à l'API de rendu Lightweight Charts ; aucune formule financière n'est introduite.
 
@@ -204,4 +204,5 @@ Chaque overlay possède une identité bornée au marché et un label explicite (
 - chandeliers, volumes et markers de fills 19.6B conservés ;
 - validation ChatGPT préalable : **17/17 tests Node passés** ;
 - validation opérateur locale : `pnpm test` **17/17**, `pnpm lint`, `pnpm typecheck` et `pnpm build` passés ; `git diff --check` sans erreur de whitespace, avertissements LF -> CRLF uniquement ;
-- commit fonctionnel local `main` : `8b969b434916d89f6b6aa127c3bac9c27e990966` (`feat: add canonical position overlays to market charts`) ; présence sur GitHub `main` à confirmer après push.
+- commit fonctionnel intégré sur GitHub `main` : `8b969b434916d89f6b6aa127c3bac9c27e990966` (`feat: add canonical position overlays to market charts`) ;
+- clôture documentaire poussée sur GitHub `main` : `9dcaf028de81b68ed357d1e6712fa833626353b9` (`docs: finalize Batch 19.7 integration state`).
