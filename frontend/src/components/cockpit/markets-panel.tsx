@@ -17,6 +17,7 @@ import {
   MARKET_TIMEFRAMES,
   buildCockpitMarkets,
   buildMarketFillMarkers,
+  buildMarketPositionOverlays,
   marketKey,
   type CandleTimeframe,
   type CockpitMarket,
@@ -281,6 +282,10 @@ export function MarketsPanel({ control }: { control: ControlPlaneController }) {
       : [],
     [activeMarket, executionState],
   );
+  const positionOverlays = useMemo(
+    () => buildMarketPositionOverlays(portfolio, activeMarket),
+    [activeMarket, portfolio],
+  );
   const activeSelectedMarker = selectedMarker
     && activeMarket
     && selectedMarker.symbol === activeMarket.symbol
@@ -399,7 +404,7 @@ export function MarketsPanel({ control }: { control: ControlPlaneController }) {
               ) : stream.state === "error" && !stream.candles.length ? (
                 <div className="flex h-[360px] items-center justify-center rounded-xl border border-destructive/30 bg-destructive-subtle p-6 text-center text-sm text-destructive-subtle-foreground sm:h-[480px]">Historique indisponible. Aucune candle de remplacement n’est inventée.</div>
               ) : (
-                <MarketChart candles={stream.candles} markers={markers} onMarkerSelect={setSelectedMarker} />
+                <MarketChart key={marketKey(activeMarket!)} candles={stream.candles} markers={markers} overlays={positionOverlays} onMarkerSelect={setSelectedMarker} />
               )}
             </CardContent>
           </Card>

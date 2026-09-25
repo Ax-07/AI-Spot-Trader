@@ -4,8 +4,10 @@ import {
   CandlestickSeries,
   ColorType,
   HistogramSeries,
+  LineStyle,
   createChart,
   createSeriesMarkers,
+  type IPriceLine,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
   type SeriesMarker,
@@ -17,28 +19,57 @@ import { useEffect, useRef } from "react";
 
 import {
   markerCandleTime,
+  replaceMarketPositionOverlayHandles,
   toCandlestickData,
   toVolumeData,
   type CandleResponse,
   type MarketFillMarker,
+  type MarketPositionOverlay,
+  type MarketPositionOverlayHandle,
 } from "@/lib/market-candles";
 
 type CandlestickSeriesApi = ISeriesApi<"Candlestick">;
 type HistogramSeriesApi = ISeriesApi<"Histogram">;
+type PriceLineValue = {
+  series: CandlestickSeriesApi;
+  line: IPriceLine;
+};
+
+function overlayAppearance(kind: MarketPositionOverlay["kind"], dark: boolean) {
+  if (kind === "average-entry") {
+    return {
+      color: dark ? "#fbbf24" : "#b45309",
+      lineStyle: LineStyle.Dashed,
+    };
+  }
+  if (kind === "liquidation") {
+    return {
+      color: dark ? "#fb7185" : "#be123c",
+      lineStyle: LineStyle.Dotted,
+    };
+  }
+  return {
+    color: dark ? "#38bdf8" : "#0369a1",
+    lineStyle: LineStyle.Solid,
+  };
+}
 
 export function MarketChart({
   candles,
   markers,
+  overlays,
   onMarkerSelect,
 }: {
   candles: CandleResponse[];
   markers: MarketFillMarker[];
+  overlays: MarketPositionOverlay[];
   onMarkerSelect: (marker: MarketFillMarker) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const candleSeriesRef = useRef<CandlestickSeriesApi | null>(null);
   const volumeSeriesRef = useRef<HistogramSeriesApi | null>(null);
   const markerApiRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const priceLineHandlesRef = useRef<MarketPositionOverlayHandle<PriceLineValue>[]>([]);
   const latestCandles = useRef(candles);
   const latestMarkers = useRef(markers);
   const latestMarkerSelect = useRef(onMarkerSelect);
@@ -69,7 +100,7 @@ export function MarketChart({
         vertLines: { color: gridColor },
         horzLines: { color: gridColor },
       },
-      rightPriceScale: { borderColor: gridColor },
+      rightPriceScale: { borderColor: gridColor, alignLabels: true },
       timeScale: { borderColor: gridColor, timeVisible: true, secondsVisible: false },
     });
 
@@ -124,6 +155,10 @@ export function MarketChart({
       observer.disconnect();
       chart.unsubscribeClick(handleClick);
       markerApi.detach();
+      for (const handle of priceLineHandlesRef.current) {
+        if (handle.value.series === candleSeries) candleSeries.removePriceLine(handle.value.line);
+      }
+      priceLineHandlesRef.current = [];
       chart.remove();
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
@@ -161,7 +196,43 @@ export function MarketChart({
       }];
     });
     markerApi.setMarkers(chartMarkers);
-  }, [candles, markers]);
+  }, [candles, markers, resolvedTheme]);
+
+  useEffect(() => {
+    const candleSeries = candleSeriesRef.current;
+    if (!candleSeries) return;
+
+    const dark = resolvedTheme === "dark";
+    const removeLine = (value: PriceLineValue) => {
+      if (candleSeriesRef.current === value.series) {
+        value.series.removePriceLine(value.line);
+      }
+    };
+    const handles = replaceMarketPositionOverlayHandles(
+      priceLineHandlesRef.current,
+      overlays,
+      (overlay): PriceLineValue => {
+        const appearance = overlayAppearance(overlay.kind, dark);
+        const line = candleSeries.createPriceLine({
+          price: overlay.price,
+          color: appearance.color,
+          lineWidth: 1,
+          lineStyle: appearance.lineStyle,
+          axisLabelVisible: true,
+          title: overlay.label,
+        });
+        return { series: candleSeries, line };
+      },
+      removeLine,
+    );
+    priceLineHandlesRef.current = handles;
+
+    return () => {
+      if (priceLineHandlesRef.current !== handles) return;
+      for (const handle of handles) removeLine(handle.value);
+      priceLineHandlesRef.current = [];
+    };
+  }, [overlays, resolvedTheme]);
 
   return (
     <div className="space-y-2">

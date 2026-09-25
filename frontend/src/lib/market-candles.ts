@@ -106,6 +106,31 @@ export type MarketFillMarker = {
   reduceOnly: boolean | null;
 };
 
+export type MarketPositionOverlay = {
+  id: string;
+  kind: "average-entry" | "mark" | "liquidation";
+  label: "Prix moyen" | "Mark backend" | "Liquidation";
+  price: number;
+};
+
+export type MarketPositionOverlayHandle<T> = {
+  overlayId: string;
+  value: T;
+};
+
+export function replaceMarketPositionOverlayHandles<T>(
+  current: readonly MarketPositionOverlayHandle<T>[],
+  overlays: readonly MarketPositionOverlay[],
+  create: (overlay: MarketPositionOverlay) => T,
+  remove: (value: T) => void,
+): MarketPositionOverlayHandle<T>[] {
+  for (const handle of current) remove(handle.value);
+  return overlays.map((overlay) => ({
+    overlayId: overlay.id,
+    value: create(overlay),
+  }));
+}
+
 export const MARKET_TIMEFRAMES: Readonly<Record<ExecutableMarketType, readonly CandleTimeframe[]>> = {
   SPOT: ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "15d"],
   PERPETUAL: ["1m", "5m", "15m", "30m", "1h", "4h", "12h", "1d", "1w"],
@@ -170,6 +195,62 @@ export function buildCockpitMarkets({
     result.push({ ...normalized, hasPosition: positionKeys.has(key) });
   }
   return result;
+}
+
+function finiteCanonicalPrice(value: string | null | undefined): number | null {
+  if (value === null || value === undefined || value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function positionOverlay(
+  market: Pick<ExecutableMarketResponse, "symbol" | "market_type">,
+  kind: MarketPositionOverlay["kind"],
+  label: MarketPositionOverlay["label"],
+  value: string | null | undefined,
+): MarketPositionOverlay | null {
+  const price = finiteCanonicalPrice(value);
+  if (price === null) return null;
+  return {
+    id: `${marketKey(market)}:${kind}`,
+    kind,
+    label,
+    price,
+  };
+}
+
+export function buildMarketPositionOverlays(
+  portfolio: PortfolioResponse | null,
+  market: Pick<ExecutableMarketResponse, "symbol" | "market_type"> | null,
+): MarketPositionOverlay[] {
+  if (!portfolio || !market) return [];
+  const normalizedSymbol = market.symbol.trim().toUpperCase();
+  if (!normalizedSymbol) return [];
+  const normalizedMarket = { ...market, symbol: normalizedSymbol };
+
+  if (market.market_type === "SPOT") {
+    const settlement = portfolio.settlement_asset?.trim().toUpperCase() ?? "";
+    if (!settlement) return [];
+    const position = portfolio.positions.find((item) => {
+      const asset = item.asset.trim().toUpperCase();
+      return asset.length > 0 && `${asset}/${settlement}` === normalizedSymbol;
+    });
+    if (!position) return [];
+    return [
+      positionOverlay(normalizedMarket, "average-entry", "Prix moyen", position.average_entry_price),
+      positionOverlay(normalizedMarket, "mark", "Mark backend", position.mark_price),
+    ].filter((item): item is MarketPositionOverlay => item !== null);
+  }
+
+  const position = portfolio.derivative_positions.find(
+    (item) => item.symbol.trim().toUpperCase() === normalizedSymbol,
+  );
+  if (!position) return [];
+  return [
+    positionOverlay(normalizedMarket, "average-entry", "Prix moyen", position.average_entry_price),
+    positionOverlay(normalizedMarket, "mark", "Mark backend", position.mark_price),
+    positionOverlay(normalizedMarket, "liquidation", "Liquidation", position.liquidation_price),
+  ].filter((item): item is MarketPositionOverlay => item !== null);
 }
 
 export function mergeCandleSeries(
