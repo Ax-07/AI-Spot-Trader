@@ -9,11 +9,13 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 ## Référence courante
 
 ```text
-HEAD GitHub vérifié après push 19.6B     : b5a26f77d1951f8eb39df30b5b6f3b5b81f4d585
-Référence fonctionnelle Batch 19.6A  : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
-Batch 19.5                            : intégré
-Batch 19.6A                           : intégré
-Batch 19.6B                           : intégré sur GitHub main
+HEAD GitHub vérifié au lancement 19.7   : 2d51cb68d55e34065626902d3792988976da11d9
+Référence fonctionnelle Batch 19.6A     : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
+Référence fonctionnelle Batch 19.6B     : a446628918a614d2ae0ac3b55243881aad5ef410
+Batch 19.5                              : intégré
+Batch 19.6A                             : intégré
+Batch 19.6B                             : intégré sur GitHub main
+Batch 19.7                              : validé localement, commit fonctionnel 8b969b4
 ```
 
 ## Décisions historiques toujours actives
@@ -27,7 +29,8 @@ Batch 19.6B                           : intégré sur GitHub main
 - ADR-207 / ADR-218 / ADR-219 / ADR-220 : `NORMAL` / `MANAGEMENT`, `CapacityEvaluator` et économie IA ;
 - ADR-221 à ADR-226 : discovery/watchlist dynamique, audit, univers effectif, whitelist et recovery ;
 - ADR-227 à ADR-230 : projection d'explicabilité, corrélation par cycle et distinction HOLD/REJECT/FAILED ;
-- ADR-231 à ADR-234 : pipeline candles 19.6A, cache/process, causalité et streams backend partagés.
+- ADR-231 à ADR-234 : pipeline candles 19.6A, cache/process, causalité et streams backend partagés ;
+- ADR-235 à ADR-238 : vue Marchés 19.6B, univers sans ranking frontend, markers issus des fills et Lightweight Charts comme rendu seulement.
 
 ## ADR-210 / ADR-227 à ADR-230 — Explicabilité opérateur
 
@@ -114,6 +117,16 @@ Un marker n'existe que si un fill PAPER réel est retourné par `/executions`. B
 
 TradingView Lightweight Charts rend OHLC/volume/markers à partir des faits backend. Les timeframes autorisés sont centralisés selon les capacités 19.6A. Le frontend n'utilise pas les candles pour recalculer P&L, exposition, liquidation, Risk ou stratégie.
 
+## ADR-239 — Les overlays de position sont une projection stricte du portefeuille backend
+
+**VALIDÉ LOCALEMENT AU BATCH 19.7 — COMMIT FONCTIONNEL `8b969b4`, NON ENCORE POUSSÉ.**
+
+Les lignes de prix de position du chart Marchés ne sont créées qu'à partir des champs déjà fournis par `/portfolio` : `average_entry_price`, `mark_price` et, uniquement pour PERPETUAL, `liquidation_price`. Une valeur absente ou non numérique n'est pas reconstruite. La conversion de la chaîne canonique en nombre sert uniquement à l'API de rendu Lightweight Charts ; aucune formule financière n'est introduite.
+
+Pour SPOT, une position n'est projetée que sur le symbole correspondant à `asset/settlement_asset` ; le frontend n'effectue aucune conversion multi-quote/FX. Pour PERPETUAL, la correspondance reste le symbole canonique exact. `mark_observed_at` reste un fait affichable mais ne crée aucune règle frontend de staleness.
+
+Chaque overlay possède une identité bornée au marché et un label explicite (`Prix moyen`, `Mark backend`, `Liquidation`). Les niveaux proches ne sont pas fusionnés : ce sont des faits distincts ; le rendu s'appuie sur l'alignement des labels de l'échelle prix. Les `price lines` natives sont supprimées avant remplacement et abandonnées lors de la recréation du chart, afin qu'un changement de marché, de position ou de thème ne conserve ni duplication ni ligne étrangère.
+
 ## Changelog — 2026-09-24 — Batch 19.1
 
 - comptabilité SPOT canonique au coût moyen pondéré ;
@@ -178,4 +191,17 @@ TradingView Lightweight Charts rend OHLC/volume/markers à partir des faits back
 - aucune connexion Kraken frontend, aucun ranking, aucun calcul Risk/P&L parallèle ;
 - validation opérateur : `pnpm test` **6/6**, `pnpm lint`, `pnpm typecheck` et `pnpm build` passés ; `git diff --check` sans erreur de whitespace ;
 - commit fonctionnel intégré sur GitHub `main` : `a446628918a614d2ae0ac3b55243881aad5ef410` (`feat: add cockpit market charts and trade markers`) ;
-- clôture documentaire poussée sur GitHub `main` : `b5a26f77d1951f8eb39df30b5b6f3b5b81f4d585` (`docs: finalize Batch 19.6B integration state`).
+- clôture documentaire poussée sur GitHub `main` : `b5a26f77d1951f8eb39df30b5b6f3b5b81f4d585` (`docs: finalize Batch 19.6B integration state`) ;
+- synchronisation documentaire post-push : `2d51cb68d55e34065626902d3792988976da11d9` (`docs: sync Batch 19.6B post-push state`).
+
+## Changelog — 2026-09-25 — Batch 19.7
+
+- overlays `Prix moyen`, `Mark backend` et `Liquidation` depuis les faits canoniques `/portfolio` uniquement ;
+- liquidation affichée uniquement pour PERPETUAL et uniquement lorsqu'elle est fournie ;
+- aucune reconstruction de valeur absente, aucun calcul frontend de P&L/exposition/liquidation/prix moyen ;
+- SPOT strictement borné au `settlement_asset` canonique, sans multi-quote/FX ;
+- lifecycle natif Lightweight Charts avec création/suppression des price lines, labels explicites, styles light/dark et nettoyage lors des changements de faits/marché/thème ;
+- chandeliers, volumes et markers de fills 19.6B conservés ;
+- validation ChatGPT préalable : **17/17 tests Node passés** ;
+- validation opérateur locale : `pnpm test` **17/17**, `pnpm lint`, `pnpm typecheck` et `pnpm build` passés ; `git diff --check` sans erreur de whitespace, avertissements LF -> CRLF uniquement ;
+- commit fonctionnel local `main` : `8b969b434916d89f6b6aa127c3bac9c27e990966` (`feat: add canonical position overlays to market charts`) ; présence sur GitHub `main` à confirmer après push.

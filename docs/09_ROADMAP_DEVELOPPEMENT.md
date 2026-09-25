@@ -3,11 +3,13 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub vérifié après push 19.6B     : b5a26f77d1951f8eb39df30b5b6f3b5b81f4d585
-Référence fonctionnelle Batch 19.6A  : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
-Batch 19.5                            : intégré sur GitHub main
-Batch 19.6A                           : intégré sur GitHub main
-Batch 19.6B                           : intégré sur GitHub main, commit fonctionnel a446628
+HEAD GitHub vérifié au lancement 19.7   : 2d51cb68d55e34065626902d3792988976da11d9
+Référence fonctionnelle Batch 19.6A     : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
+Référence fonctionnelle Batch 19.6B     : a446628918a614d2ae0ac3b55243881aad5ef410
+Batch 19.5                              : intégré sur GitHub main
+Batch 19.6A                             : intégré sur GitHub main
+Batch 19.6B                             : intégré sur GitHub main
+Batch 19.7                              : validé localement, commit fonctionnel 8b969b4
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch. Le document détaillé des améliorations est `docs/11_AMELIORATIONS_PLANIFIEES.md`.
@@ -22,7 +24,7 @@ Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batc
 - Batch 19.3 : `CapacityEvaluator`, modes `NORMAL` / `MANAGEMENT`, économie IA et barrière Risk contre l'augmentation d'exposition en MANAGEMENT ;
 - Batch 19.4 : découverte dynamique Kraken, watchlist multi-marchés auditée, même Agent stratégique, fallback/recovery et configurateur simplifié ;
 - Batch 19.5 : projection d'explicabilité opérateur Agent/Risk/exécution depuis les faits persistés ;
-- Batch 19.6A : backend candles OHLCV, cache borné, recovery et streaming cockpit partagé.
+- Batch 19.6A : backend candles OHLCV, cache borné, recovery et streaming cockpit partagé ;
 - Batch 19.6B : vue Marchés, Lightweight Charts, consommation REST/WS 19.6A et markers de fills persistés ; validation locale complète au commit `a446628`.
 
 ## Batch 19.5 — Explicabilité opérateur
@@ -65,7 +67,7 @@ Validation opérateur 19.6A : 53 tests ciblés passés ; suite backend 604 tests
 
 **État : intégré sur GitHub `main`.**
 
-Référence fonctionnelle : `a446628918a614d2ae0ac3b55243881aad5ef410` (`feat: add cockpit market charts and trade markers`). Clôture documentaire poussée ensuite au commit `b5a26f77d1951f8eb39df30b5b6f3b5b81f4d585`.
+Référence fonctionnelle : `a446628918a614d2ae0ac3b55243881aad5ef410` (`feat: add cockpit market charts and trade markers`). Clôture documentaire poussée ensuite au commit `b5a26f77d1951f8eb39df30b5b6f3b5b81f4d585`, puis synchronisée au HEAD `2d51cb68d55e34065626902d3792988976da11d9`.
 
 Périmètre intégré dans le commit fonctionnel :
 
@@ -91,6 +93,35 @@ Validation opérateur locale :
 - arbre de travail propre après commit.
 
 Le warning `MODULE_TYPELESS_PACKAGE_JSON` du test runner reste non bloquant.
+
+## Batch 19.7 — Overlays de position sur les charts Marchés
+
+**État : validation locale complète ; commit fonctionnel `8b969b4` sur `main` local, non encore poussé.**
+
+Périmètre validé localement :
+
+- projection frontend stricte des faits `/portfolio` déjà typés ; aucun nouveau contrat backend ;
+- ligne `Prix moyen` seulement si `average_entry_price` existe ;
+- ligne `Mark backend` seulement si `mark_price` existe ;
+- ligne `Liquidation` seulement pour PERPETUAL et si `liquidation_price` existe ;
+- pour SPOT, la position doit correspondre au symbole construit avec l'actif détenu et le `settlement_asset` canonique ; aucune conversion multi-quote/FX ;
+- conversion texte -> nombre uniquement pour le rendu Lightweight Charts, sans formule financière ;
+- `createPriceLine` / `removePriceLine` natifs ; cleanup sur changement de marché, position, thème et démontage ;
+- thème light/dark purement visuel ; labels distincts conservés même lorsque les niveaux sont proches, avec alignement des labels de l'échelle prix ;
+- aucune règle frontend de staleness sur `mark_observed_at` ;
+- chandeliers, volumes et markers de fills 19.6B conservés.
+
+Référence fonctionnelle locale : `8b969b434916d89f6b6aa127c3bac9c27e990966` (`feat: add canonical position overlays to market charts`).
+
+Validation opérateur locale :
+
+- `pnpm test` : **17/17 passés** ;
+- `pnpm lint` : **passé** ;
+- `pnpm typecheck` : **passé** ;
+- `pnpm build` : **passé** ;
+- `git diff --check` : **aucune erreur de whitespace**, avertissements LF -> CRLF uniquement.
+
+Validation ChatGPT préalable : `node --test --experimental-strip-types src/lib/market-candles.test.mjs` : **17/17 passés**. Le warning `MODULE_TYPELESS_PACKAGE_JSON` reste non bloquant. Présence du commit fonctionnel sur GitHub `main` à confirmer après push.
 
 ## Cadences à maintenir distinctes
 
