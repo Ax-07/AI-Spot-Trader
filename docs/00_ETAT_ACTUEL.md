@@ -6,12 +6,11 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- Référence GitHub vérifiée avant le correctif post-19.8 :
-  `e26e2966e9661e1781b3df8e81577590554c980e`
-  (`docs: consolidate Batches 19.6B through 19.8`).
-- Référence fonctionnelle intégrée courante : Batch 19.8.
-- Batch 19.8 est **intégré à GitHub `main` et validé localement**.
-- Correctif post-19.8 Session : **validé localement, à intégrer avec les fichiers de code concernés**.
+- Référence fonctionnelle du correctif post-19.8 intégré :
+  `0d964624a641aad509f5728264f873c1a837af97`
+  (`fix: preserve session creation FK ordering`).
+- Référence fonctionnelle intégrée courante : Batch 19.8 + correctif post-19.8 Session.
+- Batch 19.8 et son correctif de création Session PostgreSQL sont **intégrés à GitHub `main` et validés localement**.
 
 ## État fonctionnel intégré
 
@@ -68,7 +67,7 @@ Cause confirmée :
 - le flush unique de Strategy + Revision + Campaign pouvait envoyer la Campaign avant la Revision sur PostgreSQL ;
 - PostgreSQL rejetait alors la création et l'API répondait `HTTP 409 · session creation conflicted`.
 
-Correction :
+Correction intégrée :
 
 - Strategy + Revision sont flushées avant l'ajout de Campaign ;
 - Campaign est ensuite flushée dans **la même transaction**, donc l'atomicité de création reste intacte ;
@@ -85,6 +84,10 @@ Validation opérateur du correctif :
 - `pnpm build` : **passé** ;
 - `git diff --check` : aucune erreur de whitespace, uniquement avertissements LF → CRLF ;
 - validation fonctionnelle manuelle : **Créer et démarrer une Session fonctionne après redémarrage backend**.
+
+Commit intégré :
+`0d964624a641aad509f5728264f873c1a837af97`
+(`fix: preserve session creation FK ordering`).
 
 ## Documentation consolidée
 
