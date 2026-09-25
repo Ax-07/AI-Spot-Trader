@@ -6,9 +6,9 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub réel vérifié post-push Batch 19.8 :
-  `f3a8eae8528648c07723aa97350852428254acc7`
-  (`feat: add user-facing Sessions workflow`).
+- Référence d'audit avant la fusion documentaire des anciens changements locaux :
+  `a254df4d56208c4472bb97b9b80077ad0856f9cd`
+  (`docs: sync Batch 19.8 post-push state`).
 - Référence fonctionnelle intégrée courante : Batch 19.8.
 - Batch 19.8 est **intégré à GitHub `main` et validé localement**.
 
@@ -17,7 +17,7 @@
 - un seul Agent IA stratégique ; Kraken ; PAPER uniquement ; SPOT + PERPETUAL linéaire ;
 - Risk Engine déterministe = autorité finale ; aucune sortie LLM ne déclenche directement un ordre ;
 - comptabilité/mark-to-market backend, modes `NORMAL` / `MANAGEMENT`, discovery dynamique et watchlist auditée ;
-- explicabilité Agent/Risk/exécution, candles backend, streaming cockpit, vue Marchés et overlays de position canoniques ;
+- explicabilité Agent/Risk/exécution, candles backend, streaming cockpit, vue Marchés, markers persistés et overlays de position canoniques ;
 - frontend = cockpit uniquement ; fermer le frontend n'arrête pas le moteur backend ;
 - **Session** est le concept principal du parcours utilisateur.
 
@@ -58,15 +58,15 @@ Exécuté par l'opérateur :
 - `pnpm build` : **passé** ;
 - `git diff --check` : **aucune erreur de whitespace**.
 
-## Modifications locales hors Batch 19.8
+## Documentation consolidée
 
-Au moment du push 19.8, les fichiers suivants restent modifiés localement et ne font pas partie du commit `f3a8eae` :
+Les modifications documentaires locales héritées de 19.6B ont été auditées et fusionnées avec l'état intégré 19.7/19.8 dans :
 
 - `docs/02_ARCHITECTURE_TECHNIQUE.md` ;
 - `docs/03_AGENT_TRADING_RISK.md` ;
 - `docs/11_AMELIORATIONS_PLANIFIEES.md`.
 
-Ils doivent être audités séparément avant intégration.
+Cette fusion conserve les ajouts utiles 19.6B, marque les overlays 19.7 et Sessions 19.8 comme intégrés, et retire les formulations devenues obsolètes.
 
 ## Règle de reprise
 

@@ -1,36 +1,39 @@
 # 11 — Améliorations planifiées
 
-> Référence de reprise des chantiers 19.x. Ce document distingue ce qui est **intégré** et ce qui reste **planifié**.
+> Référence de reprise des chantiers 19.x. Ce document distingue ce qui est **intégré**, ce qui reste **ouvert** et ce qui doit encore être **décidé**.
 
 ## 1. Référence
 
 ```text
-Repository                   : Ax-07/AI-Spot-Trader
-Branche                      : main
-Référence fonctionnelle 19.6A : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
-État Batch 19.5              : intégré sur GitHub main
-État Batch 19.6A             : intégré sur GitHub main
-Date                         : 2026-09-25
+Repository                      : Ax-07/AI-Spot-Trader
+Branche                         : main
+Référence d'audit avant fusion  : a254df4d56208c4472bb97b9b80077ad0856f9cd
+Référence fonctionnelle 19.6A   : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
+Référence fonctionnelle 19.6B   : a446628918a614d2ae0ac3b55243881aad5ef410
+Référence fonctionnelle 19.7    : 8b969b434916d89f6b6aa127c3bac9c27e990966
+Référence fonctionnelle 19.8    : f3a8eae8528648c07723aa97350852428254acc7
+Date                            : 2026-09-25
 ```
 
-Les Batches 19.1 à 19.6A sont intégrés. Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
+Les Batches 19.1 à 19.8 sont intégrés. Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
 
 ## 2. Invariants transverses
 
 - un seul Agent IA stratégique ;
 - Kraken ;
 - PAPER uniquement ;
-- SPOT + PERPETUAL linéaire ;
+- SPOT + PERPETUAL linéaire dans l'état intégré ;
 - aucune sortie LLM ne déclenche directement Broker/Kraken ;
 - Risk Engine déterministe = autorité finale ;
 - IA = choix stratégique ;
 - calculs, comptabilité, monitoring, capacité, filtrage technique, statistiques et streaming candles = déterministes ;
 - frontend jamais source de vérité trading ;
-- aucun secret dans prompts/logs/docs/Git ;
+- aucun secret dans prompts, logs, docs ou Git ;
 - frais, spread, slippage et funding pris en compte sans double comptage ;
 - HOLD auditable ;
 - aucun look-ahead ni sélection rétrospective ;
-- aucune candle manquante inventée.
+- aucune candle manquante inventée ;
+- Session = façade UX, pas nouveau ledger ni nouvelle source de vérité.
 
 **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
@@ -43,7 +46,7 @@ Les Batches 19.1 à 19.6A sont intégrés. Le HEAD GitHub réel doit être revé
 | Discovery / watchlist | réévaluer les marchés intéressants | oui, même Agent |
 | Streaming marché / candles | historique, candle courante, recovery, diffusion cockpit | non |
 
-Le monitoring utilise ses cadences techniques propres. La discovery reste beaucoup plus lente. Le streaming candles est une quatrième cadence indépendante : il ne déclenche aucune décision Agent et n'intervient pas dans l'autorisation Risk.
+Ces cadences restent indépendantes. Le streaming candles ne déclenche aucune décision Agent et n'intervient pas dans l'autorisation Risk.
 
 # 4. Comptabilité SPOT par position — INTÉGRÉE 19.1
 
@@ -55,11 +58,11 @@ Confirmé : marks SPOT causaux, P&L latent backend, agrégats portfolio, monitor
 
 # 6. Mode gestion lorsque l'exposition est saturée — INTÉGRÉ 19.3
 
-Confirmé : `CapacityEvaluator`, `NORMAL` / `MANAGEMENT`, même `RiskPolicy`, recherche d'ouverture désactivée en MANAGEMENT, Risk bloque les hausses d'exposition et aucun nouvel état durable n'est créé.
+Confirmé : `CapacityEvaluator`, `NORMAL` / `MANAGEMENT`, même `RiskPolicy`, recherche d'ouverture désactivée en MANAGEMENT, Risk bloque les hausses d'exposition et aucun nouvel état durable parallèle n'est créé.
 
 # 7. Discovery automatique et watchlist — INTÉGRÉ 19.4
 
-Confirmé : catalogue `MarketResearchService`, filtrage factuel sans ranking, watchlist sélectionnée par le même Agent, fallback, interaction avec MANAGEMENT, univers effectif incluant les positions, audit durable sans table mutable dédiée et recovery canonique.
+Confirmé : catalogue `MarketResearchService`, filtrage factuel sans ranking, watchlist sélectionnée par le même Agent, fallback, interaction avec MANAGEMENT, univers effectif incluant les positions, audit durable et recovery canonique.
 
 Validation opérateur communiquée : 12 tests discovery, 578 tests backend avec 2 warnings de dépréciation, `pnpm lint`, `pnpm typecheck`, `pnpm build` passés.
 
@@ -67,7 +70,7 @@ Validation opérateur communiquée : 12 tests discovery, 578 tests backend avec 
 
 Le Batch 19.5 transforme les faits du journal de cycle en une vue de présentation typée et défensive sans créer une nouvelle source de vérité.
 
-## 8.1 Architecture intégrée
+Architecture :
 
 ```text
 CycleAuditDetail existant
@@ -81,56 +84,13 @@ CycleAuditDetail existant
 -> /api/v1/cycles/{cycle_id}
 ```
 
-Décisions conservées : aucune nouvelle table SQL, aucun ledger parallèle, aucun recalcul stratégique/Risk/P&L, parsing tolérant des historiques partiels et aucune rationale inventée.
-
-## 8.2 Sémantique opérateur
-
-La projection distingue réellement :
-
-- contexte `NORMAL` / `MANAGEMENT` ;
-- `REFRESHED`, `CACHE_REUSED`, `FALLBACK`, `SKIPPED_MANAGEMENT` ;
-- sélection du marché du cycle ;
-- BUY / SELL / HOLD et rationale Agent ;
-- ALLOW / MODIFY / REJECT et raisons Risk ;
-- fill(s), intent sans fill et FAILED à son stage propre.
-
-Positions ne prétend pas connaître la provenance d'une position lorsque les IDs d'origine ne sont pas portés par le modèle ; elle affiche seulement une activité auditée liée au même marché.
-
-## 8.3 Validation 19.5
-
-Communiquée par l'opérateur sur le repository complet :
-
-- `pytest tests/test_cycle_explainability.py` : **8 tests passés** ;
-- `pytest` : **586 tests passés**, 2 warnings de dépréciation ;
-- `pnpm lint` : **passé** ;
-- `pnpm typecheck` : **passé** ;
-- `pnpm build` : **passé**.
+La projection distingue contexte NORMAL/MANAGEMENT, discovery, sélection de marché, BUY/SELL/HOLD, ALLOW/MODIFY/REJECT, fills et FAILED.
 
 Référence intégrée : `07050faea54bbed89cf250b34f8e97bd10d94bd3`.
 
-La revue visuelle light/dark, desktop/mobile reste une validation opérateur distincte si elle n'a pas encore été réalisée.
+# 9. Historique candles + WebSocket — INTÉGRÉ 19.6A
 
-# 9. Nouvel espace Marchés — PLANIFIÉ 19.6B
-
-Navigation cible :
-
-```text
-Accueil | Marchés | Positions | Historique | Réglages
-```
-
-La vue Marchés affichera en onglets les marchés surveillés. Le frontend n'a aucune autorité sur la watchlist ou le moteur.
-
-# 10. Charts chandeliers — PLANIFIÉ 19.6B
-
-Renderer privilégié : **TradingView Lightweight Charts** avec données Kraken normalisées par le backend.
-
-À afficher lorsque disponible : OHLC, volume, prix courant, prix moyen, mark/liquidation PERPETUAL et événements BUY/SELL/réduction/clôture.
-
-Le frontend 19.6B doit consommer les endpoints 19.6A et ne pas se connecter directement à Kraken.
-
-# 11. Historique candles + WebSocket — INTÉGRÉ 19.6A
-
-## 11.1 Pipeline
+## 9.1 Pipeline
 
 ```text
 SPOT      : Kraken REST OHLC + Kraken WS v2 OHLC
@@ -146,77 +106,35 @@ PERPETUAL : Kraken Futures charts + Futures WS trade
 
 Le backend gère normalisation, déduplication, candle courante mutable, finalisation, recovery et limites de profondeur.
 
-## 11.2 Modèle canonique
+## 9.2 Modèle canonique
 
-Chaque candle porte au minimum :
-
-- symbole canonique ;
-- type de marché ;
-- timeframe ;
-- `open_time` / `close_time` UTC ;
-- open/high/low/close ;
-- volume ;
-- `is_final` ;
-- `updated_at` causal.
+Chaque candle porte au minimum : symbole canonique, type de marché, timeframe, `open_time` / `close_time` UTC, OHLC, volume, `is_final` et `updated_at` causal.
 
 Les clés sont séparées par `symbol + market_type + timeframe`. Une candle future ou une candle finale prétendument disponible avant sa clôture est refusée.
 
-## 11.3 Timeframes explicites
+## 9.3 Timeframes explicites
 
-SPOT 19.6A : `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1d`, `1w`, `15d`.
+SPOT : `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1d`, `1w`, `15d`.
 
-PERPETUAL 19.6A : `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `12h`, `1d`, `1w`.
+PERPETUAL : `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `12h`, `1d`, `1w`.
 
-FUTURE daté n'est pas supporté par le pipeline 19.6A.
+FUTURE daté n'est pas supporté par le pipeline intégré.
 
-## 11.4 Historique initial
+## 9.4 Historique initial
 
-SPOT : le endpoint OHLC est réellement borné à **720 rows**. La cible générale « environ 1000 » n'est donc pas annoncée comme atteignable pour Spot via cette API seule.
+SPOT : l'endpoint OHLC est borné à 720 rows.
 
 PERPETUAL : Kraken Futures charts est interrogé avec une cible bornée à 1000 rows. Le backend accepte une profondeur plus faible si c'est ce que le fournisseur retourne réellement.
 
 Aucune donnée n'est interpolée ou reconstruite artificiellement.
 
-## 11.5 Cache
+## 9.5 Cache et WebSocket
 
-Le cache choisi est process-local :
+Le cache est process-local, borné et dédupliqué. SPOT réutilise le canal public v2 `ohlc`. PERPETUAL agrège le feed public Futures `trade` et ne crée pas de candle vide pour une période sans trade.
 
-- profondeur maximale bornée, 1000 par défaut ;
-- ordre temporel garanti ;
-- déduplication par `open_time` ;
-- remplacement de la candle courante par sa version la plus récente ;
-- aucune régression d'une candle finale vers un état courant ;
-- aucune croissance mémoire illimitée.
+Le hub effectue backfill initial, reconnexion, recovery de gap, fusion/déduplication et expose erreur/staleness. Un seul stream provider est créé par `CandleKey` et partagé entre consommateurs cockpit.
 
-Aucune migration SQL n'est ajoutée en 19.6A. Une persistence durable sera réévaluée seulement si un besoin concret de reprise hors process apparaît.
-
-## 11.6 WebSocket et recovery
-
-SPOT réutilise le WebSocket public v2 Kraken et le canal `ohlc`.
-
-PERPETUAL utilise le feed public Futures `trade` afin de mettre à jour la candle courante à partir de trades réels. Il ne crée pas de candle vide pour une période sans trade.
-
-Le hub backend :
-
-- effectue un backfill au démarrage ;
-- retente après déconnexion ;
-- effectue un backfill lorsqu'un gap est détecté ;
-- fusionne et déduplique ;
-- conserve l'ordre causal ;
-- expose les erreurs/staleness ;
-- ne réécrit pas rétroactivement une donnée inexistante.
-
-## 11.7 Lifecycle et multi-consommateurs
-
-Un seul stream provider est créé par `CandleKey`. Plusieurs clients cockpit consomment le même flux backend.
-
-Le nombre de streams et la taille des queues consommateurs sont bornés. Les abonnements appartiennent au backend ; fermer le frontend ne stoppe ni le moteur trading ni un stream backend déjà ouvert.
-
-Au shutdown FastAPI, tous les tasks et transports candles sont nettoyés.
-
-## 11.8 API cockpit
-
-Contrats proposés :
+## 9.6 API cockpit
 
 ```text
 GET /api/v1/markets/candles
@@ -224,26 +142,94 @@ GET /api/v1/markets/candles/status
 WS  /api/v1/markets/candles/stream
 ```
 
-Le WebSocket cockpit envoie un snapshot initial puis les updates temps réel.
+Référence intégrée : `3c53af3bdb1ef53c574e26afe9b6178a374d9f06`.
 
-## 11.9 Validation
+# 10. Espace Marchés + charts + markers — INTÉGRÉ 19.6B
 
-Validation ChatGPT préalable :
+La vue Marchés :
 
-- `pytest -q tests/test_candle_streaming.py` : **18 tests passés** ;
-- `py_compile` des fichiers 19.6A : **passé**.
+- affiche la watchlist effective backend lorsqu'elle existe, sinon le bootstrap actif, puis réinjecte les positions ouvertes ;
+- ne crée aucun ranking stratégique frontend ;
+- charge le marché/timeframe actif à la demande ;
+- consomme exclusivement les contrats candles backend ;
+- utilise Lightweight Charts pour chandeliers et volume ;
+- affiche loading/error/stale et reconnecte le WebSocket avec backoff borné ;
+- utilise un cache mémoire client borné ;
+- affiche le contexte de position depuis `/portfolio` ;
+- crée les markers BUY/SELL uniquement depuis les fills persistés ;
+- utilise `/cycles/{cycle_id}` pour afficher les faits Agent/Risk corrélés ;
+- n'infère aucune clôture, aucune candle, aucun fill et aucune causalité.
 
-Validation opérateur finale avant intégration :
+Validation opérateur :
 
-- tests ciblés candles + Kraken REST/WebSocket/market data : **53 tests passés**, 2 warnings de dépréciation ;
-- suite backend complète `pytest` : **604 tests passés**, 2 warnings de dépréciation ;
-- `git diff --check` : aucune erreur de whitespace, uniquement les avertissements LF -> CRLF.
+- `pnpm test` : 6/6 ;
+- `pnpm lint` : passé sans erreur ni warning ;
+- `pnpm typecheck` : passé ;
+- `pnpm build` : passé ;
+- `git diff --check` : aucune erreur de whitespace.
 
-Les tests ciblés couvrent parsing SPOT/Futures, ordre, déduplication, candle courante, nouvelle candle, profondeur, séparation des clés, historique incomplet, no-look-ahead, reconnect/backfill, absence de duplication, unsubscribe/cleanup, plusieurs consommateurs, staleness/erreur, API historique et WebSocket cockpit.
+Référence fonctionnelle : `a446628918a614d2ae0ac3b55243881aad5ef410`.
 
-Référence intégrée : `3c53af3bdb1ef53c574e26afe9b6178a374d9f06` (`feat: add backend candle cache and streaming`).
+# 11. Overlays de position sur charts — INTÉGRÉ 19.7
 
-# 12. Ordre global
+Le Batch 19.7 a fermé la lacune de présentation identifiée après 19.6B.
+
+Sont projetés sur le chart, lorsqu'ils existent dans le portefeuille canonique :
+
+- prix moyen d'entrée ;
+- mark backend ;
+- liquidation pour PERPETUAL.
+
+Règles :
+
+- aucune valeur n'est recalculée dans le frontend ;
+- aucune ligne n'est inventée lorsque la donnée manque ;
+- les lignes sont remplacées ou retirées lors d'un changement de marché, timeframe ou position ;
+- markers de fills et overlays restent deux projections différentes de faits backend.
+
+Référence fonctionnelle : `8b969b434916d89f6b6aa127c3bac9c27e990966`.
+
+# 12. Sessions v1 — INTÉGRÉ 19.8
+
+Le Batch 19.8 remplace dans le parcours normal les concepts techniques Strategy/Revision/Campaign/paper_run par une façade utilisateur `Session`.
+
+Architecture :
+
+```text
+Session UX
+-> Strategy = identité stable
+-> StrategyRevision(s) immuables
+-> Campaign(s) immuables/versionnées
+-> paper_run(s) / recovery
+```
+
+Fonctions intégrées :
+
+- création atomique ;
+- listing et détail ;
+- modification versionnée ;
+- duplication indépendante ;
+- archivage logique ;
+- start / stop / resume / run-cycle ;
+- configurateur simple + avancé ;
+- mode marchés `AUTOMATIC_AI` ;
+- mode marchés `MANUAL` ;
+- navigation `Accueil | Sessions | Marchés | Positions | Historique | Réglages`.
+
+Aucune table SQL `sessions` n'est ajoutée.
+
+Validation opérateur :
+
+- backend complet : 606 tests passés, 2 warnings de dépendances ;
+- frontend : 21/21 tests passés ;
+- `pnpm lint` : passé ;
+- `pnpm typecheck` : passé ;
+- `pnpm build` : passé ;
+- `git diff --check` : aucune erreur de whitespace.
+
+Référence fonctionnelle : `f3a8eae8528648c07723aa97350852428254acc7`.
+
+# 13. Ordre 19.x intégré
 
 | Ordre | Batch | Résultat principal | Statut |
 | ---: | --- | --- | --- |
@@ -251,21 +237,43 @@ Référence intégrée : `3c53af3bdb1ef53c574e26afe9b6178a374d9f06` (`feat: add 
 | 2 | 19.2 — Monitoring | P&L latent et état vivant sans LLM | intégré |
 | 3 | 19.3 — Mode gestion | évite recherche IA inutile quand ouverture indisponible | intégré |
 | 4 | 19.4 — Discovery/watchlist | univers dynamique audité, même Agent | intégré |
-| 5 | 19.5 — Explicabilité | rationale visible vs Risk | intégré |
+| 5 | 19.5 — Explicabilité | rationale Agent / raisons Risk visibles | intégré |
 | 6 | 19.6A — Candles/streaming | données chart canoniques | intégré |
-| 7 | 19.6B — Marchés/charts | rendu, onglets, markers | planifié |
+| 7 | 19.6B — Marchés/charts | rendu, onglets, markers | intégré |
+| 8 | 19.7 — Overlays | prix moyen, mark, liquidation canoniques | intégré |
+| 9 | 19.8 — Sessions v1 | façade UX Session et lifecycle simplifié | intégré |
 
-## 13. Prochaine étape — 19.6B
+# 14. Chantiers ouverts
 
-Le backend 19.6A étant intégré, la prochaine étape est la vue Marchés/charts consommant exclusivement ses contrats API/WebSocket. Le frontend ne doit pas ouvrir de seconde connexion directe à Kraken.
+## 14.1 Observabilité d'usage/coût LLM — OUVERT, À CADRER
 
-La revue visuelle 19.5 reste une validation opérateur séparée si elle n'a pas encore été réalisée.
+Objectif : mesurer appels/tokens par phase et par cycle afin de quantifier l'économie IA.
 
-## 14. Critères 19.6B ultérieurs
+Contraintes :
 
-- lint/typecheck/build frontend ;
-- light/dark ;
-- changement onglet/timeframe ;
-- markers cohérents avec les fills ;
-- overlays cohérents avec les faits backend ;
-- aucun calcul stratégique/Risk dupliqué côté frontend.
+- observabilité uniquement ;
+- aucune modification automatique de la stratégie ;
+- aucun second Agent ;
+- pas de métrique inventée lorsque le provider ne la fournit pas.
+
+## 14.2 Multi-quote / FX — DÉCISION ARCHITECTURALE REQUISE
+
+Objectif : valoriser de façon cohérente des marchés dont quote/settlement diffèrent.
+
+Le chantier touche potentiellement portefeuille, Risk, analytics, recovery et sources de conversion causales. Aucun agrégat multi-devise ne doit être introduit sans contrat explicite.
+
+## 14.3 Persistence durable des candles — À DÉCIDER SUR BESOIN
+
+Le cache process-local satisfait le besoin actuel de présentation et de recovery technique. Aucun besoin démontré ne justifie encore une nouvelle table ou un historique maison.
+
+## 14.4 Restauration d'une Session archivée — À DÉCIDER SUR BESOIN PRODUIT
+
+Le Batch 19.8 archive sans effacer les faits historiques. Une action de restauration n'est pas intégrée et ne doit être ajoutée que si le besoin produit est confirmé.
+
+## 14.5 FUTURE daté — HORS PÉRIMÈTRE ACTUEL
+
+Le domaine peut connaître `MarketType.FUTURE`, mais l'exécution intégrée le refuse. Son ajout exige un chantier explicite distinct de PERPETUAL.
+
+## 14.6 LIVE — SÉPARÉ ET ULTÉRIEUR
+
+Aucun chantier PAPER ne doit basculer implicitement vers LIVE. Le passage au LIVE exige une décision et un parcours explicites, séparés et ultérieurs.
