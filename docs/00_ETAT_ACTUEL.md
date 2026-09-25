@@ -1,19 +1,18 @@
 # 00 — État actuel
 
-> Mémoire courte de reprise. À garder synthétique, factuelle et alignée avec GitHub `main` et le patch local en cours.
+> Mémoire courte de reprise. À garder synthétique, factuelle et alignée avec GitHub `main` et les éventuelles modifications locales en cours.
 
 ## Référence technique
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub `main` audité avant le Batch 19.4 :
-  `bfef06d78dc34089541272c2944518499d4a1530`
-  (`feat: add deterministic capacity management mode`).
-- Batch 19.3 **intégré** sur GitHub à ce HEAD.
-- Validation locale communiquée pour 19.3 : `tests/test_capacity_management.py` = 18 tests passés ; suite backend complète = 552 tests passés ; frontend inchangé.
-- Batch 19.4 livré ici comme **patch local proposé**, non intégré à GitHub par ChatGPT.
+- HEAD GitHub `main` :
+  `de65c6677ce01f9c75da5545fe81553a021f588d`
+  (`feat: add dynamic audited market discovery`).
+- Batch 19.4 **intégré** sur GitHub à ce HEAD.
+- Validation locale Batch 19.4 : `tests/test_market_discovery.py` = 12 tests passés ; suite backend complète = 578 tests passés avec 2 warnings de dépréciation ; frontend = `pnpm lint`, `pnpm typecheck` et `pnpm build` passés.
 
-## État fonctionnel visé après application du patch Batch 19.4
+## État fonctionnel intégré après Batch 19.4
 
 - un seul Agent IA stratégique ; Kraken ; PAPER uniquement ; SPOT + PERPETUAL linéaire ;
 - Risk Engine déterministe = autorité finale ; aucune sortie LLM ne déclenche directement un ordre ;
