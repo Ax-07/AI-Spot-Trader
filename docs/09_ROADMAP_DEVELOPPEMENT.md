@@ -7,7 +7,7 @@ HEAD GitHub vérifié                    : 321ce2d19105046af1f11295d67130402c09f
 Référence fonctionnelle Batch 19.6A  : 3c53af3bdb1ef53c574e26afe9b6178a374d9f06
 Batch 19.5                            : intégré sur GitHub main
 Batch 19.6A                           : intégré sur GitHub main
-Batch 19.6B                           : patch proposé, non intégré
+Batch 19.6B                           : validé localement, commit fonctionnel a446628
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch. Le document détaillé des améliorations est `docs/11_AMELIORATIONS_PLANIFIEES.md`.
@@ -23,6 +23,7 @@ Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batc
 - Batch 19.4 : découverte dynamique Kraken, watchlist multi-marchés auditée, même Agent stratégique, fallback/recovery et configurateur simplifié ;
 - Batch 19.5 : projection d'explicabilité opérateur Agent/Risk/exécution depuis les faits persistés ;
 - Batch 19.6A : backend candles OHLCV, cache borné, recovery et streaming cockpit partagé.
+- Batch 19.6B : vue Marchés, Lightweight Charts, consommation REST/WS 19.6A et markers de fills persistés ; validation locale complète au commit `a446628`.
 
 ## Batch 19.5 — Explicabilité opérateur
 
@@ -62,39 +63,34 @@ Validation opérateur 19.6A : 53 tests ciblés passés ; suite backend 604 tests
 
 ## Batch 19.6B — Vue Marchés, Lightweight Charts et markers
 
-**État : patch proposé, non intégré.**
+**État : validation locale complète ; commit fonctionnel `a446628` sur `main` local.**
 
-Périmètre implémenté dans le patch :
+Référence fonctionnelle : `a446628` (`feat: add cockpit market charts and trade markers`). La présence de ce commit sur GitHub `main` doit être confirmée après push.
 
-- navigation visible `Accueil | Marchés | Positions | Historique | Réglages` sans créer une seconde navigation ;
+Périmètre intégré dans le commit fonctionnel :
+
+- navigation visible `Accueil | Marchés | Positions | Historique | Réglages` ;
 - marchés = watchlist effective backend lorsqu'elle existe, sinon univers de campagne actif comme bootstrap, puis ajout des positions ouvertes ; aucune sélection/ranking stratégique TypeScript ;
 - onglets marché responsive, un seul marché/timeframe chargé à la demande ;
 - `lightweight-charts` pour chandeliers OHLC et volume ;
 - historique initial par `GET /api/v1/markets/candles`, puis WebSocket `/api/v1/markets/candles/stream` via le proxy cockpit `/backend` ;
-- reconnexion frontend bornée et cleanup lors du changement de marché/timeframe ou démontage ;
-- petit cache client process-local ; aucune nouvelle persistence ;
-- timeframes centralisés et strictement alignés sur 19.6A ;
+- reconnexion frontend bornée, cleanup et petit cache mémoire non persistant ;
+- timeframes strictement alignés sur les capacités 19.6A ;
 - contexte de position affiché depuis `/portfolio`, sans recalcul depuis les candles ;
-- markers BUY/SELL créés uniquement depuis les fills persistés `/executions` ; `reduce_only` peut annoter une réduction ; aucune clôture n'est déduite lorsqu'aucun fait canonique ne l'atteste ;
+- markers BUY/SELL créés uniquement depuis les fills persistés `/executions` ; `reduce_only` peut annoter une réduction ; aucune clôture n'est déduite sans fait canonique ;
 - sélection d'un marker -> `/cycles/{cycle_id}` pour réutiliser l'explicabilité 19.5 ;
 - aucune connexion frontend directe à Kraken, aucun P&L/Risk parallèle, aucune candle/fill/causalité inventée.
 
-Validation ChatGPT réellement exécutée sur le patch :
+Validation opérateur locale :
 
-- `node --test --experimental-strip-types src/lib/market-candles.test.mjs` : **6 tests passés** ;
-- parsing/transpilation TypeScript des six fichiers `.ts/.tsx` nouveaux/modifiés : **passé**.
+- `pnpm test` : **6/6 passés** ;
+- `pnpm lint` : **passé sans erreur ni warning** ;
+- `pnpm typecheck` : **passé** ;
+- `pnpm build` : **passé** ;
+- `git diff --check` : **aucune erreur de whitespace** ; avertissements LF -> CRLF uniquement ;
+- arbre de travail propre après commit.
 
-Restent à valider localement avant intégration :
-
-- mise à jour `pnpm-lock.yaml` après installation de `lightweight-charts` ;
-- `pnpm test` ;
-- `pnpm lint` ;
-- `pnpm typecheck` ;
-- `pnpm build` ;
-- runtime avec backend 19.6A réel : historique, snapshot WS, update, reconnexion/stale/error ;
-- revue visuelle light/dark, desktop/mobile, nombreuses paires/symbole long, position/sans position, rationale longue, raisons Risk multiples et markers rapprochés.
-
-Le Batch 19.6B ne devient « intégré » qu'après validation opérateur réelle puis commit/push.
+Le warning `MODULE_TYPELESS_PACKAGE_JSON` du test runner reste non bloquant.
 
 ## Cadences à maintenir distinctes
 

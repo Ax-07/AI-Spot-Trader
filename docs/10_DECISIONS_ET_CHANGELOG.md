@@ -92,25 +92,25 @@ Spot OHLC est borné à 720 rows. PERPETUAL vise jusqu'à 1000 rows via Futures 
 
 ## ADR-235 — La vue Marchés reste un consommateur strict du backend
 
-**PATCH PROPOSÉ BATCH 19.6B — NON INTÉGRÉ.**
+**VALIDÉ LOCALEMENT AU BATCH 19.6B — COMMIT `a446628`.**
 
 Le frontend charge uniquement le marché/timeframe actif depuis les contrats 19.6A. Il utilise le proxy same-origin `/backend` pour REST et WebSocket, n'ouvre aucune connexion Kraken directe, conserve un petit cache mémoire borné et nettoie socket/listeners/timers à chaque changement ou démontage.
 
 ## ADR-236 — L'univers Marchés ne crée aucun ranking frontend
 
-**PATCH PROPOSÉ BATCH 19.6B — NON INTÉGRÉ.**
+**VALIDÉ LOCALEMENT AU BATCH 19.6B — COMMIT `a446628`.**
 
 Ordre des faits utilisés : watchlist effective de l'explicabilité discovery lorsqu'elle existe ; univers de campagne actif seulement comme bootstrap si la watchlist manque ; positions ouvertes toujours réinjectées. Le frontend déduplique mais ne classe pas stratégiquement les marchés.
 
 ## ADR-237 — Markers uniquement depuis les fills persistés
 
-**PATCH PROPOSÉ BATCH 19.6B — NON INTÉGRÉ.**
+**VALIDÉ LOCALEMENT AU BATCH 19.6B — COMMIT `a446628`.**
 
 Un marker n'existe que si un fill PAPER réel est retourné par `/executions`. BUY/SELL viennent du payload canonique du fill. `reduce_only=true` peut annoter une réduction. Aucune clôture n'est inférée depuis une variation de position ou une candle. Le détail d'un marker recharge `/cycles/{cycle_id}` afin de réutiliser l'explicabilité 19.5 ; si la projection manque, l'UI reste explicitement partielle.
 
 ## ADR-238 — Lightweight Charts est une couche de rendu, pas une source métier
 
-**PATCH PROPOSÉ BATCH 19.6B — NON INTÉGRÉ.**
+**VALIDÉ LOCALEMENT AU BATCH 19.6B — COMMIT `a446628`.**
 
 TradingView Lightweight Charts rend OHLC/volume/markers à partir des faits backend. Les timeframes autorisés sont centralisés selon les capacités 19.6A. Le frontend n'utilise pas les candles pour recalculer P&L, exposition, liquidation, Risk ou stratégie.
 
@@ -168,15 +168,13 @@ TradingView Lightweight Charts rend OHLC/volume/markers à partir des faits back
 
 ## Changelog — 2026-09-25 — Batch 19.6B
 
-**PATCH PROPOSÉ — NON INTÉGRÉ.**
-
 - vue Marchés et navigation cockpit dédiée ;
 - onglets watchlist/positions, marché actif lazy-loaded ;
-- chandeliers + volume Lightweight Charts ;
+- chandeliers + volume via TradingView Lightweight Charts ;
 - consommation REST + WebSocket cockpit 19.6A avec cache mémoire, reconnexion et cleanup ;
 - états loading/error/stale ;
 - contexte position backend SPOT/PERPETUAL ;
 - markers issus uniquement des fills persistés et détails via l'explicabilité 19.5 ;
 - aucune connexion Kraken frontend, aucun ranking, aucun calcul Risk/P&L parallèle ;
-- validation ChatGPT : 6 tests ciblés passés + parsing/transpilation TypeScript des fichiers modifiés passé ;
-- `pnpm lint`, `pnpm typecheck`, `pnpm build`, lockfile, runtime backend réel et revue visuelle restent à valider localement avant tout statut « intégré ».
+- validation opérateur : `pnpm test` **6/6**, `pnpm lint`, `pnpm typecheck` et `pnpm build` passés ; `git diff --check` sans erreur de whitespace ;
+- commit fonctionnel local `main` : `a446628` (`feat: add cockpit market charts and trade markers`) ; présence sur GitHub `main` à confirmer après push.

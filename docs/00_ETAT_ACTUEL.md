@@ -12,45 +12,39 @@
 - Référence fonctionnelle intégrée du Batch 19.6A :
   `3c53af3bdb1ef53c574e26afe9b6178a374d9f06`
   (`feat: add backend candle cache and streaming`).
-- Batch 19.5 : **intégré** au commit `07050faea54bbed89cf250b34f8e97bd10d94bd3`.
-- Batch 19.6A : **intégré sur GitHub `main`**.
-- Batch 19.6B : **patch proposé, non intégré** tant que la validation opérateur, le commit et le push ne sont pas réalisés.
+- Référence fonctionnelle du Batch 19.6B validée localement :
+  `a446628` (`feat: add cockpit market charts and trade markers`).
+- Batch 19.6B : **validation locale complète et commit fonctionnel créé sur `main` local** ; présence sur GitHub à revérifier après push.
 
-## État fonctionnel intégré
+## État fonctionnel
 
 - un seul Agent IA stratégique ; Kraken ; PAPER uniquement ; SPOT + PERPETUAL linéaire ;
 - Risk Engine déterministe = autorité finale ; aucune sortie LLM ne déclenche directement un ordre ;
 - `NORMAL` / `MANAGEMENT`, discovery dynamique et watchlist auditée sont intégrés ;
-- l'explicabilité 19.5 expose séparément contexte/discovery, sélection de marché, Agent, Risk et exécution PAPER depuis les faits persistés ;
+- explicabilité 19.5 : contexte/discovery, sélection marché, Agent, Risk et exécution PAPER depuis les faits persistés ;
 - backend candles 19.6A : historique, cache process-local, recovery et WebSocket cockpit partagé ;
-- frontend sans autorité trading, calcul Risk ou P&L parallèle.
+- frontend 19.6B : vue Marchés, Lightweight Charts, timeframes backend, cache client borné, reconnexion et markers issus uniquement des fills persistés ;
+- aucune connexion frontend directe à Kraken, aucun calcul Risk/P&L stratégique parallèle et aucune causalité inventée.
 
-## Batch 19.6B — patch proposé
+## Validation Batch 19.6B
 
-Le patch frontend ajoute :
+Validation opérateur locale communiquée :
 
-- navigation visible `Accueil | Marchés | Positions | Historique | Réglages` ;
-- vue Marchés alimentée en priorité par la watchlist effective, avec ajout des positions ouvertes ;
-- onglets marchés responsive et chargement du seul marché actif ;
-- TradingView Lightweight Charts pour chandeliers OHLC et volume ;
-- historique initial REST 19.6A puis mises à jour WebSocket cockpit, reconnexion et cleanup ;
-- timeframes bornés aux capacités backend SPOT/PERPETUAL ;
-- petit cache client non persistant ;
-- contexte de position affiché uniquement depuis les faits portefeuille backend ;
-- markers construits uniquement depuis les fills PAPER persistés ; `reduce_only` est affiché lorsqu'il existe, sans déduire une clôture ;
-- sélection d'un fill -> chargement de l'explicabilité 19.5 du cycle corrélé ;
-- aucune connexion frontend directe à Kraken et aucune candle/fill/causalité inventée.
+- `pnpm test` : **6/6 tests passés** ;
+- `pnpm lint` : **passé sans erreur ni warning** ;
+- `pnpm typecheck` : **passé** ;
+- `pnpm build` : **passé** ;
+- `git diff --check` : **aucune erreur de whitespace** ; avertissements LF -> CRLF uniquement ;
+- arbre de travail propre après le commit fonctionnel `a446628`.
 
-Validation ChatGPT du patch : **6 tests frontend ciblés passés** ; parsing/transpilation TypeScript des nouveaux/modifiés `.ts/.tsx` passé. `pnpm lint`, `pnpm typecheck`, `pnpm build`, la validation WebSocket avec backend réel et la revue visuelle light/dark desktop/mobile restent à exécuter localement par l'opérateur.
+Le warning Node `MODULE_TYPELESS_PACKAGE_JSON` du test runner reste non bloquant et ne justifie pas à lui seul l'ajout global de `"type": "module"`.
 
 ## Prochaine priorité
 
-1. extraire le ZIP 19.6B à la racine ;
-2. installer/mettre à jour les dépendances frontend et le lockfile ;
-3. exécuter tests, lint, typecheck et build ;
-4. réaliser la revue visuelle et runtime ;
-5. seulement après validation réelle, commit/push et clôture documentaire de 19.6B.
+1. pousser les commits 19.6B sur GitHub `main` ;
+2. au démarrage du prochain batch, revérifier le HEAD GitHub réel ;
+3. poursuivre avec le prochain batch uniquement depuis cet état resynchronisé.
 
 ## Règle de reprise
 
-À chaque nouveau batch : revérifier le HEAD GitHub réel, puis distinguer clairement état intégré, modifications locales et patch proposé.
+À chaque nouveau batch : revérifier le HEAD GitHub réel, lire ce document et distinguer clairement état intégré GitHub, modifications locales et patch proposé.
