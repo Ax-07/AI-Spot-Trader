@@ -9,9 +9,10 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 ## Référence courante
 
 ```text
-HEAD GitHub post-push Batch 19.8 : f3a8eae8528648c07723aa97350852428254acc7
-Batch 19.8 intégré                 : feat: add user-facing Sessions workflow
-Validation locale                  : backend 606 passed ; frontend tests/lint/typecheck/build passés
+Référence GitHub avant correctif post-19.8 : e26e2966e9661e1781b3df8e81577590554c980e
+Batch 19.8 intégré                          : f3a8eae8528648c07723aa97350852428254acc7
+Correctif Session post-19.8                 : validé localement, intégration à faire
+Validation correctif                        : backend 607 passed ; frontend tests/lint/typecheck/build passés
 ```
 
 ## Décisions historiques toujours actives
@@ -30,15 +31,15 @@ Validation locale                  : backend 606 passed ; frontend tests/lint/ty
 
 `Session` devient le concept utilisateur principal mais son identité technique reste la `Strategy`. Aucune table `sessions` n'est créée. La projection repose sur Strategy, StrategyRevision, Campaign, paper_run et le runtime actif.
 
-Raison : préserver l'audit et les composants canoniques tout en masquant leur complexité dans le parcours normal.
-
 ## ADR-241 — La création Session est atomique côté backend
 
 **ADOPTÉ AU BATCH 19.8.**
 
-La création Strategy + StrategyRevision 1 + Campaign est réalisée dans une seule transaction persistence. Le navigateur n'orchestre plus plusieurs écritures pouvant laisser une Strategy orpheline si la création Campaign échoue.
+La création Strategy + StrategyRevision 1 + Campaign est réalisée dans une seule transaction persistence.
 
 `Créer et démarrer` enchaîne ensuite activation fraîche et démarrage du moteur dans le backend.
+
+Le correctif post-19.8 précise l'implémentation de cet invariant : Strategy + StrategyRevision sont flushées avant l'INSERT Campaign afin que la FK composite `fk_campaigns_strategy_revision` soit satisfaite sur PostgreSQL. Ce flush intermédiaire ne termine pas la transaction et ne réduit donc pas l'atomicité.
 
 ## ADR-242 — Modifier une Session produit de nouveaux faits immuables
 
@@ -55,7 +56,7 @@ Une Session RUNNING ne peut pas être modifiée silencieusement. Elle doit d'abo
 
 **ADOPTÉ AU BATCH 19.8.**
 
-L'action UX `Supprimer` utilise `Strategy.archived_at`. Campaigns, paper_runs, cycles, décisions, Risk assessments, executions/fills et données P&L restent persistés. La restauration d'une Session archivée est hors scope v1.
+L'action UX `Supprimer` utilise `Strategy.archived_at`. Les faits historiques restent persistés. La restauration d'une Session archivée est hors scope v1.
 
 ## ADR-244 — Les statuts Session sont dérivés
 
@@ -67,24 +68,31 @@ Aucune colonne de statut parallèle n'est ajoutée. Le statut dépend de l'archi
 
 **ADOPTÉ AU BATCH 19.8.**
 
-Le simple `engine.stop` historique laisse la Campaign chargée. L'action Session `stop` doit être une fin explicite de Session : arrêter la boucle si nécessaire, fermer le runtime, persister `ended_at` sur le `paper_run` puis libérer la Campaign active.
-
-Le contrôle technique `engine.stop` reste disponible dans le mode avancé pour les diagnostics historiques.
+L'action Session `stop` arrête la boucle si nécessaire, ferme le runtime, persiste `ended_at` sur le `paper_run` puis libère la Campaign active.
 
 ## ADR-246 — Deux modes de marchés explicites
 
 **ADOPTÉ AU BATCH 19.8.**
 
-- `AUTOMATIC_AI` : `market_discovery` présent ; le bootstrap/fallback ne constitue pas une obligation de trader ; la watchlist reste choisie par le même Agent IA parmi les candidats déterministes ;
+- `AUTOMATIC_AI` : `market_discovery` présent ; watchlist choisie par le même Agent IA parmi les candidats déterministes ;
 - `MANUAL` : `market_discovery = null`, `paper_executable_markets` et `risk_allowed_pairs` sont alignés sur l'univers explicite.
-
-Aucun second moteur de sélection ni ranking TypeScript n'est introduit.
 
 ## ADR-247 — Les defaults Market Discovery restent canoniques et visibles
 
 **ADOPTÉ AU BATCH 19.8.**
 
-La configuration avancée expose les valeurs effectives : 900 s catalogue, 900 s watchlist, timeout 45 s, probe 24, candidats 12, watchlist 6, snapshot 120 s, 2 observations minimales, fenêtre complète non requise. Le backend conserve la validation autoritaire.
+La configuration avancée expose les valeurs effectives. Le backend conserve la validation autoritaire.
+
+## Changelog — 2026-09-25 — Correctif post-19.8 création Session
+
+- correction de l'ordre de flush SQLAlchemy lors de la création atomique Strategy + StrategyRevision + Campaign ;
+- Strategy + Revision sont flushées avant Campaign dans la même transaction ;
+- aucune migration SQL ni modification de schéma ;
+- ajout d'un test de non-régression avec foreign keys SQLite activées ;
+- le configurateur affiche désormais le feedback d'erreur backend lors d'un échec create/start ;
+- cause observée avant correction : `HTTP 409 · session creation conflicted` sur PostgreSQL ;
+- validation fonctionnelle opérateur : création et démarrage de Session réussis après redémarrage backend ;
+- validation locale : backend `607 passed`, 2 warnings ; frontend `21/21`, lint/typecheck/build passés ; `git diff --check` sans erreur.
 
 ## Changelog — 2026-09-25 — Batch 19.8 intégré
 
@@ -99,6 +107,4 @@ La configuration avancée expose les valeurs effectives : 900 s catalogue, 900 s
 - configurateur simple/avancé réutilisé pour create/edit ;
 - modes Automatique IA / Manuel ;
 - typing frontend de `market_discovery` et whitelist Risk aligné sur le backend ;
-- tests ciblés ajoutés pour configuration Session et persistence/lifecycle ;
-- documentation refondue autour du vocabulaire Session ;
-- validation locale : backend `606 passed`, frontend `21/21`, lint/typecheck/build passés, `git diff --check` sans erreur.
+- validation locale initiale : backend `606 passed`, frontend `21/21`, lint/typecheck/build passés, `git diff --check` sans erreur.

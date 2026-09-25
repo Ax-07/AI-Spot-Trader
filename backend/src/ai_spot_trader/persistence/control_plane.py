@@ -482,6 +482,11 @@ class SqlAlchemyControlPlaneStore:
             async with self._sessions() as session, session.begin():
                 session.add(strategy)
                 session.add(revision)
+                # Campaign references the composite StrategyRevision FK but has no ORM
+                # relationship to it. Flush parent rows first so PostgreSQL cannot insert
+                # the Campaign before its referenced revision. The outer transaction keeps
+                # Strategy + Revision + Campaign creation atomic.
+                await session.flush()
                 session.add(campaign)
                 await session.flush()
             return SessionBundleView(

@@ -2,6 +2,8 @@ import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from sqlalchemy import event
+
 from ai_spot_trader.control_plane import CampaignConfiguration
 from ai_spot_trader.domain.enums import LLMModel, MarketType
 from ai_spot_trader.domain.models import ExecutableMarket
@@ -37,6 +39,35 @@ def _config(*, aggressiveness: int = 5, automatic: bool = False) -> CampaignConf
         cycle_agent_timeout_seconds=35.0,
         cycle_broker_timeout_seconds=5.0,
     )
+
+
+def _enable_sqlite_foreign_keys(database: Database) -> None:
+    @event.listens_for(database.engine.sync_engine, "connect")
+    def _set_sqlite_pragma(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+
+def test_session_bundle_creation_respects_foreign_key_ordering() -> None:
+    async def scenario() -> None:
+        database = Database("sqlite+aiosqlite:///:memory:")
+        _enable_sqlite_foreign_keys(database)
+        await database.create_schema_for_tests()
+        store = SqlAlchemyControlPlaneStore(database.sessions, clock=FixedClock())
+        try:
+            created = await store.create_session_bundle(
+                name="Session FK",
+                strategy_prompt="Cherche une opportunité claire.",
+                configuration=_config(automatic=True),
+            )
+            assert created.revision.strategy_id == created.strategy.strategy_id
+            assert created.campaign.strategy_id == created.strategy.strategy_id
+            assert created.campaign.strategy_revision == created.revision.strategy_revision
+        finally:
+            await database.close()
+
+    asyncio.run(scenario())
 
 
 def test_session_bundle_create_and_versioned_update_preserve_history() -> None:

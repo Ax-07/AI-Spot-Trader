@@ -264,6 +264,7 @@ export function SimpleConfigurator({
 
   const busy = control.busyAction !== null;
   const runningEdit = session?.status === "RUNNING";
+  const operationError = control.feedback?.tone === "error" ? control.feedback.message : null;
 
   async function submit(startNow: boolean) {
     setValidationError(null);
@@ -442,9 +443,9 @@ export function SimpleConfigurator({
         ) : null}
       </Card>
 
-      {(validationError || configurationResult.error) ? (
+      {(validationError || configurationResult.error || operationError) ? (
         <div className="rounded-lg border border-destructive/30 bg-destructive-subtle p-3 text-sm text-destructive-subtle-foreground">
-          {validationError ?? configurationResult.error}
+          {validationError ?? configurationResult.error ?? operationError}
         </div>
       ) : null}
 
