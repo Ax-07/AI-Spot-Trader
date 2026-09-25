@@ -3,8 +3,6 @@
 import {
   Bot,
   Check,
-  ChevronLeft,
-  ChevronRight,
   CircleDollarSign,
   Play,
   Save,
@@ -20,38 +18,21 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ControlPlaneController } from "@/hooks/use-control-plane";
-import type {
-  CampaignConfiguration,
-  ExecutableMarketResponse,
-  LlmModel,
-} from "@/lib/api/types";
+import type { ExecutableMarketType, LlmModel, SessionResponse } from "@/lib/api/types";
+import {
+  DEFAULT_MARKET_DISCOVERY_POLICY,
+  buildSessionCampaignConfiguration,
+  type SessionMarketSelectionMode,
+  type SessionRiskProfile,
+} from "@/lib/session-config";
 import { cn } from "@/lib/utils";
-
-type RiskProfile = "prudent" | "balanced" | "aggressive" | "custom";
-type WizardStep = 1 | 2 | 3 | 4 | 5;
-type DynamicCampaignConfiguration = Omit<CampaignConfiguration, "risk_allowed_pairs"> & {
-  risk_allowed_pairs: string[] | null;
-  market_discovery: {
-    protocol_version: "market-discovery-v1";
-    market_types: ExecutableMarketResponse["market_type"][];
-    catalog_refresh_seconds: number;
-    watchlist_refresh_seconds: number;
-    refresh_timeout_seconds: number;
-    candidate_probe_limit: number;
-    candidate_limit: number;
-    watchlist_limit: number;
-    max_snapshot_age_seconds: number;
-    min_window_observations: number;
-    require_complete_window: boolean;
-  };
-};
 
 const inputClass =
   "h-11 w-full rounded-lg border bg-background px-3 text-sm shadow-sm outline-none transition focus:border-foreground/40 focus:ring-2 focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-60";
 const textareaClass =
-  "min-h-36 w-full rounded-lg border bg-background px-3 py-3 text-sm shadow-sm outline-none transition focus:border-foreground/40 focus:ring-2 focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-60";
+  "min-h-32 w-full rounded-lg border bg-background px-3 py-3 text-sm shadow-sm outline-none transition focus:border-foreground/40 focus:ring-2 focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-60";
 
-const PROFILE_COPY: Record<Exclude<RiskProfile, "custom">, { label: string; detail: string }> = {
+const PROFILE_COPY: Record<Exclude<SessionRiskProfile, "custom">, { label: string; detail: string }> = {
   prudent: {
     label: "Prudent",
     detail: "Ordre max 5 % du capital, levier PERPETUAL 1× et exposition dérivée très limitée.",
@@ -66,90 +47,7 @@ const PROFILE_COPY: Record<Exclude<RiskProfile, "custom">, { label: string; deta
   },
 };
 
-const STEP_LABELS = ["Marché", "Capital", "IA", "Sécurité", "Résumé"];
-
-function roundDecimal(value: number): string {
-  if (!Number.isFinite(value)) return "0";
-  return String(Math.round(value * 100_000_000) / 100_000_000);
-}
-
-function parseMarkets(value: string, marketType: ExecutableMarketResponse["market_type"]) {
-  const symbols = Array.from(
-    new Set(
-      value
-        .split(/[\n,;]/)
-        .map((item) => item.trim().toUpperCase())
-        .filter(Boolean),
-    ),
-  );
-  if (!symbols.length) throw new Error("Ajoute au moins une paire de départ, par exemple BTC/USD.");
-  const quotes = new Set<string>();
-  for (const symbol of symbols) {
-    const parts = symbol.split("/");
-    if (parts.length !== 2 || !parts[0] || !parts[1]) {
-      throw new Error(`Paire invalide : ${symbol}. Utilise le format BASE/QUOTE.`);
-    }
-    quotes.add(parts[1]);
-  }
-  if (quotes.size !== 1) {
-    throw new Error("Toutes les paires de départ doivent utiliser le même actif de règlement.");
-  }
-  return {
-    settlementAsset: Array.from(quotes)[0],
-    markets: symbols.map((symbol) => ({ symbol, market_type: marketType })),
-  };
-}
-
-function profileRisk(
-  profile: Exclude<RiskProfile, "custom">,
-  capital: number,
-  marketType: ExecutableMarketResponse["market_type"],
-) {
-  const profileValues = {
-    prudent: {
-      orderFraction: 0.05,
-      leverage: "1",
-      positionFraction: 0.1,
-      totalFraction: 0.2,
-      buffer: "1.25",
-    },
-    balanced: {
-      orderFraction: 0.1,
-      leverage: "2",
-      positionFraction: 0.2,
-      totalFraction: 0.4,
-      buffer: "1.15",
-    },
-    aggressive: {
-      orderFraction: 0.2,
-      leverage: "3",
-      positionFraction: 0.35,
-      totalFraction: 0.7,
-      buffer: "1.10",
-    },
-  }[profile];
-
-  return {
-    maxOrderNotional: roundDecimal(capital * profileValues.orderFraction),
-    derivativeLeverage: marketType === "PERPETUAL" ? profileValues.leverage : "1",
-    maxDerivativeLeverage: marketType === "PERPETUAL" ? profileValues.leverage : "1",
-    maxDerivativePositionNotional:
-      marketType === "PERPETUAL" ? roundDecimal(capital * profileValues.positionFraction) : null,
-    maxTotalDerivativeExposure:
-      marketType === "PERPETUAL" ? roundDecimal(capital * profileValues.totalFraction) : null,
-    liquidationBuffer: profileValues.buffer,
-  };
-}
-
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: ReactNode;
-}) {
+function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <label className="grid gap-1.5 text-sm">
       <span className="font-medium">{label}</span>
@@ -176,128 +74,153 @@ function ChoiceCard({
       onClick={onClick}
       className={cn(
         "rounded-xl border p-4 text-left transition",
-        active ? "border-foreground bg-foreground text-background" : "bg-background hover:bg-muted/40",
+        active ? "border-primary bg-primary/10 shadow-sm" : "bg-background hover:bg-muted/40",
       )}
     >
       <span className="flex items-center justify-between gap-3">
         <span className="font-semibold">{title}</span>
-        {active ? <Check className="size-4" /> : null}
+        {active ? <Check className="size-4 text-primary" /> : null}
       </span>
-      <span className={cn("mt-1 block text-xs leading-relaxed", active ? "text-background/70" : "text-muted-foreground")}>
-        {detail}
-      </span>
+      <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{detail}</span>
     </button>
   );
 }
 
+function numberString(value: number): string {
+  return Number.isFinite(value) ? String(value) : "";
+}
+
 export function SimpleConfigurator({
   control,
-  onCreated,
+  session = null,
+  onSaved,
+  onCancel,
 }: {
   control: ControlPlaneController;
-  onCreated: () => void;
+  session?: SessionResponse | null;
+  onSaved: () => void;
+  onCancel?: () => void;
 }) {
-  const [step, setStep] = useState<WizardStep>(1);
-  const [marketType, setMarketType] = useState<ExecutableMarketResponse["market_type"]>("SPOT");
-  const [pairs, setPairs] = useState("BTC/USD");
-  const [capital, setCapital] = useState("1000");
-  const [model, setModel] = useState<LlmModel>("gpt-5.6-luna");
-  const [aggressiveness, setAggressiveness] = useState(5);
-  const [prompt, setPrompt] = useState(
-    "Cherche des opportunités cohérentes avec le contexte de marché. Privilégie la qualité du signal à la fréquence des trades et utilise HOLD quand l'opportunité n'est pas assez claire.",
+  const config = session?.configuration ?? null;
+  const discovery = config?.market_discovery;
+  const editing = session !== null;
+
+  const [name, setName] = useState(
+    session?.name ?? `Session PAPER ${new Date().toISOString().slice(0, 16).replace("T", " ")}`,
   );
-  const [riskProfile, setRiskProfile] = useState<RiskProfile>("balanced");
-  const [testName, setTestName] = useState(() => `Test PAPER ${new Date().toISOString().slice(0, 19).replace("T", " ")}`);
+  const [marketType, setMarketType] = useState<ExecutableMarketType>(
+    config?.paper_executable_markets[0]?.market_type ?? "SPOT",
+  );
+  const [marketSelectionMode, setMarketSelectionMode] = useState<SessionMarketSelectionMode>(
+    session?.market_mode ?? "AUTOMATIC_AI",
+  );
+  const [pairs, setPairs] = useState(
+    config?.paper_executable_markets.map((market) => market.symbol).join("\n") ?? "BTC/USD",
+  );
+  const [capital, setCapital] = useState(config?.paper_initial_capital ?? "1000");
+  const [model, setModel] = useState<LlmModel>(config?.llm_model ?? "gpt-5.6-luna");
+  const [aggressiveness, setAggressiveness] = useState(config?.aggressiveness ?? 5);
+  const [prompt, setPrompt] = useState(
+    session?.instructions ??
+      "Cherche des opportunités cohérentes avec le contexte de marché. Privilégie la qualité du signal à la fréquence des trades et utilise HOLD quand l'opportunité n'est pas assez claire.",
+  );
+  const [riskProfile, setRiskProfile] = useState<SessionRiskProfile>(editing ? "custom" : "balanced");
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [cadence, setCadence] = useState("30");
-  const [feeRate, setFeeRate] = useState("0.001");
-  const [spreadBps, setSpreadBps] = useState("2");
-  const [slippageBps, setSlippageBps] = useState("2");
-  const [customMaxOrder, setCustomMaxOrder] = useState("100");
-  const [customLeverage, setCustomLeverage] = useState("1");
-  const [customMaxLeverage, setCustomMaxLeverage] = useState("1");
-  const [customPositionNotional, setCustomPositionNotional] = useState("250");
-  const [customTotalExposure, setCustomTotalExposure] = useState("500");
-  const [customLiquidationBuffer, setCustomLiquidationBuffer] = useState("1.10");
-  const [customAllowedPairs, setCustomAllowedPairs] = useState("");
-  const [marketTimeout, setMarketTimeout] = useState("20");
-  const [agentTimeout, setAgentTimeout] = useState("35");
-  const [brokerTimeout, setBrokerTimeout] = useState("5");
+
+  const [cadence, setCadence] = useState(numberString(config?.trading_cadence_seconds ?? 30));
+  const [feeRate, setFeeRate] = useState(config?.paper_fee_rate ?? "0.001");
+  const [spreadBps, setSpreadBps] = useState(config?.paper_spread_bps ?? "2");
+  const [slippageBps, setSlippageBps] = useState(config?.paper_slippage_bps ?? "2");
+  const [customMaxOrder, setCustomMaxOrder] = useState(config?.risk_max_order_notional ?? "100");
+  const [customLeverage, setCustomLeverage] = useState(config?.paper_derivative_leverage ?? "1");
+  const [customMaxLeverage, setCustomMaxLeverage] = useState(config?.risk_max_derivative_leverage ?? "1");
+  const [customPositionNotional, setCustomPositionNotional] = useState(
+    config?.risk_max_derivative_position_notional ?? "250",
+  );
+  const [customTotalExposure, setCustomTotalExposure] = useState(
+    config?.risk_max_total_derivative_exposure ?? "500",
+  );
+  const [customLiquidationBuffer, setCustomLiquidationBuffer] = useState(
+    config?.risk_derivative_liquidation_buffer_ratio ?? "1.10",
+  );
+  const [customAllowedPairs, setCustomAllowedPairs] = useState(
+    config?.risk_allowed_pairs?.join("\n") ?? "",
+  );
+  const [marketTimeout, setMarketTimeout] = useState(numberString(config?.cycle_market_timeout_seconds ?? 20));
+  const [agentTimeout, setAgentTimeout] = useState(numberString(config?.cycle_agent_timeout_seconds ?? 35));
+  const [brokerTimeout, setBrokerTimeout] = useState(numberString(config?.cycle_broker_timeout_seconds ?? 5));
+
+  const [catalogRefresh, setCatalogRefresh] = useState(
+    numberString(discovery?.catalog_refresh_seconds ?? DEFAULT_MARKET_DISCOVERY_POLICY.catalog_refresh_seconds),
+  );
+  const [watchlistRefresh, setWatchlistRefresh] = useState(
+    numberString(discovery?.watchlist_refresh_seconds ?? DEFAULT_MARKET_DISCOVERY_POLICY.watchlist_refresh_seconds),
+  );
+  const [refreshTimeout, setRefreshTimeout] = useState(
+    numberString(discovery?.refresh_timeout_seconds ?? DEFAULT_MARKET_DISCOVERY_POLICY.refresh_timeout_seconds),
+  );
+  const [candidateProbeLimit, setCandidateProbeLimit] = useState(
+    numberString(discovery?.candidate_probe_limit ?? DEFAULT_MARKET_DISCOVERY_POLICY.candidate_probe_limit),
+  );
+  const [candidateLimit, setCandidateLimit] = useState(
+    numberString(discovery?.candidate_limit ?? DEFAULT_MARKET_DISCOVERY_POLICY.candidate_limit),
+  );
+  const [watchlistLimit, setWatchlistLimit] = useState(
+    numberString(discovery?.watchlist_limit ?? DEFAULT_MARKET_DISCOVERY_POLICY.watchlist_limit),
+  );
+  const [maxSnapshotAge, setMaxSnapshotAge] = useState(
+    numberString(discovery?.max_snapshot_age_seconds ?? DEFAULT_MARKET_DISCOVERY_POLICY.max_snapshot_age_seconds),
+  );
+  const [minWindowObservations, setMinWindowObservations] = useState(
+    numberString(discovery?.min_window_observations ?? DEFAULT_MARKET_DISCOVERY_POLICY.min_window_observations),
+  );
+  const [requireCompleteWindow, setRequireCompleteWindow] = useState(
+    discovery?.require_complete_window ?? DEFAULT_MARKET_DISCOVERY_POLICY.require_complete_window,
+  );
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  const plan = useMemo(() => {
+  const configurationResult = useMemo(() => {
     try {
-      const numericCapital = Number(capital);
-      if (!Number.isFinite(numericCapital) || numericCapital <= 0) {
-        throw new Error("Le capital PAPER doit être un nombre strictement positif.");
-      }
-      if (!testName.trim()) throw new Error("Donne un nom à cette configuration de test.");
+      if (!name.trim()) throw new Error("Donne un nom à la Session.");
       if (!prompt.trim()) throw new Error("Ajoute des instructions pour l’IA.");
-      const marketPlan = parseMarkets(pairs, marketType);
-      const risk =
-        riskProfile === "custom"
-          ? {
-              maxOrderNotional: customMaxOrder.trim(),
-              derivativeLeverage: marketType === "PERPETUAL" ? customLeverage.trim() : "1",
-              maxDerivativeLeverage: marketType === "PERPETUAL" ? customMaxLeverage.trim() : "1",
-              maxDerivativePositionNotional:
-                marketType === "PERPETUAL" ? customPositionNotional.trim() || null : null,
-              maxTotalDerivativeExposure:
-                marketType === "PERPETUAL" ? customTotalExposure.trim() || null : null,
-              liquidationBuffer: customLiquidationBuffer.trim(),
-            }
-          : profileRisk(riskProfile, numericCapital, marketType);
-
-      const allowedPairs =
-        riskProfile === "custom" && customAllowedPairs.trim()
-          ? Array.from(
-              new Set(
-                customAllowedPairs
-                  .split(/[\n,;]/)
-                  .map((item) => item.trim().toUpperCase())
-                  .filter(Boolean),
-              ),
-            )
-          : null;
-
-      const configuration: DynamicCampaignConfiguration = {
-        configuration_version: "paper-control-plane-config-v1",
-        llm_model: model,
+      if (aggressiveness < 1 || aggressiveness > 10) {
+        throw new Error("L’agressivité doit être comprise entre 1 et 10.");
+      }
+      const configuration = buildSessionCampaignConfiguration({
+        marketType,
+        marketSelectionMode,
+        pairs,
+        capital,
+        model,
         aggressiveness,
-        trading_cadence_seconds: Number(cadence),
-        paper_initial_capital: capital.trim(),
-        paper_settlement_asset: marketPlan.settlementAsset,
-        paper_executable_markets: marketPlan.markets,
-        market_discovery: {
-          protocol_version: "market-discovery-v1",
-          market_types: [marketType],
-          catalog_refresh_seconds: 900,
-          watchlist_refresh_seconds: 900,
-          refresh_timeout_seconds: 45,
-          candidate_probe_limit: 24,
-          candidate_limit: 12,
-          watchlist_limit: 6,
-          max_snapshot_age_seconds: 120,
-          min_window_observations: 2,
-          require_complete_window: false,
+        riskProfile,
+        cadence,
+        feeRate,
+        spreadBps,
+        slippageBps,
+        customMaxOrder,
+        customLeverage,
+        customMaxLeverage,
+        customPositionNotional,
+        customTotalExposure,
+        customLiquidationBuffer,
+        customAllowedPairs,
+        marketTimeout,
+        agentTimeout,
+        brokerTimeout,
+        discovery: {
+          catalog_refresh_seconds: Number(catalogRefresh),
+          watchlist_refresh_seconds: Number(watchlistRefresh),
+          refresh_timeout_seconds: Number(refreshTimeout),
+          candidate_probe_limit: Number(candidateProbeLimit),
+          candidate_limit: Number(candidateLimit),
+          watchlist_limit: Number(watchlistLimit),
+          max_snapshot_age_seconds: Number(maxSnapshotAge),
+          min_window_observations: Number(minWindowObservations),
+          require_complete_window: requireCompleteWindow,
         },
-        paper_fee_rate: feeRate.trim(),
-        paper_spread_bps: spreadBps.trim(),
-        paper_slippage_bps: slippageBps.trim(),
-        paper_derivative_leverage: risk.derivativeLeverage,
-        paper_derivative_margin_mode: "ISOLATED",
-        risk_max_order_notional: risk.maxOrderNotional,
-        risk_allowed_pairs: allowedPairs,
-        risk_allow_quantity_reduction: true,
-        risk_max_derivative_leverage: risk.maxDerivativeLeverage,
-        risk_max_derivative_position_notional: risk.maxDerivativePositionNotional,
-        risk_max_total_derivative_exposure: risk.maxTotalDerivativeExposure,
-        risk_derivative_liquidation_buffer_ratio: risk.liquidationBuffer,
-        cycle_market_timeout_seconds: Number(marketTimeout),
-        cycle_agent_timeout_seconds: Number(agentTimeout),
-        cycle_broker_timeout_seconds: Number(brokerTimeout),
-      };
-      return { configuration: configuration as unknown as CampaignConfiguration, error: null };
+      });
+      return { configuration, error: null };
     } catch (error) {
       return {
         configuration: null,
@@ -305,11 +228,14 @@ export function SimpleConfigurator({
       };
     }
   }, [
-    aggressiveness,
     agentTimeout,
+    aggressiveness,
     brokerTimeout,
     cadence,
+    candidateLimit,
+    candidateProbeLimit,
     capital,
+    catalogRefresh,
     customAllowedPairs,
     customLeverage,
     customLiquidationBuffer,
@@ -318,250 +244,233 @@ export function SimpleConfigurator({
     customPositionNotional,
     customTotalExposure,
     feeRate,
+    marketSelectionMode,
     marketTimeout,
     marketType,
+    maxSnapshotAge,
+    minWindowObservations,
     model,
+    name,
     pairs,
     prompt,
+    refreshTimeout,
+    requireCompleteWindow,
     riskProfile,
     slippageBps,
     spreadBps,
-    testName,
+    watchlistLimit,
+    watchlistRefresh,
   ]);
 
-  const busy = control.busyAction === "create-paper-test";
+  const busy = control.busyAction !== null;
+  const runningEdit = session?.status === "RUNNING";
 
-  function nextStep() {
+  async function submit(startNow: boolean) {
     setValidationError(null);
-    if (step === 1) {
-      try {
-        parseMarkets(pairs, marketType);
-      } catch (error) {
-        setValidationError(error instanceof Error ? error.message : "Marché invalide.");
-        return;
-      }
-    }
-    if (step === 2 && (!Number.isFinite(Number(capital)) || Number(capital) <= 0)) {
-      setValidationError("Le capital PAPER doit être un nombre strictement positif.");
+    if (!configurationResult.configuration) {
+      setValidationError(configurationResult.error ?? "Configuration invalide.");
       return;
     }
-    if (step === 3 && !prompt.trim()) {
-      setValidationError("Ajoute des instructions pour l’IA.");
-      return;
-    }
-    setStep((current) => Math.min(5, current + 1) as WizardStep);
+    const result = editing
+      ? await control.updateSession(session.session_id, {
+          name: name.trim(),
+          prompt: prompt.trim(),
+          configuration: configurationResult.configuration,
+        })
+      : await control.createSession({
+          name: name.trim(),
+          prompt: prompt.trim(),
+          configuration: configurationResult.configuration,
+          startNow,
+        });
+    if (result) onSaved();
   }
 
-  async function create(startNow: boolean) {
-    if (!plan.configuration) {
-      setValidationError(plan.error ?? "Configuration invalide.");
-      return;
-    }
-    setValidationError(null);
-    const result = await control.createPaperTest({
-      name: testName.trim(),
-      prompt: prompt.trim(),
-      configuration: plan.configuration,
-      startNow,
-    });
-    if (result) onCreated();
-  }
+  const marketModeHint = marketSelectionMode === "AUTOMATIC_AI"
+    ? "La paire saisie sert de bootstrap/fallback. L’Agent peut découvrir d’autres marchés admissibles ; elle n’est pas une obligation de trader cet actif."
+    : "L’Agent conserve BUY / SELL / HOLD mais ne travaille que dans la liste autorisée ci-dessous.";
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6 sm:px-6 xl:px-8">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Nouveau test PAPER</p>
-        <h2 className="mt-1 text-2xl font-semibold tracking-tight">Configurer en quelques étapes</h2>
-        <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-          Le cockpit crée les objets techniques nécessaires en arrière-plan. Le Risk Engine backend reste l’autorité finale sur chaque ordre.
-        </p>
+    <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-6 px-4 py-6 sm:px-6 xl:px-8">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">Sessions · PAPER</p>
+          <h2 className="mt-1 text-3xl font-semibold tracking-tight">
+            {editing ? "Modifier la Session" : "Nouvelle Session"}
+          </h2>
+          <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+            Les choix essentiels sont visibles immédiatement. La configuration avancée expose les valeurs réellement envoyées au backend.
+          </p>
+        </div>
+        {editing ? <Badge tone={runningEdit ? "warning" : "info"}>{runningEdit ? "En cours · arrêter avant modification" : "Édition versionnée"}</Badge> : null}
       </div>
 
-      <div className="grid grid-cols-5 gap-2" aria-label="Progression de la configuration">
-        {STEP_LABELS.map((label, index) => {
-          const number = index + 1;
-          const active = number === step;
-          const done = number < step;
-          return (
-            <button
-              key={label}
-              type="button"
-              onClick={() => setStep(number as WizardStep)}
-              className={cn(
-                "rounded-lg border px-2 py-2 text-center text-[11px] transition sm:text-xs",
-                active && "border-foreground bg-foreground text-background",
-                done && !active && "bg-muted/60",
-              )}
-            >
-              <span className="hidden sm:inline">{number} · </span>{label}
-            </button>
-          );
-        })}
-      </div>
+      {runningEdit ? (
+        <Card className="border-warning/35 bg-warning-subtle shadow-none">
+          <CardContent className="py-4 text-sm text-warning-foreground">
+            Cette Session est en cours. Le backend refuse toute mutation silencieuse : arrête-la depuis Sessions avant d’enregistrer une nouvelle version.
+          </CardContent>
+        </Card>
+      ) : null}
 
-      <Card className="shadow-none">
-        {step === 1 ? (
-          <>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><Waves className="size-4" /> Quel marché tester ?</CardTitle>
-              <CardDescription>Choisis le type de marché et une paire de départ/secours. Le backend découvrira ensuite périodiquement les marchés Kraken admissibles et le même Agent IA construira la watchlist.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <ChoiceCard active={marketType === "SPOT"} title="SPOT" detail="Achat et vente d’actifs détenus. Aucun short, aucun levier." onClick={() => setMarketType("SPOT")} />
-                <ChoiceCard active={marketType === "PERPETUAL"} title="PERPETUAL" detail="Contrats linéaires PAPER, LONG/SHORT, marge isolée et limites de levier imposées par Risk." onClick={() => setMarketType("PERPETUAL")} />
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Sparkles className="size-4" /> Configuration simple</CardTitle>
+          <CardDescription>Nom, capital, marché, sélection, IA, agressivité, Risk et instructions opérateur.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <Field label="Nom de la Session">
+            <input className={inputClass} value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex. Test SPOT IA" />
+          </Field>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Type de marché</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <ChoiceCard active={marketType === "SPOT"} title="SPOT" detail="Achat/vente au comptant, sans short ni levier." onClick={() => setMarketType("SPOT")} />
+                <ChoiceCard active={marketType === "PERPETUAL"} title="PERPETUAL" detail="Contrats PAPER selon les capacités intégrées et caps Risk." onClick={() => setMarketType("PERPETUAL")} />
               </div>
-              <Field label="Paire de départ / secours" hint="Tu n’as plus besoin de renseigner toute la watchlist. Cette paire sert de bootstrap et de repli si Kraken ou l’IA de découverte est indisponible.">
-                <input className={inputClass} value={pairs} onChange={(event) => setPairs(event.target.value)} placeholder="BTC/USD" />
-              </Field>
-            </CardContent>
-          </>
-        ) : null}
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Sélection des marchés</p>
+              <div className="grid gap-2">
+                <ChoiceCard active={marketSelectionMode === "AUTOMATIC_AI"} title="Automatique — laisser l’IA chercher les opportunités" detail="Discovery Kraken filtrée puis watchlist sélectionnée par le même Agent IA." onClick={() => setMarketSelectionMode("AUTOMATIC_AI")} />
+                <ChoiceCard active={marketSelectionMode === "MANUAL"} title="Manuel — choisir les marchés" detail="Univers explicite fourni par l’opérateur ; aucune discovery dynamique." onClick={() => setMarketSelectionMode("MANUAL")} />
+              </div>
+            </div>
+          </div>
 
-        {step === 2 ? (
-          <>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><CircleDollarSign className="size-4" /> Quel capital PAPER ?</CardTitle>
-              <CardDescription>Capital simulé uniquement. LIVE reste indisponible.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="mx-auto max-w-lg">
-                <Field label="Capital initial" hint="Le profil Risk simple convertira ensuite ce capital en limites explicites de notional et d’exposition.">
-                  <input className={inputClass} inputMode="decimal" value={capital} onChange={(event) => setCapital(event.target.value)} placeholder="1000" />
+          <Field label={marketSelectionMode === "AUTOMATIC_AI" ? "Paire bootstrap / fallback" : "Marchés autorisés"} hint={marketModeHint}>
+            <textarea className={textareaClass} value={pairs} onChange={(event) => setPairs(event.target.value)} placeholder={marketSelectionMode === "MANUAL" ? "BTC/USD\nETH/USD\nSOL/USD" : "BTC/USD"} />
+          </Field>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <Field label="Capital PAPER">
+              <div className="relative"><CircleDollarSign className="absolute left-3 top-3.5 size-4 text-muted-foreground" /><input className={`${inputClass} pl-9`} value={capital} onChange={(event) => setCapital(event.target.value)} inputMode="decimal" /></div>
+            </Field>
+            <Field label="Modèle IA">
+              <select className={inputClass} value={model} onChange={(event) => setModel(event.target.value as LlmModel)}>
+                <option value="gpt-5.6-luna">Luna</option>
+                <option value="gpt-5.6-sol">Sol</option>
+              </select>
+            </Field>
+          </div>
+
+          <Field label={`Agressivité · ${aggressiveness}/10`} hint="Ce paramètre contextualise l’Agent ; le Risk Engine déterministe garde l’autorité finale.">
+            <input type="range" min={1} max={10} value={aggressiveness} onChange={(event) => setAggressiveness(Number(event.target.value))} className="w-full" />
+          </Field>
+
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Profil Risk</p>
+            <div className="grid gap-2 md:grid-cols-4">
+              {(Object.keys(PROFILE_COPY) as Array<Exclude<SessionRiskProfile, "custom">>).map((profile) => (
+                <ChoiceCard key={profile} active={riskProfile === profile} title={PROFILE_COPY[profile].label} detail={PROFILE_COPY[profile].detail} onClick={() => setRiskProfile(profile)} />
+              ))}
+              <ChoiceCard active={riskProfile === "custom"} title="Personnalisé" detail="Utilise exactement les caps saisis dans Configuration avancée." onClick={() => setRiskProfile("custom")} />
+            </div>
+          </div>
+
+          <Field label="Instructions IA / opérateur" hint="Elles complètent le contrat Agent protégé. Toute modification crée une nouvelle version des instructions sans écraser l’historique.">
+            <textarea className={textareaClass} value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+          </Field>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="cursor-pointer" onClick={() => setAdvancedOpen((value) => !value)}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <CardTitle className="flex items-center gap-2"><Settings2 className="size-4" /> Configuration avancée</CardTitle>
+              <CardDescription className="mt-1">Cadence, coûts PAPER, timeouts, caps Risk et paramètres Market Discovery.</CardDescription>
+            </div>
+            <Badge tone="neutral">{advancedOpen ? "Masquer" : "Afficher"}</Badge>
+          </div>
+        </CardHeader>
+        {advancedOpen ? (
+          <CardContent className="space-y-7 border-t pt-6">
+            <section className="space-y-4">
+              <div><h3 className="font-semibold">Runtime & coûts PAPER</h3><p className="text-xs text-muted-foreground">Valeurs effectivement persistées dans la prochaine version de configuration.</p></div>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <Field label="Cadence stratégique (s)"><input className={inputClass} value={cadence} onChange={(e) => setCadence(e.target.value)} /></Field>
+                <Field label="Frais PAPER"><input className={inputClass} value={feeRate} onChange={(e) => setFeeRate(e.target.value)} /></Field>
+                <Field label="Spread (bps)"><input className={inputClass} value={spreadBps} onChange={(e) => setSpreadBps(e.target.value)} /></Field>
+                <Field label="Slippage (bps)"><input className={inputClass} value={slippageBps} onChange={(e) => setSlippageBps(e.target.value)} /></Field>
+              </div>
+              <div className="grid gap-4 md:grid-cols-3">
+                <Field label="Timeout marché (s)"><input className={inputClass} value={marketTimeout} onChange={(e) => setMarketTimeout(e.target.value)} /></Field>
+                <Field label="Timeout Agent (s)"><input className={inputClass} value={agentTimeout} onChange={(e) => setAgentTimeout(e.target.value)} /></Field>
+                <Field label="Timeout Broker (s)"><input className={inputClass} value={brokerTimeout} onChange={(e) => setBrokerTimeout(e.target.value)} /></Field>
+              </div>
+            </section>
+
+            <section className="space-y-4 border-t pt-6">
+              <div><h3 className="flex items-center gap-2 font-semibold"><ShieldCheck className="size-4" /> Risk personnalisé</h3><p className="text-xs text-muted-foreground">Ces champs sont appliqués directement lorsque le profil « Personnalisé » est sélectionné.</p></div>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <Field label="Max notional / ordre"><input className={inputClass} value={customMaxOrder} onChange={(e) => setCustomMaxOrder(e.target.value)} /></Field>
+                <Field label="Levier PAPER"><input className={inputClass} value={customLeverage} onChange={(e) => setCustomLeverage(e.target.value)} disabled={marketType !== "PERPETUAL"} /></Field>
+                <Field label="Levier Risk max"><input className={inputClass} value={customMaxLeverage} onChange={(e) => setCustomMaxLeverage(e.target.value)} disabled={marketType !== "PERPETUAL"} /></Field>
+                <Field label="Notional position dérivée max"><input className={inputClass} value={customPositionNotional} onChange={(e) => setCustomPositionNotional(e.target.value)} disabled={marketType !== "PERPETUAL"} /></Field>
+                <Field label="Exposition dérivée totale max"><input className={inputClass} value={customTotalExposure} onChange={(e) => setCustomTotalExposure(e.target.value)} disabled={marketType !== "PERPETUAL"} /></Field>
+                <Field label="Buffer liquidation"><input className={inputClass} value={customLiquidationBuffer} onChange={(e) => setCustomLiquidationBuffer(e.target.value)} /></Field>
+              </div>
+              {marketSelectionMode === "AUTOMATIC_AI" ? (
+                <Field label="Whitelist Risk optionnelle" hint="Vide = la discovery dynamique n’est pas réduite à une whitelist statique. Si renseignée, les paires bootstrap doivent y appartenir.">
+                  <textarea className={textareaClass} value={customAllowedPairs} onChange={(e) => setCustomAllowedPairs(e.target.value)} placeholder="BTC/USD\nETH/USD" />
                 </Field>
-              </div>
-            </CardContent>
-          </>
-        ) : null}
+              ) : (
+                <p className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">En mode Manuel, la whitelist Risk est automatiquement alignée sur la liste des marchés autorisés.</p>
+              )}
+            </section>
 
-        {step === 3 ? (
-          <>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><Bot className="size-4" /> Comment l’IA doit-elle travailler ?</CardTitle>
-              <CardDescription>Le même Agent sélectionne périodiquement une watchlist, puis propose BUY, SELL ou HOLD dans les cycles. Risk reste l’autorité finale.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <ChoiceCard active={model === "gpt-5.6-luna"} title="GPT-5.6 Luna" detail="Modèle rapide pour les premiers tests et itérations." onClick={() => setModel("gpt-5.6-luna")} />
-                <ChoiceCard active={model === "gpt-5.6-sol"} title="GPT-5.6 Sol" detail="Modèle plus capable, sélectionnable explicitement pour comparer les comportements." onClick={() => setModel("gpt-5.6-sol")} />
-              </div>
-              <Field label={`Agressivité : ${aggressiveness}/10`} hint="Ce contexte influence la stratégie de l’Agent. Il ne relève jamais les limites du Risk Engine.">
-                <input type="range" min={1} max={10} step={1} value={aggressiveness} onChange={(event) => setAggressiveness(Number(event.target.value))} className="w-full accent-foreground" />
-              </Field>
-              <Field label="Instructions opérateur" hint="Décris ici le comportement stratégique souhaité. Aucun secret ou clé API ne doit être placé dans ce texte.">
-                <textarea className={textareaClass} value={prompt} onChange={(event) => setPrompt(event.target.value)} />
-              </Field>
-            </CardContent>
-          </>
-        ) : null}
-
-        {step === 4 ? (
-          <>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><ShieldCheck className="size-4" /> Quel niveau de sécurité ?</CardTitle>
-              <CardDescription>Ces profils sont uniquement des raccourcis UX vers les champs canoniques de CampaignConfiguration. Ils ne remplacent jamais Risk.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <div className="grid gap-3 lg:grid-cols-4">
-                {(Object.keys(PROFILE_COPY) as Array<Exclude<RiskProfile, "custom">>).map((profile) => (
-                  <ChoiceCard key={profile} active={riskProfile === profile} title={PROFILE_COPY[profile].label} detail={PROFILE_COPY[profile].detail} onClick={() => setRiskProfile(profile)} />
-                ))}
-                <ChoiceCard active={riskProfile === "custom"} title="Personnalisé" detail="Expose les limites Risk et paramètres PAPER avancés sans les déplacer dans le frontend." onClick={() => { setRiskProfile("custom"); setAdvancedOpen(true); }} />
-              </div>
-
-              <details open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)} className="rounded-xl border bg-muted/20">
-                <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-semibold marker:hidden">
-                  <Settings2 className="size-4" /> Paramètres avancés
-                </summary>
-                <div className="grid gap-4 border-t p-4 sm:grid-cols-2 lg:grid-cols-3">
-                  <Field label="Cadence (secondes)"><input className={inputClass} inputMode="decimal" value={cadence} onChange={(e) => setCadence(e.target.value)} /></Field>
-                  <Field label="Frais PAPER"><input className={inputClass} inputMode="decimal" value={feeRate} onChange={(e) => setFeeRate(e.target.value)} /></Field>
-                  <Field label="Spread (bps)"><input className={inputClass} inputMode="decimal" value={spreadBps} onChange={(e) => setSpreadBps(e.target.value)} /></Field>
-                  <Field label="Slippage (bps)"><input className={inputClass} inputMode="decimal" value={slippageBps} onChange={(e) => setSlippageBps(e.target.value)} /></Field>
-                  <Field label="Timeout marché (s)"><input className={inputClass} inputMode="decimal" value={marketTimeout} onChange={(e) => setMarketTimeout(e.target.value)} /></Field>
-                  <Field label="Timeout Agent (s)"><input className={inputClass} inputMode="decimal" value={agentTimeout} onChange={(e) => setAgentTimeout(e.target.value)} /></Field>
-                  <Field label="Timeout Broker (s)"><input className={inputClass} inputMode="decimal" value={brokerTimeout} onChange={(e) => setBrokerTimeout(e.target.value)} /></Field>
-                  {riskProfile === "custom" ? (
-                    <>
-                      <Field label="Ordre max (notional)"><input className={inputClass} value={customMaxOrder} onChange={(e) => setCustomMaxOrder(e.target.value)} /></Field>
-                      <Field label="Whitelist Risk optionnelle" hint="Vide = la découverte Kraken reste autorisée dans le type de marché et l’actif de règlement configurés. Une liste non vide devient un garde-fou supplémentaire et doit inclure la paire de départ."><input className={inputClass} value={customAllowedPairs} onChange={(e) => setCustomAllowedPairs(e.target.value)} placeholder="BTC/USD, ETH/USD" /></Field>
-                      {marketType === "PERPETUAL" ? (
-                        <>
-                          <Field label="Levier PAPER"><input className={inputClass} value={customLeverage} onChange={(e) => setCustomLeverage(e.target.value)} /></Field>
-                          <Field label="Levier Risk max"><input className={inputClass} value={customMaxLeverage} onChange={(e) => setCustomMaxLeverage(e.target.value)} /></Field>
-                          <Field label="Position dérivée max"><input className={inputClass} value={customPositionNotional} onChange={(e) => setCustomPositionNotional(e.target.value)} /></Field>
-                          <Field label="Exposition dérivée totale max"><input className={inputClass} value={customTotalExposure} onChange={(e) => setCustomTotalExposure(e.target.value)} /></Field>
-                          <Field label="Buffer liquidation"><input className={inputClass} value={customLiquidationBuffer} onChange={(e) => setCustomLiquidationBuffer(e.target.value)} /></Field>
-                        </>
-                      ) : null}
-                    </>
-                  ) : null}
+            {marketSelectionMode === "AUTOMATIC_AI" ? (
+              <section className="space-y-4 border-t pt-6">
+                <div><h3 className="flex items-center gap-2 font-semibold"><Waves className="size-4" /> Market Discovery</h3><p className="text-xs text-muted-foreground">Defaults canoniques v1 préremplis ; l’Agent reste responsable de la sélection de watchlist parmi les candidats admissibles.</p></div>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  <Field label="Catalog refresh (s)"><input className={inputClass} value={catalogRefresh} onChange={(e) => setCatalogRefresh(e.target.value)} /></Field>
+                  <Field label="Watchlist refresh (s)"><input className={inputClass} value={watchlistRefresh} onChange={(e) => setWatchlistRefresh(e.target.value)} /></Field>
+                  <Field label="Refresh timeout (s)"><input className={inputClass} value={refreshTimeout} onChange={(e) => setRefreshTimeout(e.target.value)} /></Field>
+                  <Field label="Candidate probe limit"><input className={inputClass} value={candidateProbeLimit} onChange={(e) => setCandidateProbeLimit(e.target.value)} /></Field>
+                  <Field label="Candidate limit"><input className={inputClass} value={candidateLimit} onChange={(e) => setCandidateLimit(e.target.value)} /></Field>
+                  <Field label="Watchlist limit"><input className={inputClass} value={watchlistLimit} onChange={(e) => setWatchlistLimit(e.target.value)} /></Field>
+                  <Field label="Max snapshot age (s)"><input className={inputClass} value={maxSnapshotAge} onChange={(e) => setMaxSnapshotAge(e.target.value)} /></Field>
+                  <Field label="Min window observations"><input className={inputClass} value={minWindowObservations} onChange={(e) => setMinWindowObservations(e.target.value)} /></Field>
+                  <label className="flex items-center gap-3 rounded-lg border bg-muted/20 px-3 py-3 text-sm"><input type="checkbox" checked={requireCompleteWindow} onChange={(e) => setRequireCompleteWindow(e.target.checked)} /><span><strong>Require complete window</strong><span className="block text-xs text-muted-foreground">Refuse les candidats dont la fenêtre d’observations est incomplète.</span></span></label>
                 </div>
-              </details>
-            </CardContent>
-          </>
-        ) : null}
-
-        {step === 5 ? (
-          <>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><Sparkles className="size-4" /> Vérifier puis créer</CardTitle>
-              <CardDescription>Aucun ordre Kraken n’est envoyé à cette étape. La création reste exclusivement PAPER.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <Field label="Nom de la configuration de test"><input className={inputClass} value={testName} onChange={(event) => setTestName(event.target.value)} /></Field>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded-xl border p-4"><p className="text-xs text-muted-foreground">Marché</p><p className="mt-1 font-semibold">{marketType}</p><p className="mt-1 text-xs text-muted-foreground">Découverte auto · secours {pairs}</p></div>
-                <div className="rounded-xl border p-4"><p className="text-xs text-muted-foreground">Capital</p><p className="mt-1 font-semibold">{capital}</p><p className="mt-1 text-xs text-muted-foreground">PAPER</p></div>
-                <div className="rounded-xl border p-4"><p className="text-xs text-muted-foreground">IA</p><p className="mt-1 font-semibold">{model.replace("gpt-5.6-", "")}</p><p className="mt-1 text-xs text-muted-foreground">Agressivité {aggressiveness}/10</p></div>
-                <div className="rounded-xl border p-4"><p className="text-xs text-muted-foreground">Risk</p><p className="mt-1 font-semibold">{riskProfile === "custom" ? "Personnalisé" : PROFILE_COPY[riskProfile].label}</p><p className="mt-1 text-xs text-muted-foreground">Backend autoritaire</p></div>
-              </div>
-              <div className="rounded-xl border bg-muted/20 p-4 text-sm">
-                <p className="font-semibold">Découverte + pipeline canonique</p>
-                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Kraken → présélection factuelle → watchlist du même Agent IA → cycle BUY/SELL/HOLD → Risk Engine déterministe → Broker PAPER. Une sélection de watchlist ne déclenche jamais directement une exécution.</p>
-              </div>
-              {plan.configuration ? (
-                <details className="rounded-xl border px-4 py-3 text-xs">
-                  <summary className="cursor-pointer font-semibold">Voir les valeurs canoniques envoyées au backend</summary>
-                  <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-muted p-3 font-mono text-[11px] leading-relaxed">{JSON.stringify(plan.configuration, null, 2)}</pre>
-                </details>
-              ) : null}
-              {control.engine?.status === "RUNNING" ? (
-                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
-                  Une session est déjà en cours. Tu peux créer la configuration maintenant, mais il faut arrêter la session active avant de la démarrer.
-                </p>
-              ) : null}
-              <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
-                <Button variant="outline" onClick={() => void create(false)} disabled={busy || !plan.configuration}>
-                  <Save className="size-4" /> Créer le test
-                </Button>
-                <Button onClick={() => void create(true)} disabled={busy || !plan.configuration || control.engine?.status === "RUNNING"}>
-                  <Play className="size-4" /> Créer et démarrer
-                </Button>
-              </div>
-            </CardContent>
-          </>
+              </section>
+            ) : null}
+          </CardContent>
         ) : null}
       </Card>
 
-      {(validationError || (step === 5 && plan.error)) ? (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200">
-          {validationError ?? plan.error}
+      {(validationError || configurationResult.error) ? (
+        <div className="rounded-lg border border-destructive/30 bg-destructive-subtle p-3 text-sm text-destructive-subtle-foreground">
+          {validationError ?? configurationResult.error}
         </div>
       ) : null}
 
-      <div className="flex items-center justify-between gap-3">
-        <Button variant="outline" onClick={() => setStep((current) => Math.max(1, current - 1) as WizardStep)} disabled={step === 1 || busy}>
-          <ChevronLeft className="size-4" /> Retour
-        </Button>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Badge tone="info">PAPER</Badge>
-          <span>Étape {step}/5</span>
-        </div>
-        <Button onClick={nextStep} disabled={step === 5 || busy}>
-          Continuer <ChevronRight className="size-4" />
-        </Button>
-      </div>
+      <Card className="border-primary/25 bg-primary/5">
+        <CardContent className="flex flex-col gap-4 py-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="flex items-center gap-2 font-semibold"><Bot className="size-4" /> {editing ? "Enregistrer une nouvelle version" : "Créer la Session"}</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              {editing
+                ? "Le nom peut être modifié directement ; prompt et configuration créent de nouveaux faits immuables uniquement lorsqu’ils changent."
+                : "La création backend est atomique : aucune configuration partielle n’est conservée en cas d’échec de persistance."}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {onCancel ? <Button variant="outline" onClick={onCancel} disabled={busy}>Annuler</Button> : null}
+            <Button variant="outline" onClick={() => void submit(false)} disabled={busy || runningEdit || !configurationResult.configuration}>
+              <Save className="size-4" /> {editing ? "Enregistrer" : "Créer"}
+            </Button>
+            {!editing ? (
+              <Button onClick={() => void submit(true)} disabled={busy || !configurationResult.configuration}>
+                <Play className="size-4" /> Créer et démarrer
+              </Button>
+            ) : null}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

@@ -158,6 +158,25 @@ class CampaignRuntimeManager:
             self._active_campaign_id = campaign_id
             return composition.runtime.engine_snapshot()
 
+    async def deactivate_campaign(self, campaign_id: UUID) -> EngineRuntimeSnapshot:
+        """Stop and close the active Campaign runtime, ending its PAPER run durably."""
+
+        async with self._command_lock:
+            if self._active is None or self._active_campaign_id is None:
+                raise CampaignActivationConflictError("no campaign is active")
+            if self._active_campaign_id != campaign_id:
+                raise CampaignActivationConflictError("another campaign is active")
+
+            active = self._active
+            try:
+                if active.trading_engine.is_running:
+                    await active.runtime.stop_engine()
+                await active.runtime.close()
+            finally:
+                self._active = None
+                self._active_campaign_id = None
+            return EngineRuntimeSnapshot(configured=False, status="UNAVAILABLE")
+
     async def close(self) -> None:
         async with self._command_lock:
             try:

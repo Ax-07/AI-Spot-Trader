@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types src/lib/market-candles.test.mjs"
+    "test": "node --test --experimental-strip-types src/lib/market-candles.test.mjs src/lib/session-config.test.mjs"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

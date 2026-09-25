@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from difflib import unified_diff
 from typing import Protocol
 from uuid import UUID, uuid4
@@ -89,6 +89,15 @@ class CampaignView:
     experiment_digest: str
 
 
+@dataclass(frozen=True, slots=True)
+class SessionBundleView:
+    """Atomic persistence result backing the user-facing Session façade."""
+
+    strategy: StrategyView
+    revision: StrategyRevisionView
+    campaign: CampaignView
+
+
 class ControlPlaneStore(Protocol):
     async def create_strategy(
         self, *, name: str, strategy_prompt: str
@@ -121,6 +130,27 @@ class ControlPlaneStore(Protocol):
 
     async def list_campaigns(self) -> tuple[CampaignView, ...]: ...
     async def get_campaign(self, campaign_id: UUID) -> CampaignView | None: ...
+
+    async def latest_campaign_for_strategy(
+        self, strategy_id: UUID
+    ) -> CampaignView | None: ...
+
+    async def create_session_bundle(
+        self,
+        *,
+        name: str,
+        strategy_prompt: str,
+        configuration: CampaignConfiguration,
+    ) -> SessionBundleView: ...
+
+    async def update_session_bundle(
+        self,
+        strategy_id: UUID,
+        *,
+        name: str,
+        strategy_prompt: str,
+        configuration: CampaignConfiguration,
+    ) -> SessionBundleView: ...
 
 
 class SqlAlchemyControlPlaneStore:
@@ -358,24 +388,11 @@ class SqlAlchemyControlPlaneStore:
                 )
                 if revision is None:
                     raise ControlPlaneNotFoundError("strategy revision not found")
-                experiment_digest = campaign_identity_digest(
+                record = _new_campaign_record(
                     strategy_id=strategy_id,
-                    strategy_revision=strategy_revision,
-                    strategy_prompt_digest_value=revision.strategy_prompt_digest,
-                    base_agent_contract_version=revision.base_agent_contract_version,
-                    configuration_digest=configuration.digest,
-                )
-                record = CampaignRecord(
-                    campaign_id=uuid4(),
+                    revision=revision,
+                    configuration=configuration,
                     created_at=now,
-                    strategy_id=strategy_id,
-                    strategy_revision=strategy_revision,
-                    strategy_prompt_digest=revision.strategy_prompt_digest,
-                    base_agent_contract_version=revision.base_agent_contract_version,
-                    configuration_payload=configuration.canonical_payload(),
-                    configuration_digest=configuration.digest,
-                    experiment_protocol_version=CAMPAIGN_EXPERIMENT_PROTOCOL_VERSION,
-                    experiment_digest=experiment_digest,
                 )
                 session.add(record)
                 await session.flush()
@@ -409,6 +426,201 @@ class SqlAlchemyControlPlaneStore:
                 return None if record is None else _campaign_view(record)
         except (SQLAlchemyError, OSError, TimeoutError, ValueError) as exc:
             raise ControlPlaneUnavailableError("control-plane store unavailable") from exc
+
+    async def latest_campaign_for_strategy(
+        self, strategy_id: UUID
+    ) -> CampaignView | None:
+        try:
+            async with self._sessions() as session:
+                record = await session.scalar(
+                    select(CampaignRecord)
+                    .where(CampaignRecord.strategy_id == strategy_id)
+                    .order_by(
+                        CampaignRecord.created_at.desc(),
+                        CampaignRecord.campaign_id.desc(),
+                    )
+                    .limit(1)
+                )
+                return None if record is None else _campaign_view(record)
+        except (SQLAlchemyError, OSError, TimeoutError, ValueError) as exc:
+            raise ControlPlaneUnavailableError("control-plane store unavailable") from exc
+
+    async def create_session_bundle(
+        self,
+        *,
+        name: str,
+        strategy_prompt: str,
+        configuration: CampaignConfiguration,
+    ) -> SessionBundleView:
+        """Persist Strategy + revision 1 + Campaign atomically for the Session façade."""
+
+        normalized_name = _name(name)
+        prompt = normalize_strategy_prompt(strategy_prompt)
+        now = _clock_utc(self._clock)
+        strategy_id = uuid4()
+        strategy = StrategyRecord(
+            strategy_id=strategy_id,
+            strategy_name=normalized_name,
+            created_at=now,
+            archived_at=None,
+        )
+        revision = StrategyRevisionRecord(
+            strategy_id=strategy_id,
+            strategy_revision=1,
+            strategy_prompt=prompt,
+            strategy_prompt_digest=strategy_prompt_digest(prompt),
+            base_agent_contract_version=BASE_AGENT_CONTRACT_VERSION,
+            created_at=now,
+        )
+        campaign = _new_campaign_record(
+            strategy_id=strategy_id,
+            revision=revision,
+            configuration=configuration,
+            created_at=now,
+        )
+        try:
+            async with self._sessions() as session, session.begin():
+                session.add(strategy)
+                session.add(revision)
+                session.add(campaign)
+                await session.flush()
+            return SessionBundleView(
+                strategy=_strategy_view(strategy, latest_revision=1),
+                revision=_revision_view(revision),
+                campaign=_campaign_view(campaign),
+            )
+        except IntegrityError as exc:
+            raise ControlPlaneConflictError("session creation conflicted") from exc
+        except (SQLAlchemyError, OSError, TimeoutError) as exc:
+            raise ControlPlaneUnavailableError("control-plane store unavailable") from exc
+
+    async def update_session_bundle(
+        self,
+        strategy_id: UUID,
+        *,
+        name: str,
+        strategy_prompt: str,
+        configuration: CampaignConfiguration,
+    ) -> SessionBundleView:
+        """Apply a Session edit without mutating historical revisions or Campaigns."""
+
+        normalized_name = _name(name)
+        prompt = normalize_strategy_prompt(strategy_prompt)
+        now = _clock_utc(self._clock)
+        try:
+            async with self._sessions() as session, session.begin():
+                strategy = await session.get(StrategyRecord, strategy_id, with_for_update=True)
+                if strategy is None:
+                    raise ControlPlaneNotFoundError("session not found")
+                if strategy.archived_at is not None:
+                    raise ControlPlaneConflictError("archived session cannot be modified")
+
+                campaign = await session.scalar(
+                    select(CampaignRecord)
+                    .where(CampaignRecord.strategy_id == strategy_id)
+                    .order_by(
+                        CampaignRecord.created_at.desc(),
+                        CampaignRecord.campaign_id.desc(),
+                    )
+                    .limit(1)
+                    .with_for_update()
+                )
+                if campaign is None:
+                    raise ControlPlaneNotFoundError("session campaign not found")
+                # Keep the newest Campaign ordering deterministic even with fixed/coarse clocks.
+                if now <= _utc(campaign.created_at):
+                    now = _utc(campaign.created_at) + timedelta(microseconds=1)
+                current_revision = await session.get(
+                    StrategyRevisionRecord,
+                    {
+                        "strategy_id": strategy_id,
+                        "strategy_revision": campaign.strategy_revision,
+                    },
+                )
+                if current_revision is None:
+                    raise ControlPlaneUnavailableError(
+                        "session campaign strategy revision is unavailable"
+                    )
+
+                strategy.strategy_name = normalized_name
+                requested_prompt_digest = strategy_prompt_digest(prompt)
+                prompt_changed = requested_prompt_digest != current_revision.strategy_prompt_digest
+                configuration_changed = configuration.digest != campaign.configuration_digest
+
+                target_revision = current_revision
+                if prompt_changed:
+                    latest = await session.scalar(
+                        select(func.max(StrategyRevisionRecord.strategy_revision)).where(
+                            StrategyRevisionRecord.strategy_id == strategy_id
+                        )
+                    )
+                    target_revision = StrategyRevisionRecord(
+                        strategy_id=strategy_id,
+                        strategy_revision=int(latest or 0) + 1,
+                        strategy_prompt=prompt,
+                        strategy_prompt_digest=requested_prompt_digest,
+                        base_agent_contract_version=BASE_AGENT_CONTRACT_VERSION,
+                        created_at=now,
+                    )
+                    session.add(target_revision)
+                    await session.flush()
+
+                target_campaign = campaign
+                if prompt_changed or configuration_changed:
+                    target_campaign = _new_campaign_record(
+                        strategy_id=strategy_id,
+                        revision=target_revision,
+                        configuration=configuration,
+                        created_at=now,
+                    )
+                    session.add(target_campaign)
+                    await session.flush()
+
+                latest_revision = await session.scalar(
+                    select(func.max(StrategyRevisionRecord.strategy_revision)).where(
+                        StrategyRevisionRecord.strategy_id == strategy_id
+                    )
+                )
+                await session.flush()
+                return SessionBundleView(
+                    strategy=_strategy_view(strategy, latest_revision=latest_revision),
+                    revision=_revision_view(target_revision),
+                    campaign=_campaign_view(target_campaign),
+                )
+        except (ControlPlaneNotFoundError, ControlPlaneConflictError, ControlPlaneUnavailableError):
+            raise
+        except IntegrityError as exc:
+            raise ControlPlaneConflictError("session update conflicted") from exc
+        except (SQLAlchemyError, OSError, TimeoutError, ValueError) as exc:
+            raise ControlPlaneUnavailableError("control-plane store unavailable") from exc
+
+
+def _new_campaign_record(
+    *,
+    strategy_id: UUID,
+    revision: StrategyRevisionRecord,
+    configuration: CampaignConfiguration,
+    created_at: datetime,
+) -> CampaignRecord:
+    experiment_digest = campaign_identity_digest(
+        strategy_id=strategy_id,
+        strategy_revision=revision.strategy_revision,
+        strategy_prompt_digest_value=revision.strategy_prompt_digest,
+        base_agent_contract_version=revision.base_agent_contract_version,
+        configuration_digest=configuration.digest,
+    )
+    return CampaignRecord(
+        campaign_id=uuid4(),
+        created_at=created_at,
+        strategy_id=strategy_id,
+        strategy_revision=revision.strategy_revision,
+        strategy_prompt_digest=revision.strategy_prompt_digest,
+        base_agent_contract_version=revision.base_agent_contract_version,
+        configuration_payload=configuration.canonical_payload(),
+        configuration_digest=configuration.digest,
+        experiment_protocol_version=CAMPAIGN_EXPERIMENT_PROTOCOL_VERSION,
+        experiment_digest=experiment_digest,
+    )
 
 
 def _campaign_view(record: CampaignRecord) -> CampaignView:

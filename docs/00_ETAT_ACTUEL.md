@@ -6,73 +6,57 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub réel vérifié après le push du Batch 19.7 :
-  `9dcaf028de81b68ed357d1e6712fa833626353b9`
-  (`docs: finalize Batch 19.7 integration state`).
-- Référence fonctionnelle intégrée du Batch 19.6A :
-  `3c53af3bdb1ef53c574e26afe9b6178a374d9f06`
-  (`feat: add backend candle cache and streaming`).
-- Référence fonctionnelle intégrée du Batch 19.6B :
-  `a446628918a614d2ae0ac3b55243881aad5ef410`
-  (`feat: add cockpit market charts and trade markers`).
-- Le commit `2d51cb68` reste la synchronisation documentaire post-19.6B ; le Batch 19.7 a ensuite été poussé sur GitHub `main`.
-- Batch 19.7 : **intégré sur GitHub `main`**.
+- HEAD GitHub réel vérifié au démarrage du Batch 19.8 :
+  `130429eca6c7c8385c1caf4b2eb2870bef61ec3e`
+  (`docs: sync Batch 19.7 post-push state`).
 - Référence fonctionnelle intégrée Batch 19.7 :
   `8b969b434916d89f6b6aa127c3bac9c27e990966`
   (`feat: add canonical position overlays to market charts`).
+- Le Batch 19.8 est un **patch proposé localement**, non intégré à GitHub tant que l'opérateur ne l'a pas validé et poussé.
 
-## État fonctionnel
+## État fonctionnel intégré avant 19.8
 
 - un seul Agent IA stratégique ; Kraken ; PAPER uniquement ; SPOT + PERPETUAL linéaire ;
 - Risk Engine déterministe = autorité finale ; aucune sortie LLM ne déclenche directement un ordre ;
-- `NORMAL` / `MANAGEMENT`, discovery dynamique et watchlist auditée sont intégrés ;
-- explicabilité 19.5 : contexte/discovery, sélection marché, Agent, Risk et exécution PAPER depuis les faits persistés ;
-- backend candles 19.6A : historique, cache process-local borné, recovery et WebSocket cockpit partagé ;
-- frontend 19.6B : vue Marchés, Lightweight Charts, timeframes backend, cache client borné, reconnexion et markers issus uniquement des fills persistés ;
-- aucune connexion frontend directe à Kraken, aucun calcul Risk/P&L stratégique parallèle et aucune causalité inventée.
+- comptabilité/mark-to-market backend, modes `NORMAL` / `MANAGEMENT`, discovery dynamique et watchlist auditée ;
+- explicabilité Agent/Risk/exécution, candles backend, streaming cockpit, vue Marchés et overlays de position canoniques ;
+- frontend = cockpit uniquement ; fermer le frontend n'arrête pas le moteur backend.
 
-## Batch 19.7 — validation intégrée
+## Batch 19.8 — Sessions v1
 
-Le Batch 19.7 ajoute uniquement des overlays de position sur le chart du marché actif :
+Le patch 19.8 introduit **Session** comme concept principal du parcours utilisateur sans nouvelle table SQL :
 
-- `Prix moyen` depuis `average_entry_price` ;
-- `Mark backend` depuis `mark_price` ;
-- `Liquidation` uniquement pour PERPETUAL et uniquement depuis `liquidation_price` ;
-- aucune valeur absente n'est reconstruite ;
-- aucune formule de P&L, exposition, liquidation ou prix moyen n'est ajoutée au frontend ;
-- les lignes Lightweight Charts sont créées/supprimées proprement lors des changements de marché, de faits portefeuille et de thème ;
-- les niveaux très proches restent des faits distincts, avec labels explicites et alignement des labels d'axe ;
-- les chandeliers, volumes et markers 19.6B restent inchangés.
+```text
+Session UX
+-> Strategy = identité technique stable
+-> StrategyRevision(s) immuables
+-> Campaign(s) immuables/versionnées
+-> paper_run(s) / recovery
+```
 
-Validation opérateur locale communiquée :
+Périmètre proposé :
 
-- `pnpm test` : **17/17 tests passés** ;
-- `pnpm lint` : **passé sans erreur** ;
-- `pnpm typecheck` : **passé** ;
-- `pnpm build` : **passé** ;
-- `git diff --check` : **aucune erreur de whitespace** ; avertissements LF -> CRLF uniquement ;
-- commit fonctionnel intégré : `8b969b434916d89f6b6aa127c3bac9c27e990966` ;
-- clôture documentaire intégrée : `9dcaf028de81b68ed357d1e6712fa833626353b9`.
+- façade backend `/api/v1/sessions` ;
+- création atomique Strategy + révision 1 + Campaign ;
+- listing/détail, modification versionnée, duplication indépendante et archivage logique ;
+- statuts dérivés : `Brouillon`, `Prête`, `En cours`, `Arrêtée`, `À reprendre`, `Archivée` ;
+- start/stop/resume/run-cycle via les mécanismes canoniques ;
+- arrêt de Session = fermeture explicite du runtime actif et du `paper_run` ;
+- navigation `Accueil | Sessions | Marchés | Positions | Historique | Réglages` ;
+- création/édition simple + avancée ;
+- modes marchés `Automatique — IA` et `Manuel` ;
+- contrat TypeScript aligné sur `market_discovery` optionnel et `risk_allowed_pairs` nullable.
 
-Validation ChatGPT préalable sur le patch : test runner Node de `market-candles.test.mjs`, **17/17 tests passés**.
+## Validation du patch 19.8
 
-## Validation intégrée Batch 19.6B
+Exécuté par ChatGPT sur le patch livré :
 
-Validation opérateur locale communiquée :
+- `node --test --experimental-strip-types frontend/src/lib/session-config.test.mjs` : **4/4 tests passés** ;
+- `python -m py_compile` sur les 6 modules backend modifiés/créés et les 2 tests backend ajoutés : **passé** ;
+- transpilation syntaxique TypeScript/TSX des 7 fichiers modifiés/créés : **passée** ;
+- contrôle whitespace du workspace de patch via `git diff --cached --check` : **passé**.
 
-- `pnpm test` : **6/6 tests passés** ;
-- `pnpm lint` : **passé sans erreur ni warning** ;
-- `pnpm typecheck` : **passé** ;
-- `pnpm build` : **passé** ;
-- `git diff --check` : **aucune erreur de whitespace** ; avertissements LF -> CRLF uniquement ;
-- arbre de travail propre après le commit fonctionnel `a446628`.
-
-Le warning Node `MODULE_TYPELESS_PACKAGE_JSON` du test runner reste non bloquant et ne justifie pas à lui seul l'ajout global de `"type": "module"`.
-
-## Prochaine priorité
-
-1. conserver séparées les modifications locales hors Batch 19.7 déjà présentes dans l'arbre de travail ;
-2. au prochain batch, revérifier le HEAD GitHub réel et choisir le prochain chantier fonctionnel à partir de l'état intégré 19.7.
+La suite `pytest` n'a pas été exécutée dans l'environnement ChatGPT car `aiosqlite` n'y est pas installé et le réseau d'installation est indisponible. Les commandes `pnpm test`, `pnpm lint`, `pnpm typecheck` et `pnpm build` restent également à exécuter dans le repository local complet.
 
 ## Règle de reprise
 

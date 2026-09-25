@@ -11,6 +11,7 @@ import type {
   PaperRunPageResponse,
   PromptPreviewPhase,
   PromptPreviewResponse,
+  SessionResponse,
   StrategyResponse,
   StrategyRevisionComparisonResponse,
   StrategyRevisionResponse,
@@ -24,14 +25,17 @@ export type ControlFeedback = {
   status: number | null;
 };
 
-export type PaperTestCreationRequest = {
+export type SessionCreationRequest = {
   name: string;
   prompt: string;
   configuration: CampaignConfiguration;
   startNow: boolean;
 };
 
+export type PaperTestCreationRequest = SessionCreationRequest;
+
 type ControlPlaneSnapshot = {
+  sessions: SessionResponse[];
   strategies: StrategyResponse[];
   campaigns: CampaignResponse[];
   activeCampaign: CampaignActivationResponse | null;
@@ -60,6 +64,7 @@ function actionFailure(error: unknown, fallback: string): ControlFeedback {
 
 export function useControlPlane() {
   const [snapshot, setSnapshot] = useState<ControlPlaneSnapshot>({
+    sessions: [],
     strategies: [],
     campaigns: [],
     activeCampaign: null,
@@ -85,14 +90,15 @@ export function useControlPlane() {
         if (error instanceof ApiError && error.status === 404) return null;
         throw error;
       });
-      const [strategies, campaigns, activeCampaign, paperRuns, engine] = await Promise.all([
+      const [sessions, strategies, campaigns, activeCampaign, paperRuns, engine] = await Promise.all([
+        api.sessions(),
         api.strategies(),
         api.campaigns(),
         activePromise,
         api.paperRuns(100, 0),
         api.engine(),
       ]);
-      setSnapshot({ strategies, campaigns, activeCampaign, paperRuns, engine });
+      setSnapshot({ sessions, strategies, campaigns, activeCampaign, paperRuns, engine });
       setSelectedStrategyId((current) => {
         if (current && strategies.some((item) => item.strategy_id === current)) return current;
         return (
@@ -190,6 +196,93 @@ export function useControlPlane() {
     [busyAction, refresh],
   );
 
+  const createSession = useCallback(
+    ({ name, prompt, configuration, startNow }: SessionCreationRequest) =>
+      mutate(
+        "create-session",
+        () => api.createSession({ name, instructions: prompt, configuration, start_now: startNow }),
+        startNow
+          ? "Session PAPER créée et démarrée côté backend."
+          : "Session PAPER créée. Elle est prête à être démarrée.",
+        (value) => setSelectedStrategyId(value.session_id),
+      ),
+    [mutate],
+  );
+
+  const updateSession = useCallback(
+    (sessionId: string, request: Omit<SessionCreationRequest, "startNow">) =>
+      mutate(
+        "update-session",
+        () => api.updateSession(sessionId, {
+          name: request.name,
+          instructions: request.prompt,
+          configuration: request.configuration,
+        }),
+        "Session mise à jour sans écraser son historique.",
+      ),
+    [mutate],
+  );
+
+  const duplicateSession = useCallback(
+    (sessionId: string, name?: string) =>
+      mutate(
+        "duplicate-session",
+        () => api.duplicateSession(sessionId, name),
+        "Session dupliquée sans copier son historique d’exécution.",
+      ),
+    [mutate],
+  );
+
+  const archiveSession = useCallback(
+    (sessionId: string) =>
+      mutate(
+        "archive-session",
+        () => api.archiveSession(sessionId),
+        "Session supprimée de la liste courante. Son historique d’audit reste persisté.",
+      ),
+    [mutate],
+  );
+
+  const startSession = useCallback(
+    (sessionId: string) =>
+      mutate(
+        "session-start",
+        () => api.startSession(sessionId),
+        "Session démarrée côté backend.",
+      ),
+    [mutate],
+  );
+
+  const stopSession = useCallback(
+    (sessionId: string) =>
+      mutate(
+        "session-stop",
+        () => api.stopSession(sessionId),
+        "Session arrêtée et PAPER run fermé durablement.",
+      ),
+    [mutate],
+  );
+
+  const resumeSession = useCallback(
+    (sessionId: string) =>
+      mutate(
+        "session-resume",
+        () => api.resumeSession(sessionId),
+        "Session reprise explicitement via le recovery canonique.",
+      ),
+    [mutate],
+  );
+
+  const runSessionCycle = useCallback(
+    (sessionId: string) =>
+      mutate(
+        "session-run-cycle",
+        () => api.runSessionCycle(sessionId),
+        "Un cycle canonique a été exécuté pour cette Session.",
+      ),
+    [mutate],
+  );
+
   const createStrategy = useCallback(
     (strategyName: string, strategyPrompt: string) =>
       mutate(
@@ -264,68 +357,6 @@ export function useControlPlane() {
         "Reprise explicite effectuée via le recovery canonique du backend.",
       ),
     [mutate],
-  );
-
-  const createPaperTest = useCallback(
-    async ({ name, prompt, configuration, startNow }: PaperTestCreationRequest) => {
-      if (busyAction) return null;
-      if (startNow && snapshot.engine?.status === "RUNNING") {
-        setFeedback({
-          tone: "error",
-          status: 409,
-          message: "Arrête la session en cours avant de créer et démarrer une autre configuration. Tu peux toujours utiliser « Créer le test » sans l’activer.",
-        });
-        return null;
-      }
-      setBusyAction("create-paper-test");
-      setFeedback(null);
-      let strategyPersisted = false;
-      let campaignPersisted = false;
-      let sessionActivated = false;
-      try {
-        const created = await api.createStrategy({
-          strategy_name: name,
-          strategy_prompt: prompt,
-        });
-        strategyPersisted = true;
-        setSelectedStrategyId(created.strategy.strategy_id);
-        const campaign = await api.createCampaign({
-          strategy_id: created.strategy.strategy_id,
-          strategy_revision: created.revision.strategy_revision,
-          configuration,
-        });
-        campaignPersisted = true;
-        if (startNow) {
-          await api.activateCampaign(campaign.campaign_id);
-          sessionActivated = true;
-          await api.startEngine();
-        }
-        setFeedback({
-          tone: "success",
-          status: null,
-          message: startNow
-            ? "Configuration PAPER créée et session démarrée côté backend."
-            : "Configuration PAPER créée. Elle est prête à être démarrée.",
-        });
-        await refresh();
-        return campaign;
-      } catch (error) {
-        const failure = actionFailure(error, "Création de la configuration PAPER impossible");
-        const partialState = sessionActivated
-          ? " La session a été activée mais la boucle n’a pas démarré ; elle reste contrôlable depuis l’accueil."
-          : campaignPersisted
-            ? " La configuration technique a déjà été persistée et reste consultable dans Réglages > Avancé."
-            : strategyPersisted
-              ? " La stratégie technique a déjà été persistée ; elle reste consultable dans Réglages > Avancé."
-              : "";
-        setFeedback({ ...failure, message: `${failure.message}${partialState}` });
-        await refresh();
-        return null;
-      } finally {
-        setBusyAction(null);
-      }
-    },
-    [busyAction, refresh, snapshot.engine?.status],
   );
 
   const startCampaign = useCallback(
@@ -455,6 +486,15 @@ export function useControlPlane() {
     setFeedback,
     lastUpdatedAt,
     refresh,
+    createSession,
+    updateSession,
+    duplicateSession,
+    archiveSession,
+    startSession,
+    stopSession,
+    resumeSession,
+    runSessionCycle,
+    createPaperTest: createSession,
     createStrategy,
     renameStrategy,
     archiveStrategy,
@@ -464,7 +504,6 @@ export function useControlPlane() {
     createCampaign,
     activateCampaign,
     resumeCampaign,
-    createPaperTest,
     startCampaign,
     resumeAndStartCampaign,
     runCycle: () => engineCommand("run-cycle"),

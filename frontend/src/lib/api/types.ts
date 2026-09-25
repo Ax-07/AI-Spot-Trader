@@ -462,6 +462,20 @@ export type StrategyRevisionComparisonResponse = {
   unified_diff: string;
 };
 
+export type MarketDiscoveryPolicy = {
+  protocol_version: "market-discovery-v1";
+  market_types: ExecutableMarketType[];
+  catalog_refresh_seconds: number;
+  watchlist_refresh_seconds: number;
+  refresh_timeout_seconds: number;
+  candidate_probe_limit: number;
+  candidate_limit: number;
+  watchlist_limit: number;
+  max_snapshot_age_seconds: number;
+  min_window_observations: number;
+  require_complete_window: boolean;
+};
+
 export type CampaignConfiguration = {
   configuration_version: "paper-control-plane-config-v1";
   llm_model: LlmModel;
@@ -470,13 +484,14 @@ export type CampaignConfiguration = {
   paper_initial_capital: string;
   paper_settlement_asset: string;
   paper_executable_markets: ExecutableMarketResponse[];
+  market_discovery?: MarketDiscoveryPolicy | null;
   paper_fee_rate: string;
   paper_spread_bps: string;
   paper_slippage_bps: string;
   paper_derivative_leverage: string;
   paper_derivative_margin_mode: "ISOLATED";
   risk_max_order_notional: string;
-  risk_allowed_pairs: string[];
+  risk_allowed_pairs: string[] | null;
   risk_allow_quantity_reduction: boolean;
   risk_max_derivative_leverage: string;
   risk_max_derivative_position_notional: string | null;
@@ -519,4 +534,34 @@ export type PromptPreviewResponse = {
   dynamic_input_model: "MarketSelectionInput" | "AgentInput";
   dynamic_input: null;
   note: string;
+};
+
+
+export type SessionStatus = "DRAFT" | "READY" | "RUNNING" | "STOPPED" | "RESUMABLE" | "ARCHIVED";
+export type SessionMarketMode = "AUTOMATIC_AI" | "MANUAL";
+
+export type SessionPaperRunSummary = {
+  paper_run_id: string;
+  started_at: string;
+  ended_at: string | null;
+  resumed_from_paper_run_id: string | null;
+};
+
+export type SessionResponse = {
+  session_id: string;
+  name: string;
+  created_at: string;
+  last_activity_at: string;
+  archived_at: string | null;
+  status: SessionStatus;
+  market_mode: SessionMarketMode;
+  instructions: string;
+  configuration: CampaignConfiguration;
+  current_campaign_id: string;
+  current_campaign_created_at: string;
+  current_strategy_revision: number;
+  has_history: boolean;
+  current_campaign_has_history: boolean;
+  latest_paper_run: SessionPaperRunSummary | null;
+  engine: EngineStatusResponse | null;
 };

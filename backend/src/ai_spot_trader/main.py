@@ -15,6 +15,7 @@ from ai_spot_trader.api.routes.engine import router as engine_router
 from ai_spot_trader.api.routes.health import router as health_router
 from ai_spot_trader.api.routes.paper_runs import router as paper_runs_router
 from ai_spot_trader.api.routes.portfolio import router as portfolio_router
+from ai_spot_trader.api.routes.sessions import router as sessions_router
 from ai_spot_trader.chat.provider import OpenAIChatProvider
 from ai_spot_trader.chat.service import OperatorChatService, RuntimeChatContextSource
 from ai_spot_trader.core.config import (
@@ -215,6 +216,7 @@ def create_app(
     app.include_router(analytics_router)
     app.include_router(paper_runs_router)
     app.include_router(control_plane_router)
+    app.include_router(sessions_router)
     app.include_router(chat_router)
     app.include_router(candles_router)
     return app

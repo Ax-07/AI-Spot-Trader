@@ -1,259 +1,245 @@
 # 11 — Guide opérateur
 
-> Guide pratique du cockpit AI Spot Trader. Le parcours principal est volontairement simple ; les
-> objets techniques restent disponibles dans **Réglages > Avancé**.
+> Guide pratique du cockpit AI Spot Trader. Le parcours principal utilise **Session**. Les objets Strategy, StrategyRevision, Campaign, paper_run, digests et UUID restent dans **Réglages > Avancé**.
 
-## 1. Ce qu'il faut savoir avant de commencer
+## 1. Avant de commencer
 
-AI Spot Trader fonctionne actuellement en **PAPER uniquement** avec Kraken comme source/exchange
-initial. Le frontend est un cockpit : le moteur de trading, le mark-to-market et la découverte des marchés restent dans le backend.
-
-Principe central :
+AI Spot Trader fonctionne actuellement en **PAPER uniquement** avec Kraken. Le frontend est un cockpit ; le moteur de trading, le mark-to-market, Risk, Broker et la discovery restent dans le backend.
 
 **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
 Une sortie LLM ne déclenche jamais directement un ordre. LIVE n'est pas disponible.
 
-## 2. Le parcours normal en cinq pages
+## 2. Navigation
 
-### Accueil
+Le parcours normal comporte six pages :
 
-Répond à la question : **que dois-je faire maintenant ?**
+- **Accueil** : état et prochaine action ;
+- **Sessions** : créer et piloter les configurations PAPER ;
+- **Marchés** : watchlist, charts, positions et fills ;
+- **Positions** : portefeuille et P&L backend ;
+- **Historique** : Agent → Risk → exécution PAPER ;
+- **Réglages** : apparence, aide et mode avancé.
 
-Le bloc **Action suivante** propose l'action cohérente avec l'état backend : création d'un premier
-test, démarrage, cycle unique, surveillance, arrêt, reprise explicite ou renvoi vers le mode avancé
-lorsqu'une décision automatique serait ambiguë.
+## 3. Qu'est-ce qu'une Session ?
 
-### Configurer
-
-Assistant pour créer un test PAPER sans manipuler Strategy, Revision ou Campaign. Depuis le Batch 19.4, le parcours simple active la découverte dynamique : l'opérateur choisit surtout un **type de marché** et une **paire de départ/secours**, pas toute la watchlist.
-
-### Positions
-
-Affiche les positions canoniques du backend et leurs valeurs mark-to-market lorsque les données sont disponibles et fraîches.
-
-### Historique
-
-Présente le chemin d'une décision :
+Une Session est l'objet que vous créez et pilotez. Techniquement, le backend conserve :
 
 ```text
-Discovery éventuelle -> Agent IA -> Risk Engine -> éventuelle exécution PAPER
+Session
+-> Strategy
+-> StrategyRevision(s)
+-> Campaign(s)
+-> paper_run(s)
 ```
 
-La discovery sélectionne des marchés à **surveiller** ; elle n'exécute aucun ordre.
+Vous n'avez pas besoin de connaître ces objets pour le parcours normal. Ils sont conservés pour l'immuabilité, l'audit et le recovery.
 
-### Réglages
+## 4. Créer une Session
 
-Regroupe l'apparence, l'aide complète, l'assistant opérateur informatif et les fonctions avancées du
-Control Plane.
+Ouvrez **Sessions** puis **Nouvelle session**. Si aucune Session n'existe, l'Accueil propose également la création directe.
 
-## 3. Apparence : clair, sombre ou système
+La configuration simple demande :
 
-Le cockpit propose trois modes :
+1. un nom ;
+2. `SPOT` ou `PERPETUAL` ;
+3. un mode de sélection des marchés ;
+4. un capital PAPER ;
+5. Luna ou Sol ;
+6. agressivité 1–10 ;
+7. profil Risk ;
+8. instructions IA/opérateur.
 
-- **Clair** : thème clair forcé ;
-- **Sombre** : thème sombre forcé ;
-- **Système** : suit le thème du système d'exploitation.
+Deux boutons sont disponibles :
 
-Le sélecteur est disponible dans la barre supérieure et dans **Réglages > Apparence**. Le choix est
-conservé localement par `next-themes`.
+- **Créer** : persiste la Session sans démarrer ;
+- **Créer et démarrer** : crée puis active et démarre explicitement le moteur backend.
 
-Les couleurs d'état sont accompagnées de texte ou de signes. Par exemple, un P&L positif affiche
-`+`, un P&L négatif affiche `−`, et l'Historique indique explicitement `Exécuté` ou `Non exécuté`.
+La création technique Strategy + revision 1 + Campaign est atomique côté backend.
 
-## 4. Créer son premier test PAPER
+## 5. Mode marchés Automatique — IA
 
-Dans **Configurer** :
+Choisissez **Automatique — laisser l'IA chercher les opportunités**.
 
-1. choisir `SPOT` ou `PERPETUAL` ;
-2. saisir une paire de départ/secours, par exemple `BTC/USD` ;
-3. définir le capital PAPER ;
-4. choisir Luna ou Sol ;
-5. régler l'agressivité de 1 à 10 ;
-6. écrire les instructions opérateur destinées à l'Agent ;
-7. choisir un profil de sécurité ;
-8. vérifier le résumé ;
-9. cliquer sur `Créer le test` ou `Créer et démarrer`.
+La ou les paires saisies sont un **bootstrap/fallback**. Elles ne signifient pas que l'Agent est obligé de trader ces actifs.
 
-La paire de départ n'est plus la watchlist complète. Elle joue trois rôles : bootstrap immuable de Campaign, marché de secours si la discovery est indisponible et référence de quote/règlement pour le test simple.
-
-Le backend découvre ensuite les marchés Kraken compatibles avec ce type et cet actif de règlement. Le même Agent IA en retient périodiquement plusieurs dans une watchlist bornée.
-
-## 5. Comment fonctionne la découverte des marchés
-
-Le Batch 19.4 sépare trois niveaux :
+Le pipeline reste :
 
 ```text
-1. catalogue Kraken disponible
-2. candidats techniquement admissibles
-3. watchlist stratégique choisie par le même Agent
+Kraken
+-> filtrage déterministe d'admissibilité
+-> candidats
+-> même Agent IA choisit la watchlist
+-> même Agent décide BUY / SELL / HOLD
+-> Risk Engine autorise / modifie / refuse
+-> PaperBroker éventuel
 ```
 
-Le backend peut écarter un marché parce qu'il est indisponible, a un mauvais type/quote, possède un contrat non supporté, manque de données causales ou présente un snapshot trop ancien. Ce filtrage **ne dit pas qu'un marché est un bon ou mauvais trade**.
+La discovery n'est pas un second Agent et le filtre déterministe ne produit aucun score stratégique d'opportunité.
 
-Le même Agent stratégique sélectionne ensuite la watchlist parmi les candidats. Une watchlist peut contenir plusieurs marchés. Chaque sélection est auditée avec les faits candidats présentés à l’Agent, ses ajouts, maintiens, retraits et rationales.
+## 6. Mode marchés Manuel
 
-Valeurs simples par défaut : catalogue/watchlist renouvelés environ toutes les 15 minutes, refresh borné à 45 s, 24 marchés sondés au maximum, 12 candidats maximum et 6 marchés maximum dans la watchlist.
-
-## 6. Que se passe-t-il si Kraken ou l'IA de discovery tombe ?
-
-- si une watchlist valide existe déjà, elle est conservée ;
-- sinon la paire de départ/secours reste utilisable ;
-- l'erreur de discovery est auditée ;
-- le backend attend la prochaine échéance de refresh au lieu de retenter la discovery à chaque cycle ;
-- une panne du LLM de décision finale ou des données d'exécution reste un échec technique visible : aucun BUY/SELL/HOLD ou prix n'est inventé.
-
-## 7. Interaction avec NORMAL / MANAGEMENT
-
-Le Batch 19.3 reste prioritaire.
-
-- `NORMAL` : si la watchlist doit être renouvelée, le backend effectue la discovery puis lance le cycle stratégique ;
-- `MANAGEMENT` : la discovery destinée à chercher de nouvelles ouvertures est ignorée ; le même Agent ne travaille que sur les positions ouvertes.
-
-Une position reste toujours gérable même si son marché vient d'être retiré de la watchlist :
+Choisissez **Manuel — choisir les marchés** puis fournissez une liste comme :
 
 ```text
-univers effectif = watchlist actuelle + toutes les positions ouvertes
+BTC/USD
+ETH/USD
+SOL/USD
 ```
 
-Après un restart, une position durable peut donc être gérée avant toute nouvelle discovery.
+Dans ce mode :
 
-## 8. SPOT et PERPETUAL
+- aucune Market Discovery n'est utilisée ;
+- l'Agent ne travaille que dans l'univers fourni ;
+- la whitelist Risk est alignée sur ce même univers ;
+- l'Agent conserve BUY / SELL / HOLD ;
+- Risk reste final.
 
-### SPOT
+Toutes les paires doivent utiliser le même actif de règlement dans une Session simple.
 
-- pas de short ;
-- pas de levier ;
-- pas de marge ;
-- SELL ne peut réduire qu'un actif réellement détenu et disponible.
+## 7. Profils Risk
 
-Le backend expose pour une position comptablement complète : quantité, prix moyen d'entrée économique, coût restant, P&L réalisé, mark courant, valeur de marché et P&L latent.
-
-Le mark SPOT correspond au dernier prix ticker Kraken causal retenu par le backend. Il n'est pas calculé dans le navigateur.
-
-Si le mark manque ou devient trop ancien, le cockpit affiche `—`. Si une ancienne position ne possède pas de base de coût fiable (`accounting_complete=false`), le backend peut encore afficher sa valeur de marché, mais son P&L latent reste `—` : aucune valeur n'est inventée.
-
-### PERPETUAL
-
-Périmètre actuel : contrats linéaires PAPER avec LONG/SHORT, marge `ISOLATED` uniquement, levier
-déterministe configuré et caps de levier/position/exposition contrôlés par Risk.
-
-La discovery 19.4 n'autorise pas un contrat inverse ou un future daté à entrer dans l'univers exécutable.
-
-CROSS, contrats inverses et futures datés restent hors périmètre exécutable actuel.
-
-## 9. IA : modèle, agressivité et instructions
-
-Le choix Luna/Sol et l'agressivité font partie de la configuration immuable du test. L'agressivité
-est un contexte stratégique, pas une permission de contourner Risk. Une agressivité 10/10 ne relève
-aucune limite déterministe.
-
-Le texte saisi dans **Instructions opérateur** devient la partie éditable de la stratégie. Le contrat
-Agent protégé du backend reste séparé et non modifiable depuis le cockpit. Ne jamais placer de
-secret, clé API ou credential dans ces instructions.
-
-Le **même modèle et la même stratégie** sont utilisés pour la sélection de watchlist et pour les décisions de trading. Le Batch 19.4 n'ajoute pas de second Agent.
-
-## 10. Profils de sécurité
-
-Les profils sont des **raccourcis UX** vers des valeurs explicites de `CampaignConfiguration`. Ils ne
-constituent pas un second Risk Engine.
+Les profils sont des raccourcis UX vers des valeurs de CampaignConfiguration ; ils ne remplacent jamais le Risk Engine.
 
 | Profil | Ordre max | Levier PERP | Position dérivée max | Exposition dérivée totale max | Buffer liquidation |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Prudent | 5 % du capital | 1x | 10 % du capital | 20 % du capital | 1.25 |
-| Équilibré | 10 % du capital | 2x | 20 % du capital | 40 % du capital | 1.15 |
-| Agressif | 20 % du capital | 3x | 35 % du capital | 70 % du capital | 1.10 |
-| Personnalisé | saisi par l'opérateur | saisi | saisi | saisi | saisi |
+| Prudent | 5 % du capital | 1x | 10 % | 20 % | 1.25 |
+| Équilibré | 10 % | 2x | 20 % | 40 % | 1.15 |
+| Agressif | 20 % | 3x | 35 % | 70 % | 1.10 |
+| Personnalisé | saisi | saisi | saisi | saisi | saisi |
 
-En mode discovery simple, la whitelist de paires Risk peut être laissée vide : les frontières déterministes restent type de marché + quote settlement + catalogue Kraken + Risk. En profil personnalisé, une whitelist non vide peut être utilisée comme garde-fou supplémentaire ; elle restreint aussi les candidats de discovery.
+Le backend valide toujours les limites finales.
 
-Le backend valide toujours la configuration et peut la refuser.
+## 8. Configuration avancée
 
-## 11. Paramètres avancés
+Le même formulaire permet d'ouvrir **Configuration avancée**. Il affiche les valeurs effectivement utilisées :
 
-Dans l'assistant, **Paramètres avancés** permet de modifier sans encombrer le parcours normal :
-cadence stratégique, frais PAPER, spread, slippage, deadlines et champs Risk détaillés du profil Personnalisé.
-Les validations métier restent exclusivement côté backend.
+- cadence stratégique ;
+- frais PAPER ;
+- spread ;
+- slippage ;
+- timeouts marché / Agent / Broker ;
+- caps Risk ;
+- levier et limites PERPETUAL ;
+- whitelist Risk optionnelle en mode automatique.
 
-Le mark-to-market backend possède en plus des paramètres techniques de processus par environnement :
+En mode automatique, les paramètres Market Discovery sont aussi visibles :
 
 ```text
-AI_SPOT_TRADER_PAPER_MARK_TO_MARKET_CADENCE_SECONDS=5
-AI_SPOT_TRADER_PAPER_DERIVATIVE_MARK_TO_MARKET_CADENCE_SECONDS=15
-AI_SPOT_TRADER_PAPER_MARK_TO_MARKET_TIMEOUT_SECONDS=5
-AI_SPOT_TRADER_PAPER_MARK_TO_MARKET_STALE_AFTER_SECONDS=30
+catalog_refresh_seconds      900
+watchlist_refresh_seconds    900
+refresh_timeout_seconds      45
+candidate_probe_limit        24
+candidate_limit              12
+watchlist_limit              6
+max_snapshot_age_seconds     120
+min_window_observations      2
+require_complete_window      false
 ```
 
-Ils ne déclenchent aucun appel IA.
+## 9. Lire la page Sessions
 
-La configuration avancée historique du Control Plane peut toujours créer une Campaign statique en omettant `market_discovery`. Ce mode reste utile pour les tests reproductibles sur un univers fixe.
+Chaque carte affiche le nom, le statut et un résumé : capital, modèle, mode de marchés et agressivité.
 
-## 12. Créer, démarrer et tester un cycle
+Statuts possibles :
 
-`Créer le test` persiste la configuration via les routes canoniques sans l'activer.
+- **Brouillon** : jamais exécutée ;
+- **Prête** : runtime chargé, moteur arrêté ;
+- **En cours** : moteur autonome RUNNING ;
+- **Arrêtée** : historique existant mais non active ;
+- **À reprendre** : recovery explicite requis/possible ;
+- **Archivée** : retirée de la liste normale.
 
-`Créer et démarrer` crée Strategy/Revision/Campaign puis effectue une activation fraîche explicite et
-envoie `Start` au TradingEngine backend.
+Ces statuts sont dérivés des faits backend, pas d'un champ manipulé dans le navigateur.
 
-`Tester 1 cycle` appelle `run-cycle`, exécute un cycle puis laisse le moteur `STOPPED`. Si la Campaign dynamique est en `NORMAL` et que la watchlist est due, ce cycle peut aussi déclencher son renouvellement avant la sélection de marché.
+## 10. Démarrer, arrêter, reprendre, tester un cycle
 
-## 13. Démarrer, arrêter et reprendre
+### Démarrer
 
-`Démarrer` lance la boucle autonome **dans le backend**. Fermer le navigateur ou le frontend ne
-l'arrête pas. `Arrêter` envoie explicitement Stop.
+Une Session jamais exécutée utilise une activation fraîche puis démarre le moteur.
 
-Le mark-to-market SPOT/PERPETUAL appartient aussi au runtime backend actif : il ne dépend pas de la page Positions ni du navigateur.
+### Arrêter
 
-Après un restart backend, aucune Campaign n'est reprise silencieusement. La reprise reste explicite
-et passe par le recovery canonique ; le backend refuse une session incompatible.
+`Arrêter` termine explicitement la Session active : la boucle est stoppée si nécessaire, le runtime est fermé et le `paper_run` reçoit sa fin durable. Fermer seulement le navigateur ne fait **pas** cela et ne stoppe jamais le moteur backend.
 
-Pour une Campaign dynamique, la watchlist n'est pas restaurée comme décision stratégique à rejouer. Les positions sont restaurées, restent gérables, puis la watchlist est reconstruite quand un cycle `NORMAL` a besoin d'un refresh.
+### Reprendre
 
-## 14. Lire Positions
+Une Campaign déjà exécutée n'est jamais fresh-activée. `Reprendre` restaure explicitement le ledger compatible et crée la continuité de recovery prévue par le backend.
 
-### Vue globale
+### Tester 1 cycle
 
-Lorsque les données sont disponibles, le backend fournit directement :
+`Tester 1 cycle` exécute exactement un cycle canonique et laisse le moteur autonome arrêté. Si la Session n'avait jamais tourné, un run est créé ; si sa Campaign possède un historique, le recovery explicite est utilisé.
 
-- cash disponible ;
-- valeur de marché SPOT ;
-- P&L latent SPOT ;
-- equity ;
-- exposition courante.
+## 11. Modifier une Session
 
-Une valeur `—` signifie que la donnée canonique n'est pas disponible ou n'est plus assez fraîche ; ce n'est pas zéro.
+`Modifier` ouvre le formulaire prérempli avec la configuration courante.
 
-### PERPETUAL
+Le backend ne réécrit jamais l'historique :
 
-Le contrat backend expose directement côté LONG/SHORT, quantité, prix d'entrée moyen, mark price,
-P&L, notional, levier, marge et liquidation. Le cockpit les affiche sans les recalculer.
+- modifier seulement le nom renomme la Session ;
+- modifier les instructions crée une nouvelle StrategyRevision ;
+- modifier la configuration crée une nouvelle Campaign ;
+- les anciens runs et leurs faits restent intacts.
+
+Une Session **En cours** ne peut pas être modifiée silencieusement. Arrêtez-la avant d'appliquer une nouvelle version.
+
+## 12. Dupliquer une Session
+
+`Dupliquer` crée une nouvelle Session indépendante avec les instructions et la configuration courantes. Par défaut le nom reçoit `- copie`.
+
+La copie possède un nouvel ID technique et **aucun historique/run** de l'original.
+
+## 13. Supprimer une Session
+
+`Supprimer` signifie **archiver** dans le parcours utilisateur. Le backend ne supprime pas physiquement :
+
+- revisions ;
+- Campaigns ;
+- paper_runs ;
+- cycles ;
+- décisions ;
+- évaluations Risk ;
+- executions/fills ;
+- données nécessaires au P&L et à l'audit.
+
+La restauration d'une Session archivée n'est pas proposée en v1.
+
+## 14. SPOT et PERPETUAL
 
 ### SPOT
 
-Le backend expose directement quantité/disponible, prix moyen d'entrée, mark/timestamp, valeur de position, coût restant, P&L réalisé/latent et complétude de valorisation. Le cockpit n'effectue aucun calcul financier parallèle.
+Pas de short, levier ni marge. SELL ne peut réduire qu'un actif réellement détenu. Accounting, mark, valeur de marché et P&L sont fournis par le backend.
 
-## 15. Lire Historique
+### PERPETUAL
 
-Chaque carte de cycle regroupe autant que possible : décision Agent `BUY`, `SELL` ou `HOLD`, résultat
-Risk `ALLOW`, `MODIFY` ou `REJECT`, état `Exécuté` / `Non exécuté`, fills PAPER et erreur technique.
+Périmètre actuel : contrats linéaires PAPER selon les capacités intégrées, marge `ISOLATED`, levier configuré/déterministe et caps Risk. Le LLM ne choisit jamais librement le levier.
 
-Pour une Campaign dynamique, `market_selection_input.market_discovery` contient aussi la trace technique de la watchlist : `REFRESHED`, `CACHE_REUSED`, `FALLBACK` ou `SKIPPED_MANAGEMENT`, marchés ajoutés/maintenus/retirés et rationale de sélection. L'exposition produit dédiée de ces informations est prévue pour le Batch 19.5 ; en 19.4 elles restent auditables dans les détails techniques.
+## 15. Positions, Marchés et Historique
+
+Le frontend affiche les faits backend et ne les reconstruit pas :
+
+- P&L/exposition depuis le backend ;
+- candles via le pipeline backend ;
+- markers uniquement depuis les fills persistés ;
+- prix moyen/mark/liquidation depuis `/portfolio` ;
+- rationales et statuts Agent/Risk/exécution depuis les faits d'audit.
+
+Une valeur absente reste absente ; aucune causalité ni donnée financière n'est inventée.
 
 ## 16. Réglages > Avancé
 
-La surface avancée conserve Strategies, historique des StrategyRevision, comparaison de révisions,
-prompt preview, Campaigns, activation fraîche, recovery, digests et IDs. Elle reste secondaire.
+Cette surface reste destinée au diagnostic et aux besoins techniques : Strategies, StrategyRevision, Campaigns, comparaison de versions, prompt preview, activation/recovery technique, digests et UUID.
 
-## 17. Rappels d'architecture et de sécurité
+Le parcours normal doit privilégier **Sessions**.
+
+## 17. Sécurité
 
 - PAPER uniquement ;
-- un seul Agent IA stratégique ;
+- un seul Agent IA ;
 - Kraken ;
-- SPOT + PERPETUAL linéaire ;
-- aucune sélection de watchlist ni sortie BUY/SELL/HOLD ne déclenche directement un ordre ;
-- Risk Engine déterministe = autorité finale ;
-- aucune logique Risk, Broker, discovery ou mark-to-market canonique dupliquée dans le frontend ;
-- toutes les décisions, HOLD inclus, restent journalisées ;
-- aucun secret dans le navigateur ou les fichiers versionnés ;
-- LIVE reste séparé et ultérieur.
+- Risk final ;
+- aucune sortie LLM directe vers Broker ;
+- aucun secret dans les instructions ou fichiers versionnés ;
+- toutes les décisions, HOLD inclus, restent auditables ;
+- frontend = cockpit seulement ;
+- LIVE reste séparé.

@@ -20,6 +20,7 @@ import type {
   PromptPreviewPhase,
   PromptPreviewResponse,
   RiskAssessmentPageResponse,
+  SessionResponse,
   StrategyCreateResponse,
   StrategyResponse,
   StrategyRevisionComparisonResponse,
@@ -151,6 +152,25 @@ export const api = {
   paperRuns: (limit = 100, offset = 0) => requestJson<PaperRunPageResponse>(`/api/v1/paper-runs?limit=${limit}&offset=${offset}&order=desc`),
   currentPaperRun: () => requestJson<PaperRunResponse>("/api/v1/paper-runs/current"),
   paperRun: (paperRunId: string) => requestJson<PaperRunResponse>(`/api/v1/paper-runs/${encodeURIComponent(paperRunId)}`),
+
+  sessions: () => requestJson<SessionResponse[]>("/api/v1/sessions"),
+  session: (sessionId: string) => requestJson<SessionResponse>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`),
+  createSession: (payload: { name: string; instructions: string; configuration: CampaignConfiguration; start_now: boolean }) =>
+    requestJson<SessionResponse>("/api/v1/sessions", { method: "POST", ...jsonBody(payload) }),
+  updateSession: (sessionId: string, payload: { name: string; instructions: string; configuration: CampaignConfiguration }) =>
+    requestJson<SessionResponse>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: "PUT", ...jsonBody(payload) }),
+  duplicateSession: (sessionId: string, name?: string) =>
+    requestJson<SessionResponse>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/duplicate`, { method: "POST", ...jsonBody({ name: name ?? null }) }),
+  archiveSession: (sessionId: string) =>
+    requestJson<SessionResponse>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }),
+  startSession: (sessionId: string) =>
+    requestJson<SessionResponse>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/start`, { method: "POST" }),
+  stopSession: (sessionId: string) =>
+    requestJson<SessionResponse>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/stop`, { method: "POST" }),
+  resumeSession: (sessionId: string) =>
+    requestJson<SessionResponse>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/resume`, { method: "POST" }),
+  runSessionCycle: (sessionId: string) =>
+    requestJson<SessionResponse>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/run-cycle`, { method: "POST" }),
 
   strategies: () => requestJson<StrategyResponse[]>("/api/v1/strategies"),
   strategy: (strategyId: string) => requestJson<StrategyResponse>(`/api/v1/strategies/${encodeURIComponent(strategyId)}`),
