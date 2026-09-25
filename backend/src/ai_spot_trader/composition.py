@@ -42,6 +42,7 @@ from ai_spot_trader.portfolio.mark_to_market import (
     PaperDerivativeMarkToMarketMonitor,
     PaperSpotMarkToMarketMonitor,
 )
+from ai_spot_trader.risk.capacity import CapacityEvaluator
 from ai_spot_trader.risk.engine import RiskEngine
 from ai_spot_trader.risk.policy import RiskPolicy
 from ai_spot_trader.tools.market_research import build_market_research_tool_registry
@@ -252,20 +253,22 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         spread_bps=run.spread_bps,
         slippage_bps=run.slippage_bps,
     )
-    risk_engine = RiskEngine(
-        policy=RiskPolicy(
-            max_order_notional=run.max_order_notional,
-            allowed_pairs=run.allowed_pairs,
-            allow_quantity_reduction=run.allow_quantity_reduction,
-            derivative_leverage=run.derivative_leverage or Decimal(1),
-            max_derivative_leverage=run.max_derivative_leverage or Decimal(1),
-            max_derivative_position_notional=run.max_derivative_position_notional,
-            max_total_derivative_exposure=run.max_total_derivative_exposure,
-            derivative_liquidation_buffer_ratio=(
-                run.derivative_liquidation_buffer_ratio or Decimal("1.10")
-            ),
-            derivative_margin_mode=run.derivative_margin_mode,
+    risk_policy = RiskPolicy(
+        max_order_notional=run.max_order_notional,
+        allowed_pairs=run.allowed_pairs,
+        allow_quantity_reduction=run.allow_quantity_reduction,
+        derivative_leverage=run.derivative_leverage or Decimal(1),
+        max_derivative_leverage=run.max_derivative_leverage or Decimal(1),
+        max_derivative_position_notional=run.max_derivative_position_notional,
+        max_total_derivative_exposure=run.max_total_derivative_exposure,
+        derivative_liquidation_buffer_ratio=(
+            run.derivative_liquidation_buffer_ratio or Decimal("1.10")
         ),
+        derivative_margin_mode=run.derivative_margin_mode,
+    )
+    capacity_evaluator = CapacityEvaluator(policy=risk_policy)
+    risk_engine = RiskEngine(
+        policy=risk_policy,
         cost_model=cost_model,
         clock=clock,
     )
@@ -277,6 +280,7 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
     cycle_runner = TradingCycleRunner(
         executable_market_data=market_data,
         executable_markets=run.executable_markets,
+        capacity_evaluator=capacity_evaluator,
         portfolio=portfolio,
         agent=agent,
         risk_engine=risk_engine,

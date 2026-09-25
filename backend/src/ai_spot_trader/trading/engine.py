@@ -37,10 +37,16 @@ from ai_spot_trader.domain.ports import (
     MarketSelectingLLMProvider,
 )
 from ai_spot_trader.domain.symbols import parse_canonical_symbol
-from ai_spot_trader.portfolio.ledger import PaperPortfolioLedger
+from ai_spot_trader.risk.capacity import CapacityAssessment, CapacityEvaluator
 from ai_spot_trader.risk.engine import RiskEngine, RiskResult
 
 CycleIdFactory = Callable[[], UUID]
+
+
+class PortfolioSnapshotSource(Protocol):
+    """Minimal canonical portfolio surface consumed by cycle orchestration."""
+
+    def snapshot(self, *, as_of: datetime | None = None) -> PortfolioState: ...
 
 
 @runtime_checkable
@@ -49,6 +55,26 @@ class AgentToolTraceSource(Protocol):
 
     @property
     def last_tool_traces(self) -> tuple[AgentToolTrace, ...]: ...
+
+
+@runtime_checkable
+class ManagementDecisionProvider(Protocol):
+    """Same strategic Agent surface used when only open positions may be managed."""
+
+    async def select_management_market(
+        self,
+        selection_input: MarketSelectionInput,
+        *,
+        capacity_reason: str,
+        management_markets: tuple[ExecutableMarket, ...],
+    ) -> MarketSelection: ...
+
+    async def generate_management_decision(
+        self,
+        agent_input: AgentInput,
+        *,
+        capacity_reason: str,
+    ) -> DecisionCandidate: ...
 
 
 class TradingCycleStatus(StrEnum):
@@ -108,6 +134,7 @@ class TradingCycleResult:
     cycle_id: UUID
     status: TradingCycleStatus
     failure: TradingCycleFailure | None = None
+    capacity_assessment: CapacityAssessment | None = None
     market_selection_input: MarketSelectionInput | None = None
     market_selection: MarketSelection | None = None
     agent_input: AgentInput | None = None
@@ -122,6 +149,12 @@ class TradingCycleResult:
         call_ids = tuple(trace.call_id for trace in self.agent_tool_traces)
         if len(set(call_ids)) != len(call_ids):
             raise ValueError("cycle Agent tool traces must have unique call_id values")
+        if (
+            self.capacity_assessment is not None
+            and self.capacity_assessment.mode == "MANAGEMENT"
+            and self.agent_tool_traces
+        ):
+            raise ValueError("MANAGEMENT cycles cannot carry new-opening research tool traces")
         if self.market_selection is not None:
             if self.market_selection.cycle_id != self.cycle_id:
                 raise ValueError("MarketSelection cycle_id must match TradingCycleResult")
@@ -172,7 +205,7 @@ class TradingCycleRunner:
     def __init__(
         self,
         *,
-        portfolio: PaperPortfolioLedger,
+        portfolio: PortfolioSnapshotSource,
         agent: LLMProvider,
         risk_engine: RiskEngine,
         broker: Broker,
@@ -182,6 +215,7 @@ class TradingCycleRunner:
         symbol: str | None = None,
         executable_market_data: ExecutableMarketDataSource | None = None,
         executable_markets: tuple[ExecutableMarket, ...] | None = None,
+        capacity_evaluator: CapacityEvaluator | None = None,
         experiment_manifest: ExperimentManifest | None = None,
         clock: Clock | None = None,
         cycle_id_factory: CycleIdFactory = uuid4,
@@ -195,6 +229,8 @@ class TradingCycleRunner:
         if legacy_mode:
             if market_data is None or symbol is None:
                 raise ValueError("legacy mode requires market_data and symbol")
+            if capacity_evaluator is not None:
+                raise ValueError("capacity evaluation is supported only in selection mode")
             parse_canonical_symbol(symbol)
         else:
             if executable_market_data is None or not executable_markets:
@@ -213,6 +249,13 @@ class TradingCycleRunner:
                 raise ValueError("executable_markets must be unique")
             if not isinstance(agent, MarketSelectingLLMProvider):
                 raise TypeError("selection mode requires the same Agent to implement select_market")
+            if capacity_evaluator is not None and not isinstance(
+                agent, ManagementDecisionProvider
+            ):
+                raise TypeError(
+                    "capacity-aware selection mode requires the same Agent to implement "
+                    "management selection and decision surfaces"
+                )
 
         context = aggressiveness_context(aggressiveness)
         if experiment_manifest is not None:
@@ -243,6 +286,7 @@ class TradingCycleRunner:
         self._symbol = symbol
         self._executable_market_data = executable_market_data
         self._executable_markets = executable_markets or ()
+        self._capacity_evaluator = capacity_evaluator
         self._portfolio = portfolio
         self._agent = agent
         self._risk_engine = risk_engine
@@ -265,6 +309,7 @@ class TradingCycleRunner:
 
     async def _run_selected_cycle_locked(self) -> TradingCycleResult:
         cycle_id = self._cycle_id_factory()
+        capacity_assessment: CapacityAssessment | None = None
 
         try:
             selection_portfolio = self._portfolio.snapshot()
@@ -272,6 +317,11 @@ class TradingCycleRunner:
             return self._failed(cycle_id, TradingCycleStage.PORTFOLIO, exc)
 
         try:
+            if self._capacity_evaluator is not None:
+                capacity_assessment = self._capacity_evaluator.evaluate(
+                    portfolio_state=selection_portfolio,
+                    executable_markets=self._executable_markets,
+                )
             selection_created_at = self._now()
             selection_input = MarketSelectionInput(
                 cycle_id=cycle_id,
@@ -283,24 +333,45 @@ class TradingCycleRunner:
                 experiment_manifest=self._experiment_manifest,
             )
         except Exception as exc:
-            return self._failed(cycle_id, TradingCycleStage.SELECTION_INPUT, exc)
+            return self._failed(
+                cycle_id,
+                TradingCycleStage.SELECTION_INPUT,
+                exc,
+                capacity_assessment=capacity_assessment,
+            )
 
         try:
             selecting_agent = self._agent
             assert isinstance(selecting_agent, MarketSelectingLLMProvider)
             async with asyncio.timeout(self._timeouts.agent_seconds):
-                market_selection = await selecting_agent.select_market(selection_input)
+                if capacity_assessment is not None and capacity_assessment.mode == "MANAGEMENT":
+                    management_agent = selecting_agent
+                    assert isinstance(management_agent, ManagementDecisionProvider)
+                    market_selection = await management_agent.select_management_market(
+                        selection_input,
+                        capacity_reason=capacity_assessment.reason,
+                        management_markets=capacity_assessment.management_markets,
+                    )
+                else:
+                    market_selection = await selecting_agent.select_market(selection_input)
             self._validate_market_selection(
                 selection_input=selection_input,
                 selection=market_selection,
+                capacity_assessment=capacity_assessment,
             )
         except Exception as exc:
             return self._failed(
                 cycle_id,
                 TradingCycleStage.MARKET_SELECTION,
                 exc,
+                capacity_assessment=capacity_assessment,
                 market_selection_input=selection_input,
-                agent_tool_traces=self._agent_tool_traces(),
+                agent_tool_traces=(
+                    ()
+                    if capacity_assessment is not None
+                    and capacity_assessment.mode == "MANAGEMENT"
+                    else self._agent_tool_traces()
+                ),
             )
 
         try:
@@ -320,14 +391,12 @@ class TradingCycleRunner:
                 cycle_id,
                 TradingCycleStage.MARKET,
                 exc,
+                capacity_assessment=capacity_assessment,
                 market_selection_input=selection_input,
                 market_selection=market_selection,
                 agent_tool_traces=market_selection.tool_traces,
             )
 
-        # The selected Derivatives execution source is allowed to mark an already-open
-        # position/funding. Capture the complete portfolio only after this canonical market
-        # acquisition. Research sources remain side-effect free and cannot reach this ledger.
         try:
             portfolio_state = self._portfolio.snapshot()
         except Exception as exc:
@@ -335,6 +404,7 @@ class TradingCycleRunner:
                 cycle_id,
                 TradingCycleStage.PORTFOLIO,
                 exc,
+                capacity_assessment=capacity_assessment,
                 market_selection_input=selection_input,
                 market_selection=market_selection,
                 agent_tool_traces=market_selection.tool_traces,
@@ -371,6 +441,7 @@ class TradingCycleRunner:
                 cycle_id,
                 TradingCycleStage.INPUT,
                 exc,
+                capacity_assessment=capacity_assessment,
                 market_selection_input=selection_input,
                 market_selection=market_selection,
                 agent_tool_traces=market_selection.tool_traces,
@@ -381,6 +452,7 @@ class TradingCycleRunner:
             agent_input=agent_input,
             market_state=market_state,
             portfolio_state=portfolio_state,
+            capacity_assessment=capacity_assessment,
             market_selection_input=selection_input,
             market_selection=market_selection,
         )
@@ -440,12 +512,21 @@ class TradingCycleRunner:
         agent_input: AgentInput,
         market_state: MarketState,
         portfolio_state: PortfolioState,
+        capacity_assessment: CapacityAssessment | None = None,
         market_selection_input: MarketSelectionInput | None = None,
         market_selection: MarketSelection | None = None,
     ) -> TradingCycleResult:
         try:
             async with asyncio.timeout(self._timeouts.agent_seconds):
-                decision = await self._agent.generate_decision(agent_input)
+                if capacity_assessment is not None and capacity_assessment.mode == "MANAGEMENT":
+                    management_agent = self._agent
+                    assert isinstance(management_agent, ManagementDecisionProvider)
+                    decision = await management_agent.generate_management_decision(
+                        agent_input,
+                        capacity_reason=capacity_assessment.reason,
+                    )
+                else:
+                    decision = await self._agent.generate_decision(agent_input)
             self._validate_decision(agent_input=agent_input, decision=decision)
             if (
                 market_selection is not None
@@ -459,6 +540,7 @@ class TradingCycleRunner:
                 cycle_id,
                 TradingCycleStage.AGENT,
                 exc,
+                capacity_assessment=capacity_assessment,
                 market_selection_input=market_selection_input,
                 market_selection=market_selection,
                 agent_input=agent_input,
@@ -470,17 +552,26 @@ class TradingCycleRunner:
             )
 
         try:
-            risk_result = self._risk_engine.evaluate(
-                decision=decision,
-                market_state=market_state,
-                portfolio_state=portfolio_state,
-            )
+            if capacity_assessment is None:
+                risk_result = self._risk_engine.evaluate(
+                    decision=decision,
+                    market_state=market_state,
+                    portfolio_state=portfolio_state,
+                )
+            else:
+                risk_result = self._risk_engine.evaluate(
+                    decision=decision,
+                    market_state=market_state,
+                    portfolio_state=portfolio_state,
+                    management_mode=capacity_assessment.mode == "MANAGEMENT",
+                )
             self._validate_risk_result(decision=decision, result=risk_result)
         except Exception as exc:
             return self._failed(
                 cycle_id,
                 TradingCycleStage.RISK,
                 exc,
+                capacity_assessment=capacity_assessment,
                 market_selection_input=market_selection_input,
                 market_selection=market_selection,
                 agent_input=agent_input,
@@ -493,6 +584,7 @@ class TradingCycleRunner:
             return TradingCycleResult(
                 cycle_id=cycle_id,
                 status=TradingCycleStatus.COMPLETED,
+                capacity_assessment=capacity_assessment,
                 market_selection_input=market_selection_input,
                 market_selection=market_selection,
                 agent_input=agent_input,
@@ -510,6 +602,7 @@ class TradingCycleRunner:
                 cycle_id,
                 TradingCycleStage.BROKER,
                 exc,
+                capacity_assessment=capacity_assessment,
                 market_selection_input=market_selection_input,
                 market_selection=market_selection,
                 agent_input=agent_input,
@@ -530,6 +623,7 @@ class TradingCycleRunner:
                 cycle_id,
                 TradingCycleStage.POST_PORTFOLIO,
                 exc,
+                capacity_assessment=capacity_assessment,
                 market_selection_input=market_selection_input,
                 market_selection=market_selection,
                 agent_input=agent_input,
@@ -542,6 +636,7 @@ class TradingCycleRunner:
         return TradingCycleResult(
             cycle_id=cycle_id,
             status=TradingCycleStatus.COMPLETED,
+            capacity_assessment=capacity_assessment,
             market_selection_input=market_selection_input,
             market_selection=market_selection,
             agent_input=agent_input,
@@ -558,6 +653,7 @@ class TradingCycleRunner:
         *,
         selection_input: MarketSelectionInput,
         selection: MarketSelection,
+        capacity_assessment: CapacityAssessment | None,
     ) -> None:
         if selection.cycle_id != selection_input.cycle_id:
             raise TradingCycleInvariantError("MarketSelection cycle_id mismatch")
@@ -569,6 +665,14 @@ class TradingCycleRunner:
         )
         if selected not in selection_input.executable_markets:
             raise TradingCycleInvariantError("MarketSelection is outside executable universe")
+        if (
+            capacity_assessment is not None
+            and capacity_assessment.mode == "MANAGEMENT"
+            and selected not in capacity_assessment.management_markets
+        ):
+            raise TradingCycleInvariantError(
+                "MANAGEMENT MarketSelection is outside open-position markets"
+            )
 
     def _validate_selected_market_state(
         self,
@@ -682,6 +786,7 @@ class TradingCycleRunner:
         stage: TradingCycleStage,
         exc: Exception,
         *,
+        capacity_assessment: CapacityAssessment | None = None,
         market_selection_input: MarketSelectionInput | None = None,
         market_selection: MarketSelection | None = None,
         agent_input: AgentInput | None = None,
@@ -708,6 +813,7 @@ class TradingCycleRunner:
                 error_type=type(exc).__name__,
                 timed_out=isinstance(exc, TimeoutError),
             ),
+            capacity_assessment=capacity_assessment,
             market_selection_input=market_selection_input,
             market_selection=market_selection,
             agent_input=agent_input,

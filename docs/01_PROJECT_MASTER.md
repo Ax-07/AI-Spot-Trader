@@ -4,13 +4,13 @@
 
 AI Spot Trader est une application expérimentale de trading crypto **PAPER** pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement un cockpit de contrôle et de visualisation.
 
-Base GitHub auditée pour le Batch 19.2 :
+Base GitHub auditée pour le Batch 19.3 :
 
 ```text
-HEAD GitHub main : 01ca1e857947d969556481e5593c5712d137f5ad
+HEAD GitHub main : 44670a249ba662b2afd50a0a9e2a0e63ea4ed76d
 ```
 
-Le présent document décrit l'état attendu après application du patch 19.2 ; l'intégration GitHub reste une action explicite de l'opérateur.
+Les Batches 19.1 et 19.2 sont intégrés. Le présent document décrit l'état attendu après application du patch local 19.3 ; l'intégration GitHub reste une action explicite de l'opérateur.
 
 ## 2. Invariants fonctionnels
 
@@ -55,15 +55,22 @@ Principe central :
 ## 3. Pipeline canonique actuel
 
 ```text
-PortfolioState marqué
--> MarketSelectionInput
--> même Agent + tools read-only éventuels
+PortfolioState marqué + RiskPolicy
+-> CapacityEvaluator déterministe
+   -> NORMAL
+      -> MarketSelectionInput (univers exécutable normal)
+      -> même Agent + tools read-only éventuels
+   -> MANAGEMENT
+      -> MarketSelectionInput audité
+      -> même Agent, candidats = positions ouvertes uniquement
+      -> tools de recherche d'ouverture désactivés
 -> MarketSelection
 -> acquisition MarketState exécutable exact
 -> mark causal du ledger
--> AgentInput
+-> AgentInput + contexte de capacité si MANAGEMENT
 -> même Agent -> BUY/SELL/HOLD
 -> RiskEngine -> ALLOW/MODIFY/REJECT
+   -> en MANAGEMENT, veto sur toute augmentation d'exposition
 -> ExecutionIntent éventuel
 -> PaperBroker
 -> Fill + mise à jour comptable
@@ -72,13 +79,15 @@ PortfolioState marqué
 -> audit + snapshot durable
 ```
 
-En parallèle, les monitors SPOT et PERPETUAL peuvent rafraîchir les marks sans appel LLM. Le même Agent porte la sélection stratégique de marché et la décision de trading. Aucun composant déterministe ni frontend ne choisit l'opportunité à sa place.
+En parallèle, les monitors SPOT et PERPETUAL rafraîchissent les marks sans appel LLM. `CapacityEvaluator` ne choisit jamais une opportunité : il détermine uniquement le périmètre stratégique autorisé avant sélection. Le même Agent conserve la sélection entre positions ouvertes et la décision finale.
 
 ## 4. Univers exécutable actuel
 
 `ExecutableMarket(symbol, market_type)` représente la frontière d'exécution. La Campaign snapshotte actuellement un `paper_executable_markets` statique, trié et limité aux types supportés. Tous les marchés d'une Campaign partagent l'actif de quote/règlement attendu par la configuration actuelle.
 
 Les sources de recherche Kraken sont séparées des sources d'exécution. Un résultat de recherche ne devient jamais implicitement un `MarketState` exécutable.
+
+En mode `MANAGEMENT`, l'univers de sélection transmis au transport LLM est l'intersection entre l'univers exécutable de Campaign et les positions réellement ouvertes. Les positions SPOT sont mappées vers `BASE/settlement_asset`; les positions PERPETUAL conservent leur symbole exact. Le `MarketSelectionInput` canonique garde l'univers de Campaign pour préserver les contrats/audits existants ; le contexte transport explicite la restriction de gestion.
 
 ### Évolution planifiée
 
@@ -128,19 +137,17 @@ Un mark absent/périmé rend `mark_price`, `market_value` et `unrealized_pnl` in
 - `cash_available` : solde disponible de l'actif de règlement ;
 - `spot_remaining_cost_basis_total` : somme des coûts restants des positions SPOT si tous sont connus ;
 - `spot_market_value_total` : somme des valeurs de marché SPOT si tous les marks nécessaires sont disponibles ;
-- `spot_realized_pnl_total` : P&L SPOT réalisé cumulé quand la lignée 19.2 permet de le connaître ;
+- `spot_realized_pnl_total` : P&L SPOT réalisé cumulé quand la lignée permet de le connaître ;
 - `spot_unrealized_pnl_total` : somme des P&L latents SPOT si tous sont calculables ;
 - `equity` : cash + valeur SPOT + equity isolée des positions dérivées (`margin_used + unrealized_pnl + cumulative_funding`) lorsque la valorisation globale est complète ;
 - `exposure_value` : valeur SPOT + notional dérivé ;
 - `exposure_fraction = exposure_value / equity` lorsque `equity > 0`.
 
-`PortfolioState.valuation_complete` signifie que la **valorisation de marché/equity** dispose de toutes ses composantes fraîches ; il ne remplace pas `AssetPosition.accounting_complete`. Une position legacy peut donc contribuer à l'equity via sa valeur de marché tout en conservant un P&L latent inconnu.
-
-Le P&L réalisé SPOT n'est **pas** ajouté à l'equity : il est déjà reflété dans le cash. Un snapshot 19.1/legacy qui ne permet pas de connaître le réalisé global conserve `spot_realized_pnl_total=None`.
+`PortfolioState.valuation_complete` signifie que la **valorisation de marché/equity** dispose de toutes ses composantes fraîches ; il ne remplace pas `AssetPosition.accounting_complete`.
 
 ### PERPETUAL
 
-Les positions PERPETUAL conservent prix moyen d'entrée, mark price, notional, P&L réalisé/latent, marge, maintenance, funding et liquidation. Leur implémentation comptable existante n'est pas dupliquée par 19.2.
+Les positions PERPETUAL conservent prix moyen d'entrée, mark price, notional, P&L réalisé/latent, marge, maintenance, funding et liquidation. Leur implémentation comptable existante n'est pas dupliquée par 19.3.
 
 ## 6. Mark-to-market et cadences
 
@@ -150,20 +157,29 @@ Trois cadences restent distinctes :
 2. **cycle stratégique IA** : plus lent, décision BUY/SELL/HOLD ;
 3. **découverte / révision de watchlist IA** : beaucoup plus lente.
 
-Les monitors 19.2 fonctionnent dans le backend actif indépendamment du frontend et du cycle IA. Valeurs par défaut : cadence SPOT 5 s, cadence PERPETUAL 15 s, timeout acquisition 5 s, staleness 30 s. Ces paramètres techniques sont configurables par environnement.
+Les monitors fonctionnent dans le backend actif indépendamment du frontend et du cycle IA. Valeurs par défaut : cadence SPOT 5 s, cadence PERPETUAL 15 s, timeout acquisition 5 s, staleness 30 s.
 
-## 7. Mode gestion à exposition saturée
+## 7. Mode gestion à capacité d'ouverture indisponible
 
-Lorsque le backend détermine qu'une **nouvelle exposition est impossible** :
+Le Batch 19.3 introduit `CapacityEvaluator`, déterministe et alimenté par la **même instance `RiskPolicy`** que `RiskEngine`.
 
-- la phase stratégique doit se limiter aux positions ouvertes ;
-- l'Agent peut proposer HOLD, réduction ou clôture ;
-- le déterministe ne choisit pas à sa place quelle position conserver ou fermer ;
-- Risk conserve son autorité finale ;
-- le retour au mode normal est automatique dès qu'une capacité d'exposition redevient disponible ;
-- les appels/tools qui ne peuvent conduire qu'à une nouvelle ouverture doivent être évités et leur économie mesurée.
+Il distingue :
 
-Ce périmètre reste celui du Batch 19.3.
+- exposition actuellement utilisée ;
+- capacité théorique à augmenter encore l'exposition avant acquisition d'un marché ;
+- possibilité de réduire/clôturer une position existante.
+
+Le calcul pré-sélection utilise uniquement les faits déjà canoniques. Il peut constater notamment : cash de règlement nul, plafond total PERPETUAL atteint, tous les marchés PERPETUAL déjà au plafond par position, ou valorisation globale incomplète. Il **ne duplique pas** les contraintes qui nécessitent un `MarketState` exact : minimum d'ordre, caractéristiques de contrat, levier instrument, marge exacte et buffer de liquidation restent chez Risk.
+
+Règles :
+
+- si une capacité théorique certaine existe sur au moins un marché applicable : `NORMAL` ;
+- si aucune capacité certaine n'existe, ou si la valorisation nécessaire est incomplète : `MANAGEMENT` ;
+- SPOT ne reçoit aucun plafond global inventé : en l'état intégré, sa capacité d'ouverture pré-sélection dépend du cash disponible, tandis que les limites d'ordre restent Risk ;
+- en `MANAGEMENT`, les tools de découverte d'ouverture sont désactivés et l'Agent choisit seulement parmi les positions ouvertes ;
+- HOLD et réductions restent possibles ; Risk refuse toute augmentation d'exposition via `MANAGEMENT_EXPOSURE_INCREASE` ;
+- le mode est recalculé à chaque cycle et revient automatiquement à `NORMAL` après libération de capacité ;
+- aucune estimation de tokens n'est produite faute de métrique d'usage canonique existante.
 
 ## 8. Explicabilité
 
@@ -199,11 +215,11 @@ TradingView Lightweight Charts est privilégié pour le rendu. Un iframe Trading
 - aucun replay de MarketSelection, décision, Risk, Broker ou Fill ;
 - validation fail-closed de l'état restauré.
 
-Le Batch 19.2 étend encore le JSON `PortfolioState` sans migration SQL : les marks frais et agrégats connus sont restaurés tels quels. La règle de staleness est réévaluée au moment du nouveau snapshot ; aucune ancienne observation n'est transformée en prix courant.
+Le mode 19.3 ne nécessite aucun nouvel état durable ni migration SQL. Le snapshot restauré est valorisé selon les règles courantes puis `CapacityEvaluator` recalcule le mode au cycle suivant. Le mode et sa raison sont des faits de cycle audités, pas un état métier persistant à restaurer.
 
 ## 11. Control Plane backend
 
-`Strategy`, `StrategyRevision`, `Campaign` et `paper_run` conservent leurs rôles. Les paramètres de mark-to-market 19.2 sont des paramètres techniques de processus ; ils ne modifient pas silencieusement la stratégie ou les limites Risk de la Campaign.
+`Strategy`, `StrategyRevision`, `Campaign` et `paper_run` conservent leurs rôles. Le Batch 19.3 n'ajoute aucun paramètre opérateur : `CapacityEvaluator` réutilise les limites Risk de la Campaign et ne crée pas une seconde configuration divergente.
 
 ## 12. Cockpit
 
@@ -221,6 +237,8 @@ Le frontend reste un client des contrats backend. Il ne :
 - ne déduit pas une autorisation Risk ;
 - ne devient pas la source de vérité candles/positions ;
 - ne persiste aucun secret.
+
+Le Batch 19.3 ne requiert aucune modification frontend.
 
 ## 13. Documentation de planification
 

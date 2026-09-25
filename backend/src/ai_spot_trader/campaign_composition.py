@@ -46,6 +46,7 @@ from ai_spot_trader.portfolio.mark_to_market import (
     PaperDerivativeMarkToMarketMonitor,
     PaperSpotMarkToMarketMonitor,
 )
+from ai_spot_trader.risk.capacity import CapacityEvaluator
 from ai_spot_trader.risk.engine import RiskEngine
 from ai_spot_trader.risk.policy import RiskPolicy
 from ai_spot_trader.tools.market_research import build_market_research_tool_registry
@@ -275,20 +276,22 @@ def build_campaign_runtime(
         spread_bps=config.paper_spread_bps,
         slippage_bps=config.paper_slippage_bps,
     )
-    risk_engine = RiskEngine(
-        policy=RiskPolicy(
-            max_order_notional=config.risk_max_order_notional,
-            allowed_pairs=frozenset(config.risk_allowed_pairs),
-            allow_quantity_reduction=config.risk_allow_quantity_reduction,
-            derivative_leverage=config.paper_derivative_leverage,
-            max_derivative_leverage=config.risk_max_derivative_leverage,
-            max_derivative_position_notional=config.risk_max_derivative_position_notional,
-            max_total_derivative_exposure=config.risk_max_total_derivative_exposure,
-            derivative_liquidation_buffer_ratio=(
-                config.risk_derivative_liquidation_buffer_ratio
-            ),
-            derivative_margin_mode=config.paper_derivative_margin_mode,
+    risk_policy = RiskPolicy(
+        max_order_notional=config.risk_max_order_notional,
+        allowed_pairs=frozenset(config.risk_allowed_pairs),
+        allow_quantity_reduction=config.risk_allow_quantity_reduction,
+        derivative_leverage=config.paper_derivative_leverage,
+        max_derivative_leverage=config.risk_max_derivative_leverage,
+        max_derivative_position_notional=config.risk_max_derivative_position_notional,
+        max_total_derivative_exposure=config.risk_max_total_derivative_exposure,
+        derivative_liquidation_buffer_ratio=(
+            config.risk_derivative_liquidation_buffer_ratio
         ),
+        derivative_margin_mode=config.paper_derivative_margin_mode,
+    )
+    capacity_evaluator = CapacityEvaluator(policy=risk_policy)
+    risk_engine = RiskEngine(
+        policy=risk_policy,
         cost_model=cost_model,
         clock=clock,
     )
@@ -296,6 +299,7 @@ def build_campaign_runtime(
     cycle_runner = TradingCycleRunner(
         executable_market_data=market_data,
         executable_markets=config.paper_executable_markets,
+        capacity_evaluator=capacity_evaluator,
         portfolio=portfolio,
         agent=agent,
         risk_engine=risk_engine,

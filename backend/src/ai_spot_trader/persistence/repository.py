@@ -117,7 +117,7 @@ class SqlAlchemyCycleAuditRepository:
                 portfolio_after_as_of=(
                     portfolio_after.as_of if portfolio_after is not None else None
                 ),
-                market_selection_input_payload=_model_payload(selection_input),
+                market_selection_input_payload=_selection_input_payload(result),
                 market_selection_payload=_model_payload(result.market_selection),
                 agent_input_payload=_model_payload(agent_input),
                 agent_tool_traces_payload=_tool_trace_payload(result),
@@ -189,6 +189,28 @@ def _model_payload(model: Any | None) -> dict[str, object] | None:
     return dict(model.model_dump(mode="json"))
 
 
+def _capacity_payload(result: TradingCycleResult) -> dict[str, object] | None:
+    assessment = result.capacity_assessment
+    return None if assessment is None else assessment.to_payload()
+
+
+def _selection_input_payload(result: TradingCycleResult) -> dict[str, object] | None:
+    payload = _model_payload(result.market_selection_input)
+    capacity = _capacity_payload(result)
+    if payload is None and capacity is None:
+        return None
+    merged = {} if payload is None else payload
+    assessment = result.capacity_assessment
+    if assessment is not None:
+        merged["capacity_context"] = assessment.to_payload()
+        if assessment.mode == "MANAGEMENT" and payload is not None:
+            merged["executable_markets"] = [
+                market.model_dump(mode="json")
+                for market in assessment.management_markets
+            ]
+    return merged
+
+
 def _tool_trace_payload(result: TradingCycleResult) -> list[dict[str, object]]:
     return [dict(trace.model_dump(mode="json")) for trace in result.agent_tool_traces]
 
@@ -216,6 +238,9 @@ def _result_digest(result: TradingCycleResult, *, paper_run_id: UUID | None) -> 
         "fills": [_model_payload(fill) for fill in result.fills],
         "portfolio_state_after": _model_payload(result.portfolio_state_after),
     }
+    capacity = _capacity_payload(result)
+    if capacity is not None:
+        payload["capacity_assessment"] = capacity
     if paper_run_id is not None:
         payload["paper_run_id"] = str(paper_run_id)
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

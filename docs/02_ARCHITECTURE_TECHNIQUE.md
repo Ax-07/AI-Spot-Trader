@@ -2,13 +2,13 @@
 
 ## 1. Référence
 
-Base GitHub auditée pour le Batch 19.2 :
+Base GitHub auditée pour le Batch 19.3 :
 
 ```text
-HEAD GitHub main : 01ca1e857947d969556481e5593c5712d137f5ad
+HEAD GitHub main : 44670a249ba662b2afd50a0a9e2a0e63ea4ed76d
 ```
 
-Le HEAD doit être revérifié au démarrage de chaque batch.
+Le HEAD doit être revérifié au démarrage de chaque batch. Le Batch 19.3 décrit ci-dessous est un patch local tant qu'il n'a pas été validé/intégré explicitement par l'opérateur.
 
 ## 2. Architecture générale actuelle
 
@@ -28,6 +28,7 @@ Next.js cockpit
                     +-- TradingEngine
                     +-- AuditedTradingCycleRunner
                     +-- TradingCycleRunner
+                    +-- CapacityEvaluator
                     +-- OpenAIDecisionProvider
                     +-- RiskEngine
                     +-- PaperBroker
@@ -135,24 +136,73 @@ equity = cash settlement
 
 Le réalisé SPOT n'est pas rajouté à l'equity car il est déjà dans le cash. `exposure_value = valeur SPOT + Σ notional dérivé`. `PortfolioState.valuation_complete` qualifie la complétude de la valorisation de marché/equity, pas la connaissance de la base de coût de chaque position.
 
-Pour une lignée historique antérieure à 19.2, `spot_realized_pnl_total` reste `None` si le snapshot ne permet pas de le connaître. Aucune reconstruction par replay n'est effectuée.
+## 6. CapacityEvaluator et mode MANAGEMENT — Batch 19.3
 
-## 6. Persistence / recovery
+Le chemin multi-marchés devient :
 
-Aucune migration SQL n'est requise : les snapshots `PortfolioState` sont déjà stockés sous forme JSON.
+```text
+PortfolioState marqué + RiskPolicy partagé
+        |
+        v
+CapacityEvaluator
+   | NORMAL
+   |   -> MarketSelectionInput complet
+   |   -> même Agent + tools read-only éventuels
+   |
+   | MANAGEMENT
+   |   -> positions ouvertes intersectées avec l'univers exécutable
+   |   -> même Agent, sans tools de recherche d'ouverture
+   v
+MarketSelection -> MarketState exact -> AgentInput -> même Agent -> RiskEngine
+```
 
-Compatibilité :
+`CapacityEvaluator` et `RiskEngine` reçoivent **la même instance `RiskPolicy`** dans `composition.py` et `campaign_composition.py`. Le premier ne possède donc pas une seconde configuration de limites.
 
-- snapshots 19.2 : comptabilité, marks et agrégats connus restaurés ;
-- snapshots 19.1 : champs de valorisation absents acceptés par défaut ;
-- anciens snapshots sans base de coût : `accounting_complete=false` ;
-- mark restauré mais trop ancien : masqué au prochain snapshot ;
-- aucun replay Agent/Risk/Broker ;
-- aucune reconstruction rétrospective de base de coût ou de P&L.
+Le pré-calcul ne prétend pas reproduire Risk. Il peut établir avant sélection :
 
-## 7. Lifecycle et rafraîchissement
+- disponibilité du cash settlement ;
+- présence d'une valorisation canonique complète ;
+- notional dérivé total déjà utilisé par rapport à `max_total_derivative_exposure` ;
+- saturation des positions existantes par rapport à `max_derivative_position_notional` ;
+- marchés correspondant aux positions actuellement ouvertes.
 
-`AppRuntime` possède désormais des `background_services`. Le lifecycle est :
+Il ne possède pas encore le `MarketState` du marché sélectionné. Les contrôles suivants restent donc chez Risk : minimum de quantité, caractéristiques du contrat, levier maximum instrument, marge effective/frais, fraîcheur du marché et buffer de liquidation.
+
+Le SPOT ne reçoit aucun plafond d'exposition global inventé : la politique actuelle ne possède pas un tel champ. Avant sélection, du cash settlement positif signifie donc qu'une ouverture SPOT est théoriquement possible ; l'ordre proposé reste ensuite borné/refusé par Risk.
+
+Une valorisation incomplète produit `MANAGEMENT` avec raison explicite plutôt qu'une capacité fictive. Si aucune position ouverte exécutable n'existe dans ce cas, la sélection MANAGEMENT échoue explicitement au lieu de créer un HOLD synthétique déterministe.
+
+### Barrière Risk
+
+Le contexte `MANAGEMENT` est transmis à Risk. Après les contraintes communes, Risk rejette toute action qui augmenterait l'exposition avec `MANAGEMENT_EXPOSURE_INCREASE` :
+
+- SPOT : `BUY` augmente, `SELL` réduit ;
+- PERPETUAL : action de même sens ou ouverture sans position augmente ; action opposée à la position existante réduit et conserve la logique `reduce_only`/anti-reversal existante.
+
+HOLD passe toujours sans intention d'exécution. Le mode n'autorise jamais Broker directement.
+
+### Économie IA et audit
+
+`OpenAIDecisionProvider` conserve ses surfaces normales. Pour MANAGEMENT, deux surfaces dédiées du **même objet Agent** :
+
+- désactivent la boucle de tools pendant la sélection ;
+- remplacent uniquement l'univers transporté par les positions ouvertes ;
+- ajoutent un `capacity_context` indiquant mode, raison et `new_opening_research_skipped=true` ;
+- gardent la décision finale stratégique sur le `MarketState` exact.
+
+Aucune estimation de tokens n'est inventée : aucune donnée `input_tokens`/`output_tokens` canonique n'existe aujourd'hui dans l'infrastructure.
+
+## 7. Persistence / recovery
+
+Aucune migration SQL n'est requise. Les snapshots `PortfolioState` sont déjà stockés sous forme JSON et le `market_selection_input_payload` du cycle peut porter le `capacity_context`.
+
+Le digest du résultat audité inclut l'évaluation de capacité. Le mode n'est pas un état durable mutable : après recovery, il est recalculé depuis le nouveau `PortfolioState` à chaque cycle. Il n'existe donc aucun replay ni snapshot de « mode courant » à restaurer.
+
+Compatibilité 19.1/19.2 conservée : aucun replay Agent/Risk/Broker, aucune reconstruction rétrospective de base de coût/P&L et staleness réévaluée au snapshot.
+
+## 8. Lifecycle et rafraîchissement
+
+`AppRuntime` possède des `background_services`. Le lifecycle reste :
 
 ```text
 initialize()
@@ -167,24 +217,15 @@ close()
 -> close database
 ```
 
-Les monitors SPOT et PERPETUAL sont donc indépendants du frontend et du cycle stratégique. Valeurs par défaut :
+Les monitors SPOT et PERPETUAL sont indépendants du frontend et du cycle stratégique.
 
-- cadence SPOT : 5 s ;
-- cadence PERPETUAL : 15 s ;
-- timeout par observation : 5 s ;
-- staleness : 30 s.
+## 9. API / Agent / Risk / frontend
 
-Une erreur d'acquisition ne fabrique aucun prix et n'arrête pas le backend ; l'ancien mark cesse d'être exposé dès qu'il dépasse le seuil de fraîcheur.
+L'API portfolio continue de sérialiser le snapshot canonique. Le frontend affiche les valeurs du backend sans recalcul financier.
 
-## 8. API / Agent / Risk / frontend
+Le Batch 19.3 n'ajoute aucune dépendance frontend et ne modifie pas le cockpit : mode et raison sont déjà auditables dans les payloads de cycle. Une exposition UI dédiée pourra être ajoutée ultérieurement si elle apporte une valeur opérateur mesurée, sans déplacer le calcul de capacité dans TypeScript.
 
-`AgentInput` et `RiskEngine` consomment déjà `PortfolioState`; ils reçoivent donc naturellement les nouvelles valeurs sans calcul parallèle du P&L latent.
-
-L'API portfolio sérialise le snapshot canonique. Le frontend affiche `mark_price`, `market_value`, `remaining_cost_basis`, `realized_pnl` et `unrealized_pnl` tels quels. Une donnée `None` apparaît comme `—`.
-
-L'analytics PAPER historique conserve son rôle de replay causal des cycles persistés ; il n'est pas utilisé comme moteur de valorisation live.
-
-## 9. Cadences futures
+## 10. Cadences futures
 
 Les trois boucles restent séparées :
 
@@ -194,7 +235,7 @@ B. cycle stratégique            : même Agent, BUY/SELL/HOLD
 C. discovery/watchlist          : même Agent, cadence plus lente
 ```
 
-## 10. Discovery, watchlist et Marchés
+## 11. Discovery, watchlist et Marchés
 
 Architecture cible :
 

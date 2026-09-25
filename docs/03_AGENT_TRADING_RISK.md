@@ -4,16 +4,21 @@
 
 **L'Agent propose. Le Risk Engine autorise, modifie ou refuse.**
 
-L'Agent est stratégique. Risk, Broker, comptabilité, monitoring et contraintes structurelles restent déterministes.
+L'Agent est stratégique. Risk, Broker, comptabilité, monitoring, capacité et contraintes structurelles restent déterministes.
 
 ## 2. Agent unique aujourd'hui
 
 ```text
+NORMAL
 MarketSelectionInput -> select_market() -> MarketSelection
 AgentInput           -> generate_decision() -> DecisionCandidate
+
+MANAGEMENT
+MarketSelectionInput -> select_management_market() -> MarketSelection
+AgentInput           -> generate_management_decision() -> DecisionCandidate
 ```
 
-Il s'agit du même `OpenAIDecisionProvider`, du même modèle et du même rôle stratégique.
+Ces quatre surfaces appartiennent au même `OpenAIDecisionProvider`, au même modèle et au même rôle stratégique. MANAGEMENT n'introduit pas un second Agent.
 
 ## 3. Trois rythmes, toujours un seul Agent
 
@@ -37,6 +42,8 @@ Le contrat applicatif impose notamment :
 - aucun LLM -> Broker/Kraken ;
 - aucun tool -> Broker/Risk ;
 - Risk final.
+
+En MANAGEMENT, le transport ajoute un `capacity_context` déterministe et n'expose à la sélection que les positions ouvertes. Il indique explicitement que les tools de recherche d'ouverture sont désactivés et qu'une augmentation d'exposition sera refusée par Risk.
 
 ## 5. Rationale et explicabilité
 
@@ -66,25 +73,63 @@ Ces valeurs sont calculées exclusivement par le backend déterministe. L'Agent 
 
 `accounting_complete=false` signifie qu'une position historique ne dispose pas d'une base de coût suffisamment fiable. Même avec un mark, son P&L latent reste indisponible. Un mark absent/périmé rend également la valorisation indisponible.
 
-La fraîcheur du mark n'autorise aucune donnée future : le ledger refuse une observation postérieure à son horloge et ne remplace pas un mark récent par un mark plus ancien.
-
 ## 7. PERPETUAL
 
 `BUY` exprime/augmente LONG ou réduit SHORT. `SELL` exprime/augmente SHORT ou réduit LONG.
 
 Risk garde le contrôle du contrat, taille, levier, marge, notional, exposition, buffer liquidation, `reduce_only`, anti-reversal et marge `ISOLATED`. Le LLM ne choisit jamais le levier effectif.
 
-La comptabilité/valorisation dérivée existante reste canonique ; le Batch 19.2 ne crée pas une seconde implémentation parallèle.
+La comptabilité/valorisation dérivée existante reste canonique ; le Batch 19.3 ne crée pas une seconde implémentation parallèle.
 
 ## 8. Monitoring déterministe
 
-`PaperSpotMarkToMarketMonitor` utilise la source publique Kraken et le ledger canonique. Il ne possède aucune référence à l'Agent, Risk ou Broker et ne peut pas produire d'ordre.
+`PaperSpotMarkToMarketMonitor` et `PaperDerivativeMarkToMarketMonitor` alimentent le ledger canonique sans référence stratégique à l'Agent. Ils ne peuvent pas produire d'ordre.
 
 Le monitor reste actif avec le runtime backend même si le TradingEngine est `STOPPED`. Fermer le frontend n'arrête donc pas la valorisation du runtime actif.
 
-## 9. Mode gestion quand aucune nouvelle exposition n'est possible
+## 9. Mode gestion lorsque la capacité de nouvelle exposition n'est pas certaine
 
-Le backend pourra constater de manière déterministe qu'une nouvelle exposition est interdite. Dans ce cas, l'Agent ne recherchera pas de nouvelles ouvertures et son contexte portera sur les positions ouvertes ; HOLD, réduction et clôture resteront soumises à Risk. Ce périmètre reste celui du Batch 19.3.
+Le Batch 19.3 implémente :
+
+```text
+PortfolioState valorisé + RiskPolicy partagé
+-> CapacityEvaluator
+   -> NORMAL
+   -> MANAGEMENT
+```
+
+### NORMAL
+
+- univers exécutable normal ;
+- `select_market()` et tools read-only comme avant ;
+- même Agent final ;
+- BUY/SELL/HOLD restent soumis à Risk.
+
+### MANAGEMENT
+
+- aucune recherche/tool de découverte destinée à de nouvelles ouvertures ;
+- univers de sélection du même Agent = marchés correspondant aux positions ouvertes ;
+- HOLD, réduction partielle et clôture restent stratégiques ;
+- le déterministe ne classe ni ne choisit la position à fermer ;
+- Risk reçoit explicitement le mode et refuse toute hausse d'exposition par `MANAGEMENT_EXPOSURE_INCREASE` ;
+- une réduction PERPETUAL conserve la logique `reduce_only` et anti-reversal existante ;
+- le mode est recalculé à chaque cycle et disparaît automatiquement dès qu'une capacité redevient disponible.
+
+### Ce que CapacityEvaluator sait avant sélection
+
+Il réutilise la même `RiskPolicy` et peut constater le cash settlement, la complétude de valorisation, le plafond d'exposition dérivée totale et le plafond de notional par position déjà ouverte.
+
+Il **ne** recalcule pas les contraintes dépendant du marché exact : quantité minimum, contract metadata, levier maximum instrument, marge/frais précis, fraîcheur ou liquidation. Ces contrôles restent exclusivement dans Risk après acquisition de `MarketState`.
+
+Il n'existe pas de plafond global d'exposition SPOT dans la politique actuelle ; 19.3 n'en invente pas un. Pour SPOT, une capacité théorique pré-sélection existe tant que du cash settlement positif existe, puis Risk décide l'exécutabilité de l'ordre proposé.
+
+### Valorisation incertaine
+
+`valuation_complete=false` produit un mode MANAGEMENT explicite plutôt qu'une capacité inventée. Si aucune position ouverte exécutable n'existe, le cycle échoue de manière technique/visible à la sélection au lieu de générer artificiellement un HOLD.
+
+### Économie IA
+
+Le fait `new_opening_research_skipped=true` est audité. Les `AgentToolTrace` restent vides pour une sélection MANAGEMENT. L'infrastructure actuelle ne persiste pas de compteurs de tokens ; aucun chiffre estimé n'est fabriqué.
 
 ## 10. Découverte périodique des marchés
 
@@ -102,13 +147,7 @@ univers surveillé = watchlist IA actuelle + toutes les positions ouvertes
 
 Le recovery restaure un `PortfolioState` durable et ne réexécute jamais sélection, Agent, Risk, Broker ou Fill.
 
-Pour 19.2 :
-
-- un mark frais restauré reste utilisable ;
-- un mark devenu trop ancien est masqué au nouveau snapshot ;
-- une position legacy sans coût historique reste marquée incomplète ;
-- le P&L réalisé global reste `None` si la lignée historique ne permet pas de le connaître ;
-- aucune donnée future ou replay historique n'est utilisé pour compléter artificiellement l'état.
+Pour 19.3, aucun état `NORMAL/MANAGEMENT` n'est restauré : `CapacityEvaluator` le recalcule au prochain cycle depuis le snapshot courant. Le mode et sa raison restent des faits audités du cycle qui les a produits.
 
 ## 13. Interdits maintenus
 

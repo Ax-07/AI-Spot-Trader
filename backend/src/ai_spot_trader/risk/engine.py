@@ -82,6 +82,7 @@ class RiskEngine:
         decision: DecisionCandidate,
         market_state: MarketState,
         portfolio_state: PortfolioState,
+        management_mode: bool = False,
     ) -> RiskResult:
         """Return ALLOW/MODIFY/REJECT and create an intent only when executable."""
 
@@ -120,6 +121,18 @@ class RiskEngine:
                     decision=decision,
                     reason=common_rejection,
                 ),
+            )
+
+        if management_mode and _would_increase_exposure(
+            decision=decision,
+            portfolio_state=portfolio_state,
+        ):
+            return self._reject(
+                decision=decision,
+                assessed_at=assessed_at,
+                requested_quantity=requested,
+                reason=RiskReason.MANAGEMENT_EXPOSURE_INCREASE,
+                evaluated_limits=self._capacity_evaluated_limits(decision=decision),
             )
 
         if decision.market_type is MarketType.SPOT:
@@ -350,7 +363,6 @@ class RiskEngine:
                 authorized = current.quantity
                 reasons.append(RiskReason.DERIVATIVE_REDUCE_ONLY_LIMIT)
         elif current is not None and _action_side(decision.action) is not current.side:
-            # Defensive; _is_reducing should have captured the only opposite-side case.
             return self._reject(
                 decision=decision,
                 assessed_at=assessed_at,
@@ -374,7 +386,6 @@ class RiskEngine:
             and order_notional > self._policy.max_order_notional
         ):
             if reduce_only:
-                # Reductions are allowed to exceed the opening-order cap; they lower risk.
                 pass
             elif not self._policy.allow_quantity_reduction:
                 return self._reject(
@@ -809,13 +820,26 @@ class RiskEngine:
             limits.append(RiskLimit.MARKET_FRESHNESS)
         return tuple(limits)
 
+    def _capacity_evaluated_limits(
+        self,
+        *,
+        decision: DecisionCandidate,
+    ) -> tuple[RiskLimit, ...]:
+        limits = list(
+            self._common_evaluated_limits(
+                decision=decision,
+                reason=RiskReason.MANAGEMENT_EXPOSURE_INCREASE,
+            )
+        )
+        limits.append(RiskLimit.CAPACITY_MODE)
+        return tuple(limits)
+
     def _spot_evaluated_limits(
         self,
         *,
         decision: DecisionCandidate,
         rejection: RiskReason | None,
     ) -> tuple[RiskLimit, ...]:
-        # Preserve the exact historical SPOT audit order and early-stop semantics.
         limits: list[RiskLimit] = [RiskLimit.CANONICAL_SYMBOL]
         if rejection is RiskReason.INVALID_SYMBOL:
             return tuple(limits)
@@ -910,6 +934,24 @@ def _is_reducing(action: TradingAction, position: DerivativePosition | None) -> 
     if position is None:
         return False
     return _action_side(action) is not position.side
+
+
+def _would_increase_exposure(
+    *,
+    decision: DecisionCandidate,
+    portfolio_state: PortfolioState,
+) -> bool:
+    if decision.market_type is MarketType.SPOT:
+        return decision.action is TradingAction.BUY
+    current = next(
+        (
+            position
+            for position in portfolio_state.derivative_positions
+            if position.symbol == decision.symbol
+        ),
+        None,
+    )
+    return not _is_reducing(decision.action, current)
 
 
 def _projected_derivative_quantity(

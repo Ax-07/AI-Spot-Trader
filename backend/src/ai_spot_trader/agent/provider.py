@@ -159,6 +159,47 @@ class OpenAIDecisionProvider:
     async def select_market(self, selection_input: MarketSelectionInput) -> MarketSelection:
         """Let the same strategic Agent research and choose one typed executable market."""
 
+        return await self._select_market(
+            selection_input,
+            allow_tools=True,
+            capacity_reason=None,
+            candidate_markets=None,
+        )
+
+    async def select_management_market(
+        self,
+        selection_input: MarketSelectionInput,
+        *,
+        capacity_reason: str,
+        management_markets: tuple[ExecutableMarket, ...],
+    ) -> MarketSelection:
+        """Choose only among open-position markets without new-opening research tools."""
+
+        self._last_tool_traces = ()
+        if not management_markets:
+            raise AgentContractViolationError(
+                "MANAGEMENT mode requires at least one executable open-position market"
+            )
+        if any(market not in selection_input.executable_markets for market in management_markets):
+            raise AgentContractViolationError(
+                "management markets must be a subset of the executable universe"
+            )
+        return await self._select_market(
+            selection_input,
+            allow_tools=False,
+            capacity_reason=capacity_reason,
+            candidate_markets=management_markets,
+        )
+
+    async def _select_market(
+        self,
+        selection_input: MarketSelectionInput,
+        *,
+        allow_tools: bool,
+        capacity_reason: str | None,
+        candidate_markets: tuple[ExecutableMarket, ...] | None,
+    ) -> MarketSelection:
+        self._last_tool_traces = ()
         normalized_input = _normalize_selection_input(
             selection_input,
             model=self._model,
@@ -166,14 +207,19 @@ class OpenAIDecisionProvider:
             max_tool_calls=self._max_tool_calls,
         )
         traces: tuple[AgentToolTrace, ...] = ()
-        self._last_tool_traces = ()
-        if self._tool_registry is not None and self._max_tool_calls > 0:
+        input_text = _transport_input_text(
+            normalized_input,
+            capacity_reason=capacity_reason,
+            phase="MARKET_SELECTION",
+            management_markets=candidate_markets,
+        )
+        if allow_tools and self._tool_registry is not None and self._max_tool_calls > 0:
             tool_client = cast(ToolStructuredDecisionClient, self._client)
             try:
                 loop_result = await tool_client.generate_structured_decision_with_tools(
                     model=self._model,
                     instructions=AGENT_SYSTEM_PROMPT,
-                    input_text=normalized_input.model_dump_json(),
+                    input_text=input_text,
                     schema=MARKET_SELECTION_SCHEMA,
                     tool_registry=self._tool_registry,
                     max_tool_calls=self._max_tool_calls,
@@ -188,7 +234,7 @@ class OpenAIDecisionProvider:
             raw_output = await self._client.generate_structured_decision(
                 model=self._model,
                 instructions=AGENT_SYSTEM_PROMPT,
-                input_text=normalized_input.model_dump_json(),
+                input_text=input_text,
                 schema=MARKET_SELECTION_SCHEMA,
             )
 
@@ -201,9 +247,14 @@ class OpenAIDecisionProvider:
             symbol=payload.symbol,
             market_type=MarketType(payload.market_type),
         )
-        if selected_market not in normalized_input.executable_markets:
+        allowed_markets = (
+            normalized_input.executable_markets
+            if candidate_markets is None
+            else candidate_markets
+        )
+        if selected_market not in allowed_markets:
             raise AgentContractViolationError(
-                "LLM selected symbol + market_type outside the executable universe"
+                "LLM selected symbol + market_type outside the active cycle universe"
             )
 
         selected_at = _normalize_decision_time(self._clock.now())
@@ -240,6 +291,27 @@ class OpenAIDecisionProvider:
     async def generate_decision(self, agent_input: AgentInput) -> DecisionCandidate:
         """Generate the final BUY/SELL/HOLD decision on the exact executable MarketState."""
 
+        return await self._generate_decision(agent_input, capacity_reason=None)
+
+    async def generate_management_decision(
+        self,
+        agent_input: AgentInput,
+        *,
+        capacity_reason: str,
+    ) -> DecisionCandidate:
+        """Use the same Agent to HOLD/reduce/close an already-open selected position."""
+
+        return await self._generate_decision(
+            agent_input,
+            capacity_reason=capacity_reason,
+        )
+
+    async def _generate_decision(
+        self,
+        agent_input: AgentInput,
+        *,
+        capacity_reason: str | None,
+    ) -> DecisionCandidate:
         normalized_input = _normalize_agent_input(
             agent_input,
             model=self._model,
@@ -249,17 +321,28 @@ class OpenAIDecisionProvider:
         selection = normalized_input.market_selection
         traces: tuple[AgentToolTrace, ...] = () if selection is None else selection.tool_traces
         self._last_tool_traces = traces
+        input_text = _transport_input_text(
+            normalized_input,
+            capacity_reason=capacity_reason,
+            phase="FINAL_DECISION",
+            management_markets=None,
+        )
 
         # Legacy Batch 18.1 callers without an explicit MarketSelection keep the historical
-        # optional research loop. The Batch 18.2 causal path never researches after acquiring
+        # optional research loop. The causal multi-market path never researches after acquiring
         # the executable MarketState: it reuses exactly the selection-phase traces.
-        if selection is None and self._tool_registry is not None and self._max_tool_calls > 0:
+        if (
+            capacity_reason is None
+            and selection is None
+            and self._tool_registry is not None
+            and self._max_tool_calls > 0
+        ):
             tool_client = cast(ToolStructuredDecisionClient, self._client)
             try:
                 loop_result = await tool_client.generate_structured_decision_with_tools(
                     model=self._model,
                     instructions=AGENT_SYSTEM_PROMPT,
-                    input_text=normalized_input.model_dump_json(),
+                    input_text=input_text,
                     schema=STRATEGIC_DECISION_SCHEMA,
                     tool_registry=self._tool_registry,
                     max_tool_calls=self._max_tool_calls,
@@ -274,7 +357,7 @@ class OpenAIDecisionProvider:
             raw_output = await self._client.generate_structured_decision(
                 model=self._model,
                 instructions=AGENT_SYSTEM_PROMPT,
-                input_text=normalized_input.model_dump_json(),
+                input_text=input_text,
                 schema=STRATEGIC_DECISION_SCHEMA,
             )
 
@@ -314,6 +397,45 @@ class OpenAIDecisionProvider:
             isinstance(trace, AgentToolTrace) for trace in partial
         ):
             self._last_tool_traces = partial
+
+
+def _transport_input_text(
+    value: MarketSelectionInput | AgentInput,
+    *,
+    capacity_reason: str | None,
+    phase: Literal["MARKET_SELECTION", "FINAL_DECISION"],
+    management_markets: tuple[ExecutableMarket, ...] | None,
+) -> str:
+    if capacity_reason is None:
+        return value.model_dump_json()
+
+    payload = value.model_dump(mode="json")
+    if phase == "MARKET_SELECTION" and management_markets is not None:
+        payload["executable_markets"] = [
+            market.model_dump(mode="json") for market in management_markets
+        ]
+    instruction = (
+        "La capacité de nouvelle exposition est déterministement indisponible ou non sûre. "
+        "Ne recherchez aucune nouvelle ouverture. Choisissez uniquement un marché déjà ouvert "
+        "dans executable_markets afin de gérer une position existante."
+        if phase == "MARKET_SELECTION"
+        else "La capacité de nouvelle exposition est déterministement indisponible ou non sûre. "
+        "Décidez uniquement HOLD ou une action destinée à réduire/clôturer la position ouverte "
+        "sélectionnée. Toute augmentation d'exposition sera refusée par le Risk Engine."
+    )
+    payload["capacity_context"] = {
+        "protocol_version": "capacity-management-v1",
+        "mode": "MANAGEMENT",
+        "reason": capacity_reason,
+        "new_opening_research_skipped": True,
+        "management_markets": (
+            [market.model_dump(mode="json") for market in management_markets]
+            if management_markets is not None
+            else None
+        ),
+        "instruction": instruction,
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def _normalize_selection_input(

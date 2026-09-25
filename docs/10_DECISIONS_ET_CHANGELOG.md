@@ -10,14 +10,14 @@ Broker/Kraken, SPOT sans short/levier, PERPETUAL linéaire avec protections dét
 durable, no-look-ahead, backend indépendant du frontend, HOLD valide, aucun secret versionné et LIVE
 séparé.
 
-## Référence auditée du Batch 19.2
+## Référence auditée du Batch 19.3
 
 ```text
-HEAD GitHub main audité : 01ca1e857947d969556481e5593c5712d137f5ad
-Commit                 : docs: finalize Batch 19.1 integration state
+HEAD GitHub main audité : 44670a249ba662b2afd50a0a9e2a0e63ea4ed76d
+Commit                 : feat: add canonical mark-to-market and unrealized pnl
 ```
 
-Le Batch 19.1 est intégré. Le Batch 19.2 est livré comme patch local ; son intégration GitHub reste explicite et postérieure à la validation opérateur.
+Les Batches 19.1 et 19.2 sont intégrés. Le Batch 19.3 est livré comme patch local ; son intégration GitHub reste explicite et postérieure à la validation opérateur.
 
 ## Décisions historiques toujours actives
 
@@ -41,65 +41,75 @@ Les snapshots antérieurs sans base de coût restent `accounting_complete=false`
 
 ## ADR-206 — Séparer le monitoring déterministe du cycle stratégique IA
 
-**IMPLÉMENTÉE DANS LE BATCH 19.2.**
+**INTÉGRÉE AU BATCH 19.2.**
 
-``PaperSpotMarkToMarketMonitor` et `PaperDerivativeMarkToMarketMonitor` sont des services backend indépendant du `TradingEngine` et du LLM. Il ne sélectionne aucun trade et ne produit aucun ordre.
-
-Paramètres techniques par défaut :
-
-```text
-cadence SPOT MTM  : 5 s
-cadence PERP MTM  : 15 s
-timeout observation: 5 s
-staleness mark     : 30 s
-```
-
-Ces valeurs sont configurables par environnement et ne changent pas silencieusement la stratégie de Campaign.
+`PaperSpotMarkToMarketMonitor` et `PaperDerivativeMarkToMarketMonitor` sont des services backend indépendants du `TradingEngine` et du LLM. Ils ne sélectionnent aucun trade et ne produisent aucun ordre.
 
 ## ADR-215 — Mark SPOT = dernier prix ticker Kraken causal
 
-**IMPLÉMENTÉE DANS LE BATCH 19.2.**
+**INTÉGRÉE AU BATCH 19.2.**
 
 La référence de valorisation SPOT est `LAST_PRICE` issue d'une observation Kraken datée. Une observation future par rapport à l'horloge du ledger est rejetée ; une observation plus ancienne ne remplace pas un mark plus récent.
-
-Définitions :
 
 ```text
 market_value   = quantity * mark_price
 unrealized_pnl = market_value - remaining_cost_basis
 ```
 
-Le mark ne simule pas un SELL et n'ajoute donc ni frais, ni spread, ni slippage de sortie hypothétique.
-
 ## ADR-216 — Staleness fail-closed pour la valorisation live
 
-**IMPLÉMENTÉE DANS LE BATCH 19.2.**
+**INTÉGRÉE AU BATCH 19.2.**
 
-Un mark plus ancien que le seuil configuré n'est plus exposé dans le snapshot : prix courant, valeur de marché et P&L latent deviennent indisponibles. Le backend ne prolonge pas artificiellement la validité d'un prix lors d'une panne de données.
-
-Une position legacy avec coût inconnu peut exposer `market_value`, mais jamais un `unrealized_pnl` canonique.
+Un mark plus ancien que le seuil configuré n'est plus exposé dans le snapshot. Le backend ne prolonge pas artificiellement la validité d'un prix lors d'une panne de données.
 
 ## ADR-217 — Agrégats portefeuille calculés dans le ledger
 
-**IMPLÉMENTÉE DANS LE BATCH 19.2.**
+**INTÉGRÉE AU BATCH 19.2.**
 
-Le frontend et l'API ne recalculent pas les métriques financières. Le ledger expose cash, coût restant SPOT, valeur SPOT, P&L réalisé/latent SPOT, equity et exposition lorsque les données nécessaires existent.
-
-Définition de l'equity :
-
-```text
-equity = cash settlement
-       + valeur SPOT
-       + Σ(margin_used + unrealized_pnl + cumulative_funding) dérivés
-```
-
-Le P&L réalisé n'est pas rajouté : il est déjà reflété dans le cash.
-
-Le total réalisé SPOT commence à zéro pour une nouvelle lignée 19.2 et est ensuite persisté dans `PortfolioState`. Pour un snapshot antérieur qui ne permet pas de connaître l'historique complet, il reste `None`; aucun replay des fills n'est lancé.
+Le ledger expose cash, coût restant SPOT, valeur SPOT, P&L réalisé/latent SPOT, equity et exposition lorsque les données nécessaires existent. Le frontend ne recalcule pas ces métriques financières.
 
 ## ADR-207 — Saturation d'exposition = restriction déterministe du champ des actions
 
-**PLANIFIÉE / NON IMPLÉMENTÉE.** Le backend pourra utiliser l'état valorisé 19.2 pour constater qu'aucune nouvelle exposition n'est possible. Le même Agent choisira encore parmi HOLD/réduction/clôture ; Risk reste final.
+**IMPLÉMENTÉE DANS LE PATCH BATCH 19.3.**
+
+Le backend introduit `CapacityEvaluator` avant la sélection de marché. Son rôle est uniquement de constater si une nouvelle augmentation d'exposition est théoriquement possible avec les faits déjà disponibles avant `MarketState`.
+
+Deux états :
+
+```text
+NORMAL      -> sélection stratégique normale + tools read-only éventuels
+MANAGEMENT  -> positions ouvertes uniquement + recherche d'ouverture désactivée
+```
+
+Le même Agent choisit encore le marché parmi les positions ouvertes et décide HOLD/réduction/clôture. Le déterministe ne classe pas les positions et ne crée pas une stratégie de sortie.
+
+## ADR-218 — CapacityEvaluator partage exactement la RiskPolicy active
+
+**IMPLÉMENTÉE DANS LE PATCH BATCH 19.3.**
+
+`composition.py` et `campaign_composition.py` construisent une seule instance `RiskPolicy`, transmise à `CapacityEvaluator` et `RiskEngine`. Il n'existe pas de deuxième copie de configuration Risk susceptible de diverger.
+
+Le CapacityEvaluator ne duplique pas les contrôles qui dépendent du `MarketState` : minimum d'ordre, contrat, levier instrument, marge exacte, frais, fraîcheur et liquidation restent exclusivement sous l'autorité de Risk.
+
+Aucun plafond global SPOT n'est inventé car la politique actuelle n'en possède pas.
+
+## ADR-219 — MANAGEMENT est fail-closed et Risk interdit les hausses d'exposition
+
+**IMPLÉMENTÉE DANS LE PATCH BATCH 19.3.**
+
+Une valorisation incomplète produit MANAGEMENT avec raison explicite. Risk reçoit le mode du cycle et rejette toute action augmentant l'exposition avec `MANAGEMENT_EXPOSURE_INCREASE`.
+
+HOLD reste autorisé. Les actions réductrices continuent dans les chemins SPOT SELL et PERPETUAL `reduce_only` existants. Aucune sortie Agent ne contourne Risk.
+
+Le mode n'est pas un état persistant : il est recalculé à chaque cycle, y compris après recovery.
+
+## ADR-220 — Économie IA mesurée uniquement avec des faits observables
+
+**IMPLÉMENTÉE DANS LE PATCH BATCH 19.3.**
+
+En MANAGEMENT, `OpenAIDecisionProvider` désactive la boucle de tools pendant la sélection et expose `new_opening_research_skipped=true` dans le contexte audité. Les traces de tools du cycle restent vides.
+
+Aucun compteur de tokens n'existe actuellement dans l'infrastructure durable. Le Batch 19.3 n'invente donc ni estimation de tokens ni nombre fictif d'appels économisés.
 
 ## ADR-208/209 — Univers admissible, watchlist stratégique et révisions
 
@@ -131,13 +141,25 @@ Le schéma de persistence/watchlist reste à décider au batch dédié.
 
 ## Changelog — 2026-09-24 — Batch 19.2
 
-- resynchronisation sur le HEAD GitHub `01ca1e8579...` ;
-- audit ledger/broker/pricing/Kraken/recovery/analytics/Agent/Risk/API/frontend ;
 - mark SPOT causal `LAST_PRICE` et P&L latent backend ;
 - agrégats portefeuille et equity/exposition backend ;
-- monitor SPOT/PERPETUAL sans LLM avec cadence/timeout/staleness configurables ;
-- séparation exécution/valorisation : le broker met à jour la comptabilité, tandis que la source de marché et le monitor rafraîchissent le mark ;
+- monitor SPOT/PERPETUAL sans LLM ;
+- séparation exécution/valorisation ;
 - compatibilité snapshot/recovery sans migration SQL ;
 - API et cockpit Positions branchés uniquement sur les valeurs backend ;
-- tests ciblés ajoutés ;
+- intégration GitHub au HEAD `44670a2...`.
+
+## Changelog — 2026-09-25 — Batch 19.3
+
+- resynchronisation sur le HEAD GitHub `44670a249b...` ;
+- audit TradingCycleRunner/Agent/tools/Risk/PortfolioState/Control Plane/audit ;
+- ajout de `CapacityEvaluator` déterministe avec `NORMAL` / `MANAGEMENT` ;
+- même `RiskPolicy` partagée entre CapacityEvaluator et RiskEngine ;
+- sélection MANAGEMENT limitée aux positions ouvertes ;
+- tools de recherche d'ouverture désactivés en MANAGEMENT ;
+- même Agent conservé pour sélection de gestion et décision finale ;
+- Risk bloque explicitement toute augmentation d'exposition en MANAGEMENT ;
+- mode/reason/search-skip audités sans nouvel état durable ni migration SQL ;
+- aucune métrique tokens inventée ;
+- frontend inchangé ;
 - aucune modification GitHub effectuée par ChatGPT.

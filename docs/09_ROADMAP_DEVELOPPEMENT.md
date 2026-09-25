@@ -3,50 +3,45 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub main audité : 01ca1e857947d969556481e5593c5712d137f5ad
+HEAD GitHub main audité : 44670a249ba662b2afd50a0a9e2a0e63ea4ed76d
 ```
 
 Le HEAD doit être revérifié au démarrage de chaque nouveau batch. Le document détaillé des améliorations est `docs/11_AMELIORATIONS_PLANIFIEES.md`.
 
-## Jalons intégrés avant 19.2
+## Jalons intégrés avant 19.3
 
 - 18.1 à 18.8 : tools Agent read-only, sélection multi-marchés, expérimentation, recovery et résilience réseau ;
 - 18.9A à 18.9C : Control Plane backend/frontend et validation comportementale ;
 - 18.10 à 18.13 : refonte UX, guide opérateur, simplification, dark mode et modernisation ;
-- Batch 19.1 : comptabilité SPOT canonique intégrée, clôture documentaire au HEAD `01ca1e8...`.
+- Batch 19.1 : comptabilité SPOT canonique ;
+- Batch 19.2 : mark-to-market canonique, equity/exposition backend et monitors SPOT/PERPETUAL sans LLM, intégré au HEAD `44670a2...`.
 
-## Batch 19.2 — Monitoring et mark-to-market déterministes
+## Batch 19.3 — Mode gestion et optimisation de consommation IA
 
 **État du patch : implémenté par ChatGPT, à valider/intégrer localement par l'opérateur.**
 
 Résultat :
 
-- mark SPOT canonique basé sur le dernier prix ticker Kraken causal ;
-- timestamp et source du mark exposés par position ;
-- `market_value = quantity * mark_price` ;
-- `unrealized_pnl = market_value - remaining_cost_basis` lorsque la comptabilité 19.1 est complète ;
-- marks absents/périmés explicitement indisponibles ;
-- positions legacy valorisables au marché sans inventer un P&L latent ;
-- agrégats `PortfolioState` : cash, coût restant, valeur SPOT, P&L réalisé/latent, equity et exposition lorsque calculables ;
-- monitor backend SPOT/PERPETUAL sans LLM, cadence/timeout/staleness configurables ;
-- valorisation SPOT alimentée par la source de marché canonique et le monitor, séparée de l'exécution du broker ;
-- recovery compatible sans migration SQL ni replay historique ;
-- API/types/cockpit Positions enrichis ;
-- suppression du rapprochement TypeScript entre position et dernier marché global ;
-- tests ciblés 19.2 couvrant valorisation, recovery, staleness, coûts, Decimal et no-look-ahead.
+- `CapacityEvaluator` déterministe branché avant la sélection de marché ;
+- partage de la même instance `RiskPolicy` entre CapacityEvaluator et RiskEngine ;
+- modes `NORMAL` et `MANAGEMENT` recalculés à chaque cycle ;
+- aucune limite globale SPOT inventée ;
+- saturation PERPETUAL détectable via plafond d'exposition totale et plafond par position déjà ouverte ;
+- valorisation incomplète traitée explicitement en MANAGEMENT sans capacité fictive ;
+- en MANAGEMENT, candidats de sélection limités aux positions réellement ouvertes ;
+- tools read-only de recherche d'ouverture désactivés pendant la sélection MANAGEMENT ;
+- même Agent stratégique conservé pour choisir parmi les positions ouvertes puis décider HOLD/réduction/clôture ;
+- barrière Risk explicite contre toute augmentation d'exposition en MANAGEMENT ;
+- logique SPOT SELL et PERPETUAL `reduce_only` existante conservée ;
+- retour automatique à NORMAL après libération de capacité ;
+- mode, raison et `new_opening_research_skipped` ajoutés à l'audit de cycle sans migration SQL ;
+- aucun état de mode durable à restaurer ;
+- aucune estimation de tokens fabriquée car l'infrastructure ne persiste pas d'usage tokens canonique ;
+- aucun changement frontend.
 
-Le Batch 19.2 ne comprend ni watchlist dynamique, ni optimisation IA à exposition saturée, ni charts/WebSocket cockpit.
+Le Batch 19.3 ne comprend ni discovery/watchlist dynamique, ni refonte d'explicabilité, ni candles/WebSocket/charts, ni LIVE.
 
 ## Prochaine séquence
-
-### Batch 19.3 — Mode gestion et optimisation de consommation IA
-
-- déterminer si une nouvelle exposition est possible à partir de l'état canonique valorisé ;
-- éviter recherche/tools d'ouverture inutiles lorsque la capacité est saturée ;
-- concentrer le même Agent sur les positions existantes ;
-- HOLD/réduction/clôture ;
-- Risk toujours final ;
-- métriques d'appels/tools/tokens réellement observables.
 
 ### Batch 19.4 — Découverte dynamique et watchlist versionnée
 
@@ -83,12 +78,12 @@ Le Batch 19.2 ne comprend ni watchlist dynamique, ni optimisation IA à expositi
 
 ## Pourquoi cet ordre
 
-La comptabilité SPOT 19.1 fournit la base de coût ; le mark-to-market 19.2 fournit maintenant l'état courant fiable nécessaire au mode gestion. Discovery/watchlist introduira ensuite un nouvel état durable et une autre cadence IA. Les charts restent séparés en source backend puis rendu frontend.
+La comptabilité 19.1 et le mark-to-market 19.2 fournissent un état portfolio exploitable. Le Batch 19.3 utilise cet état pour supprimer la recherche d'ouverture quand elle est déterministement inutile ou incertaine, sans déplacer la stratégie hors de l'Agent. Discovery/watchlist 19.4 pourra ensuite introduire un nouvel état durable et une cadence IA plus lente sans mélanger les responsabilités.
 
 ## Cadences à maintenir distinctes
 
 1. **monitoring / mark-to-market** : rapide, déterministe, sans LLM ;
-2. **cycle stratégique IA** : plus lent, décision BUY/SELL/HOLD ;
+2. **cycle stratégique IA** : plus lent, décision BUY/SELL/HOLD, avec restriction MANAGEMENT si nécessaire ;
 3. **découverte/révision de watchlist IA** : nettement plus lente.
 
 ## Périmètres ultérieurs
