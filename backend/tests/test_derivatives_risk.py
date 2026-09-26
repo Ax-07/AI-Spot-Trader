@@ -3,6 +3,10 @@ from decimal import Decimal
 from uuid import uuid4
 
 from ai_spot_trader.broker.pricing import PaperExecutionCostModel
+from ai_spot_trader.domain.derivative_margin import (
+    DerivativeMarginTier,
+    TieredDerivativeInstrument,
+)
 from ai_spot_trader.domain.enums import (
     DerivativeContractKind,
     MarketType,
@@ -31,27 +35,53 @@ class FixedClock:
         return NOW
 
 
-def instrument(*, max_leverage: str = "10") -> DerivativeInstrument:
-    return DerivativeInstrument(
-        symbol="BTC/USD",
-        venue_symbol="PF_XBTUSD",
-        market_type=MarketType.PERPETUAL,
-        contract_kind=DerivativeContractKind.LINEAR,
-        underlying_asset="BTC",
-        quote_asset="USD",
-        contract_size=Decimal("1"),
-        tick_size=Decimal("1"),
-        min_order_quantity=Decimal("0.01"),
-        max_position_quantity=Decimal("100"),
-        initial_margin_rate=Decimal("0.10"),
-        maintenance_margin_rate=Decimal("0.05"),
-        max_leverage=Decimal(max_leverage),
-        funding_interval_seconds=Decimal("3600"),
+def instrument(*, max_leverage: str = "10", tiered: bool = False) -> DerivativeInstrument:
+    values: dict[str, object] = {
+        "symbol": "BTC/USD",
+        "venue_symbol": "PF_XBTUSD",
+        "market_type": MarketType.PERPETUAL,
+        "contract_kind": DerivativeContractKind.LINEAR,
+        "underlying_asset": "BTC",
+        "quote_asset": "USD",
+        "contract_size": Decimal("1"),
+        "tick_size": Decimal("1"),
+        "min_order_quantity": Decimal("0.01"),
+        "max_position_quantity": Decimal("100"),
+        "initial_margin_rate": Decimal("0.10"),
+        "maintenance_margin_rate": Decimal("0.05"),
+        "max_leverage": Decimal(max_leverage),
+        "funding_interval_seconds": Decimal("3600"),
+    }
+    if not tiered:
+        return DerivativeInstrument(**values)  # type: ignore[arg-type]
+    return TieredDerivativeInstrument(
+        **values,  # type: ignore[arg-type]
+        margin_tiers=(
+            DerivativeMarginTier(
+                threshold=Decimal("0"),
+                threshold_basis="POSITION_NOTIONAL",
+                initial_margin_rate=Decimal("0.10"),
+                maintenance_margin_rate=Decimal("0.05"),
+            ),
+            DerivativeMarginTier(
+                threshold=Decimal("250"),
+                threshold_basis="POSITION_NOTIONAL",
+                initial_margin_rate=Decimal("0.20"),
+                maintenance_margin_rate=Decimal("0.10"),
+            ),
+            DerivativeMarginTier(
+                threshold=Decimal("1000"),
+                threshold_basis="POSITION_NOTIONAL",
+                initial_margin_rate=Decimal("0.50"),
+                maintenance_margin_rate=Decimal("0.25"),
+            ),
+        ),
+        margin_schedule_source="retailMarginLevels",
     )
 
 
-def market(*, max_leverage: str = "10") -> MarketState:
-    inst = instrument(max_leverage=max_leverage)
+def market(*, max_leverage: str = "10", tiered: bool = False) -> MarketState:
+    inst = instrument(max_leverage=max_leverage, tiered=tiered)
     return MarketState(
         market_state_id=uuid4(),
         as_of=NOW,
@@ -173,6 +203,68 @@ def test_leverage_above_instrument_cap_is_rejected() -> None:
     assert result.assessment.reasons == (RiskReason.DERIVATIVE_LEVERAGE_EXCEEDED,)
 
 
+def test_small_tiered_position_uses_first_tier_instead_of_global_strictest_rate() -> None:
+    result = engine(
+        policy(
+            derivative_leverage=Decimal("3"),
+            max_derivative_leverage=Decimal("3"),
+        )
+    ).evaluate(
+        decision=decision(TradingAction.BUY, "1"),
+        market_state=market(tiered=True),
+        portfolio_state=portfolio(),
+    )
+
+    assert result.assessment.status is RiskDecision.ALLOW
+    assert result.execution_intent is not None
+    assert result.execution_intent.leverage == Decimal("3")
+
+
+def test_leverage_above_applicable_projected_tier_is_rejected() -> None:
+    result = engine(
+        policy(
+            derivative_leverage=Decimal("3"),
+            max_derivative_leverage=Decimal("3"),
+        )
+    ).evaluate(
+        decision=decision(TradingAction.BUY, "11"),
+        market_state=market(tiered=True),
+        portfolio_state=portfolio(cash="10000"),
+    )
+
+    assert result.assessment.status is RiskDecision.REJECT
+    assert result.assessment.reasons == (RiskReason.DERIVATIVE_LEVERAGE_EXCEEDED,)
+
+
+def test_tier_is_selected_from_total_projected_position_when_increasing() -> None:
+    current = position(PositionSide.LONG, quantity="9.9", margin="330", leverage="3")
+    result = engine(policy(max_derivative_leverage=Decimal("3"))).evaluate(
+        decision=decision(TradingAction.BUY, "0.2"),
+        market_state=market(tiered=True),
+        portfolio_state=portfolio(current, cash="10000"),
+    )
+
+    assert result.assessment.status is RiskDecision.REJECT
+    assert result.assessment.reasons == (RiskReason.DERIVATIVE_LEVERAGE_EXCEEDED,)
+
+
+def test_session_leverage_cap_remains_stricter_than_kraken_tier() -> None:
+    result = engine(
+        policy(
+            derivative_leverage=Decimal("2"),
+            max_derivative_leverage=Decimal("2"),
+        )
+    ).evaluate(
+        decision=decision(TradingAction.BUY, "1"),
+        market_state=market(tiered=True),
+        portfolio_state=portfolio(),
+    )
+
+    assert result.assessment.status is RiskDecision.ALLOW
+    assert result.execution_intent is not None
+    assert result.execution_intent.leverage == Decimal("2")
+
+
 def test_reduce_only_can_decrease_position_already_above_current_caps() -> None:
     legacy_position = position(PositionSide.LONG, quantity="5", leverage="3")
     result = engine(
@@ -183,7 +275,7 @@ def test_reduce_only_can_decrease_position_already_above_current_caps() -> None:
         )
     ).evaluate(
         decision=decision(TradingAction.SELL, "1"),
-        market_state=market(),
+        market_state=market(tiered=True),
         portfolio_state=portfolio(legacy_position),
     )
 

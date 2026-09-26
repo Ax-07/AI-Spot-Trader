@@ -4,6 +4,7 @@ from decimal import Decimal
 
 import pytest
 
+from ai_spot_trader.domain.derivative_margin import TieredDerivativeInstrument
 from ai_spot_trader.domain.enums import DerivativeContractKind, MarketType
 from ai_spot_trader.domain.models import DerivativeInstrument
 from ai_spot_trader.integrations.kraken.derivatives import (
@@ -45,7 +46,7 @@ def instruments_payload() -> dict[str, object]:
                 "tradeable": True,
                 "contractValueTradePrecision": 0,
                 "marginLevels": [
-                    {"numNonContractUnits": 0, "initialMargin": 0.02, "maintenanceMargin": 0.01}
+                    {"contracts": 0, "initialMargin": 0.02, "maintenanceMargin": 0.01}
                 ],
             },
             {
@@ -66,7 +67,7 @@ def instruments_payload() -> dict[str, object]:
     }
 
 
-def test_parse_kraken_derivative_metadata_and_conservative_margin() -> None:
+def test_parse_kraken_derivative_metadata_and_retail_margin_schedule() -> None:
     parsed = parse_kraken_derivatives_instruments(instruments_payload())
     linear = next(item for item in parsed if item.venue_symbol == "PF_XBTUSD")
     inverse = next(item for item in parsed if item.venue_symbol == "PI_XBTUSD")
@@ -79,6 +80,8 @@ def test_parse_kraken_derivative_metadata_and_conservative_margin() -> None:
     assert linear.initial_margin_rate == Decimal("0.1")
     assert linear.maintenance_margin_rate == Decimal("0.05")
     assert linear.max_leverage == Decimal("10")
+    assert isinstance(linear, TieredDerivativeInstrument)
+    assert linear.margin_schedule_source == "retailMarginLevels"
     assert inverse.contract_kind is DerivativeContractKind.INVERSE
     assert future.market_type is MarketType.FUTURE
     assert future.expires_at == datetime(2026, 12, 25, 15, 0, tzinfo=UTC)
@@ -149,6 +152,7 @@ def test_parse_margin_schedules_mapping_without_guessing_account_tier() -> None:
     assert instrument.initial_margin_rate == Decimal("0.10")
     assert instrument.maintenance_margin_rate == Decimal("0.05")
     assert instrument.max_leverage == Decimal("10")
+    assert not isinstance(instrument, TieredDerivativeInstrument)
 
 
 def test_parse_nested_margin_schedules_from_public_kraken_shape() -> None:
@@ -211,6 +215,9 @@ def test_parse_nested_margin_schedules_from_public_kraken_shape() -> None:
 
     (instrument,) = parse_kraken_derivatives_instruments(payload)
 
+    # Direct generic levels plus incompatible named account/regulatory schedules are ambiguous.
+    # Keep the conservative scalar fallback instead of inventing one mixed tier curve.
+    assert not isinstance(instrument, TieredDerivativeInstrument)
     assert instrument.symbol == "ETH/USD"
     assert instrument.initial_margin_rate == Decimal("0.50")
     assert instrument.maintenance_margin_rate == Decimal("0.25")
@@ -248,6 +255,86 @@ def test_nested_margin_schedules_still_fail_closed_on_malformed_leaf() -> None:
         parse_kraken_derivatives_instruments(payload)
 
 
+def test_retail_margin_levels_preserve_sorted_position_size_tiers() -> None:
+    payload = {
+        "result": "success",
+        "instruments": [
+            {
+                "symbol": "PF_ACEUSD",
+                "base": "ACE",
+                "quote": "USD",
+                "type": "flexible_futures",
+                "tickSize": "0.0001",
+                "contractSize": 1,
+                "tradeable": True,
+                "contractValueTradePrecision": 0,
+                "retailMarginLevels": [
+                    {
+                        "numNonContractUnits": 2_000_000,
+                        "initialMargin": "0.50",
+                        "maintenanceMargin": "0.25",
+                    },
+                    {
+                        "numNonContractUnits": 0,
+                        "initialMargin": "0.10",
+                        "maintenanceMargin": "0.05",
+                    },
+                    {
+                        "numNonContractUnits": 250_000,
+                        "initialMargin": "0.20",
+                        "maintenanceMargin": "0.10",
+                    },
+                    {
+                        "numNonContractUnits": 1_000_000,
+                        "initialMargin": "0.30",
+                        "maintenanceMargin": "0.15",
+                    },
+                ],
+            }
+        ],
+    }
+
+    (instrument,) = parse_kraken_derivatives_instruments(payload)
+
+    assert isinstance(instrument, TieredDerivativeInstrument)
+    assert tuple(tier.threshold for tier in instrument.margin_tiers) == (
+        Decimal("0"),
+        Decimal("250000"),
+        Decimal("1000000"),
+        Decimal("2000000"),
+    )
+    assert instrument.initial_margin_rate == Decimal("0.10")
+    assert instrument.max_leverage == Decimal("10")
+
+
+def test_margin_levels_contract_thresholds_are_preserved() -> None:
+    payload = {
+        "result": "success",
+        "instruments": [
+            {
+                "symbol": "PI_XBTUSD",
+                "base": "XBT",
+                "quote": "USD",
+                "type": "inverse_futures",
+                "tickSize": "0.5",
+                "contractSize": 1,
+                "tradeable": True,
+                "contractValueTradePrecision": 0,
+                "marginLevels": [
+                    {"contracts": 0, "initialMargin": "0.02", "maintenanceMargin": "0.01"},
+                    {"contracts": 500000, "initialMargin": "0.04", "maintenanceMargin": "0.02"},
+                ],
+            }
+        ],
+    }
+
+    (instrument,) = parse_kraken_derivatives_instruments(payload)
+
+    assert isinstance(instrument, TieredDerivativeInstrument)
+    assert all(tier.threshold_basis == "CONTRACTS" for tier in instrument.margin_tiers)
+    assert instrument.margin_tiers[1].threshold == Decimal("500000")
+
+
 @pytest.mark.parametrize(
     ("mutation", "match"),
     [
@@ -257,6 +344,8 @@ def test_nested_margin_schedules_still_fail_closed_on_malformed_leaf() -> None:
         ("negative_margin_threshold", "numNonContractUnits cannot be negative"),
         ("invalid_tradeable", "tradeable flag is invalid"),
         ("max_position_below_minimum", "maxPositionSize cannot be smaller"),
+        ("duplicate_threshold", "duplicate margin thresholds"),
+        ("decreasing_initial", "initialMargin cannot decrease by size"),
     ],
 )
 def test_instrument_parser_fails_closed_on_incoherent_public_metadata(
@@ -285,6 +374,16 @@ def test_instrument_parser_fails_closed_on_incoherent_public_metadata(
         raw["tradeable"] = "true"
     elif mutation == "max_position_below_minimum":
         raw["maxPositionSize"] = "0.00001"
+    elif mutation == "duplicate_threshold":
+        raw["retailMarginLevels"] = [
+            {"numNonContractUnits": 0, "initialMargin": 0.10, "maintenanceMargin": 0.05},
+            {"numNonContractUnits": 0, "initialMargin": 0.20, "maintenanceMargin": 0.10},
+        ]
+    elif mutation == "decreasing_initial":
+        raw["retailMarginLevels"] = [
+            {"numNonContractUnits": 0, "initialMargin": 0.20, "maintenanceMargin": 0.10},
+            {"numNonContractUnits": 250000, "initialMargin": 0.10, "maintenanceMargin": 0.05},
+        ]
     else:  # pragma: no cover - guards the test table itself.
         raise AssertionError(f"unknown mutation {mutation}")
 

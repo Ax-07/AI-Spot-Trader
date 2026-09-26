@@ -1,5 +1,6 @@
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
@@ -7,6 +8,10 @@ from typing import Any, Protocol
 import httpx
 
 from ai_spot_trader.core.clock import Clock, SystemClock
+from ai_spot_trader.domain.derivative_margin import (
+    DerivativeMarginTier,
+    TieredDerivativeInstrument,
+)
 from ai_spot_trader.domain.enums import DerivativeContractKind, MarketType
 from ai_spot_trader.domain.models import (
     DerivativeInstrument,
@@ -32,6 +37,12 @@ _QUOTE_CANDIDATES = ("USDC", "USDT", "USD", "EUR", "GBP", "BTC", "ETH")
 _MARGIN_LEVEL_KEYS = frozenset(
     {"contracts", "numNonContractUnits", "initialMargin", "maintenanceMargin"}
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _ParsedMarginCurve:
+    source: str
+    tiers: tuple[DerivativeMarginTier, ...]
 
 
 class DerivativeMarketSink(Protocol):
@@ -325,7 +336,7 @@ def parse_kraken_derivatives_mark_candles(
 
 
 def parse_kraken_derivatives_instruments(payload: object) -> tuple[DerivativeInstrument, ...]:
-    """Normalize public /instruments data without assuming a private account tier."""
+    """Normalize public /instruments data and retain one explicit tier curve when safe."""
 
     root = _mapping(payload, "Kraken Derivatives instruments payload")
     result = root.get("result")
@@ -359,35 +370,44 @@ def parse_kraken_derivatives_instruments(payload: object) -> tuple[DerivativeIns
             raise KrakenPayloadError(
                 "maxPositionSize cannot be smaller than the minimum order quantity"
             )
-        initial_margin, maintenance_margin = _conservative_margin_rates(raw)
+        margin_curve, initial_margin, maintenance_margin, schedule_source = _margin_metadata(raw)
         max_leverage = Decimal(1) / initial_margin
         expires_at = None
         if market_type is MarketType.FUTURE:
             expires_at = _datetime(raw.get("lastTradingTime"), "lastTradingTime")
 
-        parsed.append(
-            DerivativeInstrument(
-                symbol=canonical,
-                venue_symbol=venue_symbol,
-                market_type=market_type,
-                contract_kind=contract_kind,
-                underlying_asset=base_asset,
-                quote_asset=quote_asset,
-                contract_size=contract_size,
-                tick_size=tick_size,
-                min_order_quantity=min_order_quantity,
-                max_position_quantity=max_position,
-                initial_margin_rate=initial_margin,
-                maintenance_margin_rate=maintenance_margin,
-                max_leverage=max_leverage,
-                funding_interval_seconds=(
-                    KRAKEN_DERIVATIVES_FUNDING_INTERVAL_SECONDS
-                    if market_type is MarketType.PERPETUAL
-                    else None
-                ),
-                expires_at=expires_at,
+        instrument_kwargs: dict[str, Any] = {
+            "symbol": canonical,
+            "venue_symbol": venue_symbol,
+            "market_type": market_type,
+            "contract_kind": contract_kind,
+            "underlying_asset": base_asset,
+            "quote_asset": quote_asset,
+            "contract_size": contract_size,
+            "tick_size": tick_size,
+            "min_order_quantity": min_order_quantity,
+            "max_position_quantity": max_position,
+            "initial_margin_rate": initial_margin,
+            "maintenance_margin_rate": maintenance_margin,
+            "max_leverage": max_leverage,
+            "funding_interval_seconds": (
+                KRAKEN_DERIVATIVES_FUNDING_INTERVAL_SECONDS
+                if market_type is MarketType.PERPETUAL
+                else None
+            ),
+            "expires_at": expires_at,
+        }
+        if margin_curve is None:
+            parsed.append(DerivativeInstrument(**instrument_kwargs))
+        else:
+            assert schedule_source is not None
+            parsed.append(
+                TieredDerivativeInstrument(
+                    **instrument_kwargs,
+                    margin_tiers=margin_curve,
+                    margin_schedule_source=schedule_source,
+                )
             )
-        )
     if not parsed:
         raise KrakenPayloadError("Kraken Derivatives returned no usable instruments")
     return tuple(parsed)
@@ -447,92 +467,192 @@ def parse_kraken_derivatives_ticker(
     return observed_at, mark_price, index_price, funding_rate
 
 
-def _conservative_margin_rates(raw: Mapping[str, Any]) -> tuple[Decimal, Decimal]:
-    schedule_groups: list[tuple[str, tuple[Mapping[str, Any], ...]]] = []
+def _margin_metadata(
+    raw: Mapping[str, Any],
+) -> tuple[
+    tuple[DerivativeMarginTier, ...] | None,
+    Decimal,
+    Decimal,
+    str | None,
+]:
+    """Validate public schedules and select one explicit PAPER curve without merging regimes."""
+
+    curves: list[_ParsedMarginCurve] = []
+    direct: dict[str, _ParsedMarginCurve] = {}
     for key in ("marginLevels", "retailMarginLevels"):
         value = raw.get(key)
         if value is None:
             continue
         if not isinstance(value, list):
             raise KrakenPayloadError(f"{key} must be an array")
-        rows: list[Mapping[str, Any]] = []
-        for item in value:
-            if not isinstance(item, Mapping):
-                raise KrakenPayloadError(f"{key} contains an invalid margin level")
-            rows.append(item)
-        schedule_groups.append((key, tuple(rows)))
+        curve = _parse_margin_curve(value, source=key)
+        if curve is not None:
+            curves.append(curve)
+            direct[key] = curve
 
     named = raw.get("marginSchedules")
+    named_curves: list[_ParsedMarginCurve] = []
     if named is not None:
         if not isinstance(named, Mapping):
             raise KrakenPayloadError("marginSchedules must be an object")
-        schedule_groups.append(("marginSchedules", _margin_schedule_rows(named)))
+        named_curves = list(_margin_schedule_curves(named))
+        curves.extend(named_curves)
 
-    schedules = [item for _, rows in schedule_groups for item in rows]
-    if not schedules:
+    if not curves:
         raise KrakenPayloadError("derivative instrument has no public margin levels")
 
-    initials: list[Decimal] = []
-    maintenance: list[Decimal] = []
-    for item in schedules:
-        _validate_margin_threshold(item, "contracts")
-        _validate_margin_threshold(item, "numNonContractUnits")
-        initial = _positive_decimal(item.get("initialMargin"), "initialMargin")
-        maintenance_rate = _positive_decimal(
-            item.get("maintenanceMargin"),
+    # PAPER v1 is explicitly modeled as the public retail schedule when Kraken exposes it.
+    # This is conservative relative to generic/professional schedules and does not infer a
+    # private account entitlement. We never merge it with another schedule.
+    selected = direct.get("retailMarginLevels")
+    unique_named: dict[
+        tuple[tuple[Decimal, str, Decimal, Decimal], ...], _ParsedMarginCurve
+    ] = {}
+    for curve in named_curves:
+        signature = tuple(
+            (
+                tier.threshold,
+                tier.threshold_basis,
+                tier.initial_margin_rate,
+                tier.maintenance_margin_rate,
+            )
+            for tier in curve.tiers
+        )
+        unique_named.setdefault(signature, curve)
+
+    if selected is None:
+        generic = direct.get("marginLevels")
+        if not named_curves:
+            selected = generic
+        elif generic is None and len(unique_named) == 1:
+            selected = next(iter(unique_named.values()))
+        elif generic is not None and len(unique_named) == 1:
+            only_named = next(iter(unique_named.values()))
+            generic_signature = tuple(
+                (
+                    tier.threshold,
+                    tier.threshold_basis,
+                    tier.initial_margin_rate,
+                    tier.maintenance_margin_rate,
+                )
+                for tier in generic.tiers
+            )
+            named_signature = tuple(
+                (
+                    tier.threshold,
+                    tier.threshold_basis,
+                    tier.initial_margin_rate,
+                    tier.maintenance_margin_rate,
+                )
+                for tier in only_named.tiers
+            )
+            if generic_signature == named_signature:
+                selected = generic
+
+    if selected is not None:
+        first = selected.tiers[0]
+        return (
+            selected.tiers,
+            first.initial_margin_rate,
+            first.maintenance_margin_rate,
+            selected.source,
+        )
+
+    # Ambiguous named schedules are kept fail-closed. Preserve the old conservative scalar
+    # behavior rather than pretending mutually exclusive account/regulatory curves are tiers.
+    all_tiers = tuple(tier for curve in curves for tier in curve.tiers)
+    return (
+        None,
+        max(tier.initial_margin_rate for tier in all_tiers),
+        max(tier.maintenance_margin_rate for tier in all_tiers),
+        None,
+    )
+
+
+def _parse_margin_curve(
+    rows: list[object] | tuple[Mapping[str, Any], ...],
+    *,
+    source: str,
+) -> _ParsedMarginCurve | None:
+    if not rows:
+        return None
+    tiers: list[DerivativeMarginTier] = []
+    for raw_item in rows:
+        if not isinstance(raw_item, Mapping):
+            raise KrakenPayloadError(f"{source} contains an invalid margin level")
+        has_contracts = "contracts" in raw_item
+        has_non_contracts = "numNonContractUnits" in raw_item
+        if has_contracts == has_non_contracts:
+            raise KrakenPayloadError(
+                f"{source} margin level must contain exactly one size threshold"
+            )
+        threshold_key = "contracts" if has_contracts else "numNonContractUnits"
+        threshold = _decimal(raw_item.get(threshold_key), threshold_key)
+        if threshold < 0:
+            raise KrakenPayloadError(f"{threshold_key} cannot be negative")
+        initial = _positive_decimal(raw_item.get("initialMargin"), "initialMargin")
+        maintenance = _positive_decimal(
+            raw_item.get("maintenanceMargin"),
             "maintenanceMargin",
         )
         if initial > Decimal(1):
             raise KrakenPayloadError("initialMargin cannot exceed 1")
-        if maintenance_rate > initial:
+        if maintenance > initial:
             raise KrakenPayloadError("maintenanceMargin cannot exceed initialMargin")
-        initials.append(initial)
-        maintenance.append(maintenance_rate)
+        tiers.append(
+            DerivativeMarginTier(
+                threshold=threshold,
+                threshold_basis=(
+                    "CONTRACTS" if threshold_key == "contracts" else "POSITION_NOTIONAL"
+                ),
+                initial_margin_rate=initial,
+                maintenance_margin_rate=maintenance,
+            )
+        )
 
-    # Public metadata can expose multiple account/regulatory schedules and position-size
-    # tiers, but this public-only runtime cannot prove which private account schedule applies.
-    # Keep the existing conservative semantics: use the strictest public rates and preserve
-    # the full tier-aware model as a separate architectural decision instead of guessing it.
-    return max(initials), max(maintenance)
+    bases = {tier.threshold_basis for tier in tiers}
+    if len(bases) != 1:
+        raise KrakenPayloadError(f"{source} mixes incompatible margin threshold units")
+    tiers.sort(key=lambda tier: tier.threshold)
+    thresholds = tuple(tier.threshold for tier in tiers)
+    if len(set(thresholds)) != len(thresholds):
+        raise KrakenPayloadError(f"{source} contains duplicate margin thresholds")
+    if thresholds[0] != 0:
+        raise KrakenPayloadError(f"{source} margin levels must start at zero")
+    initials = tuple(tier.initial_margin_rate for tier in tiers)
+    maintenance_rates = tuple(tier.maintenance_margin_rate for tier in tiers)
+    if initials != tuple(sorted(initials)):
+        raise KrakenPayloadError(f"{source} initialMargin cannot decrease by size")
+    if maintenance_rates != tuple(sorted(maintenance_rates)):
+        raise KrakenPayloadError(f"{source} maintenanceMargin cannot decrease by size")
+    return _ParsedMarginCurve(source=source, tiers=tuple(tiers))
 
 
-def _margin_schedule_rows(
+def _margin_schedule_curves(
     value: Mapping[str, Any],
-) -> tuple[Mapping[str, Any], ...]:
-    """Flatten named Kraken public margin schedules while validating every leaf."""
-
-    rows: list[Mapping[str, Any]] = []
+    *,
+    path: str = "marginSchedules",
+) -> tuple[_ParsedMarginCurve, ...]:
+    curves: list[_ParsedMarginCurve] = []
     for schedule_name, item in value.items():
         if not isinstance(schedule_name, str) or not schedule_name.strip():
             raise KrakenPayloadError("marginSchedules contains an invalid schedule name")
+        source = f"{path}.{schedule_name.strip()}"
+        if isinstance(item, list):
+            curve = _parse_margin_curve(item, source=source)
+            if curve is not None:
+                curves.append(curve)
+            continue
         if isinstance(item, Mapping):
             if _MARGIN_LEVEL_KEYS.intersection(item):
-                rows.append(item)
+                curve = _parse_margin_curve((item,), source=source)
+                if curve is not None:
+                    curves.append(curve)
                 continue
-            rows.extend(_margin_schedule_rows(item))
-            continue
-        if isinstance(item, list):
-            for level in item:
-                if not isinstance(level, Mapping):
-                    raise KrakenPayloadError(
-                        "marginSchedules contains an invalid margin level"
-                    )
-                if not _MARGIN_LEVEL_KEYS.intersection(level):
-                    raise KrakenPayloadError(
-                        "marginSchedules contains an invalid margin level"
-                    )
-                rows.append(level)
+            curves.extend(_margin_schedule_curves(item, path=source))
             continue
         raise KrakenPayloadError("marginSchedules contains an invalid margin level")
-    return tuple(rows)
-
-
-def _validate_margin_threshold(item: Mapping[str, Any], key: str) -> None:
-    if key not in item:
-        return
-    threshold = _decimal(item.get(key), key)
-    if threshold < 0:
-        raise KrakenPayloadError(f"{key} cannot be negative")
+    return tuple(curves)
 
 
 def _minimum_order_quantity(value: object) -> Decimal:

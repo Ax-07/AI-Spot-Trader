@@ -5,6 +5,11 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from ai_spot_trader.domain.derivative_margin import (
+    DerivativeMarginTier,
+    TieredDerivativeInstrument,
+    resolve_derivative_margin,
+)
 from ai_spot_trader.domain.enums import (
     DerivativeContractKind,
     MarketType,
@@ -39,6 +44,33 @@ def instrument() -> DerivativeInstrument:
         maintenance_margin_rate=Decimal("0.05"),
         max_leverage=Decimal("10"),
         funding_interval_seconds=Decimal("3600"),
+    )
+
+
+def tiered_instrument() -> TieredDerivativeInstrument:
+    return TieredDerivativeInstrument(
+        **instrument().model_dump(),
+        margin_tiers=(
+            DerivativeMarginTier(
+                threshold=Decimal("0"),
+                threshold_basis="POSITION_NOTIONAL",
+                initial_margin_rate=Decimal("0.10"),
+                maintenance_margin_rate=Decimal("0.05"),
+            ),
+            DerivativeMarginTier(
+                threshold=Decimal("250"),
+                threshold_basis="POSITION_NOTIONAL",
+                initial_margin_rate=Decimal("0.20"),
+                maintenance_margin_rate=Decimal("0.10"),
+            ),
+            DerivativeMarginTier(
+                threshold=Decimal("1000"),
+                threshold_basis="POSITION_NOTIONAL",
+                initial_margin_rate=Decimal("0.50"),
+                maintenance_margin_rate=Decimal("0.25"),
+            ),
+        ),
+        margin_schedule_source="retailMarginLevels",
     )
 
 
@@ -143,3 +175,53 @@ def test_decision_candidate_remains_spot_by_default_for_backward_compatibility()
         proposed_quantity=Decimal("1"),
     )
     assert decision.market_type is MarketType.SPOT
+
+
+def test_margin_tier_resolver_uses_projected_position_notional() -> None:
+    inst = tiered_instrument()
+
+    first = resolve_derivative_margin(
+        inst,
+        projected_quantity=Decimal("2.4"),
+        projected_notional=Decimal("240"),
+    )
+    second = resolve_derivative_margin(
+        inst,
+        projected_quantity=Decimal("2.6"),
+        projected_notional=Decimal("260"),
+    )
+    last = resolve_derivative_margin(
+        inst,
+        projected_quantity=Decimal("11"),
+        projected_notional=Decimal("1100"),
+    )
+
+    assert first.initial_margin_rate == Decimal("0.10")
+    assert first.max_leverage == Decimal("10")
+    assert second.initial_margin_rate == Decimal("0.20")
+    assert second.max_leverage == Decimal("5")
+    assert last.initial_margin_rate == Decimal("0.50")
+    assert last.max_leverage == Decimal("2")
+
+
+def test_tiered_instrument_rejects_incoherent_curves() -> None:
+    base = instrument().model_dump()
+    with pytest.raises(ValidationError, match="unique ascending thresholds"):
+        TieredDerivativeInstrument(
+            **base,
+            margin_tiers=(
+                DerivativeMarginTier(
+                    threshold=Decimal("0"),
+                    threshold_basis="POSITION_NOTIONAL",
+                    initial_margin_rate=Decimal("0.10"),
+                    maintenance_margin_rate=Decimal("0.05"),
+                ),
+                DerivativeMarginTier(
+                    threshold=Decimal("0"),
+                    threshold_basis="POSITION_NOTIONAL",
+                    initial_margin_rate=Decimal("0.20"),
+                    maintenance_margin_rate=Decimal("0.10"),
+                ),
+            ),
+            margin_schedule_source="fixture",
+        )

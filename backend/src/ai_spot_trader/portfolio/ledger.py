@@ -5,6 +5,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from ai_spot_trader.core.clock import Clock, SystemClock
+from ai_spot_trader.domain.derivative_margin import resolve_derivative_margin
 from ai_spot_trader.domain.enums import MarketType, PositionSide, TradingAction
 from ai_spot_trader.domain.models import (
     AssetBalance,
@@ -527,13 +528,31 @@ class PaperPortfolioLedger:
 
         if current is not None and current.side is not order_side:
             raise ValueError("opposite derivative fill must be reduce_only")
+        if current is not None and current.leverage != leverage:
+            raise ValueError("cannot silently change leverage on an open PAPER position")
 
         execution_notional = execution_price * quantity * instrument.contract_size
-        initial_margin = max(
-            execution_notional / leverage,
-            execution_notional * instrument.initial_margin_rate,
+        current_quantity = current.quantity if current is not None else ZERO
+        total_quantity = current_quantity + quantity
+        projected_mark_notional = context.mark_price * total_quantity * instrument.contract_size
+        margin = resolve_derivative_margin(
+            instrument,
+            projected_quantity=total_quantity,
+            projected_notional=projected_mark_notional,
         )
-        required_cash = initial_margin + fee
+        current_entry_notional = (
+            current.average_entry_price * current.quantity * current.contract_size
+            if current is not None
+            else ZERO
+        )
+        projected_entry_notional = current_entry_notional + execution_notional
+        target_margin = max(
+            projected_entry_notional / leverage,
+            projected_entry_notional * margin.initial_margin_rate,
+        )
+        existing_margin = current.margin_used if current is not None else ZERO
+        additional_margin = max(target_margin - existing_margin, ZERO)
+        required_cash = additional_margin + fee
         if quote_available < required_cash:
             raise InsufficientBalanceError(
                 f"insufficient {quote_asset} for derivative margin and fee"
@@ -541,19 +560,15 @@ class PaperPortfolioLedger:
 
         if current is None:
             average_entry = execution_price
-            total_quantity = quantity
-            total_margin = initial_margin
+            total_margin = additional_margin
             realized = ZERO
             funding = ZERO
         else:
-            if current.leverage != leverage:
-                raise ValueError("cannot silently change leverage on an open PAPER position")
-            total_quantity = current.quantity + quantity
             average_entry = (
                 current.average_entry_price * current.quantity
                 + execution_price * quantity
             ) / total_quantity
-            total_margin = current.margin_used + initial_margin
+            total_margin = current.margin_used + additional_margin
             realized = current.realized_pnl
             funding = current.cumulative_funding
 
@@ -565,19 +580,14 @@ class PaperPortfolioLedger:
             mark_price=context.mark_price,
             mark_observed_at=context.observed_at,
             contract_size=instrument.contract_size,
-            notional=context.mark_price * total_quantity * instrument.contract_size,
+            notional=projected_mark_notional,
             realized_pnl=realized,
             unrealized_pnl=ZERO,
             leverage=leverage,
             margin_used=total_margin,
-            initial_margin_rate=instrument.initial_margin_rate,
-            maintenance_margin_rate=instrument.maintenance_margin_rate,
-            maintenance_margin=(
-                context.mark_price
-                * total_quantity
-                * instrument.contract_size
-                * instrument.maintenance_margin_rate
-            ),
+            initial_margin_rate=margin.initial_margin_rate,
+            maintenance_margin_rate=margin.maintenance_margin_rate,
+            maintenance_margin=projected_mark_notional * margin.maintenance_margin_rate,
             cumulative_funding=funding,
             liquidation_price=None,
             funding_updated_at=context.observed_at,
@@ -596,7 +606,7 @@ class PaperPortfolioLedger:
             **self._derivative_positions,
             market_state.symbol: position,
         }
-        return DerivativeFillAccounting(margin_delta=initial_margin)
+        return DerivativeFillAccounting(margin_delta=additional_margin)
 
     def _asset_position(
         self,
@@ -652,7 +662,11 @@ class PaperPortfolioLedger:
 
         if all(position.remaining_cost_basis is not None for position in positions):
             spot_cost = sum(
-                (position.remaining_cost_basis for position in positions if position.remaining_cost_basis is not None),
+                (
+                    position.remaining_cost_basis
+                    for position in positions
+                    if position.remaining_cost_basis is not None
+                ),
                 ZERO,
             )
         else:
@@ -668,7 +682,11 @@ class PaperPortfolioLedger:
 
         if all(position.unrealized_pnl is not None for position in positions):
             spot_unrealized = sum(
-                (position.unrealized_pnl for position in positions if position.unrealized_pnl is not None),
+                (
+                    position.unrealized_pnl
+                    for position in positions
+                    if position.unrealized_pnl is not None
+                ),
                 ZERO,
             )
         else:

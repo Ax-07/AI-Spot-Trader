@@ -5,6 +5,10 @@ from uuid import uuid4
 
 from ai_spot_trader.broker.paper import PaperBroker
 from ai_spot_trader.broker.pricing import PaperExecutionCostModel
+from ai_spot_trader.domain.derivative_margin import (
+    DerivativeMarginTier,
+    TieredDerivativeInstrument,
+)
 from ai_spot_trader.domain.enums import (
     DerivativeContractKind,
     MarketType,
@@ -32,25 +36,57 @@ class FixedClock:
         return self.value
 
 
-def instrument() -> DerivativeInstrument:
-    return DerivativeInstrument(
-        symbol="BTC/USD",
-        venue_symbol="PF_XBTUSD",
-        market_type=MarketType.PERPETUAL,
-        contract_kind=DerivativeContractKind.LINEAR,
-        underlying_asset="BTC",
-        quote_asset="USD",
-        contract_size=Decimal("1"),
-        tick_size=Decimal("1"),
-        min_order_quantity=Decimal("0.01"),
-        initial_margin_rate=Decimal("0.10"),
-        maintenance_margin_rate=Decimal("0.05"),
-        max_leverage=Decimal("10"),
-        funding_interval_seconds=Decimal("3600"),
+def instrument(*, tiered: bool = False) -> DerivativeInstrument:
+    values: dict[str, object] = {
+        "symbol": "BTC/USD",
+        "venue_symbol": "PF_XBTUSD",
+        "market_type": MarketType.PERPETUAL,
+        "contract_kind": DerivativeContractKind.LINEAR,
+        "underlying_asset": "BTC",
+        "quote_asset": "USD",
+        "contract_size": Decimal("1"),
+        "tick_size": Decimal("1"),
+        "min_order_quantity": Decimal("0.01"),
+        "initial_margin_rate": Decimal("0.10"),
+        "maintenance_margin_rate": Decimal("0.05"),
+        "max_leverage": Decimal("10"),
+        "funding_interval_seconds": Decimal("3600"),
+    }
+    if not tiered:
+        return DerivativeInstrument(**values)  # type: ignore[arg-type]
+    return TieredDerivativeInstrument(
+        **values,  # type: ignore[arg-type]
+        margin_tiers=(
+            DerivativeMarginTier(
+                threshold=Decimal("0"),
+                threshold_basis="POSITION_NOTIONAL",
+                initial_margin_rate=Decimal("0.10"),
+                maintenance_margin_rate=Decimal("0.05"),
+            ),
+            DerivativeMarginTier(
+                threshold=Decimal("250"),
+                threshold_basis="POSITION_NOTIONAL",
+                initial_margin_rate=Decimal("0.30"),
+                maintenance_margin_rate=Decimal("0.15"),
+            ),
+            DerivativeMarginTier(
+                threshold=Decimal("1000"),
+                threshold_basis="POSITION_NOTIONAL",
+                initial_margin_rate=Decimal("0.50"),
+                maintenance_margin_rate=Decimal("0.25"),
+            ),
+        ),
+        margin_schedule_source="retailMarginLevels",
     )
 
 
-def market(mark: str = "100", funding: str = "0.001", at: datetime = NOW) -> MarketState:
+def market(
+    mark: str = "100",
+    funding: str = "0.001",
+    at: datetime = NOW,
+    *,
+    tiered: bool = False,
+) -> MarketState:
     return MarketState(
         market_state_id=uuid4(),
         as_of=at,
@@ -59,7 +95,7 @@ def market(mark: str = "100", funding: str = "0.001", at: datetime = NOW) -> Mar
         market_type=MarketType.PERPETUAL,
         derivative=DerivativeMarketContext(
             observed_at=at,
-            instrument=instrument(),
+            instrument=instrument(tiered=tiered),
             mark_price=Decimal(mark),
             index_price=Decimal(mark),
             funding_rate=Decimal(funding),
@@ -72,6 +108,7 @@ def intent(
     quantity: str,
     *,
     reduce_only: bool = False,
+    leverage: str = "1",
     at: datetime = NOW,
 ) -> ExecutionIntent:
     return ExecutionIntent(
@@ -85,7 +122,7 @@ def intent(
         quantity=Decimal(quantity),
         market_type=MarketType.PERPETUAL,
         reduce_only=reduce_only,
-        leverage=Decimal("1"),
+        leverage=Decimal(leverage),
     )
 
 
@@ -235,3 +272,30 @@ def test_short_close_realizes_profit_when_price_falls() -> None:
     )[0]
     assert fill.realized_pnl == Decimal("10")
     assert portfolio.snapshot().derivative_positions == ()
+
+
+def test_tier_crossing_remargins_total_position_with_same_canonical_tier() -> None:
+    clock = FixedClock(NOW)
+    portfolio = ledger(clock)
+    paper = broker(portfolio, clock)
+    tiered_market = market(tiered=True)
+
+    first = asyncio.run(
+        paper.execute(intent(TradingAction.BUY, "2", leverage="5"), tiered_market)
+    )[0]
+    opened = portfolio.snapshot().derivative_positions[0]
+    assert first.margin_delta == Decimal("40")
+    assert opened.margin_used == Decimal("40")
+    assert opened.initial_margin_rate == Decimal("0.10")
+    assert opened.maintenance_margin_rate == Decimal("0.05")
+
+    second = asyncio.run(
+        paper.execute(intent(TradingAction.BUY, "1", leverage="5"), tiered_market)
+    )[0]
+    increased = portfolio.snapshot().derivative_positions[0]
+    assert second.margin_delta == Decimal("50")
+    assert increased.quantity == Decimal("3")
+    assert increased.margin_used == Decimal("90")
+    assert increased.initial_margin_rate == Decimal("0.30")
+    assert increased.maintenance_margin_rate == Decimal("0.15")
+    assert increased.maintenance_margin == Decimal("45")

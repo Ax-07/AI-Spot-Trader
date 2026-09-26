@@ -9,6 +9,7 @@ from ai_spot_trader.broker.pricing import (
     estimate_paper_execution,
 )
 from ai_spot_trader.core.clock import Clock, SystemClock
+from ai_spot_trader.domain.derivative_margin import resolve_derivative_margin
 from ai_spot_trader.domain.enums import (
     DerivativeContractKind,
     MarginMode,
@@ -21,6 +22,7 @@ from ai_spot_trader.domain.enums import (
 )
 from ai_spot_trader.domain.models import (
     DecisionCandidate,
+    DerivativeInstrument,
     DerivativePosition,
     ExecutionIntent,
     MarketState,
@@ -403,7 +405,6 @@ class RiskEngine:
                 )
                 authorized = min(authorized, max_quantity)
                 reasons.append(RiskReason.MAX_ORDER_NOTIONAL_LIMIT)
-                order_notional = market_state.last_price * authorized * instrument.contract_size
 
         if authorized < instrument.min_order_quantity:
             return self._reject(
@@ -414,11 +415,21 @@ class RiskEngine:
                 evaluated_limits=tuple(evaluated),
             )
 
+        projected_quantity = _projected_derivative_quantity(
+            current=current,
+            authorized=authorized,
+            reduce_only=reduce_only,
+        )
+        projected_notional = market_state.last_price * projected_quantity * instrument.contract_size
+        margin = resolve_derivative_margin(
+            instrument,
+            projected_quantity=projected_quantity,
+            projected_notional=projected_notional,
+        )
         leverage = current.leverage if current is not None else self._policy.derivative_leverage
         effective_max_leverage = min(
             self._policy.max_derivative_leverage,
-            instrument.max_leverage,
-            ONE / instrument.initial_margin_rate,
+            margin.max_leverage,
         )
         if not reduce_only and leverage > effective_max_leverage:
             return self._reject(
@@ -447,11 +458,6 @@ class RiskEngine:
                     evaluated_limits=tuple(evaluated),
                 )
 
-        projected_quantity = _projected_derivative_quantity(
-            current=current,
-            authorized=authorized,
-            reduce_only=reduce_only,
-        )
         if (
             not reduce_only
             and instrument.max_position_quantity is not None
@@ -465,7 +471,6 @@ class RiskEngine:
                 evaluated_limits=tuple(evaluated),
             )
 
-        projected_notional = market_state.last_price * projected_quantity * instrument.contract_size
         if (
             not reduce_only
             and self._policy.max_derivative_position_notional is not None
@@ -516,18 +521,15 @@ class RiskEngine:
                     reason=RiskReason.QUOTE_BALANCE_MISSING,
                     evaluated_limits=tuple(evaluated),
                 )
-            initial_margin = max(
-                order_notional / leverage,
-                order_notional * instrument.initial_margin_rate,
-            )
-            estimate = estimate_paper_execution(
+            required_cash = _derivative_opening_cash_requirement(
                 action=decision.action,
-                reference_price=market_state.last_price,
                 quantity=authorized,
+                reference_price=market_state.last_price,
+                instrument=instrument,
+                current=current,
+                leverage=leverage,
                 cost_model=self._cost_model,
-                contract_size=instrument.contract_size,
             )
-            required_cash = initial_margin + estimate.fee
             if required_cash > quote_available:
                 if not self._policy.allow_quantity_reduction:
                     return self._reject(
@@ -537,20 +539,16 @@ class RiskEngine:
                         reason=RiskReason.DERIVATIVE_MARGIN_INSUFFICIENT,
                         evaluated_limits=tuple(evaluated),
                     )
-                unit_notional = market_state.last_price * instrument.contract_size
-                unit_fee = estimate_paper_execution(
+                authorized = _max_affordable_derivative_quantity(
                     action=decision.action,
+                    maximum=authorized,
+                    available_cash=quote_available,
                     reference_price=market_state.last_price,
-                    quantity=ONE,
+                    instrument=instrument,
+                    current=current,
+                    leverage=leverage,
                     cost_model=self._cost_model,
-                    contract_size=instrument.contract_size,
-                ).fee
-                unit_margin = max(
-                    unit_notional / leverage,
-                    unit_notional * instrument.initial_margin_rate,
                 )
-                affordable = quote_available / (unit_margin + unit_fee)
-                authorized = min(authorized, affordable)
                 if authorized < instrument.min_order_quantity:
                     return self._reject(
                         decision=decision,
@@ -923,6 +921,79 @@ class RiskEngine:
             ]
         )
         return tuple(limits)
+
+
+def _derivative_opening_cash_requirement(
+    *,
+    action: TradingAction,
+    quantity: Decimal,
+    reference_price: Decimal,
+    instrument: DerivativeInstrument,
+    current: DerivativePosition | None,
+    leverage: Decimal,
+    cost_model: PaperExecutionCostModel,
+) -> Decimal:
+    if quantity <= ZERO:
+        return ZERO
+    estimate = estimate_paper_execution(
+        action=action,
+        reference_price=reference_price,
+        quantity=quantity,
+        cost_model=cost_model,
+        contract_size=instrument.contract_size,
+    )
+    current_quantity = current.quantity if current is not None else ZERO
+    projected_quantity = current_quantity + quantity
+    projected_notional = reference_price * projected_quantity * instrument.contract_size
+    margin = resolve_derivative_margin(
+        instrument,
+        projected_quantity=projected_quantity,
+        projected_notional=projected_notional,
+    )
+    existing_entry_notional = (
+        current.average_entry_price * current.quantity * current.contract_size
+        if current is not None
+        else ZERO
+    )
+    projected_entry_notional = existing_entry_notional + estimate.notional
+    target_margin = max(
+        projected_entry_notional / leverage,
+        projected_entry_notional * margin.initial_margin_rate,
+    )
+    existing_margin = current.margin_used if current is not None else ZERO
+    additional_margin = max(target_margin - existing_margin, ZERO)
+    return additional_margin + estimate.fee
+
+
+def _max_affordable_derivative_quantity(
+    *,
+    action: TradingAction,
+    maximum: Decimal,
+    available_cash: Decimal,
+    reference_price: Decimal,
+    instrument: DerivativeInstrument,
+    current: DerivativePosition | None,
+    leverage: Decimal,
+    cost_model: PaperExecutionCostModel,
+) -> Decimal:
+    low = ZERO
+    high = maximum
+    for _ in range(96):
+        midpoint = (low + high) / Decimal(2)
+        required = _derivative_opening_cash_requirement(
+            action=action,
+            quantity=midpoint,
+            reference_price=reference_price,
+            instrument=instrument,
+            current=current,
+            leverage=leverage,
+            cost_model=cost_model,
+        )
+        if required <= available_cash:
+            low = midpoint
+        else:
+            high = midpoint
+    return low
 
 
 def _action_side(action: TradingAction) -> PositionSide:
