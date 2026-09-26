@@ -429,6 +429,7 @@ export type ChatHistoryResponse = {
 };
 
 export type LlmModel = "gpt-5.6-luna" | "gpt-5.6-sol";
+export type TradingStyle = "SCALP" | "SWING";
 
 export type StrategyResponse = {
   strategy_id: string;
@@ -481,6 +482,8 @@ export type CampaignConfiguration = {
   llm_model: LlmModel;
   aggressiveness: number;
   trading_cadence_seconds: number;
+  trading_style?: TradingStyle | null;
+  trading_style_mapping_version?: "trading-style-map-v1" | null;
   paper_initial_capital: string;
   paper_settlement_asset: string;
   paper_executable_markets: ExecutableMarketResponse[];
@@ -535,7 +538,6 @@ export type PromptPreviewResponse = {
   dynamic_input: null;
   note: string;
 };
-
 
 export type SessionStatus = "DRAFT" | "READY" | "RUNNING" | "STOPPED" | "RESUMABLE" | "ARCHIVED";
 export type SessionMarketMode = "AUTOMATIC_AI" | "MANUAL";

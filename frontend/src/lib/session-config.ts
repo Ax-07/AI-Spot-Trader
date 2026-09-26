@@ -3,10 +3,39 @@ import type {
   ExecutableMarketType,
   LlmModel,
   MarketDiscoveryPolicy,
+  TradingStyle,
 } from "@/lib/api/types";
 
 export type SessionMarketSelectionMode = "AUTOMATIC_AI" | "MANUAL";
 export type SessionRiskProfile = "prudent" | "balanced" | "aggressive" | "custom";
+
+export const TRADING_STYLE_MAPPING_VERSION = "trading-style-map-v1" as const;
+
+export const TRADING_STYLE_UI_METADATA = {
+  SCALP: {
+    label: "Scalping",
+    detail: "Horizon court. Recherche d’opportunités rapides. Les coûts d’exécution ont une importance élevée.",
+    timeframes: ["1m", "5m", "15m", "30m"],
+    recommendedTradingCadenceSeconds: 60,
+    recommendedWatchlistRefreshSeconds: 300,
+  },
+  SWING: {
+    label: "Swing",
+    detail: "Horizon de plusieurs heures à plusieurs jours. Recherche de mouvements plus larges.",
+    timeframes: ["1h", "4h", "1d"],
+    recommendedTradingCadenceSeconds: 900,
+    recommendedWatchlistRefreshSeconds: 1800,
+  },
+} as const satisfies Record<
+  TradingStyle,
+  {
+    label: string;
+    detail: string;
+    timeframes: readonly string[];
+    recommendedTradingCadenceSeconds: number;
+    recommendedWatchlistRefreshSeconds: number;
+  }
+>;
 
 export const DEFAULT_MARKET_DISCOVERY_POLICY = {
   protocol_version: "market-discovery-v1",
@@ -28,6 +57,7 @@ export type SessionConfigurationInput = {
   capital: string;
   model: LlmModel;
   aggressiveness: number;
+  tradingStyle: TradingStyle | null;
   riskProfile: SessionRiskProfile;
   cadence: string;
   feeRate: string;
@@ -45,6 +75,32 @@ export type SessionConfigurationInput = {
   brokerTimeout: string;
   discovery: Omit<MarketDiscoveryPolicy, "protocol_version" | "market_types">;
 };
+
+export function tradingStyleRecommendations(style: TradingStyle) {
+  const metadata = TRADING_STYLE_UI_METADATA[style];
+  return {
+    tradingCadenceSeconds: metadata.recommendedTradingCadenceSeconds,
+    watchlistRefreshSeconds: metadata.recommendedWatchlistRefreshSeconds,
+  };
+}
+
+export function initialSessionStyleValues(
+  configuration: CampaignConfiguration | null,
+  editing: boolean,
+) {
+  const tradingStyle = configuration?.trading_style ?? (editing ? null : "SCALP");
+  const recommendations = tradingStyle ? tradingStyleRecommendations(tradingStyle) : null;
+
+  return {
+    tradingStyle,
+    tradingCadenceSeconds:
+      configuration?.trading_cadence_seconds ?? recommendations?.tradingCadenceSeconds ?? 30,
+    watchlistRefreshSeconds:
+      configuration?.market_discovery?.watchlist_refresh_seconds ??
+      recommendations?.watchlistRefreshSeconds ??
+      DEFAULT_MARKET_DISCOVERY_POLICY.watchlist_refresh_seconds,
+  };
+}
 
 function roundDecimal(value: number): string {
   if (!Number.isFinite(value)) return "0";
@@ -174,11 +230,19 @@ export function buildSessionCampaignConfiguration(input: SessionConfigurationInp
       }
     : null;
 
+  const tradingStyle = input.tradingStyle === null
+    ? {}
+    : {
+        trading_style: input.tradingStyle,
+        trading_style_mapping_version: TRADING_STYLE_MAPPING_VERSION,
+      };
+
   return {
     configuration_version: "paper-control-plane-config-v1",
     llm_model: input.model,
     aggressiveness: input.aggressiveness,
     trading_cadence_seconds: cadence,
+    ...tradingStyle,
     paper_initial_capital: input.capital.trim(),
     paper_settlement_asset: marketPlan.settlementAsset,
     paper_executable_markets: marketPlan.markets,

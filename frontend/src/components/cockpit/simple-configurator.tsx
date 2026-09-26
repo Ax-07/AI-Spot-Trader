@@ -18,10 +18,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ControlPlaneController } from "@/hooks/use-control-plane";
-import type { ExecutableMarketType, LlmModel, SessionResponse } from "@/lib/api/types";
+import type { ExecutableMarketType, LlmModel, SessionResponse, TradingStyle } from "@/lib/api/types";
 import {
   DEFAULT_MARKET_DISCOVERY_POLICY,
+  TRADING_STYLE_MAPPING_VERSION,
+  TRADING_STYLE_UI_METADATA,
   buildSessionCampaignConfiguration,
+  initialSessionStyleValues,
+  tradingStyleRecommendations,
   type SessionMarketSelectionMode,
   type SessionRiskProfile,
 } from "@/lib/session-config";
@@ -104,6 +108,7 @@ export function SimpleConfigurator({
   const config = session?.configuration ?? null;
   const discovery = config?.market_discovery;
   const editing = session !== null;
+  const initialStyle = initialSessionStyleValues(config, editing);
 
   const [name, setName] = useState(
     session?.name ?? `Session PAPER ${new Date().toISOString().slice(0, 16).replace("T", " ")}`,
@@ -120,6 +125,7 @@ export function SimpleConfigurator({
   const [capital, setCapital] = useState(config?.paper_initial_capital ?? "1000");
   const [model, setModel] = useState<LlmModel>(config?.llm_model ?? "gpt-5.6-luna");
   const [aggressiveness, setAggressiveness] = useState(config?.aggressiveness ?? 5);
+  const [tradingStyle, setTradingStyle] = useState<TradingStyle | null>(initialStyle.tradingStyle);
   const [prompt, setPrompt] = useState(
     session?.instructions ??
       "Cherche des opportunités cohérentes avec le contexte de marché. Privilégie la qualité du signal à la fréquence des trades et utilise HOLD quand l'opportunité n'est pas assez claire.",
@@ -127,7 +133,7 @@ export function SimpleConfigurator({
   const [riskProfile, setRiskProfile] = useState<SessionRiskProfile>(editing ? "custom" : "balanced");
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
-  const [cadence, setCadence] = useState(numberString(config?.trading_cadence_seconds ?? 30));
+  const [cadence, setCadence] = useState(numberString(initialStyle.tradingCadenceSeconds));
   const [feeRate, setFeeRate] = useState(config?.paper_fee_rate ?? "0.001");
   const [spreadBps, setSpreadBps] = useState(config?.paper_spread_bps ?? "2");
   const [slippageBps, setSlippageBps] = useState(config?.paper_slippage_bps ?? "2");
@@ -154,7 +160,7 @@ export function SimpleConfigurator({
     numberString(discovery?.catalog_refresh_seconds ?? DEFAULT_MARKET_DISCOVERY_POLICY.catalog_refresh_seconds),
   );
   const [watchlistRefresh, setWatchlistRefresh] = useState(
-    numberString(discovery?.watchlist_refresh_seconds ?? DEFAULT_MARKET_DISCOVERY_POLICY.watchlist_refresh_seconds),
+    numberString(initialStyle.watchlistRefreshSeconds),
   );
   const [refreshTimeout, setRefreshTimeout] = useState(
     numberString(discovery?.refresh_timeout_seconds ?? DEFAULT_MARKET_DISCOVERY_POLICY.refresh_timeout_seconds),
@@ -179,6 +185,11 @@ export function SimpleConfigurator({
   );
   const [validationError, setValidationError] = useState<string | null>(null);
 
+  const styleMetadata = tradingStyle ? TRADING_STYLE_UI_METADATA[tradingStyle] : null;
+  const styleMappingVersion = tradingStyle
+    ? config?.trading_style_mapping_version ?? TRADING_STYLE_MAPPING_VERSION
+    : null;
+
   const configurationResult = useMemo(() => {
     try {
       if (!name.trim()) throw new Error("Donne un nom à la Session.");
@@ -193,6 +204,7 @@ export function SimpleConfigurator({
         capital,
         model,
         aggressiveness,
+        tradingStyle,
         riskProfile,
         cadence,
         feeRate,
@@ -258,6 +270,7 @@ export function SimpleConfigurator({
     riskProfile,
     slippageBps,
     spreadBps,
+    tradingStyle,
     watchlistLimit,
     watchlistRefresh,
   ]);
@@ -265,6 +278,13 @@ export function SimpleConfigurator({
   const busy = control.busyAction !== null;
   const runningEdit = session?.status === "RUNNING";
   const operationError = control.feedback?.tone === "error" ? control.feedback.message : null;
+
+  function applyRecommendedStyleValues() {
+    if (!tradingStyle) return;
+    const recommendations = tradingStyleRecommendations(tradingStyle);
+    setCadence(numberString(recommendations.tradingCadenceSeconds));
+    setWatchlistRefresh(numberString(recommendations.watchlistRefreshSeconds));
+  }
 
   async function submit(startNow: boolean) {
     setValidationError(null);
@@ -317,7 +337,7 @@ export function SimpleConfigurator({
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Sparkles className="size-4" /> Configuration simple</CardTitle>
-          <CardDescription>Nom, capital, marché, sélection, IA, agressivité, Risk et instructions opérateur.</CardDescription>
+          <CardDescription>Nom, capital, marché, sélection, IA, style de trading, agressivité, Risk et instructions opérateur.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <Field label="Nom de la Session">
@@ -357,6 +377,48 @@ export function SimpleConfigurator({
             </Field>
           </div>
 
+          <div className="space-y-3">
+            <div>
+              <p className="text-sm font-medium">Style de trading</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                Le style définit l’horizon stratégique. Il reste indépendant de l’agressivité, du mode de sélection des marchés et du profil Risk.
+              </p>
+            </div>
+            {tradingStyle === null ? (
+              <div className="rounded-lg border border-warning/35 bg-warning-subtle p-3 text-sm text-warning-foreground">
+                Session historique : style hérité / non défini. Aucun style n’est inféré tant que tu ne choisis pas explicitement Scalping ou Swing.
+              </div>
+            ) : null}
+            <div className="grid gap-2 md:grid-cols-2">
+              <ChoiceCard
+                active={tradingStyle === "SCALP"}
+                title={TRADING_STYLE_UI_METADATA.SCALP.label}
+                detail={TRADING_STYLE_UI_METADATA.SCALP.detail}
+                onClick={() => setTradingStyle("SCALP")}
+              />
+              <ChoiceCard
+                active={tradingStyle === "SWING"}
+                title={TRADING_STYLE_UI_METADATA.SWING.label}
+                detail={TRADING_STYLE_UI_METADATA.SWING.detail}
+                onClick={() => setTradingStyle("SWING")}
+              />
+            </div>
+            {styleMetadata ? (
+              <div className="flex flex-col gap-3 rounded-xl border bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-xs leading-relaxed text-muted-foreground">
+                  <span className="font-medium text-foreground">Sélection actuelle : {styleMetadata.label}</span>
+                  <span className="block">Timeframes stratégiques : {styleMetadata.timeframes.join(" · ")}</span>
+                  <span className="block">
+                    Valeurs conseillées à la création : cadence {styleMetadata.recommendedTradingCadenceSeconds} s · watchlist {styleMetadata.recommendedWatchlistRefreshSeconds} s.
+                  </span>
+                </div>
+                <Button variant="outline" onClick={applyRecommendedStyleValues}>
+                  Réappliquer les valeurs conseillées
+                </Button>
+              </div>
+            ) : null}
+          </div>
+
           <Field label={`Agressivité · ${aggressiveness}/10`} hint="Ce paramètre contextualise l’Agent ; le Risk Engine déterministe garde l’autorité finale.">
             <input type="range" min={1} max={10} value={aggressiveness} onChange={(event) => setAggressiveness(Number(event.target.value))} className="w-full" />
           </Field>
@@ -382,7 +444,7 @@ export function SimpleConfigurator({
           <div className="flex items-center justify-between gap-3">
             <div>
               <CardTitle className="flex items-center gap-2"><Settings2 className="size-4" /> Configuration avancée</CardTitle>
-              <CardDescription className="mt-1">Cadence, coûts PAPER, timeouts, caps Risk et paramètres Market Discovery.</CardDescription>
+              <CardDescription className="mt-1">Style effectif, cadence, coûts PAPER, timeouts, caps Risk et paramètres Market Discovery.</CardDescription>
             </div>
             <Badge tone="neutral">{advancedOpen ? "Masquer" : "Afficher"}</Badge>
           </div>
@@ -390,6 +452,24 @@ export function SimpleConfigurator({
         {advancedOpen ? (
           <CardContent className="space-y-7 border-t pt-6">
             <section className="space-y-4">
+              <div>
+                <h3 className="font-semibold">Style stratégique effectif</h3>
+                <p className="text-xs text-muted-foreground">Lecture seule du mapping stratégique ; les timeframes ne sont pas configurables indépendamment du style.</p>
+              </div>
+              {styleMetadata ? (
+                <div className="grid gap-3 rounded-xl border bg-muted/20 p-4 md:grid-cols-3">
+                  <div><p className="text-xs text-muted-foreground">Style</p><p className="mt-1 font-medium">{styleMetadata.label}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Mapping</p><p className="mt-1 font-medium">{styleMappingVersion}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Timeframes stratégiques</p><p className="mt-1 font-medium">{styleMetadata.timeframes.join(" · ")}</p></div>
+                </div>
+              ) : (
+                <div className="rounded-xl border bg-muted/20 p-4 text-sm text-muted-foreground">
+                  Style : Hérité / non défini · mapping et timeframes non inférés.
+                </div>
+              )}
+            </section>
+
+            <section className="space-y-4 border-t pt-6">
               <div><h3 className="font-semibold">Runtime & coûts PAPER</h3><p className="text-xs text-muted-foreground">Valeurs effectivement persistées dans la prochaine version de configuration.</p></div>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <Field label="Cadence stratégique (s)"><input className={inputClass} value={cadence} onChange={(e) => setCadence(e.target.value)} /></Field>
@@ -425,7 +505,7 @@ export function SimpleConfigurator({
 
             {marketSelectionMode === "AUTOMATIC_AI" ? (
               <section className="space-y-4 border-t pt-6">
-                <div><h3 className="flex items-center gap-2 font-semibold"><Waves className="size-4" /> Market Discovery</h3><p className="text-xs text-muted-foreground">Defaults canoniques v1 préremplis ; l’Agent reste responsable de la sélection de watchlist parmi les candidats admissibles.</p></div>
+                <div><h3 className="flex items-center gap-2 font-semibold"><Waves className="size-4" /> Market Discovery</h3><p className="text-xs text-muted-foreground">Valeurs effectives persistées ; le style ne les modifie que via l’action explicite « Réappliquer les valeurs conseillées ».</p></div>
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                   <Field label="Catalog refresh (s)"><input className={inputClass} value={catalogRefresh} onChange={(e) => setCatalogRefresh(e.target.value)} /></Field>
                   <Field label="Watchlist refresh (s)"><input className={inputClass} value={watchlistRefresh} onChange={(e) => setWatchlistRefresh(e.target.value)} /></Field>

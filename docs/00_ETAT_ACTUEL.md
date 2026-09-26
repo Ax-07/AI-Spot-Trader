@@ -6,14 +6,17 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub `main` vérifié après intégration du Batch 19.9B :
+- HEAD GitHub `main` vérifié avant préparation du Batch 19.9C :
+  `792711217513db6e9825a96e15ec59c74d33b192`
+  (`docs: sync post-19.9B state`).
+- Parent fonctionnel 19.9B :
   `88be7d50111c2e6210225071d3f1af3f7f07b4f0`
   (`feat: add strategic multi-timeframe context`).
-- Parent documentaire post-19.9A :
-  `a4f841c7c23e3af1b44a9cbb104ccc44d5cad2d9`
-  (`docs: sync post-19.9A state`).
+- Référence fonctionnelle 19.9A :
+  `4b6a851addea74d72af2c433827c935a87d4bc04`
+  (`feat: add canonical scalp swing trading style`).
 
-## État fonctionnel intégré
+## État fonctionnel intégré + Batch 19.9C préparé
 
 - un seul Agent IA stratégique ; pipeline Risk déterministe inchangé ;
 - Session = concept principal du parcours utilisateur ;
@@ -24,26 +27,31 @@
 - `CandleStreamService` backend partagé entre cockpit et Campaign runtimes, sans second pipeline/cache OHLC ;
 - lecture causale `history_as_of(...)`, sans interpolation des gaps ni donnée candle indisponible à `as_of` ;
 - disponibilité explicite `AVAILABLE` / `PARTIAL` / `MISSING`, stale et profondeur bornée ;
-- contexte borné à 32 marchés, 128 KiB JSON et concurrence de lecture bornée ;
 - snapshot construit pour Market Selection puis réutilisé inchangé pour la décision finale ;
-- Discovery reste légère avant l'enrichissement multi-timeframes ;
-- `ExecutionCostContext` reste séparé ;
+- Batch 19.9C : le configurateur Session expose le style dans la configuration simple et avancée ;
+- les quatre dimensions restent indépendantes : style de trading, agressivité, sélection des marchés et Risk ;
+- nouvelles Sessions : `SCALP` est le choix UX initial avec cadence recommandée `60 s` et refresh watchlist `300 s` ;
+- recommandations `SWING` : cadence `900 s` et refresh watchlist `1800 s` ;
+- changer de style ne modifie aucune valeur avancée ; une action explicite permet de réappliquer les recommandations ;
+- les Sessions legacy sans style restent affichées `Hérité / non défini` et aucun style n'est inféré ;
+- l'édition reconstruit cadence, Discovery, coûts, Risk, timeouts, marché et agressivité depuis les valeurs persistées ;
+- les timeframes sont affichées en lecture seule comme dérivées du mapping versionné, sans sélecteur indépendant ;
 - `agent-contract-v1` et Campaigns historiques sans `trading_style` restent compatibles ;
 - aucune règle technique déterministe `indicateur -> BUY/SELL/HOLD` et aucun timer de fermeture lié au style.
 
 Principe central : **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
-Détails : `docs/19_BATCH_19_9B_MULTI_TIMEFRAMES.md`.
+Détails 19.9B : `docs/19_BATCH_19_9B_MULTI_TIMEFRAMES.md`.
+Détails 19.9C : `docs/20_BATCH_19_9C_SESSION_TRADING_STYLE_UX.md`.
 
-## Validation locale post-intégration
+## Validation du patch 19.9C
 
-Validation fournie par l'opérateur après intégration de 19.9B :
+Exécuté par ChatGPT sur le patch isolé :
 
-- tests ciblés : **57 passed, 2 warnings** ;
-- suite backend complète : **629 passed, 2 warnings** ;
-- `git diff --check` : aucune erreur de whitespace ;
-- warnings limités aux dépendances Starlette/FastAPI déjà connues et aux notifications Git LF -> CRLF ;
-- aucun fichier frontend fonctionnel modifié par 19.9B.
+- tests unitaires `session-config` via Node 22 type stripping : **12/12 passés** ;
+- vérification syntaxique TypeScript/TSX du patch : **passée** ;
+- `tsc --strict --noEmit` ciblé sur `api/types.ts` + `session-config.ts` : **passé** ;
+- la suite frontend complète (`pnpm test`, `pnpm lint`, `pnpm typecheck`, `pnpm build`) reste à exécuter dans le repository local opérateur avec ses dépendances.
 
 ## Règle de reprise
 
