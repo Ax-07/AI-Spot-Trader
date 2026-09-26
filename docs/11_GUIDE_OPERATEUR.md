@@ -43,12 +43,13 @@ La configuration simple demande :
 
 1. un nom ;
 2. `SPOT` ou `PERPETUAL` ;
-3. un mode de sélection des marchés ;
-4. un capital PAPER ;
-5. Luna ou Sol ;
-6. agressivité 1–10 ;
-7. profil Risk ;
-8. instructions IA/opérateur.
+3. un style de trading `SCALP` ou `SWING` ;
+4. un mode de sélection des marchés ;
+5. un capital PAPER ;
+6. Luna ou Sol ;
+7. agressivité 1–10 ;
+8. profil Risk ;
+9. instructions IA/opérateur.
 
 Deux boutons sont disponibles :
 
@@ -56,6 +57,19 @@ Deux boutons sont disponibles :
 - **Créer et démarrer** : crée puis active et démarre explicitement le moteur backend.
 
 La création technique Strategy + revision 1 + Campaign est atomique côté backend.
+
+### Style de trading
+
+Pour une nouvelle Session, `SCALP` est le choix UX initial. Les recommandations affichées sont :
+
+| Style | Cadence stratégique | Watchlist refresh | Timeframes stratégiques |
+| --- | ---: | ---: | --- |
+| SCALP | 60 s | 300 s | `1m · 5m · 15m · 30m` |
+| SWING | 900 s | 1800 s | `1h · 4h · 1d` |
+
+Changer de style ne remplace pas automatiquement une cadence ou un refresh déjà personnalisé. Utilisez `Réappliquer les valeurs conseillées` uniquement si vous voulez explicitement reprendre les recommandations du style.
+
+Le style ne choisit ni l'agressivité, ni le mode de marchés, ni le profil Risk. Ces quatre dimensions restent indépendantes.
 
 ## 5. Mode marchés Automatique — IA
 
@@ -114,6 +128,8 @@ Le backend valide toujours les limites finales.
 
 Le même formulaire permet d'ouvrir **Configuration avancée**. Il affiche les valeurs effectivement utilisées :
 
+- style de trading et version `trading-style-map-v1` ;
+- timeframes stratégiques associées, en lecture seule ;
 - cadence stratégique ;
 - frais PAPER ;
 - spread ;
@@ -122,6 +138,8 @@ Le même formulaire permet d'ouvrir **Configuration avancée**. Il affiche les v
 - caps Risk ;
 - levier et limites PERPETUAL ;
 - whitelist Risk optionnelle en mode automatique.
+
+Les timeframes affichées sont dérivées du mapping versionné pour information ; elles ne constituent pas un sélecteur indépendant et ne construisent pas le contexte runtime.
 
 En mode automatique, les paramètres Market Discovery sont aussi visibles :
 
@@ -182,6 +200,8 @@ Le backend ne réécrit jamais l'historique :
 - les anciens runs et leurs faits restent intacts.
 
 Une Session **En cours** ne peut pas être modifiée silencieusement. Arrêtez-la avant d'appliquer une nouvelle version.
+
+À la réouverture, le formulaire reprend les valeurs réellement persistées : style, cadence, watchlist refresh, coûts, Risk, timeouts, marchés et agressivité. Une Session historique sans style affiche `Hérité / non défini` ; aucun SCALP/SWING n'est inféré automatiquement.
 
 ## 12. Dupliquer une Session
 

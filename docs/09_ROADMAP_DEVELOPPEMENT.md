@@ -3,9 +3,9 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub vérifié après Batch 19.9B : 88be7d50111c2e6210225071d3f1af3f7f07b4f0
-Batch 19.9B intégré                 : feat: add strategic multi-timeframe context
-Validation locale post-19.9B       : backend 629 passed, 2 warnings ; git diff --check sans erreur
+HEAD GitHub vérifié après Batch 19.9C : b59020a4b354d9d56d593f3e39bcd608824bcd42
+Batch 19.9C intégré                 : feat: add session trading style UX
+Validation opérateur post-19.9C    : frontend 29/29 ; lint/typecheck/build PASS ; git diff --check sans erreur
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -25,7 +25,8 @@ Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batc
 - 19.7 : overlays de position canoniques `Prix moyen`, `Mark backend`, `Liquidation` ;
 - 19.8 : façade utilisateur **Session**, CRUD/lifecycle versionné, configurateur simple/avancé et choix de marchés Automatique IA / Manuel ;
 - 19.9A : Trading Style canonique `SCALP` / `SWING`, contextes style/coûts Agent et propagation Discovery -> Market Selection -> décision finale ;
-- 19.9B : contexte stratégique candles multi-timeframes `strategic-mtf-v1`, causal, borné et partagé entre Market Selection et décision finale.
+- 19.9B : contexte stratégique candles multi-timeframes `strategic-mtf-v1`, causal, borné et partagé entre Market Selection et décision finale ;
+- 19.9C : UX Session SCALP/SWING, persistance du style, timeframes en lecture seule, recommandations explicites et reconstruction persist-first.
 
 ## Batch 19.8 — Sessions v1
 
@@ -126,6 +127,33 @@ Validation locale post-intégration :
 - tests ciblés : `57 passed, 2 warnings` ;
 - backend complet : `629 passed, 2 warnings` ;
 - `git diff --check` : aucune erreur de whitespace.
+
+## Batch 19.9C — UX Session pour le style de trading
+
+**État : intégré à GitHub `main` au commit `b59020a4b354d9d56d593f3e39bcd608824bcd42` et validé localement par l'opérateur.**
+
+Objectif atteint : exposer le Trading Style dans le parcours Session sans coupler le style à l'agressivité, au choix des marchés ou au Risk, et sans modifier le backend.
+
+Livrables :
+
+- choix `SCALP` / `SWING` dans le configurateur Session ;
+- persistance de `trading_style` et `trading_style_mapping_version` avec `trading-style-map-v1` ;
+- affichage en lecture seule des timeframes stratégiques : SCALP `1m/5m/15m/30m`, SWING `1h/4h/1d` ;
+- recommandations UX : SCALP `60 s` / `300 s`, SWING `900 s` / `1800 s` pour cadence stratégique / watchlist refresh ;
+- changement de style sans écrasement silencieux des personnalisations ;
+- action explicite `Réappliquer les valeurs conseillées` ;
+- Sessions historiques sans style affichées `Hérité / non défini`, sans inférence ;
+- reconstruction persist-first de la configuration ;
+- aucun fichier backend et aucune règle runtime dérivée du style.
+
+Validation locale post-intégration :
+
+- `pnpm test` : `29 tests`, `29 pass`, `0 fail` ;
+- `pnpm lint` : PASS ;
+- `pnpm typecheck` : PASS ;
+- `pnpm build` : PASS sous Next.js 16.3.3 ;
+- `git diff --check` : aucune erreur de whitespace ;
+- warnings Node `MODULE_TYPELESS_PACKAGE_JSON` et Git LF → CRLF : non bloquants.
 
 ## Périmètres ultérieurs
 

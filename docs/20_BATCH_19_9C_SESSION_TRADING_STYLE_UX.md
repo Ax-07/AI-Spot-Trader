@@ -5,11 +5,16 @@
 Repository : `Ax-07/AI-Spot-Trader`
 Branche : `main`
 
-HEAD GitHub vérifié avant préparation :
+Base vérifiée avant implémentation :
 
 - `792711217513db6e9825a96e15ec59c74d33b192` — `docs: sync post-19.9B state` ;
 - parent fonctionnel 19.9B : `88be7d50111c2e6210225071d3f1af3f7f07b4f0` ;
 - référence 19.9A : `4b6a851addea74d72af2c433827c935a87d4bc04`.
+
+État intégré vérifié après push :
+
+- `b59020a4b354d9d56d593f3e39bcd608824bcd42` — `feat: add session trading style UX` ;
+- parent : `792711217513db6e9825a96e15ec59c74d33b192`.
 
 ## Audit
 
@@ -120,18 +125,55 @@ Les tests `frontend/src/lib/session-config.test.mjs` couvrent :
 - mapping de timeframes d'affichage ;
 - reconstruction depuis cadence/watchlist persistées.
 
-## Validation attendue dans le repository opérateur
+## Validations réellement exécutées
 
-```powershell
-cd E:\AI-Spot-Trader\frontend
+Après extraction du Batch 19.9C dans le repository opérateur :
+
+```text
 pnpm test
-pnpm lint
-pnpm typecheck
-pnpm build
-
-cd E:\AI-Spot-Trader
-git diff --check
-git status --short
+29 tests
+29 pass
+0 fail
 ```
 
-`frontend/next-env.d.ts` reste hors périmètre s'il est modifié localement indépendamment du batch.
+```text
+pnpm lint
+PASS
+```
+
+```text
+pnpm typecheck
+PASS
+```
+
+```text
+pnpm build
+PASS
+Next.js 16.3.3
+Compiled successfully
+TypeScript terminé avec succès
+Static pages générées avec succès
+```
+
+Puis, à la racine du repository :
+
+```text
+git diff --check
+```
+
+Aucune erreur de whitespace n'a été signalée. Deux warnings Node `MODULE_TYPELESS_PACKAGE_JSON` ont été affichés pour les imports TypeScript ; ils sont non bloquants. Git a également signalé des avertissements LF → CRLF sous Windows, sans erreur de whitespace.
+
+## État intégré final
+
+Le Batch 19.9C est intégré à GitHub `main` au commit `b59020a4b354d9d56d593f3e39bcd608824bcd42` (`feat: add session trading style UX`).
+
+Le commit contient 6 fichiers modifiés/créés, uniquement côté frontend et documentation du batch :
+
+- `docs/00_ETAT_ACTUEL.md` ;
+- `docs/20_BATCH_19_9C_SESSION_TRADING_STYLE_UX.md` ;
+- `frontend/src/components/cockpit/simple-configurator.tsx` ;
+- `frontend/src/lib/api/types.ts` ;
+- `frontend/src/lib/session-config.test.mjs` ;
+- `frontend/src/lib/session-config.ts`.
+
+Aucun fichier backend, aucune configuration runtime et aucune dépendance n'ont été modifiés par 19.9C.

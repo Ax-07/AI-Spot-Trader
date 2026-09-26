@@ -4,16 +4,16 @@
 
 AI Spot Trader est une application expérimentale de trading **PAPER** pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement un cockpit de contrôle et de visualisation.
 
-Référence GitHub vérifiée après intégration du Batch 19.9B :
+Référence GitHub vérifiée après intégration du Batch 19.9C :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 88be7d50111c2e6210225071d3f1af3f7f07b4f0
-Commit     : feat: add strategic multi-timeframe context
+HEAD       : b59020a4b354d9d56d593f3e39bcd608824bcd42
+Commit     : feat: add session trading style UX
 ```
 
-Les Batches 19.9A et 19.9B sont intégrés à GitHub `main`. La distinction `SCALP` / `SWING` est désormais opérationnelle côté contexte de données multi-timeframes remis au même Agent stratégique.
+Les Batches 19.9A, 19.9B et 19.9C sont intégrés à GitHub `main`. La distinction `SCALP` / `SWING` est opérationnelle côté contexte de données multi-timeframes remis au même Agent stratégique et exposée dans le parcours Session côté cockpit.
 
 ## 2. Invariants fonctionnels
 
@@ -135,7 +135,7 @@ Kraken catalogue
 
 ## 8. Market Discovery
 
-Defaults canoniques :
+Defaults backend canoniques hors recommandations UX 19.9C :
 
 ```text
 catalog_refresh_seconds      = 900
@@ -149,7 +149,7 @@ min_window_observations      = 2
 require_complete_window      = false
 ```
 
-Les defaults frontend sont centralisés pour refléter ceux du backend ; le backend reste la référence de validation.
+Ces valeurs restent les defaults contractuels généraux du backend. Le configurateur Session 19.9C applique, lors de la création ou via une action explicite de réapplication, des recommandations UX dépendantes du style : SCALP `60 s` / `300 s`, SWING `900 s` / `1800 s` pour cadence stratégique / watchlist refresh. Une Session existante est toujours reconstruite depuis ses valeurs persistées.
 
 ## 9. NORMAL / MANAGEMENT
 
@@ -222,7 +222,23 @@ Le contexte est compact et borné : 32 marchés maximum, 128 KiB JSON maximum, c
 
 Le même Agent IA conserve la décision stratégique. `ExecutionCostContext` reste séparé, le Risk Engine reste inchangé et aucune statistique technique n'est convertie en règle déterministe BUY/SELL/HOLD.
 
-## 15. Hors périmètre actuel
+## 15. UX Session du Trading Style — Batch 19.9C
+
+Le configurateur Session expose désormais `SCALP` / `SWING` dans le parcours normal et persiste `trading_style` avec `trading_style_mapping_version = trading-style-map-v1`.
+
+Règles UX intégrées :
+
+- les timeframes stratégiques sont affichées en lecture seule depuis le mapping versionné : SCALP `1m/5m/15m/30m`, SWING `1h/4h/1d` ;
+- une nouvelle Session part avec `SCALP` comme choix UX initial et les recommandations `60 s` / `300 s` ; SWING recommande `900 s` / `1800 s` ;
+- changer de style ne réécrit jamais silencieusement cadence, watchlist refresh, Risk, agressivité, marchés, coûts ou timeouts ;
+- l'action `Réappliquer les valeurs conseillées` est la seule action UX qui remplace explicitement cadence et watchlist refresh par les recommandations du style ;
+- l'édition est persist-first : les valeurs réellement stockées sont restaurées telles quelles ;
+- une Campaign historique sans style reste affichée `Hérité / non défini` sans inférence SCALP/SWING ;
+- style, agressivité, sélection des marchés et Risk restent quatre dimensions indépendantes.
+
+19.9C ne modifie aucun backend, aucune règle runtime cachée, aucun timer de fermeture et aucune autorité stratégique : le frontend reste un cockpit.
+
+## 16. Hors périmètre actuel
 
 - LIVE ;
 - `ADAPTIVE_AI` tant qu'il n'est pas cadré ;

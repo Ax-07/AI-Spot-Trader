@@ -6,17 +6,20 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub `main` vérifié avant préparation du Batch 19.9C :
+- HEAD GitHub `main` vérifié après intégration du Batch 19.9C :
+  `b59020a4b354d9d56d593f3e39bcd608824bcd42`
+  (`feat: add session trading style UX`).
+- Parent documentaire post-19.9B :
   `792711217513db6e9825a96e15ec59c74d33b192`
   (`docs: sync post-19.9B state`).
-- Parent fonctionnel 19.9B :
+- Référence fonctionnelle 19.9B :
   `88be7d50111c2e6210225071d3f1af3f7f07b4f0`
   (`feat: add strategic multi-timeframe context`).
 - Référence fonctionnelle 19.9A :
   `4b6a851addea74d72af2c433827c935a87d4bc04`
   (`feat: add canonical scalp swing trading style`).
 
-## État fonctionnel intégré + Batch 19.9C préparé
+## État fonctionnel intégré après Batch 19.9C
 
 - un seul Agent IA stratégique ; pipeline Risk déterministe inchangé ;
 - Session = concept principal du parcours utilisateur ;
@@ -44,15 +47,18 @@ Principe central : **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 Détails 19.9B : `docs/19_BATCH_19_9B_MULTI_TIMEFRAMES.md`.
 Détails 19.9C : `docs/20_BATCH_19_9C_SESSION_TRADING_STYLE_UX.md`.
 
-## Validation du patch 19.9C
+## Validation post-intégration 19.9C
 
-Exécuté par ChatGPT sur le patch isolé :
+Validations locales réellement exécutées par l'opérateur après extraction du Batch 19.9C :
 
-- tests unitaires `session-config` via Node 22 type stripping : **12/12 passés** ;
-- vérification syntaxique TypeScript/TSX du patch : **passée** ;
-- `tsc --strict --noEmit` ciblé sur `api/types.ts` + `session-config.ts` : **passé** ;
-- la suite frontend complète (`pnpm test`, `pnpm lint`, `pnpm typecheck`, `pnpm build`) reste à exécuter dans le repository local opérateur avec ses dépendances.
+- `pnpm test` : **29 tests, 29 pass, 0 fail** ;
+- `pnpm lint` : **PASS** ;
+- `pnpm typecheck` : **PASS** ;
+- `pnpm build` : **PASS** sous Next.js 16.3.3, compilation TypeScript et génération des pages statiques réussies ;
+- `git diff --check` : **aucune erreur de whitespace**.
+
+Deux warnings Node `MODULE_TYPELESS_PACKAGE_JSON` sur les imports TypeScript et les avertissements Git LF → CRLF sous Windows ont été observés. Ils sont non bloquants et n'appellent aucune modification fonctionnelle dans ce batch documentaire.
 
 ## Règle de reprise
 
-À chaque nouvelle tâche : revérifier le HEAD GitHub réel, relire ce document et distinguer clairement état intégré GitHub, modifications locales fournies par l'opérateur et éventuel patch proposé.
+À chaque nouvelle tâche : revérifier le HEAD GitHub réel, relire ce document et distinguer clairement état intégré GitHub, modifications locales fournies par l'opérateur et éventuel patch proposé. Aucun nouveau chantier n'est acté par cette synchronisation documentaire.

@@ -9,10 +9,10 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 ## Référence courante
 
 ```text
-HEAD GitHub vérifié après 19.9B        : 88be7d50111c2e6210225071d3f1af3f7f07b4f0
-Référence fonctionnelle intégrée       : 88be7d50111c2e6210225071d3f1af3f7f07b4f0
-Batch 19.9B                            : intégré à GitHub `main`
-Validation locale post-19.9B           : backend 629 passed, 2 warnings ; git diff --check sans erreur
+HEAD GitHub vérifié après 19.9C        : b59020a4b354d9d56d593f3e39bcd608824bcd42
+Référence intégrée                     : b59020a4b354d9d56d593f3e39bcd608824bcd42
+Batch 19.9C                            : intégré à GitHub `main`
+Validation opérateur post-19.9C        : frontend 29/29 ; lint/typecheck/build PASS ; git diff --check sans erreur
 ```
 
 ## Décisions historiques toujours actives
@@ -23,7 +23,10 @@ Validation locale post-19.9B           : backend 629 passed, 2 warnings ; git di
 - ADR-205 à ADR-226 : comptabilité, monitoring, `NORMAL`/`MANAGEMENT`, discovery/watchlist, whitelist et recovery ;
 - ADR-227 à ADR-230 : explicabilité ;
 - ADR-231 à ADR-238 : candles/streaming, vue Marchés, univers sans ranking frontend, markers de fills et Lightweight Charts comme rendu uniquement ;
-- ADR-239 : overlays de position strictement issus du portefeuille backend.
+- ADR-239 : overlays de position strictement issus du portefeuille backend ;
+- ADR-240 à ADR-247 : façade Session, lifecycle, immutabilité et modes de marchés ;
+- ADR-248 à ADR-255 : Trading Style, coûts Agent et contexte stratégique multi-timeframes ;
+- ADR-256 à ADR-258 : UX Session du style, recommandations explicites et compatibilité legacy.
 
 ## ADR-240 — Session est une façade UX, pas un nouvel agrégat persistant
 
@@ -140,6 +143,39 @@ Les bornes v1 sont explicites : 32 marchés maximum, 128 KiB JSON maximum, concu
 **ADOPTÉ AU BATCH 19.9B.**
 
 Le service 19.9B consomme le mapping `trading-style-map-v1` sans le dupliquer. Les statistiques OHLCV résumées ne produisent aucune règle `indicateur -> BUY/SELL/HOLD`. Le même Agent stratégique décide ; `ExecutionCostContext` reste séparé ; Risk Engine, broker, contrats de sortie Agent et timers de position restent inchangés.
+
+## ADR-256 — Le style est exposé dans la Session sans coupler les dimensions
+
+**ADOPTÉ AU BATCH 19.9C.**
+
+Le configurateur Session expose `SCALP` / `SWING`, mais style, agressivité, mode de sélection des marchés et Risk restent quatre dimensions indépendantes. Le frontend persiste `trading_style` et `trading_style_mapping_version` sans créer de nouvelle autorité métier.
+
+## ADR-257 — Changer de style ne réécrit jamais silencieusement les personnalisations
+
+**ADOPTÉ AU BATCH 19.9C.**
+
+Un changement de style modifie uniquement le style sélectionné. Les recommandations SCALP `60 s` / `300 s` et SWING `900 s` / `1800 s` pour cadence stratégique / watchlist refresh ne sont appliquées que lors de l'initialisation UX prévue ou via l'action explicite `Réappliquer les valeurs conseillées`. L'édition d'une Session reconstruit toujours les valeurs réellement persistées.
+
+## ADR-258 — Legacy sans inférence et timeframes d'affichage en lecture seule
+
+**ADOPTÉ AU BATCH 19.9C.**
+
+Une Campaign historique sans `trading_style` reste `Hérité / non défini` ; le frontend n'infère aucun style. Les timeframes associées sont affichées en lecture seule depuis `trading-style-map-v1` : SCALP `1m/5m/15m/30m`, SWING `1h/4h/1d`. Cette représentation d'affichage ne construit pas le contexte runtime `strategic-mtf-v1`.
+
+## Changelog — 2026-09-26 — Batch 19.9C intégré
+
+- commit GitHub `b59020a4b354d9d56d593f3e39bcd608824bcd42` (`feat: add session trading style UX`) ;
+- parent `792711217513db6e9825a96e15ec59c74d33b192` (`docs: sync post-19.9B state`) ;
+- exposition `SCALP` / `SWING` dans le configurateur Session ;
+- persistance de `trading_style` et `trading_style_mapping_version` avec `trading-style-map-v1` ;
+- affichage des timeframes stratégiques en lecture seule ;
+- recommandations UX SCALP `60 s` / `300 s` et SWING `900 s` / `1800 s` ;
+- changement de style sans écrasement silencieux et réapplication explicite des recommandations ;
+- compatibilité des Sessions historiques via `Hérité / non défini`, sans inférence ;
+- reconstruction persist-first des formulaires ;
+- style, agressivité, sélection des marchés et Risk maintenus indépendants ;
+- aucun fichier backend, aucun timer de fermeture et aucune règle runtime cachée ajoutés ;
+- validation locale opérateur : `pnpm test` 29/29, lint/typecheck/build PASS, `git diff --check` sans erreur ; warnings Node `MODULE_TYPELESS_PACKAGE_JSON` et Git LF → CRLF non bloquants.
 
 ## Changelog — 2026-09-26 — Batch 19.9B intégré
 
