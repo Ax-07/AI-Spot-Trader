@@ -23,7 +23,14 @@ from ai_spot_trader.domain.models import (
     MarketState,
     PortfolioState,
 )
+from ai_spot_trader.persistence.audit import AuditedTradingCycleRunner
 from ai_spot_trader.portfolio.ledger import PaperPortfolioLedger
+from ai_spot_trader.trading.engine import (
+    TradingCycleFailure,
+    TradingCycleResult,
+    TradingCycleStage,
+    TradingCycleStatus,
+)
 
 NOW = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
 
@@ -299,3 +306,124 @@ def test_tier_crossing_remargins_total_position_with_same_canonical_tier() -> No
     assert increased.initial_margin_rate == Decimal("0.30")
     assert increased.maintenance_margin_rate == Decimal("0.15")
     assert increased.maintenance_margin == Decimal("45")
+
+
+def test_high_precision_perpetual_fill_from_notional_cap_is_exact() -> None:
+    reference_price = Decimal("310.2472717758515210664404972")
+    max_order_notional = Decimal("40")
+
+    for contract_size in (Decimal("1"), Decimal("0.1"), Decimal("10")):
+        quantity = max_order_notional / reference_price / contract_size
+        clock = FixedClock(NOW)
+        portfolio = ledger(clock)
+        aave_instrument = DerivativeInstrument(
+            symbol="AAVE/USD",
+            venue_symbol="PF_AAVEUSD",
+            market_type=MarketType.PERPETUAL,
+            contract_kind=DerivativeContractKind.LINEAR,
+            underlying_asset="AAVE",
+            quote_asset="USD",
+            contract_size=contract_size,
+            tick_size=Decimal("0.001"),
+            min_order_quantity=Decimal("0.01"),
+            initial_margin_rate=Decimal("0.10"),
+            maintenance_margin_rate=Decimal("0.05"),
+            max_leverage=Decimal("10"),
+            funding_interval_seconds=Decimal("3600"),
+        )
+        aave_market = MarketState(
+            market_state_id=uuid4(),
+            as_of=NOW,
+            symbol="AAVE/USD",
+            last_price=reference_price,
+            market_type=MarketType.PERPETUAL,
+            derivative=DerivativeMarketContext(
+                observed_at=NOW,
+                instrument=aave_instrument,
+                mark_price=reference_price,
+                index_price=reference_price,
+                funding_rate=Decimal("0"),
+            ),
+        )
+        aave_intent = ExecutionIntent(
+            execution_id=uuid4(),
+            cycle_id=uuid4(),
+            decision_id=uuid4(),
+            risk_assessment_id=uuid4(),
+            created_at=NOW,
+            action=TradingAction.BUY,
+            symbol="AAVE/USD",
+            quantity=quantity,
+            market_type=MarketType.PERPETUAL,
+            leverage=Decimal("1"),
+        )
+        paper = PaperBroker(
+            ledger=portfolio,
+            cost_model=PaperExecutionCostModel(
+                fee_rate=Decimal("0.001"),
+                spread_bps=Decimal("5"),
+                slippage_bps=Decimal("7"),
+            ),
+            clock=clock,
+        )
+
+        fill = asyncio.run(paper.execute(aave_intent, aave_market))[0]
+        adverse_delta = fill.price - fill.reference_price
+
+        assert fill.notional == fill.price * fill.quantity * fill.contract_size
+        assert (
+            fill.spread_cost + fill.slippage_cost
+            == adverse_delta * fill.quantity * fill.contract_size
+        )
+        assert fill.spread_cost > 0
+        assert fill.slippage_cost > 0
+
+
+def test_audited_runner_rolls_back_derivative_mutation_on_broker_failure() -> None:
+    class Writer:
+        async def ensure_available(self) -> None:
+            return None
+
+        async def record(self, result: TradingCycleResult) -> bool:
+            assert result.status is TradingCycleStatus.FAILED
+            return True
+
+    class MutatingBrokerFailureDelegate:
+        def __init__(self, portfolio: PaperPortfolioLedger) -> None:
+            self.portfolio = portfolio
+
+        async def run_cycle(self) -> TradingCycleResult:
+            self.portfolio.apply_derivative_fill(
+                market_state=market(),
+                action=TradingAction.BUY,
+                quantity=Decimal("1"),
+                execution_price=Decimal("100"),
+                fee=Decimal("0"),
+                leverage=Decimal("1"),
+                reduce_only=False,
+            )
+            return TradingCycleResult(
+                cycle_id=uuid4(),
+                status=TradingCycleStatus.FAILED,
+                failure=TradingCycleFailure(
+                    stage=TradingCycleStage.BROKER,
+                    error_type="ValidationError",
+                ),
+            )
+
+    clock = FixedClock(NOW)
+    portfolio = ledger(clock)
+    runner = AuditedTradingCycleRunner(
+        delegate=MutatingBrokerFailureDelegate(portfolio),
+        audit_writer=Writer(),
+        portfolio=portfolio,
+    )
+
+    result = asyncio.run(runner.run_cycle())
+    snapshot = portfolio.snapshot()
+
+    assert result.status is TradingCycleStatus.FAILED
+    assert result.failure is not None
+    assert result.failure.stage is TradingCycleStage.BROKER
+    assert snapshot.derivative_positions == ()
+    assert snapshot.balances[0].available == Decimal("1000")

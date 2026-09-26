@@ -9,9 +9,9 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 ## Référence courante
 
 ```text
-HEAD GitHub vérifié après intégration 19.12 : f8397d207be67309db083e49e113253fe88b3624
-Batch 19.12                                   : intégré et validé localement par l'opérateur
-Note détaillée                                : docs/23_BATCH_19_12_OPENAI_RATE_LIMIT_HANDLING.md
+HEAD GitHub vérifié au lancement du correctif : 1408a74f5256ff3674b154d3a64794f4ffd012c2
+Dernier backend intégré                         : f8397d207be67309db083e49e113253fe88b3624
+Correctif PAPER PERPETUAL                       : patch proposé, non intégré à GitHub
 ```
 
 ## Décisions historiques toujours actives
@@ -27,7 +27,8 @@ Note détaillée                                : docs/23_BATCH_19_12_OPENAI_RAT
 - ADR-248 à ADR-255 : Trading Style, coûts Agent et contexte stratégique multi-timeframes ;
 - ADR-256 à ADR-258 : UX Session du style, recommandations explicites et compatibilité legacy ;
 - ADR-259 à ADR-262 : gestion stratégique des positions ouvertes, contexte `position-management-v1`, plafond Risk par ordre et rotation multi-cycle du capital par le même Agent ;
-- ADR-263 : classification robuste des limites fournisseur OpenAI, retry borné et maintien du fail-closed.
+- ADR-263 : classification robuste des limites fournisseur OpenAI, retry borné et maintien du fail-closed ;
+- ADR-264 : arithmétique PAPER `Decimal` canonique et normalisation descendante des quantités PERPETUAL sur le quantum provider-derived.
 
 ## ADR-240 — Session est une façade UX, pas un nouvel agrégat persistant
 
@@ -206,6 +207,32 @@ Un HTTP 429 n'est plus traité uniformément. Les erreurs identifiées comme quo
 Les métadonnées fournisseur conservées sont bornées et non sensibles ; le message brut provider n'est pas propagé. Toute erreur LLM reste un échec technique distinct de Risk : aucun HOLD artificiel, aucun fallback algorithmique et aucun passage vers Risk/Broker ne sont introduits.
 
 Détails d'implémentation et contrat d'erreur : `docs/23_BATCH_19_12_OPENAI_RATE_LIMIT_HANDLING.md`.
+
+## ADR-264 — Les quantités PERPETUAL sont rabattues sur le quantum provider-derived et le Fill conserve une arithmétique exacte
+
+**PROPOSÉ DANS LE CORRECTIF PAPER PERPETUAL POST-19.12.**
+
+Pour les dérivés Kraken actuellement exécutables, `contractValueTradePrecision` est converti par l'adapter en `DerivativeInstrument.min_order_quantity`. Cette valeur canonique représente à la fois le minimum positif et le quantum de quantité. Le Risk Engine l'utilise directement ; aucun second champ provider ou mapping parallèle n'est introduit.
+
+Toute quantité dérivée autorisée est vérifiée sur ce quantum. Si une réduction est permise, la normalisation se fait exclusivement vers le bas. Les réductions dues au plafond de notional, à la marge disponible ou à `reduce_only` sont renormalisées, puis les minimums et plafonds financiers sont revérifiés. Une quantité normalisée ne peut donc jamais augmenter l'exposition. `DERIVATIVE_QUANTITY_STEP` devient une raison Risk stable lorsque cette normalisation modifie la quantité.
+
+Les validations exactes de `Fill` ne sont pas relâchées. `estimate_paper_execution()` calcule désormais `notional` avec le même ordre `price × quantity × contract_size` et dérive spread/slippage d'un unique coût adverse canonique. Le résidu éventuel du contexte `Decimal` est attribué déterministement à la composante slippage afin que `spread_cost + slippage_cost` reste exactement égal au delta de prix exécuté validé par le modèle.
+
+L'atomicité du runner audité n'est pas modifiée : tout cycle `FAILED` restaure le checkpoint du ledger PAPER avant persistance de l'échec.
+
+Le diagnostic structuré enrichi des `ValidationError` est volontairement différé. Le schéma actuel persiste seulement `stage`, `error_type` et `timed_out`; ajouter modèle/champ/code de validation nécessiterait une évolution coordonnée du contrat `TradingCycleFailure`, de la persistence et potentiellement de l'API. Une future implémentation devra persister uniquement des champs allow-listés et bornés, jamais les messages bruts, inputs ou contextes d'exceptions externes.
+
+## Changelog — 2026-09-26 — Correctif PAPER PERPETUAL proposé, non intégré
+
+- HEAD GitHub de référence : `1408a74f5256ff3674b154d3a64794f4ffd012c2` ;
+- reproduction réaliste du `ValidationError` avec prix AAVE haute précision, quantité issue de `max_order_notional / price / contract_size` et spread/slippage non nuls ;
+- suppression de la divergence infinitésimale entre chemins arithmétiques sans affaiblir `Fill.validate_paper_fill()` ;
+- ordre canonique du notional : `price × quantity × contract_size` ;
+- normalisation descendante de la quantité PERPETUAL sur `min_order_quantity`, interprété comme quantum pour les métadonnées Kraken issues de `contractValueTradePrecision` ;
+- revalidation du minimum et du plafond de notional après normalisation ;
+- cohérence `reduce_only` avec la position détenue ;
+- ajout de régressions sur quantité AAVE-like `0.1289... -> 0.12`, `contract_size != 1`, quantité sous minimum, marge, exactitude du Fill et rollback dérivé d'un échec `BROKER` ;
+- diagnostic structuré détaillé des erreurs de validation différé pour éviter une évolution de schéma hors scope et toute persistance de message brut.
 
 ## Changelog — 2026-09-26 — Batch 19.12 intégré
 

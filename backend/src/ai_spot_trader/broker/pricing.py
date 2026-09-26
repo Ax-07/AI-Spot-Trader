@@ -6,6 +6,7 @@ from ai_spot_trader.domain.enums import TradingAction
 
 BASIS_POINTS = Decimal(10_000)
 ONE = Decimal(1)
+ZERO = Decimal(0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,11 +86,26 @@ def estimate_paper_execution(
     slippage_per_unit = reference_price * cost_model.slippage_bps / BASIS_POINTS
     if action is TradingAction.BUY:
         price = reference_price + spread_per_unit + slippage_per_unit
+        adverse_price_delta = price - reference_price
     else:
         price = reference_price - spread_per_unit - slippage_per_unit
+        adverse_price_delta = reference_price - price
 
+    # Keep the notional arithmetic path identical to Fill.validate_paper_fill(). Decimal
+    # regrouping can otherwise create a one-ulp mismatch for high-precision prices and
+    # Risk-derived quantities. Preserve the historical component arithmetic where possible,
+    # then assign only the residual rounding difference to slippage so the persisted cost
+    # components still sum exactly to the canonical execution-price delta.
+    notional = price * quantity * contract_size
+    execution_cost = adverse_price_delta * quantity * contract_size
     exposure_units = quantity * contract_size
-    notional = price * exposure_units
+    raw_spread_cost = spread_per_unit * exposure_units
+    raw_slippage_cost = slippage_per_unit * exposure_units
+    spread_cost, slippage_cost = _reconcile_execution_costs(
+        execution_cost=execution_cost,
+        spread_cost=raw_spread_cost,
+        slippage_cost=raw_slippage_cost,
+    )
     return PaperExecutionEstimate(
         action=action,
         quantity=quantity,
@@ -98,9 +114,25 @@ def estimate_paper_execution(
         price=price,
         notional=notional,
         fee=notional * cost_model.fee_rate,
-        spread_cost=spread_per_unit * exposure_units,
-        slippage_cost=slippage_per_unit * exposure_units,
+        spread_cost=spread_cost,
+        slippage_cost=slippage_cost,
     )
+
+
+def _reconcile_execution_costs(
+    *,
+    execution_cost: Decimal,
+    spread_cost: Decimal,
+    slippage_cost: Decimal,
+) -> tuple[Decimal, Decimal]:
+    """Preserve historical component arithmetic and reconcile only Decimal residue."""
+
+    residual = execution_cost - (spread_cost + slippage_cost)
+    if residual == ZERO:
+        return spread_cost, slippage_cost
+    # Keep spread's historical representation untouched and assign only the finite-context
+    # residual to slippage. This preserves exact Fill coherence without weakening validation.
+    return spread_cost, slippage_cost + residual
 
 
 def _validate_positive_decimal(value: Decimal, name: str) -> None:

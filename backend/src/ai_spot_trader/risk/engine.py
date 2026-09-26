@@ -382,6 +382,35 @@ class RiskEngine:
                 evaluated_limits=tuple(evaluated),
             )
 
+        # The provider adapter normalizes venue quantity precision into min_order_quantity.
+        # For the currently executable derivatives this single canonical value is both the
+        # smallest positive order and the quantity quantum; do not introduce a second
+        # provider step-size source of truth.
+        normalized = _floor_derivative_quantity(
+            authorized,
+            quantum=instrument.min_order_quantity,
+        )
+        if normalized != authorized:
+            if not self._policy.allow_quantity_reduction:
+                return self._reject(
+                    decision=decision,
+                    assessed_at=assessed_at,
+                    requested_quantity=requested,
+                    reason=RiskReason.DERIVATIVE_QUANTITY_STEP,
+                    evaluated_limits=tuple(evaluated),
+                )
+            authorized = normalized
+            reasons.append(RiskReason.DERIVATIVE_QUANTITY_STEP)
+
+        if authorized < instrument.min_order_quantity:
+            return self._reject(
+                decision=decision,
+                assessed_at=assessed_at,
+                requested_quantity=requested,
+                reason=RiskReason.DERIVATIVE_MIN_ORDER_QUANTITY,
+                evaluated_limits=tuple(evaluated),
+            )
+
         order_notional = market_state.last_price * authorized * instrument.contract_size
         if (
             self._policy.max_order_notional is not None
@@ -398,13 +427,36 @@ class RiskEngine:
                     evaluated_limits=tuple(evaluated),
                 )
             else:
+                reasons.append(RiskReason.MAX_ORDER_NOTIONAL_LIMIT)
                 max_quantity = (
                     self._policy.max_order_notional
                     / market_state.last_price
                     / instrument.contract_size
                 )
-                authorized = min(authorized, max_quantity)
-                reasons.append(RiskReason.MAX_ORDER_NOTIONAL_LIMIT)
+                bounded = min(authorized, max_quantity)
+                normalized = _floor_derivative_quantity(
+                    bounded,
+                    quantum=instrument.min_order_quantity,
+                )
+                if normalized != bounded and RiskReason.DERIVATIVE_QUANTITY_STEP not in reasons:
+                    reasons.append(RiskReason.DERIVATIVE_QUANTITY_STEP)
+                authorized = normalized
+                # Decimal division is context-bounded. Recheck the financial cap after
+                # normalization and, if a division rounded upward onto a quantum boundary,
+                # move down by whole quanta until the cap is truly respected.
+                while (
+                    authorized > ZERO
+                    and market_state.last_price
+                    * authorized
+                    * instrument.contract_size
+                    > self._policy.max_order_notional
+                ):
+                    authorized = max(
+                        authorized - instrument.min_order_quantity,
+                        ZERO,
+                    )
+                    if RiskReason.DERIVATIVE_QUANTITY_STEP not in reasons:
+                        reasons.append(RiskReason.DERIVATIVE_QUANTITY_STEP)
 
         if authorized < instrument.min_order_quantity:
             return self._reject(
@@ -539,7 +591,8 @@ class RiskEngine:
                         reason=RiskReason.DERIVATIVE_MARGIN_INSUFFICIENT,
                         evaluated_limits=tuple(evaluated),
                     )
-                authorized = _max_affordable_derivative_quantity(
+                reasons.append(RiskReason.DERIVATIVE_MARGIN_LIMIT)
+                affordable = _max_affordable_derivative_quantity(
                     action=decision.action,
                     maximum=authorized,
                     available_cash=quote_available,
@@ -549,6 +602,13 @@ class RiskEngine:
                     leverage=leverage,
                     cost_model=self._cost_model,
                 )
+                normalized = _floor_derivative_quantity(
+                    affordable,
+                    quantum=instrument.min_order_quantity,
+                )
+                if normalized != affordable and RiskReason.DERIVATIVE_QUANTITY_STEP not in reasons:
+                    reasons.append(RiskReason.DERIVATIVE_QUANTITY_STEP)
+                authorized = normalized
                 if authorized < instrument.min_order_quantity:
                     return self._reject(
                         decision=decision,
@@ -557,7 +617,6 @@ class RiskEngine:
                         reason=RiskReason.DERIVATIVE_MARGIN_INSUFFICIENT,
                         evaluated_limits=tuple(evaluated),
                     )
-                reasons.append(RiskReason.DERIVATIVE_MARGIN_LIMIT)
 
         if authorized <= 0:
             return self._reject(
@@ -994,6 +1053,14 @@ def _max_affordable_derivative_quantity(
         else:
             high = midpoint
     return low
+
+
+def _floor_derivative_quantity(quantity: Decimal, *, quantum: Decimal) -> Decimal:
+    """Floor a positive derivative quantity to whole provider quanta without increasing it."""
+
+    if quantity <= ZERO:
+        return ZERO
+    return quantity - (quantity % quantum)
 
 
 def _action_side(action: TradingAction) -> PositionSide:

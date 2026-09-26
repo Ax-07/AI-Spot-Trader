@@ -35,7 +35,13 @@ class FixedClock:
         return NOW
 
 
-def instrument(*, max_leverage: str = "10", tiered: bool = False) -> DerivativeInstrument:
+def instrument(
+    *,
+    max_leverage: str = "10",
+    tiered: bool = False,
+    contract_size: str = "1",
+    min_order_quantity: str = "0.01",
+) -> DerivativeInstrument:
     values: dict[str, object] = {
         "symbol": "BTC/USD",
         "venue_symbol": "PF_XBTUSD",
@@ -43,9 +49,9 @@ def instrument(*, max_leverage: str = "10", tiered: bool = False) -> DerivativeI
         "contract_kind": DerivativeContractKind.LINEAR,
         "underlying_asset": "BTC",
         "quote_asset": "USD",
-        "contract_size": Decimal("1"),
+        "contract_size": Decimal(contract_size),
         "tick_size": Decimal("1"),
-        "min_order_quantity": Decimal("0.01"),
+        "min_order_quantity": Decimal(min_order_quantity),
         "max_position_quantity": Decimal("100"),
         "initial_margin_rate": Decimal("0.10"),
         "maintenance_margin_rate": Decimal("0.05"),
@@ -80,19 +86,31 @@ def instrument(*, max_leverage: str = "10", tiered: bool = False) -> DerivativeI
     )
 
 
-def market(*, max_leverage: str = "10", tiered: bool = False) -> MarketState:
-    inst = instrument(max_leverage=max_leverage, tiered=tiered)
+def market(
+    *,
+    max_leverage: str = "10",
+    tiered: bool = False,
+    price: str = "100",
+    contract_size: str = "1",
+    min_order_quantity: str = "0.01",
+) -> MarketState:
+    inst = instrument(
+        max_leverage=max_leverage,
+        tiered=tiered,
+        contract_size=contract_size,
+        min_order_quantity=min_order_quantity,
+    )
     return MarketState(
         market_state_id=uuid4(),
         as_of=NOW,
         symbol="BTC/USD",
-        last_price=Decimal("100"),
+        last_price=Decimal(price),
         market_type=MarketType.PERPETUAL,
         derivative=DerivativeMarketContext(
             observed_at=NOW,
             instrument=inst,
-            mark_price=Decimal("100"),
-            index_price=Decimal("100"),
+            mark_price=Decimal(price),
+            index_price=Decimal(price),
             funding_rate=Decimal("0.001"),
         ),
     )
@@ -382,3 +400,112 @@ def test_derivative_position_and_total_exposure_caps_are_deterministic_vetoes() 
     assert total.assessment.reasons == (
         RiskReason.DERIVATIVE_TOTAL_EXPOSURE_EXCEEDED,
     )
+
+
+def test_max_order_notional_reduction_floors_to_kraken_quantity_quantum() -> None:
+    state = market(price="310.2472717758515210664404972")
+    result = engine(policy(max_order_notional=Decimal("40"))).evaluate(
+        decision=decision(TradingAction.BUY, "0.5"),
+        market_state=state,
+        portfolio_state=portfolio(),
+    )
+
+    assert result.assessment.status is RiskDecision.MODIFY
+    assert result.assessment.authorized_quantity == Decimal("0.12")
+    assert result.assessment.reasons == (
+        RiskReason.MAX_ORDER_NOTIONAL_LIMIT,
+        RiskReason.DERIVATIVE_QUANTITY_STEP,
+    )
+    assert result.execution_intent is not None
+    assert result.execution_intent.quantity == Decimal("0.12")
+    assert result.execution_intent.quantity <= Decimal("0.5")
+    assert state.derivative is not None
+    assert result.execution_intent.quantity % state.derivative.instrument.min_order_quantity == 0
+    assert (
+        state.last_price
+        * result.execution_intent.quantity
+        * state.derivative.instrument.contract_size
+        <= Decimal("40")
+    )
+
+
+def test_notional_reduction_with_non_unit_contract_size_never_rounds_up() -> None:
+    state = market(price="100", contract_size="10")
+    result = engine(policy(max_order_notional=Decimal("25"))).evaluate(
+        decision=decision(TradingAction.BUY, "1"),
+        market_state=state,
+        portfolio_state=portfolio(),
+    )
+
+    assert result.assessment.status is RiskDecision.MODIFY
+    assert result.assessment.authorized_quantity == Decimal("0.02")
+    assert result.execution_intent is not None
+    assert result.execution_intent.quantity < Decimal("0.025")
+    assert state.derivative is not None
+    assert (
+        state.last_price
+        * result.execution_intent.quantity
+        * state.derivative.instrument.contract_size
+        == Decimal("20")
+    )
+
+
+def test_notional_reduction_below_minimum_is_rejected_canonically() -> None:
+    result = engine(policy(max_order_notional=Decimal("0.5"))).evaluate(
+        decision=decision(TradingAction.BUY, "1"),
+        market_state=market(price="100"),
+        portfolio_state=portfolio(),
+    )
+
+    assert result.assessment.status is RiskDecision.REJECT
+    assert result.assessment.reasons == (RiskReason.DERIVATIVE_MIN_ORDER_QUANTITY,)
+    assert result.execution_intent is None
+
+
+def test_reduce_only_clamp_respects_quantity_quantum_and_held_position() -> None:
+    current = position(PositionSide.LONG, quantity="0.1289294174", margin="20")
+    result = engine().evaluate(
+        decision=decision(TradingAction.SELL, "1"),
+        market_state=market(),
+        portfolio_state=portfolio(current),
+    )
+
+    assert result.assessment.status is RiskDecision.MODIFY
+    assert result.assessment.authorized_quantity == Decimal("0.12")
+    assert result.assessment.reasons == (
+        RiskReason.DERIVATIVE_REDUCE_ONLY_LIMIT,
+        RiskReason.DERIVATIVE_QUANTITY_STEP,
+    )
+    assert result.execution_intent is not None
+    assert result.execution_intent.reduce_only is True
+    assert result.execution_intent.quantity <= current.quantity
+    assert result.execution_intent.quantity % Decimal("0.01") == 0
+
+
+def test_off_quantum_derivative_quantity_is_rejected_when_reduction_is_disabled() -> None:
+    result = engine(policy(allow_quantity_reduction=False)).evaluate(
+        decision=decision(TradingAction.BUY, "0.1289"),
+        market_state=market(),
+        portfolio_state=portfolio(),
+    )
+
+    assert result.assessment.status is RiskDecision.REJECT
+    assert result.assessment.reasons == (RiskReason.DERIVATIVE_QUANTITY_STEP,)
+    assert result.execution_intent is None
+
+
+def test_margin_reduction_is_also_floored_to_quantity_quantum() -> None:
+    result = engine().evaluate(
+        decision=decision(TradingAction.BUY, "1"),
+        market_state=market(),
+        portfolio_state=portfolio(cash="10"),
+    )
+
+    assert result.assessment.status is RiskDecision.MODIFY
+    assert result.assessment.authorized_quantity == Decimal("0.09")
+    assert result.assessment.reasons == (
+        RiskReason.DERIVATIVE_MARGIN_LIMIT,
+        RiskReason.DERIVATIVE_QUANTITY_STEP,
+    )
+    assert result.execution_intent is not None
+    assert result.execution_intent.quantity % Decimal("0.01") == 0

@@ -6,26 +6,30 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub `main` vérifié après intégration du Batch 19.12 : `f8397d207be67309db083e49e113253fe88b3624` (`fix: handle OpenAI rate limits and quota errors robustly`).
-- Parent du Batch 19.12 : `5c92958414ce4fb52865dedfb17b808232fdc91c` (`fix: restore session risk profile from persisted configuration`).
+- HEAD GitHub `main` vérifié au lancement du correctif PAPER PERPETUAL : `1408a74f5256ff3674b154d3a64794f4ffd012c2` (`docs: sync post-19.12 state`).
+- Ce HEAD ne modifie que la documentation par rapport à `f8397d207be67309db083e49e113253fe88b3624` (`fix: handle OpenAI rate limits and quota errors robustly`).
+- Le correctif PAPER PERPETUAL décrit ci-dessous est un patch proposé, non intégré à GitHub au moment de cette mise à jour.
 
-## État intégré
+## État intégré et correctif proposé
 
 - un seul Agent IA stratégique ; Risk Engine déterministe avec autorité finale ;
 - versions actuelles en PAPER ; aucune sortie LLM directe vers Broker/Kraken ;
-- Session comme façade UX principale ;
 - Trading Style `SCALP` / `SWING`, contexte multi-timeframes et gestion stratégique des positions intégrés ;
-- erreurs LLM techniques fail-closed : aucun `ExecutionIntent` après un échec Agent/Market Selection ;
-- Batch 19.12 intégré : les HTTP 429 OpenAI distinguent limitation temporaire et quota/crédit/usage/spend non retryable ; `Retry-After` numérique valide est pris en compte, sinon le retry utilise un backoff borné avec 3 tentatives maximum ;
-- le cockpit distingue explicitement rate limit temporaire, quota/spend, timeout et autre erreur fournisseur ; aucun échec LLM n'est converti artificiellement en HOLD.
+- erreurs LLM techniques fail-closed et classifiées depuis le Batch 19.12 ;
+- correctif proposé : arithmétique PAPER `Decimal` canonique pour garantir les égalités exactes du `Fill` même avec prix Kraken haute précision et spread/slippage ;
+- correctif proposé : toute quantité PERPETUAL autorisée par Risk est rabattue vers le bas sur le quantum dérivé de `DerivativeInstrument.min_order_quantity` ; pour Kraken, ce champ provient de `contractValueTradePrecision` et représente à la fois le minimum positif et le pas de quantité ;
+- une normalisation ne peut jamais augmenter l'exposition et les minimums/plafonds sont revérifiés avant création de l'`ExecutionIntent` ;
+- l'atomicité `AuditedTradingCycleRunner` reste inchangée : un cycle `FAILED`, notamment au stage `BROKER`, restaure le checkpoint PAPER.
 
 Principe central : **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
-Détails 19.12 : `docs/23_BATCH_19_12_OPENAI_RATE_LIMIT_HANDLING.md`.
+## Diagnostic différé
 
-## Validation post-intégration 19.12
+La persistance d'un diagnostic structuré détaillé pour les `ValidationError` internes n'est pas incluse dans ce correctif ciblé : le contrat actuel ne persiste que `stage`, `error_type` et `timed_out`. Une extension sûre devra utiliser des champs allow-listés et bornés (modèle, chemin de champ, code de validation), sans message brut ni input externe.
 
-Validation locale opérateur communiquée : backend complet `665 passed, 2 warnings`, frontend `37 passed`, ESLint OK, TypeScript OK, build Next.js OK et `git diff --check` sans erreur. Working tree annoncé propre après commit/push.
+## Validation
+
+Le ZIP du correctif contient les régressions PAPER/Risk correspondantes. Les tests backend ciblés et le `pytest` complet doivent être exécutés dans le repository local après extraction ; ne pas considérer ce patch intégré avant cette validation et le commit explicite de l'opérateur.
 
 ## Règle de reprise
 
