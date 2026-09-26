@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Protocol, cast
 
+from ai_spot_trader.agent.position_management import build_position_management_context
 from ai_spot_trader.agent.prompt import (
     compose_agent_instructions,
     compose_trading_context_sections,
@@ -12,6 +13,9 @@ from ai_spot_trader.domain.enums import LLMModel
 from ai_spot_trader.domain.models import (
     AggressivenessContext,
     ExecutionCostContext,
+    ExecutableMarket,
+    MarketState,
+    PortfolioState,
     TradingStyleContext,
 )
 from ai_spot_trader.tools.read_only import ReadOnlyToolRegistry, ToolLoopResult
@@ -64,12 +68,19 @@ class StrategyInstructionsClient:
                 trading_style_context=trading_style,
                 execution_cost_context=execution_costs,
             )
-        return compose_agent_instructions(
+        instructions = compose_agent_instructions(
             strategy_prompt=self._strategy_prompt,
             aggressiveness_context=context,
             trading_style_context=trading_style,
             execution_cost_context=execution_costs,
         ).instructions
+        position_section = _position_management_section_from_payload(
+            payload,
+            execution_cost_context=execution_costs,
+        )
+        if position_section is None:
+            return instructions
+        return f"{instructions}\n\n{position_section}"
 
     async def generate_structured_decision(
         self,
@@ -155,6 +166,81 @@ def _execution_cost_context_from_payload(
         raise ValueError(
             "campaign Agent input contains an invalid execution_cost_context"
         ) from exc
+
+
+def _position_management_section_from_payload(
+    payload: dict[str, object],
+    *,
+    execution_cost_context: ExecutionCostContext | None,
+) -> str | None:
+    # Preserve the exact historical Campaign prompt for legacy inputs without the paired
+    # TradingStyleContext + ExecutionCostContext introduced in Batch 19.9A.
+    if execution_cost_context is None:
+        return None
+
+    raw_portfolio = payload.get("portfolio_state")
+    if raw_portfolio is None:
+        return None
+    try:
+        portfolio = PortfolioState.model_validate_json(
+            json.dumps(raw_portfolio, ensure_ascii=False)
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("campaign Agent input contains an invalid portfolio_state") from exc
+
+    raw_markets = payload.get("executable_markets")
+    markets: tuple[ExecutableMarket, ...]
+    if isinstance(raw_markets, list):
+        try:
+            markets = tuple(
+                ExecutableMarket.model_validate_json(
+                    json.dumps(item, ensure_ascii=False)
+                )
+                for item in raw_markets
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "campaign Agent input contains invalid executable_markets"
+            ) from exc
+    else:
+        raw_market_state = payload.get("market_state")
+        if raw_market_state is None:
+            return None
+        try:
+            market_state = MarketState.model_validate_json(
+                json.dumps(raw_market_state, ensure_ascii=False)
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("campaign Agent input contains an invalid market_state") from exc
+        markets = (
+            ExecutableMarket(
+                symbol=market_state.symbol,
+                market_type=market_state.market_type,
+            ),
+        )
+
+    context = build_position_management_context(
+        portfolio_state=portfolio,
+        executable_markets=markets,
+        execution_cost_context=execution_cost_context,
+    )
+    if not context["management_markets"]:
+        return None
+
+    encoded = json.dumps(
+        context,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return (
+        "CONTEXTE FACTUEL DE GESTION DES POSITIONS OUVERTES :\n"
+        f"{encoded}\n"
+        "Les marches de `management_markets` correspondent a du capital deja engage. "
+        "Ils restent des opportunites strategiques meme quand une nouvelle ouverture est possible. "
+        "Les estimations de sortie sont descriptives et utilisent les couts PAPER canoniques : "
+        "elles ne constituent jamais un signal automatique de vente."
+    )
 
 
 def _compose_market_discovery_instructions(

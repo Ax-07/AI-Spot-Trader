@@ -3,9 +3,9 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub vérifié après Batch 19.9C : b59020a4b354d9d56d593f3e39bcd608824bcd42
-Batch 19.9C intégré                 : feat: add session trading style UX
-Validation opérateur post-19.9C    : frontend 29/29 ; lint/typecheck/build PASS ; git diff --check sans erreur
+HEAD GitHub vérifié au démarrage 19.10 : 105aaae47efbeed4a2208fcf036c09aa096f9351
+Batch 19.9C intégré                  : feat: add session trading style UX
+Patch Batch 19.10                    : proposé localement, non intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -154,6 +154,26 @@ Validation locale post-intégration :
 - `pnpm build` : PASS sous Next.js 16.3.3 ;
 - `git diff --check` : aucune erreur de whitespace ;
 - warnings Node `MODULE_TYPELESS_PACKAGE_JSON` et Git LF → CRLF : non bloquants.
+
+## Batch 19.10 — Gestion stratégique des positions ouvertes et rotation du capital
+
+**État : patch proposé, non intégré à GitHub.**
+
+Objectif : supprimer le biais structurel vers la recherche de nouvelles ouvertures en rendant les positions existantes explicitement gérables aussi en mode `NORMAL`, sans déplacer la décision de sortie dans du code déterministe.
+
+Design proposé :
+
+- réutiliser/généraliser `management_markets` au lieu d'un second portfolio manager ;
+- centraliser le mapping positions -> marchés ;
+- fournir `position-management-v1` au même Agent avec faits portefeuille et estimation nette de sortie PAPER ;
+- garder `HOLD`, sortie partielle et clôture comme décisions stratégiques ;
+- préserver `strategic-mtf-v1` et `trading-style-map-v1` ;
+- conserver `max_order_notional` comme plafond par ordre, y compris pour SELL SPOT ;
+- préserver un seul ordre stratégique par cycle ;
+- permettre la rotation du capital sur plusieurs cycles, sans BUY forcé après SELL ;
+- aucune migration SQL ni modification frontend requise.
+
+Validation attendue après extraction : tests ciblés Batch 19.10 puis `pytest` backend complet.
 
 ## Périmètres ultérieurs
 

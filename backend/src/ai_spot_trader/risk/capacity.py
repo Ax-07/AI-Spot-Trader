@@ -72,7 +72,10 @@ class CapacityEvaluator:
         portfolio_state: PortfolioState,
         executable_markets: tuple[ExecutableMarket, ...],
     ) -> CapacityAssessment:
-        management_markets = _management_markets(portfolio_state, executable_markets)
+        management_markets = management_markets_for_portfolio(
+            portfolio_state,
+            executable_markets,
+        )
         has_spot = any(market.market_type is MarketType.SPOT for market in executable_markets)
         perpetual_markets = tuple(
             market for market in executable_markets if market.market_type is MarketType.PERPETUAL
@@ -117,6 +120,9 @@ class CapacityEvaluator:
                 reason=REASON_OPENING_CAPACITY_AVAILABLE,
                 spot_opening_capacity=spot_state,
                 perpetual_opening_capacity=perpetual_state,
+                # Batch 19.10: open positions remain strategic management opportunities even
+                # when new exposure is possible. This is descriptive only; it does not force SELL.
+                management_markets=management_markets,
             )
 
         if "UNKNOWN" in (spot_state, perpetual_state):
@@ -183,26 +189,72 @@ class CapacityEvaluator:
         return "POSSIBLE", None
 
 
+def open_position_markets(
+    portfolio_state: PortfolioState,
+    *,
+    settlement_asset: str | None = None,
+) -> tuple[ExecutableMarket, ...]:
+    """Return the canonical typed markets represented by currently open positions.
+
+    The function is intentionally descriptive. It centralizes the held-position -> market mapping
+    reused by capacity evaluation, dynamic watchlist expansion and Agent context construction.
+    """
+
+    settlement = settlement_asset or portfolio_state.settlement_asset
+    selected: list[ExecutableMarket] = []
+    if settlement is not None:
+        normalized_settlement = settlement.strip().upper()
+        if normalized_settlement:
+            selected.extend(
+                ExecutableMarket(
+                    symbol=f"{position.asset}/{normalized_settlement}",
+                    market_type=MarketType.SPOT,
+                )
+                for position in portfolio_state.positions
+                if position.quantity > ZERO
+            )
+
+    selected.extend(
+        ExecutableMarket(
+            symbol=position.symbol,
+            market_type=MarketType.PERPETUAL,
+        )
+        for position in portfolio_state.derivative_positions
+        if position.quantity > ZERO
+    )
+    return tuple(sorted(set(selected), key=lambda item: (item.market_type.value, item.symbol)))
+
+
+def management_markets_for_portfolio(
+    portfolio_state: PortfolioState,
+    executable_markets: tuple[ExecutableMarket, ...],
+) -> tuple[ExecutableMarket, ...]:
+    """Intersect open-position markets with the executable universe for this cycle."""
+
+    held = set(open_position_markets(portfolio_state))
+    selected: list[ExecutableMarket] = []
+    for market in executable_markets:
+        # Preserve the canonical symbol parser as a boundary check for executable markets.
+        parse_canonical_symbol(market.symbol)
+        if market in held:
+            selected.append(market)
+    return tuple(sorted(selected, key=lambda item: (item.market_type.value, item.symbol)))
+
+
+# Backward-compatible private name retained for internal/tests that may still import it.
 def _management_markets(
     portfolio_state: PortfolioState,
     executable_markets: tuple[ExecutableMarket, ...],
 ) -> tuple[ExecutableMarket, ...]:
-    held_spot_assets = {
-        position.asset for position in portfolio_state.positions if position.quantity > ZERO
-    }
-    derivative_symbols = {position.symbol for position in portfolio_state.derivative_positions}
-    settlement_asset = portfolio_state.settlement_asset
+    return management_markets_for_portfolio(portfolio_state, executable_markets)
 
-    selected: list[ExecutableMarket] = []
-    for market in executable_markets:
-        if market.market_type is MarketType.SPOT:
-            if settlement_asset is None:
-                continue
-            base_asset, quote_asset = parse_canonical_symbol(market.symbol)
-            if quote_asset == settlement_asset and base_asset in held_spot_assets:
-                selected.append(market)
-        elif market.market_type is MarketType.PERPETUAL:
-            if market.symbol in derivative_symbols:
-                selected.append(market)
 
-    return tuple(sorted(selected, key=lambda item: (item.market_type.value, item.symbol)))
+__all__ = [
+    "CAPACITY_PROTOCOL_VERSION",
+    "CapacityAssessment",
+    "CapacityEvaluator",
+    "CapacityMode",
+    "CapacityState",
+    "management_markets_for_portfolio",
+    "open_position_markets",
+]

@@ -70,6 +70,19 @@ Règles protégées :
   l'exposition et les buffers de liquidation relèvent exclusivement du Risk Engine déterministe.
 - `PortfolioState` est global et complet : tenez compte de toutes les balances, positions SPOT
   et positions Derivatives fournies, y compris celles d'autres symboles.
+- Une position déjà ouverte reste une opportunité stratégique de gestion à chaque cycle, même si
+  du cash ou de la capacité permettrait aussi une nouvelle ouverture. Avant de privilégier une
+  nouvelle entrée, évaluez si le capital déjà engagé doit être conservé, réduit ou clôturé.
+- Une position bénéficiaire représente du capital encore exposé. Comparez le résultat net de
+  sortie disponible, le potentiel restant, le risque de retournement, les coûts PAPER et le
+  contexte multi-timeframe avant de décider de conserver ou de matérialiser tout ou partie du
+  résultat. Une réduction partielle via `SELL` reste valide en SPOT.
+- N'appliquez aucune règle automatique du type gain/perte X %, durée X, timer ou indicateur ->
+  `BUY`/`SELL`/`HOLD`. Une position bénéficiaire n'impose pas `SELL`, une position perdante
+  n'impose pas `SELL`, et `HOLD` reste toujours une décision stratégique valide.
+- Le style `SCALP` peut justifier une réévaluation plus fréquente du capital engagé ; le style
+  `SWING` peut justifier de conserver plus longtemps une thèse multi-timeframe valide. Ces
+  indications restent stratégiques et ne sont jamais des déclencheurs déterministes.
 - `BUY` et `SELL` doivent proposer une quantité strictement positive.
 - `HOLD` ne doit proposer aucune quantité ; utilisez `null`. HOLD reste valide même après des
   recherches et une sélection de marché.

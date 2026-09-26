@@ -8,7 +8,6 @@ from uuid import UUID
 from pydantic import ConfigDict
 
 from ai_spot_trader.core.clock import Clock
-from ai_spot_trader.domain.enums import MarketType
 from ai_spot_trader.domain.models import (
     ExecutionCostContext,
     ExecutableMarket,
@@ -17,9 +16,8 @@ from ai_spot_trader.domain.models import (
     TradingStyleContext,
 )
 from ai_spot_trader.domain.ports import Broker, ExecutableMarketDataSource, LLMProvider
-from ai_spot_trader.domain.symbols import parse_canonical_symbol
 from ai_spot_trader.market.discovery import MarketDiscoveryAudit, MarketDiscoveryCoordinator
-from ai_spot_trader.risk.capacity import CapacityEvaluator
+from ai_spot_trader.risk.capacity import CapacityEvaluator, open_position_markets
 from ai_spot_trader.risk.engine import RiskEngine
 from ai_spot_trader.trading.engine import (
     PortfolioSnapshotSource,
@@ -56,6 +54,7 @@ class DynamicMarketTradingCycleRunner:
 
     MANAGEMENT is evaluated before any discovery refresh. Existing positions are always injected
     into the effective universe so a watchlist removal can never make an open position unmanageable.
+    In NORMAL mode those same positions remain visible beside newly discovered opportunities.
     """
 
     def __init__(
@@ -116,7 +115,10 @@ class DynamicMarketTradingCycleRunner:
                 )
 
             prefetched = _PrefetchedPortfolio(self._portfolio, portfolio)
-            existing = _position_markets(portfolio, settlement_asset=self._settlement_asset)
+            existing = open_position_markets(
+                portfolio,
+                settlement_asset=self._settlement_asset,
+            )
             preflight_universe = _ordered(
                 self._bootstrap_markets + self._discovery.watchlist + existing
             )
@@ -209,25 +211,9 @@ def _position_markets(
     *,
     settlement_asset: str,
 ) -> tuple[ExecutableMarket, ...]:
-    markets: list[ExecutableMarket] = []
-    for position in portfolio.positions:
-        if position.quantity <= 0:
-            continue
-        markets.append(
-            ExecutableMarket(
-                symbol=f"{position.asset}/{settlement_asset}",
-                market_type=MarketType.SPOT,
-            )
-        )
-    for position in portfolio.derivative_positions:
-        parse_canonical_symbol(position.symbol)
-        markets.append(
-            ExecutableMarket(
-                symbol=position.symbol,
-                market_type=MarketType.PERPETUAL,
-            )
-        )
-    return _ordered(tuple(markets)) if markets else ()
+    """Backward-compatible alias for the centralized open-position market mapping."""
+
+    return open_position_markets(portfolio, settlement_asset=settlement_asset)
 
 
 def _ordered(markets: tuple[ExecutableMarket, ...]) -> tuple[ExecutableMarket, ...]:
