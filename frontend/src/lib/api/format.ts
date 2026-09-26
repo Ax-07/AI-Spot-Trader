@@ -1,13 +1,7 @@
 import type { JsonObject, JsonValue } from "@/lib/api/types";
 
-const dateTimeFormatter = new Intl.DateTimeFormat("fr-FR", {
-  dateStyle: "short",
-  timeStyle: "medium",
-});
-
-const numberFormatter = new Intl.NumberFormat("fr-FR", {
-  maximumFractionDigits: 10,
-});
+const dateTimeFormatter = new Intl.DateTimeFormat("fr-FR", { dateStyle: "short", timeStyle: "medium" });
+const numberFormatter = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 10 });
 
 export function formatTimestamp(value: string | null | undefined): string {
   if (!value) return "—";
@@ -28,11 +22,21 @@ export function shortUuid(value: string | null | undefined): string {
   return value.length > 12 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value;
 }
 
-export function formatFailure(
-  failure: { stage: string; error_type: string; timed_out: boolean } | null | undefined,
-): string {
+const FAILURE_LABELS: Record<string, string> = {
+  LLMRateLimitError: "Limite temporaire du fournisseur IA",
+  LLMQuotaError: "Quota / limite de dépenses du fournisseur IA",
+  LLMProviderLimitError: "Autre limite du fournisseur IA",
+  LLMServerError: "Autre erreur fournisseur IA",
+  LLMNetworkError: "Autre erreur fournisseur IA",
+  LLMHTTPError: "Autre erreur fournisseur IA",
+  LLMTransportError: "Autre erreur fournisseur IA",
+  LLMProviderError: "Autre erreur fournisseur IA",
+};
+
+export function formatFailure(failure: { stage: string; error_type: string; timed_out: boolean } | null | undefined): string {
   if (!failure) return "Aucune";
-  return `${failure.stage} · ${failure.error_type}${failure.timed_out ? " · timeout" : ""}`;
+  const label = failure.timed_out ? "Timeout du fournisseur IA" : (FAILURE_LABELS[failure.error_type] ?? failure.error_type);
+  return `${failure.stage} · ${label}`;
 }
 
 function formatContextValue(value: JsonValue): string {
@@ -46,7 +50,5 @@ function formatContextValue(value: JsonValue): string {
 
 export function contextEntries(context: JsonObject | null, limit = 6): Array<[string, string]> {
   if (!context) return [];
-  return Object.entries(context)
-    .slice(0, limit)
-    .map(([key, value]) => [key, formatContextValue(value)]);
+  return Object.entries(context).slice(0, limit).map(([key, value]) => [key, formatContextValue(value)]);
 }

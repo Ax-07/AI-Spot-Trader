@@ -5,9 +5,20 @@ class AgentError(Exception):
 class LLMTransportError(AgentError):
     """The LLM provider could not be reached or returned an HTTP failure."""
 
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        provider_error_type: str | None = None,
+        provider_error_code: str | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.provider_error_type = provider_error_type
+        self.provider_error_code = provider_error_code
+        self.retry_after_seconds = retry_after_seconds
 
 
 class LLMTransientError(LLMTransportError):
@@ -23,7 +34,15 @@ class LLMNetworkError(LLMTransientError):
 
 
 class LLMRateLimitError(LLMTransientError):
-    """Retryable LLM HTTP 429 response."""
+    """Retryable provider throughput/rate-limit failure."""
+
+
+class LLMQuotaError(LLMTransportError):
+    """Non-retryable provider quota, credit, usage or spend-limit failure."""
+
+
+class LLMProviderLimitError(LLMTransportError):
+    """Provider limit failure that cannot be safely classified as transient."""
 
 
 class LLMServerError(LLMTransientError):
