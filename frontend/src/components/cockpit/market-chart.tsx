@@ -54,6 +54,13 @@ function overlayAppearance(kind: MarketPositionOverlay["kind"], dark: boolean) {
   };
 }
 
+function chartThemeColors(dark: boolean) {
+  return {
+    textColor: dark ? "#a1a1aa" : "#52525b",
+    gridColor: dark ? "#27272a" : "#e4e4e7",
+  };
+}
+
 export function MarketChart({
   candles,
   markers,
@@ -85,9 +92,12 @@ export function MarketChart({
     const container = containerRef.current;
     if (!container) return;
 
-    const rootStyle = getComputedStyle(document.documentElement);
-    const textColor = rootStyle.getPropertyValue("--muted-foreground").trim() || (resolvedTheme === "dark" ? "#a1a1aa" : "#52525b");
-    const gridColor = rootStyle.getPropertyValue("--border").trim() || (resolvedTheme === "dark" ? "#27272a" : "#e4e4e7");
+    // Lightweight Charts 5.2 parses a restricted set of CSS color formats.
+    // Browser-resolved OKLCH design tokens may be exposed as lab(...), which the
+    // chart parser rejects. Keep the application tokens untouched and adapt the
+    // two chart UI colors to stable HEX values at this library boundary.
+    const dark = resolvedTheme === "dark";
+    const { textColor, gridColor } = chartThemeColors(dark);
 
     const chart = createChart(container, {
       width: container.clientWidth,
