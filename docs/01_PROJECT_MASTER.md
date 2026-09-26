@@ -4,16 +4,16 @@
 
 AI Spot Trader est une application expérimentale de trading **PAPER** pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement un cockpit de contrôle et de visualisation.
 
-Référence GitHub revérifiée au démarrage du Batch 19.10 :
+Référence GitHub revérifiée après intégration du Batch 19.10 :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 105aaae47efbeed4a2208fcf036c09aa096f9351
-Commit     : docs: sync post-19.9C state
+HEAD       : 8643b9412bd19791e3cfd60884126ca0c300dc33
+Commit     : feat: add strategic position management and capital rotation
 ```
 
-Les Batches 19.9A, 19.9B et 19.9C sont intégrés à GitHub `main`. Le Batch 19.10 décrit ci-dessous un patch local proposé, non intégré tant qu'il n'a pas été validé, commit et push par l'opérateur.
+Les Batches 19.9A, 19.9B, 19.9C et 19.10 sont intégrés à GitHub `main`.
 
 ## 2. Invariants fonctionnels
 
@@ -155,7 +155,7 @@ Ces valeurs restent les defaults contractuels généraux du backend. Le configur
 
 Les règles 19.3 restent autoritaires : `MANAGEMENT` n'ouvre pas une recherche destinée à de nouvelles positions et reste limité à la gestion des positions ouvertes. Risk refuse l'augmentation d'exposition incompatible.
 
-Le patch 19.10 généralise l'exposition des positions existantes : en `NORMAL`, Discovery peut continuer à chercher de nouvelles opportunités, mais `CapacityAssessment.management_markets` conserve également les marchés correspondant aux positions ouvertes. Le même Agent peut donc sélectionner une position existante, un nouveau marché ou finir sur HOLD. Aucun ordre supplémentaire et aucune priorité déterministe ne sont ajoutés.
+Depuis le Batch 19.10, les positions existantes restent explicitement exposées comme opportunités stratégiques aussi en `NORMAL` : Discovery peut continuer à chercher de nouvelles opportunités, tandis que `CapacityAssessment.management_markets` conserve également les marchés correspondant aux positions ouvertes. Le même Agent peut sélectionner une position existante, un nouveau marché ou finir sur `HOLD`. Aucun ordre supplémentaire et aucune priorité déterministe ne sont ajoutés.
 
 ## 10. Comptabilité, analytics et charts
 
@@ -240,11 +240,11 @@ Règles UX intégrées :
 
 19.9C ne modifie aucun backend, aucune règle runtime cachée, aucun timer de fermeture et aucune autorité stratégique : le frontend reste un cockpit.
 
-## 16. Gestion stratégique des positions et rotation du capital — Batch 19.10 proposé
+## 16. Gestion stratégique des positions et rotation du capital — Batch 19.10
 
-Le batch 19.10 rend les positions ouvertes explicitement visibles comme opportunités de gestion même lorsque le portefeuille conserve de la capacité d'ouverture.
+Le Batch 19.10 est intégré à `main` au commit `8643b9412bd19791e3cfd60884126ca0c300dc33`. Il rend les positions ouvertes explicitement visibles comme opportunités de gestion même lorsque le portefeuille conserve de la capacité d'ouverture.
 
-Le contexte descriptif `position-management-v1` est dérivé du `PortfolioState`, de l'univers exécutable et de `ExecutionCostContext`. Pour SPOT, il expose quantité, quantité disponible, PRU, coût restant, mark, valeur, P&L non réalisé et estimation nette d'une sortie de la quantité disponible. Cette estimation réutilise le modèle PAPER canonique et le coût restant du ledger ; elle ne génère aucun signal.
+Le contexte descriptif `position-management-v1` est dérivé du `PortfolioState`, de l'univers exécutable et de `ExecutionCostContext`. Pour SPOT, il expose quantité, quantité disponible, PRU, coût restant, mark, valeur, P&L non réalisé et estimation nette d'une sortie de la quantité disponible. Cette estimation réutilise le modèle PAPER canonique et le coût restant du ledger ; elle ne génère aucun signal, et les coûts d'entrée ne sont pas comptés une seconde fois.
 
 Le même Agent arbitre entre :
 
@@ -254,11 +254,15 @@ rechercher / ouvrir une nouvelle opportunité
 ne rien faire
 ```
 
-La prise partielle reste `SELL + proposed_quantity`. Le Risk Engine conserve son autorité finale et `risk_max_order_notional` reste un plafond par ordre également pour un SELL SPOT réducteur. Une grosse clôture peut donc s'étaler sur plusieurs cycles.
+La réduction ou clôture reste une décision `SELL` stratégique, totale ou partielle selon la quantité proposée. `HOLD` reste valide. Il n'existe aucune règle déterministe du type P&L X %, timer ou indicateur -> SELL ; SCALP/SWING enrichit le contexte stratégique mais ne devient pas un déclencheur automatique.
+
+Le Risk Engine conserve son autorité finale. En SPOT, il demeure impossible de vendre un actif non détenu ou au-delà de la quantité disponible. `risk_max_order_notional` reste un plafond par ordre également pour un SELL réducteur ; une grosse clôture peut donc s'étaler sur plusieurs cycles.
 
 La rotation du capital reste multi-cycle : SELL peut libérer du cash, puis un cycle ultérieur peut reprendre Discovery / Market Selection. Il n'existe aucune règle `SELL -> BUY`, aucun take-profit fixe, aucun timer de liquidation et aucun second Agent.
 
-`trading-style-map-v1` et `strategic-mtf-v1` restent les seules sources des contextes SCALP/SWING et multi-timeframes.
+Le mapping position ouverte -> marché est centralisé et réutilisé. Le calcul économique canonique de gestion de position vit côté trading ; la façade Agent ne dépend pas directement du broker. `trading-style-map-v1` et `strategic-mtf-v1` restent les sources canoniques des contextes SCALP/SWING et multi-timeframes.
+
+Validation locale opérateur du Batch 19.10 après correctif : tests ciblés `11 passed`, backend complet `638 passed, 2 warnings`. Les deux warnings sont des dépréciations FastAPI/Starlette préexistantes.
 
 ## 17. Hors périmètre actuel
 

@@ -2,15 +2,27 @@
 
 ## Statut
 
-Patch proposé à partir du HEAD GitHub `main` vérifié `105aaae47efbeed4a2208fcf036c09aa096f9351` (`docs: sync post-19.9C state`).
+Batch intégré à GitHub `main` au commit fonctionnel :
 
-Le batch n'est pas intégré à GitHub tant que l'opérateur ne l'a pas validé, commit et push.
+```text
+8643b9412bd19791e3cfd60884126ca0c300dc33
+feat: add strategic position management and capital rotation
+```
+
+Commit précédent :
+
+```text
+105aaae47efbeed4a2208fcf036c09aa096f9351
+docs: sync post-19.9C state
+```
+
+Le commit fonctionnel contient le correctif appliqué après la première validation locale et a été poussé après validation finale par l'opérateur.
 
 ## Objectif
 
 Permettre au même Agent stratégique de considérer explicitement les positions déjà ouvertes comme des opportunités de gestion à chaque cycle, y compris lorsqu'une nouvelle exposition reste possible.
 
-Le comportement cible reste multi-cycle :
+Le comportement reste multi-cycle :
 
 ```text
 portefeuille
@@ -24,29 +36,33 @@ portefeuille
 
 Aucun BUY n'est imposé après un SELL. Aucun SELL n'est imposé parce qu'une position est gagnante, perdante ou détenue depuis une durée donnée.
 
-## Audit de l'existant
+Principe préservé : **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
-### Confirmé
+## Audit de départ
 
-- `CapacityEvaluator` calcule déjà les marchés correspondant aux positions ouvertes via `management_markets`.
-- En mode `MANAGEMENT`, le même Agent sélectionne uniquement parmi ces marchés et peut produire HOLD ou une réduction/clôture.
-- En mode `NORMAL`, l'Agent reçoit le portefeuille complet mais `CapacityAssessment.management_markets` n'était pas renseigné lorsque de la capacité d'ouverture existait.
-- `DynamicMarketTradingCycleRunner` réinjecte déjà les positions ouvertes dans l'univers effectif afin qu'une disparition de watchlist ne les rende pas ingérables.
-- `AssetPosition` expose quantité, quantité disponible, PRU, coût de revient restant, mark, valeur de marché et P&L non réalisé.
-- Le ledger PAPER inclut le débit BUY réel dans `remaining_cost_basis`; les frais d'entrée sont donc déjà incorporés au coût restant.
-- `estimate_paper_execution()` et `PaperExecutionCostModel` constituent la source canonique de calcul des frais/spread/slippage de sortie PAPER.
-- `strategic-mtf-v1` construit un snapshot pour tout l'univers de Market Selection puis le réutilise pour la décision finale.
-- `_evaluate_spot()` applique actuellement `max_order_notional` avant la distinction BUY/SELL : un SELL supérieur au plafond est donc réduit lorsque `allow_quantity_reduction=True`.
+### Confirmé avant intégration
 
-### Problème confirmé
+- `CapacityEvaluator` calculait déjà les marchés correspondant aux positions ouvertes via `management_markets`.
+- En mode `MANAGEMENT`, le même Agent sélectionnait uniquement parmi ces marchés et pouvait produire HOLD ou une réduction/clôture.
+- En mode `NORMAL`, l'Agent recevait le portefeuille complet mais `CapacityAssessment.management_markets` n'était pas renseigné lorsque de la capacité d'ouverture existait.
+- `DynamicMarketTradingCycleRunner` réinjectait déjà les positions ouvertes dans l'univers effectif afin qu'une disparition de watchlist ne les rende pas ingérables.
+- `AssetPosition` exposait quantité, quantité disponible, PRU, coût de revient restant, mark, valeur de marché et P&L non réalisé.
+- Le ledger PAPER incluait le débit BUY réel dans `remaining_cost_basis`; les frais d'entrée étaient donc déjà incorporés au coût restant.
+- `estimate_paper_execution()` et `PaperExecutionCostModel` constituaient la source canonique de calcul des frais/spread/slippage de sortie PAPER.
+- `strategic-mtf-v1` construisait un snapshot pour tout l'univers de Market Selection puis le réutilisait pour la décision finale.
+- `_evaluate_spot()` appliquait `max_order_notional` avant la distinction BUY/SELL : un SELL supérieur au plafond était déjà réduit lorsque `allow_quantity_reduction=True`.
 
-Le mode `MANAGEMENT` rend les positions ouvertes explicitement prioritaires seulement lorsque la capacité d'ouverture devient indisponible ou incertaine. En `NORMAL`, l'Agent peut sélectionner une position ouverte, mais le contrat ne lui signale pas avec la même clarté quels marchés représentent déjà du capital engagé ni l'économie nette d'une sortie immédiate.
+### Problème traité
+
+Le mode `MANAGEMENT` rendait les positions ouvertes explicitement prioritaires seulement lorsque la capacité d'ouverture devenait indisponible ou incertaine. En `NORMAL`, l'Agent pouvait sélectionner une position ouverte, mais le contrat ne lui signalait pas avec la même clarté quels marchés représentaient déjà du capital engagé ni l'économie nette d'une sortie immédiate.
+
+Le Batch 19.10 supprime ce biais structurel sans créer de seconde autorité stratégique.
 
 ## Architecture retenue
 
 ### Option C — généralisation des primitives existantes
 
-Aucun second Agent, aucun nouveau pipeline de décision et aucun modèle persistant parallèle ne sont ajoutés.
+Aucun second Agent, aucun nouveau pipeline de décision et aucun modèle persistant parallèle n'ont été ajoutés.
 
 1. `CapacityAssessment.management_markets` est renseigné en `NORMAL` comme en `MANAGEMENT`.
 2. Le mapping portefeuille -> marchés ouverts est centralisé par `open_position_markets()` puis réutilisé par Capacity et Dynamic Discovery.
@@ -56,6 +72,19 @@ Aucun second Agent, aucun nouveau pipeline de décision et aucun modèle persist
 6. Le schéma de sortie Agent reste inchangé : une seule décision finale `BUY` / `SELL` / `HOLD` avec quantité proposée.
 
 Cette solution préserve `agent-contract-v1`, les digests expérimentaux historiques et les modèles Pydantic persistés existants.
+
+### Frontière architecturale finale
+
+Le premier patch plaçait le calcul économique directement sous `agent/`, ce qui introduisait un import interdit vers `broker.pricing`. Le correctif intégré retient la frontière suivante :
+
+```text
+agent/position_management.py
+→ façade de compatibilité
+→ trading/position_management.py
+→ broker/pricing.py + risk/capacity.py
+```
+
+Le calcul économique canonique de gestion de position vit donc côté trading. Le package Agent ne dépend pas directement du broker ni du Risk Engine pour cette primitive.
 
 ## `position-management-v1`
 
@@ -139,9 +168,11 @@ La guidance Agent est seulement clarifiée :
 - SWING peut conduire l'Agent à conserver plus longtemps une position si la thèse multi-timeframe reste valide ;
 - aucun timer, seuil de profit ou indicateur ne déclenche automatiquement une vente.
 
+Le style influence donc le contexte et l'interprétation stratégique, jamais une règle déterministe de sortie.
+
 ## Décision Risk — `risk_max_order_notional`
 
-La sémantique actuelle est conservée explicitement : `max_order_notional` reste un plafond de taille notionnelle **par ordre**, indépendamment du fait que l'ordre augmente ou réduise l'exposition.
+La sémantique existante est conservée explicitement : `max_order_notional` reste un plafond de taille notionnelle **par ordre**, indépendamment du fait que l'ordre augmente ou réduise l'exposition.
 
 Exemple :
 
@@ -162,11 +193,25 @@ Raisons du maintien :
 
 Les protections existantes restent impératives : actif détenu, quantité disponible, aucun short SPOT, Risk autorité finale.
 
+## Rotation du capital
+
+La rotation est volontairement multi-cycle :
+
+```text
+cycle N   : l'Agent choisit éventuellement SELL sur une position détenue
+Risk      : autorise, modifie ou refuse la quantité
+Broker    : exécution PAPER éventuelle
+ledger    : cash/position mis à jour
+cycle N+1 : capacité et opportunités recalculées depuis le nouvel état
+```
+
+Un SELL peut donc libérer du capital qui sera réévalué lors d'un cycle ultérieur. Aucun second Agent, aucun portfolio manager autonome et aucune règle `SELL -> BUY` ne sont introduits.
+
 ## Explicabilité
 
 Le pipeline durable existant reste la source d'audit :
 
-- `CapacityAssessment.to_payload()` persiste désormais `management_markets` aussi en `NORMAL` ;
+- `CapacityAssessment.to_payload()` persiste `management_markets` aussi en `NORMAL` ;
 - `MarketSelectionInput` conserve le `PortfolioState` complet ;
 - `MarketSelection` identifie le marché réellement choisi ;
 - `AgentInput`, décision, Risk assessment, intent, fills et portefeuille post-trade restent inchangés ;
@@ -191,6 +236,8 @@ Préservés :
 
 Le `AGENT_SYSTEM_PROMPT` historique reste inchangé pour les protocoles expérimentaux historiques. La clarification de gestion est portée par le contrat protégé Campaign composé par `StrategyInstructionsClient`.
 
+Le correctif final préserve aussi exactement les instructions historiques des inputs legacy sans `ExecutionCostContext` : aucune section `position-management-v1` n'y est ajoutée.
+
 ## Fichiers fonctionnels du batch
 
 ```text
@@ -203,9 +250,9 @@ backend/src/ai_spot_trader/agent/prompt.py
 backend/tests/test_position_management_rotation.py
 ```
 
-## Tests ciblés ajoutés
+## Tests ciblés
 
-Le nouveau module de test couvre :
+Le module `backend/tests/test_position_management_rotation.py` couvre notamment :
 
 - position ouverte visible en `NORMAL` avec cash disponible ;
 - mapping canonique des positions ouvertes ;
@@ -215,9 +262,12 @@ Le nouveau module de test couvre :
 - sélection d'une position ouverte par le même Agent en mode normal ;
 - présence du contexte SCALP dans les instructions ;
 - absence de règle automatique de prise de profit ;
-- sémantique explicite de `max_order_notional` sur un SELL SPOT réducteur.
+- sémantique explicite de `max_order_notional` sur un SELL SPOT réducteur ;
+- parsing transport compatible avec les modèles Pydantic stricts ;
+- respect de la frontière d'import Agent ;
+- compatibilité exacte des instructions Campaign legacy.
 
-Les tests existants à conserver couvrent en complément la Discovery dynamique, le cycle MANAGEMENT, le Risk anti-short/anti-oversell, le broker/ledger PAPER, l'explicabilité et le contexte multi-timeframe.
+Les tests existants couvrent en complément la Discovery dynamique, le cycle MANAGEMENT, le Risk anti-short/anti-oversell, le broker/ledger PAPER, l'explicabilité et le contexte multi-timeframe.
 
 ## Hors périmètre confirmé
 
@@ -232,19 +282,34 @@ Les tests existants à conserver couvrent en complément la Discovery dynamique,
 
 ## Validation et correctif après première livraison
 
-Première validation locale opérateur :
+### Première validation locale opérateur
 
 - `python -m pytest backend/tests/test_position_management_rotation.py` : `6 passed, 1 failed` ;
-- `python -m pytest backend/tests` : `633 passed, 3 failed, 2 warnings` ;
-- échec 1 : `ExecutableMarket.model_validate(...)` refusait la chaîne JSON `SPOT` avec le modèle Pydantic strict ;
-- échec 2 : le nouveau module sous `agent/` importait directement `ai_spot_trader.broker.pricing`, interdit par la frontière d'architecture existante ;
-- échec 3 : même cause de parsing sur le test Trading Style legacy avant son assertion de compatibilité.
+- `python -m pytest backend/tests` : `633 passed, 3 failed, 2 warnings`.
 
-Correctif :
+Les trois échecs étaient bornés à deux causes :
+
+1. `ExecutableMarket.model_validate(...)` refusait la chaîne JSON `SPOT` avec le modèle Pydantic strict ;
+2. le nouveau module sous `agent/` importait directement `ai_spot_trader.broker.pricing`, interdit par la frontière d'architecture existante.
+
+Le troisième échec correspondait à la même cause de parsing sur le test Trading Style legacy avant son assertion de compatibilité.
+
+### Correctif intégré
 
 - parsing transport via `ExecutableMarket.model_validate_json(...)` ;
-- implémentation du calcul déplacée dans `trading/position_management.py` et façade `agent/position_management.py` conservée sans dépendance directe Risk/Broker ;
-- absence de section `position-management-v1` pour les inputs legacy sans `ExecutionCostContext`, ce qui conserve exactement le prompt historique ;
-- tests ciblés ajoutés pour ces deux invariants.
+- implémentation du calcul déplacée dans `trading/position_management.py` ;
+- façade `agent/position_management.py` conservée sans dépendance directe Risk/Broker ;
+- absence de section `position-management-v1` pour les inputs legacy sans `ExecutionCostContext`, ce qui conserve exactement leur prompt historique ;
+- tests ciblés ajoutés pour la frontière d'import, le parsing strict et la compatibilité legacy.
 
-Validation ChatGPT du correctif : compilation Python PASS, sémantique Pydantic strict JSON reproduite et validée, frontière d'import Agent PASS, whitespace PASS. La suite backend complète reste à rejouer localement après extraction.
+### Validation finale opérateur
+
+Après application du correctif :
+
+- tests ciblés Batch 19.10 : `11 passed` ;
+- suite backend complète : `638 passed, 2 warnings` ;
+- les deux warnings sont des dépréciations FastAPI/Starlette préexistantes et ne constituent pas des échecs du Batch 19.10 ;
+- `git diff --cached --check` : PASS ;
+- `git diff --check` : aucune erreur, seulement les warnings Windows LF -> CRLF.
+
+Aucun test backend supplémentaire n'est requis pour la présente synchronisation documentaire tant qu'aucun fichier de code n'est modifié.

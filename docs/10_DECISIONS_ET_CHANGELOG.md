@@ -9,9 +9,9 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 ## Référence courante
 
 ```text
-HEAD GitHub vérifié au démarrage 19.10 : 105aaae47efbeed4a2208fcf036c09aa096f9351
-Référence fonctionnelle 19.9C           : b59020a4b354d9d56d593f3e39bcd608824bcd42
-Batch 19.10                              : patch proposé, non intégré
+HEAD GitHub vérifié après intégration 19.10 : 8643b9412bd19791e3cfd60884126ca0c300dc33
+Référence fonctionnelle 19.9C                : b59020a4b354d9d56d593f3e39bcd608824bcd42
+Batch 19.10                                   : intégré et validé localement
 ```
 
 ## Décisions historiques toujours actives
@@ -26,7 +26,7 @@ Batch 19.10                              : patch proposé, non intégré
 - ADR-240 à ADR-247 : façade Session, lifecycle, immutabilité et modes de marchés ;
 - ADR-248 à ADR-255 : Trading Style, coûts Agent et contexte stratégique multi-timeframes ;
 - ADR-256 à ADR-258 : UX Session du style, recommandations explicites et compatibilité legacy ;
-- ADR-259 à ADR-262 : proposition Batch 19.10 sur gestion des positions et rotation du capital, à adopter seulement après validation/intégration.
+- ADR-259 à ADR-262 : gestion stratégique des positions ouvertes, contexte `position-management-v1`, plafond Risk par ordre et rotation multi-cycle du capital par le même Agent.
 
 ## ADR-240 — Session est une façade UX, pas un nouvel agrégat persistant
 
@@ -164,61 +164,56 @@ Une Campaign historique sans `trading_style` reste `Hérité / non défini` ; le
 
 ## ADR-259 — Les positions ouvertes restent des opportunités stratégiques en mode NORMAL
 
-**PROPOSÉ AU BATCH 19.10 — À ADOPTER APRÈS VALIDATION/INTÉGRATION.**
+**ADOPTÉ AU BATCH 19.10.**
 
-`CapacityAssessment.management_markets` doit être renseigné même lorsque l'ouverture d'une nouvelle exposition reste possible. Le même Agent peut alors arbitrer entre un marché déjà détenu et une nouvelle opportunité sans attendre la saturation du portefeuille.
+`CapacityAssessment.management_markets` est renseigné même lorsque l'ouverture d'une nouvelle exposition reste possible. Le même Agent peut ainsi arbitrer entre un marché déjà détenu et une nouvelle opportunité sans attendre la saturation du portefeuille.
 
 Aucune priorité déterministe n'est imposée : le cycle final reste une seule décision BUY / SELL / HOLD sur un marché.
 
 ## ADR-260 — `position-management-v1` est un contexte factuel reconstructible
 
-**PROPOSÉ AU BATCH 19.10 — À ADOPTER APRÈS VALIDATION/INTÉGRATION.**
+**ADOPTÉ AU BATCH 19.10.**
 
 Le contexte de gestion expose inventaire, coût de revient, mark, P&L et estimation de sortie nette. Les coûts de sortie utilisent `PaperExecutionCostModel` / `estimate_paper_execution` ; `remaining_cost_basis` est réutilisé sans double compter les frais d'entrée.
 
 Le contexte ne contient ni score, ni `should_sell`, ni take-profit automatique. Il est dérivé des faits déjà persistés et ne constitue pas une nouvelle source d'audit.
 
+L'implémentation économique canonique vit côté trading. `agent/position_management.py` reste une façade de compatibilité sans dépendance directe vers Risk/Broker, ce qui préserve la frontière d'architecture Agent.
+
 ## ADR-261 — `risk_max_order_notional` reste un plafond par ordre, y compris sur SELL SPOT
 
-**PROPOSÉ AU BATCH 19.10 — À ADOPTER APRÈS VALIDATION/INTÉGRATION.**
+**ADOPTÉ AU BATCH 19.10.**
 
-Le batch conserve la sémantique existante : la limite s'applique avant la distinction BUY/SELL. Avec `allow_quantity_reduction=True`, un SELL SPOT supérieur au plafond est réduit ; une clôture complète plus grande peut donc nécessiter plusieurs décisions/cycles.
+La sémantique existante est conservée : la limite s'applique avant la distinction BUY/SELL. Avec `allow_quantity_reduction=True`, un SELL SPOT supérieur au plafond est réduit ; une clôture complète plus grande peut donc nécessiter plusieurs décisions/cycles.
 
 Cette décision évite de redéfinir silencieusement un paramètre Risk déjà persisté et exposé. Les protections anti-short et anti-oversell restent inchangées.
 
 ## ADR-262 — La rotation du capital reste multi-cycle et pilotée par l'Agent
 
-**PROPOSÉ AU BATCH 19.10 — À ADOPTER APRÈS VALIDATION/INTÉGRATION.**
+**ADOPTÉ AU BATCH 19.10.**
 
 Un SELL peut libérer du cash. Un cycle ultérieur peut ensuite revenir à Discovery / Market Selection et éventuellement produire BUY, SELL ou HOLD. Aucune règle `après SELL -> BUY` n'est introduite.
 
-Le style SCALP/SWING module l'interprétation stratégique mais ne crée aucun timer ou seuil de sortie.
+Le style SCALP/SWING module l'interprétation stratégique mais ne crée aucun timer, seuil P&L ou signal automatique de sortie. HOLD reste une décision valide.
 
-## Changelog — 2026-09-26 — Patch Batch 19.10 proposé
+## Changelog — 2026-09-26 — Batch 19.10 intégré
 
-- resynchronisation sur le HEAD GitHub `105aaae47efbeed4a2208fcf036c09aa096f9351` ;
+- commit GitHub `8643b9412bd19791e3cfd60884126ca0c300dc33` (`feat: add strategic position management and capital rotation`) ;
+- parent `105aaae47efbeed4a2208fcf036c09aa096f9351` (`docs: sync post-19.9C state`) ;
 - `management_markets` conservé également en mode `NORMAL` ;
-- mapping positions ouvertes -> marchés centralisé ;
-- ajout du contexte descriptif `position-management-v1` ;
-- estimations de sortie SPOT via le modèle de coûts PAPER canonique ;
-- clarification du contrat protégé Campaign pour la gestion du capital déjà engagé ;
-- aucun changement du `AGENT_SYSTEM_PROMPT` historique ;
-- `risk_max_order_notional` conservé comme plafond par ordre sur BUY et SELL ;
-- nouveau test ciblé Batch 19.10 ;
-- aucune migration SQL, aucun changement frontend, aucun second Agent, aucun take-profit automatique ;
-- validation ChatGPT : compilation Python PASS, whitespace PASS, harness isolé Capacity/contexte de sortie PASS ;
-- lors de la génération initiale, `pytest` complet et lint projet restaient à exécuter localement ;
-- patch non intégré : validations locales opérateur encore requises avant commit/push.
-
-## Changelog — 2026-09-26 — Correctif Batch 19.10 après validation locale
-
-- première validation opérateur : test ciblé `6 passed, 1 failed` ; backend complet `633 passed, 3 failed, 2 warnings` ;
-- correction du parsing `ExecutableMarket` transporté en JSON sous Pydantic strict via `model_validate_json(...)` ;
-- déplacement du calcul `position-management-v1` vers `trading/position_management.py` pour préserver l'interdiction d'import direct `agent -> risk/broker` ;
-- conservation d'une façade `agent/position_management.py` afin que l'extraction corrective écrase proprement la première livraison sans suppression manuelle ;
-- préservation exacte du prompt Campaign legacy quand `TradingStyleContext` / `ExecutionCostContext` sont absents ;
-- tests 19.10 renforcés sur la frontière d'import et la compatibilité legacy ;
-- correctif non intégré : suite backend complète à rejouer localement avant commit/push.
+- mapping positions ouvertes -> marchés centralisé et réutilisé ;
+- ajout du contexte descriptif et reconstructible `position-management-v1` ;
+- estimations de sortie SPOT via le modèle de coûts PAPER canonique, sans double comptage des coûts d'entrée ;
+- clarification du contrat Campaign : le même Agent arbitre entre conserver, réduire/clôturer ou privilégier une autre opportunité ;
+- aucune règle P&L/timer/indicateur/style -> SELL et aucun changement du `AGENT_SYSTEM_PROMPT` historique ;
+- `risk_max_order_notional` conservé comme plafond par ordre sur BUY et SELL SPOT réducteur ;
+- rotation du capital maintenue sur plusieurs cycles, sans BUY automatique après SELL ;
+- première validation locale : test ciblé `6 passed, 1 failed`, backend `633 passed, 3 failed, 2 warnings` ;
+- correctif : parsing transport via `ExecutableMarket.model_validate_json(...)`, calcul économique déplacé dans `trading/position_management.py`, façade Agent sans dépendance directe broker/risk et compatibilité exacte des inputs legacy sans `ExecutionCostContext` ;
+- validation locale finale opérateur : tests ciblés `11 passed`, backend complet `638 passed, 2 warnings` ;
+- les deux warnings finaux sont des dépréciations FastAPI/Starlette préexistantes ;
+- `git diff --cached --check` : PASS ; `git diff --check` : aucune erreur, seulement des warnings LF -> CRLF ;
+- aucune migration SQL, aucun changement frontend, aucun second Agent et aucun take-profit automatique.
 
 ## Changelog — 2026-09-26 — Batch 19.9C intégré
 
@@ -233,7 +228,7 @@ Le style SCALP/SWING module l'interprétation stratégique mais ne crée aucun t
 - reconstruction persist-first des formulaires ;
 - style, agressivité, sélection des marchés et Risk maintenus indépendants ;
 - aucun fichier backend, aucun timer de fermeture et aucune règle runtime cachée ajoutés ;
-- validation locale opérateur : `pnpm test` 29/29, lint/typecheck/build PASS, `git diff --check` sans erreur ; warnings Node `MODULE_TYPELESS_PACKAGE_JSON` et Git LF → CRLF non bloquants.
+- validation locale opérateur : `pnpm test` 29/29, lint/typecheck/build PASS, `git diff --check` sans erreur ; warnings Node `MODULE_TYPELESS_PACKAGE_JSON` et Git LF -> CRLF non bloquants.
 
 ## Changelog — 2026-09-26 — Batch 19.9B intégré
 

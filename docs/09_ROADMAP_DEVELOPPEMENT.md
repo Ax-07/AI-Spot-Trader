@@ -3,9 +3,9 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub vérifié au démarrage 19.10 : 105aaae47efbeed4a2208fcf036c09aa096f9351
-Batch 19.9C intégré                  : feat: add session trading style UX
-Patch Batch 19.10                    : proposé localement, non intégré
+HEAD GitHub vérifié après intégration 19.10 : 8643b9412bd19791e3cfd60884126ca0c300dc33
+Batch 19.9C intégré                    : feat: add session trading style UX
+Batch 19.10 intégré                    : feat: add strategic position management and capital rotation
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -26,7 +26,8 @@ Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batc
 - 19.8 : façade utilisateur **Session**, CRUD/lifecycle versionné, configurateur simple/avancé et choix de marchés Automatique IA / Manuel ;
 - 19.9A : Trading Style canonique `SCALP` / `SWING`, contextes style/coûts Agent et propagation Discovery -> Market Selection -> décision finale ;
 - 19.9B : contexte stratégique candles multi-timeframes `strategic-mtf-v1`, causal, borné et partagé entre Market Selection et décision finale ;
-- 19.9C : UX Session SCALP/SWING, persistance du style, timeframes en lecture seule, recommandations explicites et reconstruction persist-first.
+- 19.9C : UX Session SCALP/SWING, persistance du style, timeframes en lecture seule, recommandations explicites et reconstruction persist-first ;
+- 19.10 : gestion stratégique des positions ouvertes, contexte `position-management-v1` et rotation du capital multi-cycle par le même Agent.
 
 ## Batch 19.8 — Sessions v1
 
@@ -153,27 +154,37 @@ Validation locale post-intégration :
 - `pnpm typecheck` : PASS ;
 - `pnpm build` : PASS sous Next.js 16.3.3 ;
 - `git diff --check` : aucune erreur de whitespace ;
-- warnings Node `MODULE_TYPELESS_PACKAGE_JSON` et Git LF → CRLF : non bloquants.
+- warnings Node `MODULE_TYPELESS_PACKAGE_JSON` et Git LF -> CRLF : non bloquants.
 
 ## Batch 19.10 — Gestion stratégique des positions ouvertes et rotation du capital
 
-**État : patch proposé, non intégré à GitHub.**
+**État : intégré à GitHub `main` au commit `8643b9412bd19791e3cfd60884126ca0c300dc33` et validé localement par l'opérateur.**
 
-Objectif : supprimer le biais structurel vers la recherche de nouvelles ouvertures en rendant les positions existantes explicitement gérables aussi en mode `NORMAL`, sans déplacer la décision de sortie dans du code déterministe.
+Objectif atteint : supprimer le biais structurel vers la recherche de nouvelles ouvertures en rendant les positions existantes explicitement gérables aussi en mode `NORMAL`, sans déplacer la décision de sortie dans du code déterministe.
 
-Design proposé :
+Livrables :
 
-- réutiliser/généraliser `management_markets` au lieu d'un second portfolio manager ;
-- centraliser le mapping positions -> marchés ;
-- fournir `position-management-v1` au même Agent avec faits portefeuille et estimation nette de sortie PAPER ;
-- garder `HOLD`, sortie partielle et clôture comme décisions stratégiques ;
-- préserver `strategic-mtf-v1` et `trading-style-map-v1` ;
-- conserver `max_order_notional` comme plafond par ordre, y compris pour SELL SPOT ;
-- préserver un seul ordre stratégique par cycle ;
-- permettre la rotation du capital sur plusieurs cycles, sans BUY forcé après SELL ;
-- aucune migration SQL ni modification frontend requise.
+- `CapacityAssessment.management_markets` renseigné aussi en mode `NORMAL` ;
+- mapping positions ouvertes -> marchés centralisé et réutilisé ;
+- contexte factuel versionné `position-management-v1` fourni au même Agent ;
+- estimation économique de sortie SPOT via le modèle PAPER canonique, avec frais, spread et slippage ;
+- réutilisation de `remaining_cost_basis` sans double comptage des coûts d'entrée ;
+- `HOLD`, réduction partielle et clôture conservés comme décisions stratégiques ;
+- aucune règle P&L, timer, style ou indicateur -> SELL ;
+- `strategic-mtf-v1` et `trading-style-map-v1` préservés ;
+- `risk_max_order_notional` conservé comme plafond par ordre, y compris pour un SELL SPOT réducteur ;
+- protections anti-short/anti-oversell SPOT inchangées ;
+- rotation du capital sur plusieurs cycles, sans BUY forcé après SELL ;
+- frontière d'architecture Agent préservée : calcul économique côté trading, sans dépendance directe `agent -> broker` ;
+- aucune migration SQL, aucun changement frontend et aucun second Agent.
 
-Validation attendue après extraction : tests ciblés Batch 19.10 puis `pytest` backend complet.
+Validation locale finale après correctif :
+
+- tests ciblés : `11 passed` ;
+- backend complet : `638 passed, 2 warnings` ;
+- les deux warnings sont des dépréciations FastAPI/Starlette préexistantes ;
+- `git diff --cached --check` : PASS ;
+- `git diff --check` : aucune erreur, seulement des warnings LF -> CRLF.
 
 ## Périmètres ultérieurs
 
