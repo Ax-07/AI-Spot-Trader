@@ -2,7 +2,9 @@
 
 ## Référence
 
-Audit réalisé sur GitHub `main` au HEAD `5c92958414ce4fb52865dedfb17b808232fdc91c`.
+Audit initial réalisé sur GitHub `main` au HEAD `5c92958414ce4fb52865dedfb17b808232fdc91c`.
+
+Batch intégré sur GitHub `main` au commit `f8397d207be67309db083e49e113253fe88b3624` (`fix: handle OpenAI rate limits and quota errors robustly`). Ce commit est un descendant direct du HEAD audité et constitue le HEAD `main` vérifié lors de la synchronisation documentaire post-batch.
 
 ## Audit
 
@@ -14,10 +16,12 @@ Audit réalisé sur GitHub `main` au HEAD `5c92958414ce4fb52865dedfb17b808232fdc
 - `TradingCycleRunner` borne l'appel Agent par `TradingCycleTimeouts.agent_seconds` et transforme l'échec en `TradingCycleFailure` ; Market Selection échoue avant Risk/Broker.
 - le cockpit affichait directement `error_type`, d'où `MARKET_SELECTION · LLMRateLimitError`.
 
-### Obsolète
+### Obsolète après intégration
 
-- considérer tous les 429 comme un simple débit temporaire.
-- la référence HEAD `47e12798f54c3686b59faf339315ff39d9191b44` dans `00_ETAT_ACTUEL.md`.
+- considérer tous les 429 comme un simple débit temporaire ;
+- limiter le retry pré-décision à 2 tentatives avec un backoff maximal de 1 s ;
+- présenter le Batch 19.12 comme un patch proposé ou non validé ;
+- utiliser `5c92958414ce4fb52865dedfb17b808232fdc91c` comme HEAD intégré courant dans `00_ETAT_ACTUEL.md`.
 
 ### Manquant avant le batch
 
@@ -26,13 +30,13 @@ Audit réalisé sur GitHub `main` au HEAD `5c92958414ce4fb52865dedfb17b808232fdc
 - métadonnées provider sûres `error.type` / `error.code` ;
 - libellés opérateur explicites.
 
-### Décidé dans ce batch
+### Décidé et intégré dans ce batch
 
 - Les codes OpenAI documentés au 26/09/2026 comme non retryables sont : `credit_balance_exhausted`, `organization_usage_limit_exceeded`, `organization_spend_limit_exceeded`, `project_spend_limit_exceeded`. Le type `insufficient_quota` est également traité comme non transitoire lorsque le code n'est pas plus précis.
 - Un 429 qui n'est pas identifié comme quota/spend reste un rate limit transitoire et peut être réessayé.
 - Le message brut OpenAI n'est jamais recopié dans l'exception ni dans le journal de retry.
 - `Retry-After` numérique valide prime sur le backoff. En son absence ou s'il est invalide, le backoff est 1 s puis 2 s, avec 3 tentatives maximum.
-- Aucun jitter n'est ajouté dans ce batch afin de garder la politique entièrement déterministe et testable.
+- Aucun jitter n'est ajouté afin de garder la politique entièrement déterministe et testable.
 - Le budget externe `agent_seconds` reste l'autorité temporelle supérieure : un `Retry-After` trop long est interrompu par le timeout du cycle avant qu'un retry supplémentaire ne puisse déclencher Risk/Broker.
 
 ## Contrat d'erreur
@@ -60,15 +64,16 @@ Le préfixe existant « Échec technique distinct de Risk » est conservé. Aucu
 
 Aucun fallback algorithmique, aucun HOLD artificiel, aucun changement Risk/Broker, aucun ordre direct depuis le LLM et aucun changement LIVE. Un échec Market Selection reste un échec technique avant décision finale, Risk et Broker.
 
-## Validation attendue opérateur
+## Validation post-intégration
 
-```powershell
-cd backend
-pytest tests/test_openai_client.py tests/test_openai_rate_limits.py tests/test_market_selection_runner.py -q
-pytest
-cd ..\frontend
-pnpm test
-pnpm lint
-pnpm typecheck
-pnpm build
-```
+Validation locale opérateur communiquée après intégration :
+
+- backend complet : `665 passed, 2 warnings` ;
+- frontend : `37 passed` ;
+- ESLint : OK ;
+- TypeScript : OK ;
+- build Next.js : OK ;
+- `git diff --check` : aucune erreur ;
+- working tree propre après commit/push.
+
+Cette validation est une validation opérateur ; la synchronisation documentaire post-batch ne réexécute pas les suites applicatives.

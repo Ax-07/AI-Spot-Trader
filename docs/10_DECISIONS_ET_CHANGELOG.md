@@ -9,9 +9,9 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 ## Référence courante
 
 ```text
-HEAD GitHub vérifié après intégration 19.10 : 8643b9412bd19791e3cfd60884126ca0c300dc33
-Référence fonctionnelle 19.9C                : b59020a4b354d9d56d593f3e39bcd608824bcd42
-Batch 19.10                                   : intégré et validé localement
+HEAD GitHub vérifié après intégration 19.12 : f8397d207be67309db083e49e113253fe88b3624
+Batch 19.12                                   : intégré et validé localement par l'opérateur
+Note détaillée                                : docs/23_BATCH_19_12_OPENAI_RATE_LIMIT_HANDLING.md
 ```
 
 ## Décisions historiques toujours actives
@@ -26,7 +26,8 @@ Batch 19.10                                   : intégré et validé localement
 - ADR-240 à ADR-247 : façade Session, lifecycle, immutabilité et modes de marchés ;
 - ADR-248 à ADR-255 : Trading Style, coûts Agent et contexte stratégique multi-timeframes ;
 - ADR-256 à ADR-258 : UX Session du style, recommandations explicites et compatibilité legacy ;
-- ADR-259 à ADR-262 : gestion stratégique des positions ouvertes, contexte `position-management-v1`, plafond Risk par ordre et rotation multi-cycle du capital par le même Agent.
+- ADR-259 à ADR-262 : gestion stratégique des positions ouvertes, contexte `position-management-v1`, plafond Risk par ordre et rotation multi-cycle du capital par le même Agent ;
+- ADR-263 : classification robuste des limites fournisseur OpenAI, retry borné et maintien du fail-closed.
 
 ## ADR-240 — Session est une façade UX, pas un nouvel agrégat persistant
 
@@ -195,6 +196,29 @@ Cette décision évite de redéfinir silencieusement un paramètre Risk déjà p
 Un SELL peut libérer du cash. Un cycle ultérieur peut ensuite revenir à Discovery / Market Selection et éventuellement produire BUY, SELL ou HOLD. Aucune règle `après SELL -> BUY` n'est introduite.
 
 Le style SCALP/SWING module l'interprétation stratégique mais ne crée aucun timer, seuil P&L ou signal automatique de sortie. HOLD reste une décision valide.
+
+## ADR-263 — Les limites fournisseur OpenAI sont classifiées avant retry et restent fail-closed
+
+**ADOPTÉ AU BATCH 19.12.**
+
+Un HTTP 429 n'est plus traité uniformément. Les erreurs identifiées comme quota, crédit, usage ou limite de dépenses sont non retryables ; les limitations temporaires restent retryables. `Retry-After` numérique valide est honoré, sinon le retry utilise le backoff borné 1 s puis 2 s, avec 3 tentatives maximum et sous l'autorité temporelle de `TradingCycleTimeouts.agent_seconds`.
+
+Les métadonnées fournisseur conservées sont bornées et non sensibles ; le message brut provider n'est pas propagé. Toute erreur LLM reste un échec technique distinct de Risk : aucun HOLD artificiel, aucun fallback algorithmique et aucun passage vers Risk/Broker ne sont introduits.
+
+Détails d'implémentation et contrat d'erreur : `docs/23_BATCH_19_12_OPENAI_RATE_LIMIT_HANDLING.md`.
+
+## Changelog — 2026-09-26 — Batch 19.12 intégré
+
+- commit GitHub `f8397d207be67309db083e49e113253fe88b3624` (`fix: handle OpenAI rate limits and quota errors robustly`) ;
+- parent `5c92958414ce4fb52865dedfb17b808232fdc91c` ;
+- classification des HTTP 429 entre limitation temporaire retryable et quota/crédit/usage/spend non retryable ;
+- ajout des erreurs `LLMQuotaError` et `LLMProviderLimitError` avec métadonnées provider bornées ;
+- prise en compte de `Retry-After` numérique valide, sinon backoff 1 s puis 2 s, 3 tentatives maximum ;
+- maintien du timeout Agent comme borne supérieure ;
+- UX opérateur explicite pour rate limit temporaire, quota/spend, timeout et autre erreur fournisseur ;
+- aucun fallback HOLD, aucun signal algorithmique, aucune modification Risk/Broker et aucun changement LIVE ;
+- validation locale opérateur : backend `665 passed, 2 warnings`, frontend `37 passed`, ESLint OK, TypeScript OK, build Next.js OK et `git diff --check` sans erreur ;
+- note détaillée : `docs/23_BATCH_19_12_OPENAI_RATE_LIMIT_HANDLING.md`.
 
 ## Changelog — 2026-09-26 — Batch 19.10 intégré
 
