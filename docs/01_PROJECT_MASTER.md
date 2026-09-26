@@ -4,16 +4,16 @@
 
 AI Spot Trader est une application expérimentale de trading **PAPER** pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement un cockpit de contrôle et de visualisation.
 
-Référence GitHub vérifiée après intégration du Batch 19.9A :
+Référence GitHub vérifiée après intégration du Batch 19.9B :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 4b6a851addea74d72af2c433827c935a87d4bc04
-Commit     : feat: add canonical scalp swing trading style
+HEAD       : 88be7d50111c2e6210225071d3f1af3f7f07b4f0
+Commit     : feat: add strategic multi-timeframe context
 ```
 
-Le Batch 19.9A est intégré à GitHub `main`. Le contexte candles multi-timeframes complet reste le périmètre du Batch 19.9B.
+Les Batches 19.9A et 19.9B sont intégrés à GitHub `main`. La distinction `SCALP` / `SWING` est désormais opérationnelle côté contexte de données multi-timeframes remis au même Agent stratégique.
 
 ## 2. Invariants fonctionnels
 
@@ -185,6 +185,7 @@ Réglages
 - table `sessions` ;
 - restauration d'une Session archivée ;
 - refonte graphique générale.
+
 ## 13. Trading Style canonique — Batch 19.9A
 
 Le style stratégique appartient à la `Campaign` et ne remplace ni l'agressivité ni la cadence persistée. Deux valeurs sont définies :
@@ -204,14 +205,28 @@ Invariants :
 - le style ne modifie aucune limite Risk ;
 - aucune durée SCALP/SWING ne déclenche une liquidation ;
 - aucun score déterministe d'opportunité n'est ajouté ;
-- `agent-contract-v1` reste inchangé ;
-- le Batch 19.9A ne fournit pas encore le contexte candles multi-timeframes complet. Celui-ci relève du Batch 19.9B.
+- `agent-contract-v1` reste inchangé.
 
-## 14. Hors périmètre 19.9A
+## 14. Contexte stratégique multi-timeframes — Batch 19.9B
 
-- bouton UX affirmant que SWING est pleinement opérationnel ;
-- construction du contexte candles multi-timeframes complet ;
-- `ADAPTIVE_AI` ;
+Le Batch 19.9B raccorde les préférences de `trading-style-map-v1` au pipeline candles canonique sans dupliquer le mapping style -> timeframes :
+
+- SCALP : `1m`, `5m`, `15m`, `30m` ;
+- SWING : `1h`, `4h`, `1d`.
+
+Le contexte versionné `strategic-mtf-v1` est construit par `StrategicMultiTimeframeContextService` à partir du `CandleStreamService` backend partagé. Il utilise `history_as_of(...)` pour exclure toute donnée non disponible au temps de décision, conserve explicitement les gaps sans interpolation et expose `AVAILABLE` / `PARTIAL` / `MISSING` ainsi que l'état stale.
+
+Le contexte est compact et borné : 32 marchés maximum, 128 KiB JSON maximum, concurrence de lecture bornée et profondeur spécifique par timeframe. Discovery reste volontairement légère ; l'enrichissement candles intervient pour l'univers remis à Market Selection.
+
+`MultiTimeframeDecisionProvider` construit un snapshot au `MarketSelectionInput.created_at`, le remet à Market Selection puis réutilise exactement le même snapshot pour l'`AgentInput` final. Le fallback legacy single-market avec style explicite construit son snapshot au temps de l'`AgentInput`.
+
+Le même Agent IA conserve la décision stratégique. `ExecutionCostContext` reste séparé, le Risk Engine reste inchangé et aucune statistique technique n'est convertie en règle déterministe BUY/SELL/HOLD.
+
+## 15. Hors périmètre actuel
+
+- LIVE ;
+- `ADAPTIVE_AI` tant qu'il n'est pas cadré ;
 - modification du Risk Engine selon le style ;
-- fermeture automatique par durée de détention ;
-- ranking technique déterministe.
+- fermeture automatique d'une position selon une durée de détention ;
+- ranking technique déterministe d'opportunité ;
+- second pipeline/cache OHLC ou second Agent stratégique.

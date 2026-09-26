@@ -3,9 +3,9 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub vérifié après Batch 19.9A : 4b6a851addea74d72af2c433827c935a87d4bc04
-Batch 19.9A intégré                 : feat: add canonical scalp swing trading style
-Validation post-correctif 19.8      : backend 607 passed ; frontend tests/lint/typecheck/build passés
+HEAD GitHub vérifié après Batch 19.9B : 88be7d50111c2e6210225071d3f1af3f7f07b4f0
+Batch 19.9B intégré                 : feat: add strategic multi-timeframe context
+Validation locale post-19.9B       : backend 629 passed, 2 warnings ; git diff --check sans erreur
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -24,7 +24,8 @@ Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batc
 - 19.6B : vue Marchés, Lightweight Charts et markers de fills persistés ;
 - 19.7 : overlays de position canoniques `Prix moyen`, `Mark backend`, `Liquidation` ;
 - 19.8 : façade utilisateur **Session**, CRUD/lifecycle versionné, configurateur simple/avancé et choix de marchés Automatique IA / Manuel ;
-- 19.9A : Trading Style canonique `SCALP` / `SWING`, contextes style/coûts Agent et propagation Discovery → Market Selection → décision finale.
+- 19.9A : Trading Style canonique `SCALP` / `SWING`, contextes style/coûts Agent et propagation Discovery -> Market Selection -> décision finale ;
+- 19.9B : contexte stratégique candles multi-timeframes `strategic-mtf-v1`, causal, borné et partagé entre Market Selection et décision finale.
 
 ## Batch 19.8 — Sessions v1
 
@@ -83,12 +84,11 @@ Ils sont dérivés des faits persistés et du runtime, jamais stockés comme une
 3. discovery / watchlist IA : même Agent, cadence lente ;
 4. streaming marché / candles : technique, déterministe, sans LLM.
 
-
 ## Batch 19.9A — Trading Style canonique / contexte Agent
 
 **État : intégré à GitHub `main` au commit `4b6a851addea74d72af2c433827c935a87d4bc04`.**
 
-Objectif : poser les fondations versionnées `SCALP` / `SWING` dans la Campaign et propager le contexte stratégique et les coûts PAPER au même Agent, sans modifier Risk.
+Objectif atteint : poser les fondations versionnées `SCALP` / `SWING` dans la Campaign et propager le contexte stratégique et les coûts PAPER au même Agent, sans modifier Risk.
 
 Livrables :
 
@@ -96,15 +96,36 @@ Livrables :
 - mapping `trading-style-map-v1` et `TradingStyleContext` ;
 - `ExecutionCostContext` dérivé exactement de la Campaign ;
 - compatibilité digest des Campaigns historiques sans style ;
-- propagation Discovery → Market Selection → décision finale ;
+- propagation Discovery -> Market Selection -> décision finale ;
 - forwarding du runner dynamique ;
 - composition de prompt canonique ;
 - tests de non-régression persistence/digest/runtime ;
-- aucune migration SQL et aucune UI proclamant SWING pleinement opérationnel.
+- aucune migration SQL.
 
-## Prochain batch — 19.9B
+## Batch 19.9B — Données stratégiques multi-timeframes
 
-Rendre la distinction SCALP/SWING réellement opérationnelle côté données avec un contexte marché multi-timeframes cohérent, causal et auditable. Conserver le même Agent stratégique et éviter tout ranking déterministe d'opportunité.
+**État : intégré à GitHub `main` au commit `88be7d50111c2e6210225071d3f1af3f7f07b4f0`.**
+
+Objectif atteint : rendre la distinction SCALP/SWING opérationnelle côté données de marché sans déplacer la décision stratégique vers du code déterministe.
+
+Livrables :
+
+- contexte versionné `strategic-mtf-v1` ;
+- réutilisation exclusive du mapping `trading-style-map-v1` ;
+- `CandleStreamService` partagé avec les Campaign runtimes, sans second cache/pipeline OHLC ;
+- lecture causale `history_as_of(...)` ;
+- gaps conservés et statuts `AVAILABLE` / `PARTIAL` / `MISSING` avec stale ;
+- bornes de 32 marchés, 128 KiB JSON, concurrence et profondeurs par timeframe ;
+- snapshot construit pour Market Selection puis réutilisé inchangé pour la décision finale ;
+- Discovery maintenue légère ;
+- `ExecutionCostContext`, Risk Engine et `agent-contract-v1` inchangés ;
+- compatibilité des Campaigns historiques sans `trading_style`.
+
+Validation locale post-intégration :
+
+- tests ciblés : `57 passed, 2 warnings` ;
+- backend complet : `629 passed, 2 warnings` ;
+- `git diff --check` : aucune erreur de whitespace.
 
 ## Périmètres ultérieurs
 

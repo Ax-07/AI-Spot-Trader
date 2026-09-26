@@ -5,15 +5,16 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-Référence d'audit avant cette fusion documentaire : a254df4d56208c4472bb97b9b80077ad0856f9cd
 Référence fonctionnelle Batch 19.6B : a446628918a614d2ae0ac3b55243881aad5ef410
 Référence fonctionnelle Batch 19.7  : 8b969b434916d89f6b6aa127c3bac9c27e990966
 Référence fonctionnelle Batch 19.8  : f3a8eae8528648c07723aa97350852428254acc7
 Correctif fonctionnel post-19.8      : 0d964624a641aad509f5728264f873c1a837af97
-HEAD GitHub vérifié avant 19.9A     : 97a95ef7e91f6fb66577b7c399ac17af676cd146
+Référence fonctionnelle Batch 19.9A : 4b6a851addea74d72af2c433827c935a87d4bc04
+Sync documentaire post-19.9A        : a4f841c7c23e3af1b44a9cbb104ccc44d5cad2d9
+HEAD GitHub / Batch 19.9B           : 88be7d50111c2e6210225071d3f1af3f7f07b4f0
 ```
 
-Les Batches 19.1 à 19.8 sont intégrés. Le présent document décrit l'architecture fonctionnelle intégrée jusqu'au Batch 19.8.
+Les Batches 19.1 à 19.9B sont intégrés. Le présent document décrit l'architecture fonctionnelle intégrée après le Batch 19.9B.
 
 ## 2. Architecture générale
 
@@ -28,6 +29,10 @@ Next.js cockpit
 
      -> Control Plane PostgreSQL
      -> CampaignRuntimeManager
+        -> CandleStreamService partagé
+           -> StrategicMultiTimeframeContextService
+              -> MultiTimeframeDecisionProvider
+                 -> même Agent stratégique
         -> TradingEngine
         -> AuditedTradingCycleRunner
         -> DynamicMarketTradingCycleRunner
@@ -48,6 +53,7 @@ Next.js cockpit
            -> PERPETUAL Futures charts + WS public trade
         -> CandleCache borné
         -> API historique / WebSocket cockpit
+        -> history_as_of(...) pour le contexte stratégique
 
 Next.js vue Marchés
   -> contrats REST/WS backend uniquement
@@ -57,7 +63,7 @@ Next.js vue Marchés
   -> portefeuille backend pour overlays de position
 ```
 
-Le frontend n'est jamais dans la chaîne d'exécution trading. Fermer ou redémarrer le cockpit n'arrête ni le moteur de trading backend ni les streams backend déjà ouverts.
+Le `CandleStreamService` représenté dans les deux branches du schéma est une **même instance backend partagée**, pas deux services. Le frontend n'est jamais dans la chaîne d'exécution trading. Fermer ou redémarrer le cockpit n'arrête ni le moteur de trading backend ni les streams backend déjà ouverts.
 
 ## 3. Sessions — façade utilisateur intégrée 19.8
 
@@ -121,6 +127,8 @@ Dans les deux modes, le même Agent conserve BUY / SELL / HOLD et le Risk Engine
 `OpenAIWatchlistSelector` réutilise la même instance d'Agent stratégique. La sélection d'une watchlist ne crée aucun `ExecutionIntent`.
 
 `DynamicMarketTradingCycleRunner` prépare l'univers puis délègue au runner de trading canonique. Risk, Broker et validations causales ne sont pas dupliqués. Les positions ouvertes restent toujours dans l'univers gérable.
+
+Depuis 19.9B, `MultiTimeframeDecisionProvider` décore ce même Agent pour Market Selection et la décision finale. Il ne constitue pas un second Agent : il enrichit les inputs avec le snapshot candles stratégique puis délègue à `OpenAIDecisionProvider`.
 
 ## 7. Monitoring / mark-to-market
 
@@ -239,6 +247,8 @@ Propriétés :
 - statut `connected`, `stale`, `last_update_at`, `last_error` ;
 - fermeture de tous les tasks et transports au shutdown backend.
 
+Le Batch 19.9B ajoute `history_as_of(...)` comme lecture stratégique causale du même cache/provider. Une candle n'est retenue que si sa révision était disponible à `as_of`; une finale doit aussi être clôturée à `as_of`. Les backfills historiques ne reconstruisent pas artificiellement une candle active passée à partir de son état actuel.
+
 ## 16. API cockpit candles
 
 Le backend expose :
@@ -286,7 +296,19 @@ Référence fonctionnelle : `8b969b434916d89f6b6aa127c3bac9c27e990966`.
 
 Le service de candles est créé dans le lifespan FastAPI avec les URLs/timeouts Kraken présents dans `Settings`. Aucun nouveau secret ni paramètre stratégique n'est introduit.
 
-Au shutdown, `CandleStreamService` ferme ses tasks/provider puis le runtime trading poursuit son cleanup canonique.
+Depuis 19.9B, `CampaignRuntimeManager` reçoit l'instance partagée de `CandleStreamService`. La composition Campaign l'utilise pour construire `StrategicMultiTimeframeContextService`, mais le runtime Campaign n'en devient pas propriétaire.
+
+Ordre de shutdown intégré :
+
+```text
+FastAPI lifespan shutdown
+-> runtime.close()
+   -> fermeture du Campaign runtime actif le cas échéant
+-> resolved_candle_service.aclose()
+   -> fermeture des tasks/streams/provider candles partagés
+```
+
+Cet ordre est volontaire : un Campaign runtime peut encore lire le service candles partagé pendant son cleanup. Le `CandleStreamService` ne doit donc pas être fermé avant le runtime Campaign.
 
 Les cadences restent distinctes :
 
@@ -297,9 +319,11 @@ Les cadences restent distinctes :
 
 ## 20. Persistence / audit
 
-Aucune migration SQL n'est introduite par 19.6A, 19.6B, 19.7 ou 19.8 pour les candles, charts, overlays ou façade Session.
+Aucune migration SQL n'est introduite par 19.6A, 19.6B, 19.7, 19.8, 19.9A ou 19.9B pour les candles, charts, overlays, façade Session ou contexte multi-timeframes.
 
-Le cache candles n'est pas utilisé comme source de vérité d'exécution, Risk, portfolio ou décision Agent.
+Le cache candles n'est pas utilisé comme source de vérité d'exécution, Risk ou portfolio. Pour la décision Agent, il fournit uniquement des faits de marché causaux via le contexte `strategic-mtf-v1`.
+
+Les payloads persistés `MarketSelectionInput` et `AgentInput` embarquent le contexte multi-timeframes optionnel lorsqu'il existe. Les anciens payloads et Campaigns sans `trading_style` restent valides.
 
 Les faits durables restent portés par les tables canoniques Strategy/Revision/Campaign/paper_run/audit. La façade Session ne duplique pas cet état.
 
@@ -313,12 +337,14 @@ Restent hors de l'état intégré :
 - persistence durable des candles sans besoin démontré ;
 - ranking stratégique déterministe ;
 - calcul Risk/P&L parallèle côté frontend ;
-- second Agent ou contournement du Risk Engine.
+- second Agent ou contournement du Risk Engine ;
+- fermeture automatique liée au style de trading.
+
 ## 22. Batch 19.9A — Overlay Trading Style et coûts Agent
 
 Le Batch 19.9A étend la configuration JSON de Campaign sans migration SQL et sans augmenter `paper-control-plane-config-v1`. Les champs optionnels `trading_style` et `trading_style_mapping_version` sont omis du payload canonique lorsqu'ils sont absents ; les Campaigns historiques gardent donc leur digest précédent.
 
-Flux de contexte :
+Flux de contexte 19.9A :
 
 ```text
 CampaignConfiguration
@@ -339,4 +365,26 @@ Le mapping v1 est purement stratégique :
 
 La composition d'instructions ajoute des sections canoniques dérivées des contextes structurés. En leur absence, les Campaigns historiques conservent la composition legacy. `agent-contract-v1` n'est pas modifié.
 
-Le Batch 19.9B devra fournir les données de marché multi-timeframes cohérentes avec ces préférences ; 19.9A ne fabrique pas ces données.
+Le Batch 19.9B consomme désormais ces préférences pour construire le contexte candles stratégique ; il ne redéfinit pas le mapping SCALP/SWING.
+
+## 23. Batch 19.9B — Contexte stratégique multi-timeframes
+
+Raccordement intégré :
+
+```text
+CampaignRuntimeManager
+-> CandleStreamService partagé
+-> StrategicMultiTimeframeContextService
+-> MultiTimeframeDecisionProvider
+-> même Agent stratégique
+```
+
+`StrategicMultiTimeframeContextService` produit `strategic-mtf-v1` à partir de `TradingStyleContext.preferred_timeframes`. Les profondeurs d'historique sont des bornes de volume, pas un second mapping stratégique : `1m=12`, `5m=12`, `15m=10`, `30m=8`, `1h=16`, `4h=12`, `1d=10`.
+
+Le contexte est borné à 32 marchés, 128 KiB JSON et 4 lectures concurrentes. Pour chaque timeframe il expose notamment la disponibilité `AVAILABLE` / `PARTIAL` / `MISSING`, la couverture, les gaps, stale, la dernière candle et des statistiques OHLCV descriptives. Aucun gap n'est interpolé.
+
+Causalité : `history_as_of(...)` exclut les révisions `updated_at > as_of`; une candle finale requiert `close_time <= as_of`; une candle active n'est utilisable que si sa révision exacte était déjà connue à `as_of`. Une révision actuelle ne sert jamais à rétro-projeter artificiellement l'état d'une candle active passée.
+
+Snapshot de cycle : le contexte est construit à `MarketSelectionInput.created_at`, attaché à Market Selection puis conservé par `MultiTimeframeDecisionProvider` et réutilisé inchangé pour l'`AgentInput` final. Le fallback legacy single-market avec style explicite construit le contexte à `AgentInput.created_at`.
+
+Discovery reste volontairement légère avant cet enrichissement. `ExecutionCostContext` demeure séparé. Risk Engine, broker, contrats de sortie Agent et règles de décision restent inchangés : aucune statistique technique ne déclenche directement BUY, SELL ou HOLD.

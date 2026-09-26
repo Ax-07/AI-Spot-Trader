@@ -9,10 +9,10 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 ## Référence courante
 
 ```text
-HEAD GitHub vérifié après 19.9A        : 4b6a851addea74d72af2c433827c935a87d4bc04
-Référence fonctionnelle intégrée         : 4b6a851addea74d72af2c433827c935a87d4bc04
-Batch 19.9A                              : intégré à GitHub `main`
-Validation historique post-19.8          : backend 607 passed ; frontend tests/lint/typecheck/build passés
+HEAD GitHub vérifié après 19.9B        : 88be7d50111c2e6210225071d3f1af3f7f07b4f0
+Référence fonctionnelle intégrée       : 88be7d50111c2e6210225071d3f1af3f7f07b4f0
+Batch 19.9B                            : intégré à GitHub `main`
+Validation locale post-19.9B           : backend 629 passed, 2 warnings ; git diff --check sans erreur
 ```
 
 ## Décisions historiques toujours actives
@@ -89,7 +89,6 @@ Aucun second moteur de sélection ni ranking TypeScript n'est introduit.
 
 La configuration avancée expose les valeurs effectives : 900 s catalogue, 900 s watchlist, timeout 45 s, probe 24, candidats 12, watchlist 6, snapshot 120 s, 2 observations minimales, fenêtre complète non requise. Le backend conserve la validation autoritaire.
 
-
 ## ADR-248 — Trading Style est une propriété versionnée de Campaign
 
 **ADOPTÉ AU BATCH 19.9A.**
@@ -100,7 +99,7 @@ La configuration avancée expose les valeurs effectives : 900 s catalogue, 900 s
 
 **ADOPTÉ AU BATCH 19.9A.**
 
-Le style décrit l'horizon et la manière d'interpréter les faits de marché ; l'agressivité décrit la posture stratégique. Aucun mapping style → agressivité ni style → Risk n'est autorisé.
+Le style décrit l'horizon et la manière d'interpréter les faits de marché ; l'agressivité décrit la posture stratégique. Aucun mapping style -> agressivité ni style -> Risk n'est autorisé.
 
 ## ADR-250 — Les coûts PAPER sont un contexte factuel de l'Agent
 
@@ -120,6 +119,45 @@ Le style décrit l'horizon et la manière d'interpréter les faits de marché ; 
 
 Les guidances de détention SCALP/SWING sont descriptives. Une durée écoulée ne produit jamais automatiquement SELL/HOLD, ne ferme aucune position et ne modifie aucune règle Risk.
 
+## ADR-253 — Le contexte stratégique multi-timeframes réutilise le pipeline candles canonique
+
+**ADOPTÉ AU BATCH 19.9B.**
+
+`CampaignRuntimeManager` reçoit le `CandleStreamService` backend partagé et l'injecte dans la composition Campaign. `StrategicMultiTimeframeContextService` lit ce service ; aucun second provider, cache ou pipeline OHLC stratégique n'est créé.
+
+La lecture décisionnelle utilise `history_as_of(...)` afin de ne retenir que les révisions et candles disponibles à l'instant `as_of`. Les gaps restent explicites et ne sont jamais interpolés.
+
+## ADR-254 — Un snapshot multi-timeframes causal et borné est partagé dans le cycle Agent
+
+**ADOPTÉ AU BATCH 19.9B.**
+
+Le contexte `strategic-mtf-v1` est construit au `MarketSelectionInput.created_at`, attaché à Market Selection puis réutilisé inchangé pour l'`AgentInput` final du même cycle. Discovery reste légère et ne reçoit pas l'historique multi-timeframes riche.
+
+Les bornes v1 sont explicites : 32 marchés maximum, 128 KiB JSON maximum, concurrence de lecture limitée à 4 et profondeur bornée par timeframe. Les états `AVAILABLE`, `PARTIAL`, `MISSING`, les gaps et stale sont conservés comme faits descriptifs.
+
+## ADR-255 — Le multi-timeframes enrichit les faits, pas l'autorité stratégique ou Risk
+
+**ADOPTÉ AU BATCH 19.9B.**
+
+Le service 19.9B consomme le mapping `trading-style-map-v1` sans le dupliquer. Les statistiques OHLCV résumées ne produisent aucune règle `indicateur -> BUY/SELL/HOLD`. Le même Agent stratégique décide ; `ExecutionCostContext` reste séparé ; Risk Engine, broker, contrats de sortie Agent et timers de position restent inchangés.
+
+## Changelog — 2026-09-26 — Batch 19.9B intégré
+
+- commit GitHub `88be7d50111c2e6210225071d3f1af3f7f07b4f0` (`feat: add strategic multi-timeframe context`) ;
+- parent `a4f841c7c23e3af1b44a9cbb104ccc44d5cad2d9` (`docs: sync post-19.9A state`) ;
+- ajout de `StrategicMultiTimeframeContextService` et du contrat `strategic-mtf-v1` ;
+- ajout de `MultiTimeframeDecisionProvider` autour du même Agent stratégique ;
+- partage du `CandleStreamService` backend entre cockpit et Campaign runtimes ;
+- ajout de la lecture causale `history_as_of(...)` ;
+- mapping SCALP/SWING toujours exclusivement fourni par `trading-style-map-v1` ;
+- contexte compact : 32 marchés max, 128 KiB JSON max, concurrence et profondeurs bornées ;
+- snapshot Market Selection réutilisé pour la décision finale ;
+- Discovery maintenue légère ;
+- gaps, stale et disponibilité `AVAILABLE` / `PARTIAL` / `MISSING` exposés explicitement ;
+- `ExecutionCostContext`, Risk Engine, broker et `agent-contract-v1` inchangés ;
+- compatibilité préservée pour les Campaigns historiques sans `trading_style` ;
+- validation locale : tests ciblés `57 passed, 2 warnings` ; backend complet `629 passed, 2 warnings` ; `git diff --check` sans erreur.
+
 ## Changelog — 2026-09-26 — Batch 19.9A intégré
 
 - commit GitHub `4b6a851addea74d72af2c433827c935a87d4bc04` (`feat: add canonical scalp swing trading style`) ;
@@ -132,7 +170,7 @@ Les guidances de détention SCALP/SWING sont descriptives. Une durée écoulée 
 - forwarding explicite dans `DynamicMarketTradingCycleRunner` ;
 - sections d'instructions canoniques dérivées des contextes ;
 - Risk Engine, `RiskPolicy`, cadence persistée et contrat `agent-contract-v1` inchangés ;
-- contexte candles multi-timeframes complet reporté au Batch 19.9B.
+- fondations Trading Style désormais consommées par le contexte multi-timeframes intégré au Batch 19.9B.
 
 ## Changelog — 2026-09-25 — Correctif post-19.8 création Session
 

@@ -1,5 +1,22 @@
 # Batch 19.9B — Données stratégiques multi-timeframes SCALP / SWING
 
+## État intégré
+
+Le Batch 19.9B est intégré à GitHub `main` :
+
+```text
+Commit : 88be7d50111c2e6210225071d3f1af3f7f07b4f0
+Message: feat: add strategic multi-timeframe context
+Parent : a4f841c7c23e3af1b44a9cbb104ccc44d5cad2d9
+```
+
+Validation locale post-intégration fournie par l'opérateur :
+
+- tests ciblés : **57 passed, 2 warnings** ;
+- suite backend complète : **629 passed, 2 warnings** ;
+- `git diff --check` : aucune erreur de whitespace ;
+- aucun fichier frontend fonctionnel modifié par le batch.
+
 ## Objectif
 
 Fournir au même Agent IA stratégique un contexte candles multi-timeframes causal, borné, stable et auditable, sans introduire de second pipeline OHLC ni de ranking stratégique déterministe.
@@ -54,7 +71,7 @@ Discovery ne reçoit pas le contexte candles riche v1. Il conserve ses candidats
 
 ## Partage du pipeline candles
 
-Le `CandleStreamService` créé par le backend FastAPI est injecté dans `CampaignRuntimeManager`, puis `build_campaign_runtime`. Le cockpit et le moteur stratégique utilisent donc la même instance, le même cache et le même provider. Le Campaign runtime n'en devient pas propriétaire et ne le ferme pas ; le backend le ferme après le runtime Campaign.
+Le `CandleStreamService` créé par le backend FastAPI est injecté dans `CampaignRuntimeManager`, puis `build_campaign_runtime`. Le cockpit et le moteur stratégique utilisent donc la même instance, le même cache et le même provider. Le Campaign runtime n'en devient pas propriétaire et ne le ferme pas ; le backend ferme d'abord le runtime Campaign puis le `CandleStreamService` partagé.
 
 ## Compatibilité et audit
 
@@ -63,16 +80,16 @@ Le `CandleStreamService` créé par le backend FastAPI est injecté dans `Campai
 - persistence : les payloads complets `MarketSelectionInput` et `AgentInput` existants embarquent automatiquement le nouveau contexte ;
 - analytics/replay : `AgentInput` connaît officiellement le champ optionnel, donc les payloads 19.9B restent validables et les anciens payloads restent acceptés ;
 - `ExecutionCostContext` reste une responsabilité distincte ;
-- aucun changement Risk Engine, broker, règle indicateur→action ou timer de liquidation.
+- aucun changement Risk Engine, broker, règle indicateur->action ou timer de liquidation.
 
-## Validation attendue avant intégration
+## Validation post-intégration
 
-```powershell
-cd E:\AI-Spot-Trader
-git status --short
-git diff --check
-pytest backend/tests/test_strategic_multi_timeframe.py
-pytest
+Les validations Python n'ont pas à être relancées pour une synchronisation documentaire pure. La validation de référence du code intégré est :
+
+```text
+tests ciblés   : 57 passed, 2 warnings
+backend complet: 629 passed, 2 warnings
+git diff --check: aucune erreur de whitespace
 ```
 
-Le frontend n'est pas modifié par ce batch.
+Les warnings observés correspondent aux dépendances Starlette/FastAPI déjà connues. Les notifications Git LF -> CRLF ne constituent pas des erreurs de whitespace.
