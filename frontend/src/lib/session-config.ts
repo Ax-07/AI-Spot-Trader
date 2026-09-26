@@ -176,6 +176,47 @@ export function profileRisk(
   };
 }
 
+function decimalValuesEqual(left: string | null, right: string | null): boolean {
+  if (left === null || right === null) return left === right;
+  const leftNumber = Number(left);
+  const rightNumber = Number(right);
+  return Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber === rightNumber;
+}
+
+export function inferSessionRiskProfile(configuration: CampaignConfiguration): SessionRiskProfile {
+  const capital = Number(configuration.paper_initial_capital);
+  const marketType = configuration.paper_executable_markets[0]?.market_type;
+  if (!Number.isFinite(capital) || capital <= 0 || !marketType) return "custom";
+
+  const profiles = ["prudent", "balanced", "aggressive"] as const;
+  for (const profile of profiles) {
+    const expected = profileRisk(profile, capital, marketType);
+    if (
+      decimalValuesEqual(configuration.risk_max_order_notional, expected.maxOrderNotional) &&
+      decimalValuesEqual(configuration.paper_derivative_leverage, expected.derivativeLeverage) &&
+      decimalValuesEqual(
+        configuration.risk_max_derivative_leverage,
+        expected.maxDerivativeLeverage,
+      ) &&
+      decimalValuesEqual(
+        configuration.risk_max_derivative_position_notional,
+        expected.maxDerivativePositionNotional,
+      ) &&
+      decimalValuesEqual(
+        configuration.risk_max_total_derivative_exposure,
+        expected.maxTotalDerivativeExposure,
+      ) &&
+      decimalValuesEqual(
+        configuration.risk_derivative_liquidation_buffer_ratio,
+        expected.liquidationBuffer,
+      )
+    ) {
+      return profile;
+    }
+  }
+  return "custom";
+}
+
 function splitPairs(value: string): string[] {
   return Array.from(
     new Set(

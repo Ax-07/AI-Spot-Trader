@@ -24,6 +24,7 @@ import {
   TRADING_STYLE_MAPPING_VERSION,
   TRADING_STYLE_UI_METADATA,
   buildSessionCampaignConfiguration,
+  inferSessionRiskProfile,
   initialSessionStyleValues,
   tradingStyleRecommendations,
   type SessionMarketSelectionMode,
@@ -130,7 +131,9 @@ export function SimpleConfigurator({
     session?.instructions ??
       "Cherche des opportunités cohérentes avec le contexte de marché. Privilégie la qualité du signal à la fréquence des trades et utilise HOLD quand l'opportunité n'est pas assez claire.",
   );
-  const [riskProfile, setRiskProfile] = useState<SessionRiskProfile>(editing ? "custom" : "balanced");
+  const [riskProfile, setRiskProfile] = useState<SessionRiskProfile>(
+    config ? inferSessionRiskProfile(config) : "balanced",
+  );
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const [cadence, setCadence] = useState(numberString(initialStyle.tradingCadenceSeconds));

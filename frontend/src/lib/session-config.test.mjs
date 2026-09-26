@@ -6,6 +6,7 @@ import {
   TRADING_STYLE_MAPPING_VERSION,
   TRADING_STYLE_UI_METADATA,
   buildSessionCampaignConfiguration,
+  inferSessionRiskProfile,
   initialSessionStyleValues,
   parseSessionMarkets,
   sessionStatusLabel,
@@ -187,4 +188,64 @@ test("editing a legacy Session does not infer a style", () => {
     tradingCadenceSeconds: 120,
     watchlistRefreshSeconds: 720,
   });
+});
+
+test("Risk profile inference recognizes prudent SPOT configuration", () => {
+  const configuration = buildSessionCampaignConfiguration({ ...base, riskProfile: "prudent" });
+  assert.equal(inferSessionRiskProfile(configuration), "prudent");
+});
+
+test("Risk profile inference recognizes balanced SPOT configuration", () => {
+  const configuration = buildSessionCampaignConfiguration({ ...base, riskProfile: "balanced" });
+  assert.equal(inferSessionRiskProfile(configuration), "balanced");
+});
+
+test("Risk profile inference recognizes aggressive SPOT configuration", () => {
+  const configuration = buildSessionCampaignConfiguration({ ...base, riskProfile: "aggressive" });
+  assert.equal(inferSessionRiskProfile(configuration), "aggressive");
+});
+
+test("Risk profile inference returns custom when a persisted cap differs", () => {
+  const configuration = buildSessionCampaignConfiguration({ ...base, riskProfile: "balanced" });
+  configuration.risk_max_order_notional = "101";
+  assert.equal(inferSessionRiskProfile(configuration), "custom");
+});
+
+test("Risk profile inference compares Decimal string forms semantically", () => {
+  const configuration = buildSessionCampaignConfiguration({ ...base, riskProfile: "balanced" });
+  configuration.risk_max_order_notional = "100.0";
+  configuration.paper_derivative_leverage = "1.0";
+  configuration.risk_max_derivative_leverage = "1.00";
+  configuration.risk_derivative_liquidation_buffer_ratio = "1.1500";
+  assert.equal(inferSessionRiskProfile(configuration), "balanced");
+});
+
+test("Risk profile inference recognizes all PERPETUAL presets including derived caps", () => {
+  for (const profile of ["prudent", "balanced", "aggressive"]) {
+    const configuration = buildSessionCampaignConfiguration({
+      ...base,
+      marketType: "PERPETUAL",
+      riskProfile: profile,
+    });
+    assert.equal(inferSessionRiskProfile(configuration), profile);
+  }
+});
+
+test("Risk profile inference is independent from Agent aggressiveness", () => {
+  const configuration = buildSessionCampaignConfiguration({
+    ...base,
+    riskProfile: "balanced",
+    aggressiveness: 10,
+  });
+  assert.equal(inferSessionRiskProfile(configuration), "balanced");
+});
+
+test("Risk profile inference returns custom when a PERPETUAL derived cap differs", () => {
+  const configuration = buildSessionCampaignConfiguration({
+    ...base,
+    marketType: "PERPETUAL",
+    riskProfile: "prudent",
+  });
+  configuration.risk_max_total_derivative_exposure = "201";
+  assert.equal(inferSessionRiskProfile(configuration), "custom");
 });
