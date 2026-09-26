@@ -4,16 +4,16 @@
 
 AI Spot Trader est une application expérimentale de trading **PAPER** pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement un cockpit de contrôle et de visualisation.
 
-Référence GitHub vérifiée au démarrage du Batch 19.8 :
+Référence GitHub vérifiée au démarrage du Batch 19.9A :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 130429eca6c7c8385c1caf4b2eb2870bef61ec3e
-Commit     : docs: sync Batch 19.7 post-push state
+HEAD       : 97a95ef7e91f6fb66577b7c399ac17af676cd146
+Commit     : docs: sync post-19.8 session fix state
 ```
 
-Le Batch 19.8 décrit un patch proposé localement ; son intégration GitHub reste une action explicite de l'opérateur.
+Le Batch 19.9A décrit le patch proposé dans cette livraison ; son intégration GitHub reste une action explicite de l'opérateur.
 
 ## 2. Invariants fonctionnels
 
@@ -185,3 +185,33 @@ Réglages
 - table `sessions` ;
 - restauration d'une Session archivée ;
 - refonte graphique générale.
+## 13. Trading Style canonique — Batch 19.9A
+
+Le style stratégique appartient à la `Campaign` et ne remplace ni l'agressivité ni la cadence persistée. Deux valeurs sont définies :
+
+```text
+SCALP
+SWING
+```
+
+La configuration conserve `paper-control-plane-config-v1`. Les champs `trading_style` et `trading_style_mapping_version` sont optionnels et absents du payload canonique lorsqu'ils valent `null`, de sorte qu'une Campaign historique garde exactement son ancien `configuration_digest`. Un changement de style modifie en revanche l'identité de configuration et produit une nouvelle Campaign immuable via le mécanisme Session existant.
+
+Le mapping `trading-style-map-v1` produit un `TradingStyleContext` structuré. `ExecutionCostContext` expose exactement `paper_fee_rate`, `paper_spread_bps` et `paper_slippage_bps` à l'Agent. Les deux contextes suivent le même Agent dans Discovery, Market Selection et décision finale ; le runner dynamique les retransmet au runner canonique.
+
+Invariants :
+
+- style et agressivité sont orthogonaux ;
+- le style ne modifie aucune limite Risk ;
+- aucune durée SCALP/SWING ne déclenche une liquidation ;
+- aucun score déterministe d'opportunité n'est ajouté ;
+- `agent-contract-v1` reste inchangé ;
+- le Batch 19.9A ne fournit pas encore le contexte candles multi-timeframes complet. Celui-ci relève du Batch 19.9B.
+
+## 14. Hors périmètre 19.9A
+
+- bouton UX affirmant que SWING est pleinement opérationnel ;
+- construction du contexte candles multi-timeframes complet ;
+- `ADAPTIVE_AI` ;
+- modification du Risk Engine selon le style ;
+- fermeture automatique par durée de détention ;
+- ranking technique déterministe.

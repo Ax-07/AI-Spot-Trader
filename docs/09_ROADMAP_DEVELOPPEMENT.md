@@ -3,9 +3,9 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub post-push Batch 19.8 : f3a8eae8528648c07723aa97350852428254acc7
+HEAD GitHub vérifié avant Batch 19.9A : 97a95ef7e91f6fb66577b7c399ac17af676cd146
 Batch 19.8 intégré                 : feat: add user-facing Sessions workflow
-Validation locale                  : backend 606 passed ; frontend tests/lint/typecheck/build passés
+Validation post-correctif 19.8      : backend 607 passed ; frontend tests/lint/typecheck/build passés
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -81,6 +81,29 @@ Ils sont dérivés des faits persistés et du runtime, jamais stockés comme une
 2. cycle stratégique IA : BUY / SELL / HOLD ;
 3. discovery / watchlist IA : même Agent, cadence lente ;
 4. streaming marché / candles : technique, déterministe, sans LLM.
+
+
+## Batch 19.9A — Trading Style canonique / contexte Agent
+
+**État : patch proposé non intégré à GitHub dans cette livraison.**
+
+Objectif : poser les fondations versionnées `SCALP` / `SWING` dans la Campaign et propager le contexte stratégique et les coûts PAPER au même Agent, sans modifier Risk.
+
+Livrables :
+
+- enum `TradingStyle` ;
+- mapping `trading-style-map-v1` et `TradingStyleContext` ;
+- `ExecutionCostContext` dérivé exactement de la Campaign ;
+- compatibilité digest des Campaigns historiques sans style ;
+- propagation Discovery → Market Selection → décision finale ;
+- forwarding du runner dynamique ;
+- composition de prompt canonique ;
+- tests de non-régression persistence/digest/runtime ;
+- aucune migration SQL et aucune UI proclamant SWING pleinement opérationnel.
+
+## Prochain batch — 19.9B
+
+Rendre la distinction SCALP/SWING réellement opérationnelle côté données avec un contexte marché multi-timeframes cohérent, causal et auditable. Conserver le même Agent stratégique et éviter tout ranking déterministe d'opportunité.
 
 ## Périmètres ultérieurs
 

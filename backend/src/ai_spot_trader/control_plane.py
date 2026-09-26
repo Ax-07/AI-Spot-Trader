@@ -9,7 +9,8 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ai_spot_trader.agent.prompt import BASE_AGENT_CONTRACT_VERSION
-from ai_spot_trader.domain.enums import LLMModel, MarginMode, MarketType
+from ai_spot_trader.domain.enums import LLMModel, MarginMode, MarketType, TradingStyle
+from ai_spot_trader.domain.experiments import TRADING_STYLE_MAPPING_VERSION
 from ai_spot_trader.domain.models import ExecutableMarket
 from ai_spot_trader.domain.symbols import parse_canonical_symbol
 from ai_spot_trader.market.discovery import MarketDiscoveryPolicy
@@ -42,6 +43,12 @@ class CampaignConfiguration(ControlPlaneModel):
     llm_model: LLMModel
     aggressiveness: int = Field(ge=1, le=10)
     trading_cadence_seconds: float = Field(gt=0)
+    trading_style: TradingStyle | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    trading_style_mapping_version: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     paper_initial_capital: PositiveDecimal
     paper_settlement_asset: str = Field(min_length=1, max_length=16)
@@ -142,6 +149,15 @@ class CampaignConfiguration(ControlPlaneModel):
     def validate_structural_configuration(self) -> "CampaignConfiguration":
         if self.configuration_version != CONTROL_PLANE_CONFIGURATION_VERSION:
             raise ValueError("unsupported control-plane configuration version")
+        if (self.trading_style is None) != (self.trading_style_mapping_version is None):
+            raise ValueError(
+                "trading_style and trading_style_mapping_version must be supplied together"
+            )
+        if (
+            self.trading_style_mapping_version is not None
+            and self.trading_style_mapping_version != TRADING_STYLE_MAPPING_VERSION
+        ):
+            raise ValueError("unsupported trading style mapping version")
         if self.paper_spread_bps + self.paper_slippage_bps >= Decimal(10_000):
             raise ValueError("combined paper spread and slippage must be below 10000 bps")
 

@@ -6,11 +6,13 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- Référence fonctionnelle du correctif post-19.8 intégré :
-  `0d964624a641aad509f5728264f873c1a837af97`
+- HEAD GitHub `main` vérifié au démarrage du Batch 19.9A :
+  `97a95ef7e91f6fb66577b7c399ac17af676cd146`
+  (`docs: sync post-19.8 session fix state`).
+- Référence fonctionnelle intégrée : `0d964624a641aad509f5728264f873c1a837af97`
   (`fix: preserve session creation FK ordering`).
-- Référence fonctionnelle intégrée courante : Batch 19.8 + correctif post-19.8 Session.
-- Batch 19.8 et son correctif de création Session PostgreSQL sont **intégrés à GitHub `main` et validés localement**.
+- Batch 19.8 et son correctif PostgreSQL sont intégrés et validés.
+- **Batch 19.9A : patch proposé non intégré à GitHub** dans ce lot de livraison.
 
 ## État fonctionnel intégré
 
@@ -96,6 +98,20 @@ Les modifications documentaires locales héritées de 19.6B ont été auditées 
 - `docs/02_ARCHITECTURE_TECHNIQUE.md` ;
 - `docs/03_AGENT_TRADING_RISK.md` ;
 - `docs/11_AMELIORATIONS_PLANIFIEES.md`.
+
+## Batch 19.9A — Trading Style canonique (patch proposé)
+
+Fondations ajoutées sans migration SQL ni rupture de `agent-contract-v1` :
+
+- `TradingStyle` canonique : `SCALP` / `SWING` ;
+- `CampaignConfiguration.trading_style` + `trading_style_mapping_version`, omis du JSON canonique lorsqu'absents afin de préserver les digests historiques ;
+- `TradingStyleContext` versionné (`trading-style-map-v1`) et `ExecutionCostContext` ;
+- style et coûts propagés vers Discovery, Market Selection et `AgentInput`, y compris via le runner dynamique ;
+- style et agressivité restent indépendants ; aucun mapping style → Risk, aucun ranking déterministe, aucune fermeture par timer ;
+- coûts PAPER visibles par l'Agent sans devenir un score algorithmique ;
+- `SCALP` : `1m/5m/15m/30m` ; `SWING` : `1h/4h/1d`.
+
+Le contexte candles multi-timeframes réellement opérationnel reste le **Batch 19.9B**. Aucune UI ne doit présenter SWING comme pleinement opérationnel avant ce batch.
 
 ## Règle de reprise
 

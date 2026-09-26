@@ -14,12 +14,18 @@ from ai_spot_trader.broker.paper import PaperBroker
 from ai_spot_trader.broker.pricing import PaperExecutionCostModel
 from ai_spot_trader.chat.provider import OpenAIChatProvider
 from ai_spot_trader.chat.service import OperatorChatService, RuntimeChatContextSource
+from ai_spot_trader.control_plane import CampaignConfiguration
 from ai_spot_trader.core.clock import SystemClock
 from ai_spot_trader.core.config import PaperRuntimeConfigurationError, Settings
 from ai_spot_trader.core.runtime import AppRuntime
 from ai_spot_trader.domain.enums import MarketType
-from ai_spot_trader.domain.experiments import aggressiveness_context
-from ai_spot_trader.domain.models import AssetBalance, PortfolioState
+from ai_spot_trader.domain.experiments import aggressiveness_context, trading_style_context
+from ai_spot_trader.domain.models import (
+    AssetBalance,
+    ExecutionCostContext,
+    PortfolioState,
+    TradingStyleContext,
+)
 from ai_spot_trader.domain.ports import MarketDataSource
 from ai_spot_trader.integrations.kraken.derivatives import (
     KrakenDerivativesMarketDataSource,
@@ -84,6 +90,23 @@ class CampaignRuntimeComposition:
     paper_run_reader: CampaignPaperRunQueryService
 
 
+def _campaign_agent_contexts(
+    config: CampaignConfiguration,
+) -> tuple[TradingStyleContext | None, ExecutionCostContext | None]:
+    """Derive optional Agent-only strategic context from the immutable Campaign snapshot."""
+
+    if config.trading_style is None:
+        return None, None
+    style_context = trading_style_context(config.trading_style)
+    if config.trading_style_mapping_version != style_context.mapping_version:
+        raise PaperRuntimeConfigurationError("campaign trading style mapping version mismatch")
+    return style_context, ExecutionCostContext(
+        fee_rate=config.paper_fee_rate,
+        spread_bps=config.paper_spread_bps,
+        slippage_bps=config.paper_slippage_bps,
+    )
+
+
 def build_campaign_runtime(
     settings: Settings,
     *,
@@ -116,6 +139,7 @@ def build_campaign_runtime(
     config = campaign.configuration
     dynamic_policy = config.market_discovery
     dynamic_enabled = dynamic_policy is not None
+    style_context, execution_cost_context = _campaign_agent_contexts(config)
     clock = SystemClock()
     database = Database(database_url)
     audit_repository = SqlAlchemyCycleAuditRepository(database.sessions)
@@ -346,6 +370,8 @@ def build_campaign_runtime(
             aggressiveness=config.aggressiveness,
             timeouts=cycle_timeouts,
             experiment_manifest=None,
+            trading_style_context=style_context,
+            execution_cost_context=execution_cost_context,
             clock=clock,
         )
     else:
@@ -358,6 +384,8 @@ def build_campaign_runtime(
             bootstrap_markets=config.paper_executable_markets,
             aggressiveness=config.aggressiveness,
             aggressiveness_context=aggressiveness_context(config.aggressiveness),
+            trading_style_context=style_context,
+            execution_cost_context=execution_cost_context,
             risk_allowed_pairs=(
                 None
                 if config.risk_allowed_pairs is None
@@ -377,6 +405,8 @@ def build_campaign_runtime(
             broker=broker,
             aggressiveness=config.aggressiveness,
             timeouts=cycle_timeouts,
+            trading_style_context=style_context,
+            execution_cost_context=execution_cost_context,
             clock=clock,
         )
 

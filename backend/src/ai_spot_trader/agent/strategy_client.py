@@ -3,9 +3,17 @@ from __future__ import annotations
 import json
 from typing import Any, Protocol, cast
 
-from ai_spot_trader.agent.prompt import compose_agent_instructions, normalize_strategy_prompt
+from ai_spot_trader.agent.prompt import (
+    compose_agent_instructions,
+    compose_trading_context_sections,
+    normalize_strategy_prompt,
+)
 from ai_spot_trader.domain.enums import LLMModel
-from ai_spot_trader.domain.models import AggressivenessContext
+from ai_spot_trader.domain.models import (
+    AggressivenessContext,
+    ExecutionCostContext,
+    TradingStyleContext,
+)
 from ai_spot_trader.tools.read_only import ReadOnlyToolRegistry, ToolLoopResult
 
 
@@ -47,14 +55,20 @@ class StrategyInstructionsClient:
     def effective_instructions(self, input_text: str) -> str:
         payload = _input_payload(input_text)
         context = _aggressiveness_context_from_payload(payload)
+        trading_style = _trading_style_context_from_payload(payload)
+        execution_costs = _execution_cost_context_from_payload(payload)
         if "market_discovery_context" in payload:
             return _compose_market_discovery_instructions(
                 strategy_prompt=self._strategy_prompt,
                 context=context,
+                trading_style_context=trading_style,
+                execution_cost_context=execution_costs,
             )
         return compose_agent_instructions(
             strategy_prompt=self._strategy_prompt,
             aggressiveness_context=context,
+            trading_style_context=trading_style,
+            execution_cost_context=execution_costs,
         ).instructions
 
     async def generate_structured_decision(
@@ -115,10 +129,40 @@ def _aggressiveness_context_from_payload(payload: dict[str, object]) -> Aggressi
         ) from exc
 
 
+def _trading_style_context_from_payload(
+    payload: dict[str, object],
+) -> TradingStyleContext | None:
+    raw = payload.get("trading_style_context")
+    if raw is None:
+        return None
+    try:
+        return TradingStyleContext.model_validate_json(json.dumps(raw, ensure_ascii=False))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "campaign Agent input contains an invalid trading_style_context"
+        ) from exc
+
+
+def _execution_cost_context_from_payload(
+    payload: dict[str, object],
+) -> ExecutionCostContext | None:
+    raw = payload.get("execution_cost_context")
+    if raw is None:
+        return None
+    try:
+        return ExecutionCostContext.model_validate_json(json.dumps(raw, ensure_ascii=False))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "campaign Agent input contains an invalid execution_cost_context"
+        ) from exc
+
+
 def _compose_market_discovery_instructions(
     *,
     strategy_prompt: str,
     context: AggressivenessContext,
+    trading_style_context: TradingStyleContext | None,
+    execution_cost_context: ExecutionCostContext | None,
 ) -> str:
     protected = """\
 Vous etes l'unique Agent de trading strategique pour AI Spot Trader.
@@ -151,10 +195,11 @@ Regles protegees :
         f"posture={context.posture}\n"
         f"instruction={context.strategic_instruction}"
     )
-    return "\n\n".join(
-        (
-            protected.rstrip(),
-            strategy_section,
-            aggression_section,
+    sections = [protected.rstrip(), strategy_section, aggression_section]
+    sections.extend(
+        compose_trading_context_sections(
+            trading_style_context=trading_style_context,
+            execution_cost_context=execution_cost_context,
         )
     )
+    return "\n\n".join(sections)

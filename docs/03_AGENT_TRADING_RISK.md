@@ -182,3 +182,20 @@ Une Session RUNNING doit être arrêtée avant modification. L'archivage conserv
 - aucune obligation de trader ;
 - aucun calcul stratégique ou financier canonique déporté dans le frontend ;
 - aucun effacement de l'historique lors d'une modification ou d'un archivage de Session.
+## 17. Trading Style et coûts stratégiques — Batch 19.9A
+
+Le même Agent reçoit deux contextes structurés supplémentaires lorsqu'une Campaign adopte un style :
+
+- `TradingStyleContext` : horizon, timeframes préférées, guidance de détention, fréquence d'opportunité et sensibilité aux coûts ;
+- `ExecutionCostContext` : `fee_rate`, `spread_bps`, `slippage_bps` exactement issus de la Campaign PAPER.
+
+Le mapping `trading-style-map-v1` définit :
+
+- **SCALP** : horizon minutes/intraday court, `1m/5m/15m/30m`, opportunités potentiellement plus fréquentes, sensibilité aux coûts `VERY_HIGH` ;
+- **SWING** : horizon heures à plusieurs jours, `1h/4h/1d`, sélection plus espacée, maintien possible tant que la thèse reste valide, sensibilité aux coûts `HIGH`.
+
+Ces indications n'ont aucune autorité déterministe. Elles ne modifient ni `RiskPolicy`, ni `CapacityEvaluator`, ni les plafonds d'ordre/exposition, ni le levier, ni les règles de réduction. Aucune position n'est fermée parce qu'une durée « normale » du style est atteinte.
+
+Style et agressivité restent indépendants : `SCALP + prudent`, `SCALP + agressif`, `SWING + prudent` et `SWING + agressif` sont tous des états valides. Les coûts sont des faits fournis à l'Agent, pas un score d'opportunité calculé par le backend.
+
+La règle d'autorité reste inchangée : **l'Agent propose ; le Risk Engine autorise, modifie ou refuse.**

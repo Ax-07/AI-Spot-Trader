@@ -9,10 +9,10 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 ## Référence courante
 
 ```text
-Référence fonctionnelle correctif        : 0d964624a641aad509f5728264f873c1a837af97
-Batch 19.8 intégré                       : f3a8eae8528648c07723aa97350852428254acc7
-Correctif Session post-19.8 intégré      : 0d964624a641aad509f5728264f873c1a837af97
-Validation correctif                     : backend 607 passed ; frontend tests/lint/typecheck/build passés
+HEAD GitHub vérifié avant 19.9A        : 97a95ef7e91f6fb66577b7c399ac17af676cd146
+Référence fonctionnelle intégrée         : 0d964624a641aad509f5728264f873c1a837af97
+Batch 19.9A                              : patch proposé non intégré dans cette livraison
+Validation historique post-19.8          : backend 607 passed ; frontend tests/lint/typecheck/build passés
 ```
 
 ## Décisions historiques toujours actives
@@ -88,6 +88,50 @@ Aucun second moteur de sélection ni ranking TypeScript n'est introduit.
 **ADOPTÉ AU BATCH 19.8.**
 
 La configuration avancée expose les valeurs effectives : 900 s catalogue, 900 s watchlist, timeout 45 s, probe 24, candidats 12, watchlist 6, snapshot 120 s, 2 observations minimales, fenêtre complète non requise. Le backend conserve la validation autoritaire.
+
+
+## ADR-248 — Trading Style est une propriété versionnée de Campaign
+
+**ADOPTÉ DANS LE PATCH BATCH 19.9A.**
+
+`TradingStyle` contient `SCALP` et `SWING`. La Campaign persiste `trading_style` et `trading_style_mapping_version`. Ces champs sont optionnels et omis de la sérialisation canonique lorsqu'ils sont absents : les digests historiques restent identiques. `paper-control-plane-config-v1` est conservé et aucune migration SQL n'est nécessaire.
+
+## ADR-249 — Style et agressivité sont orthogonaux
+
+**ADOPTÉ DANS LE PATCH BATCH 19.9A.**
+
+Le style décrit l'horizon et la manière d'interpréter les faits de marché ; l'agressivité décrit la posture stratégique. Aucun mapping style → agressivité ni style → Risk n'est autorisé.
+
+## ADR-250 — Les coûts PAPER sont un contexte factuel de l'Agent
+
+**ADOPTÉ DANS LE PATCH BATCH 19.9A.**
+
+`ExecutionCostContext` expose exactement `paper_fee_rate`, `paper_spread_bps` et `paper_slippage_bps` aux phases stratégiques. Le backend ne convertit pas ces coûts en score d'opportunité.
+
+## ADR-251 — Un même overlay contextuel suit les trois phases Agent
+
+**ADOPTÉ DANS LE PATCH BATCH 19.9A.**
+
+`TradingStyleContext` + `ExecutionCostContext` sont propagés à `MarketDiscoveryInput`, `MarketSelectionInput` et `AgentInput`. Le runner dynamique doit les transmettre au runner canonique qu'il reconstruit. Aucun second Agent n'est créé et `agent-contract-v1` reste inchangé.
+
+## ADR-252 — Aucune sortie temporisée liée au style
+
+**ADOPTÉ DANS LE PATCH BATCH 19.9A.**
+
+Les guidances de détention SCALP/SWING sont descriptives. Une durée écoulée ne produit jamais automatiquement SELL/HOLD, ne ferme aucune position et ne modifie aucune règle Risk.
+
+## Changelog — 2026-09-26 — Batch 19.9A proposé
+
+- ajout de `TradingStyle.SCALP` / `TradingStyle.SWING` ;
+- mapping canonique `trading-style-map-v1` ;
+- ajout de `TradingStyleContext` et `ExecutionCostContext` ;
+- extension rétrocompatible de `CampaignConfiguration` sans migration SQL ;
+- préservation du payload/digest historique lorsque le style est absent ;
+- propagation structurée vers Discovery, Market Selection et décision finale ;
+- forwarding explicite dans `DynamicMarketTradingCycleRunner` ;
+- sections d'instructions canoniques dérivées des contextes ;
+- Risk Engine, `RiskPolicy`, cadence persistée et contrat `agent-contract-v1` inchangés ;
+- contexte candles multi-timeframes complet reporté au Batch 19.9B.
 
 ## Changelog — 2026-09-25 — Correctif post-19.8 création Session
 

@@ -123,6 +123,13 @@ class LLMModel(StrEnum):
     SOL = "gpt-5.6-sol"
 
 
+class TradingStyle(StrEnum):
+    """Canonical strategic trading horizon configured per Campaign."""
+
+    SCALP = "SCALP"
+    SWING = "SWING"
+
+
 class ExperimentVariable(StrEnum):
     """Single controlled variable intentionally changed inside an experiment group."""
 

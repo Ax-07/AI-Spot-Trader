@@ -28,6 +28,7 @@ from ai_spot_trader.domain.enums import (
     RiskLimit,
     RiskReason,
     TradingAction,
+    TradingStyle,
 )
 from ai_spot_trader.domain.symbols import parse_canonical_symbol
 
@@ -524,6 +525,35 @@ class AggressivenessContext(DomainModel):
     strategic_instruction: NonEmptyText
 
 
+class TradingStyleContext(DomainModel):
+    """Versioned strategic horizon guidance for one configured trading style."""
+
+    mapping_version: NonEmptyText
+    style: TradingStyle
+    horizon_guidance: NonEmptyText
+    preferred_timeframes: Annotated[
+        tuple[Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"], ...],
+        Field(min_length=1),
+    ]
+    position_holding_guidance: NonEmptyText
+    opportunity_frequency_guidance: NonEmptyText
+    cost_sensitivity: NonEmptyText
+
+    @model_validator(mode="after")
+    def validate_preferred_timeframes(self) -> "TradingStyleContext":
+        if len(set(self.preferred_timeframes)) != len(self.preferred_timeframes):
+            raise ValueError("preferred_timeframes must be unique")
+        return self
+
+
+class ExecutionCostContext(DomainModel):
+    """Canonical PAPER execution costs visible to the strategic Agent."""
+
+    fee_rate: NonNegativeDecimal
+    spread_bps: NonNegativeDecimal
+    slippage_bps: NonNegativeDecimal
+
+
 class ExperimentRiskPolicySnapshot(DomainModel):
     """Canonical experiment identity for deterministic RiskPolicy parameters."""
 
@@ -736,6 +766,12 @@ class MarketSelectionInput(DomainModel):
     executable_markets: tuple[ExecutableMarket, ...]
     aggressiveness: Annotated[int, Field(ge=1, le=10)]
     aggressiveness_context: AggressivenessContext | None = None
+    trading_style_context: TradingStyleContext | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    execution_cost_context: ExecutionCostContext | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     experiment_manifest: ExperimentManifest | None = None
 
     @model_validator(mode="after")
@@ -760,6 +796,10 @@ class MarketSelectionInput(DomainModel):
             and self.aggressiveness_context.level != self.aggressiveness
         ):
             raise ValueError("aggressiveness_context level must match aggressiveness")
+        if (self.trading_style_context is None) != (self.execution_cost_context is None):
+            raise ValueError(
+                "trading_style_context and execution_cost_context must be supplied together"
+            )
         manifest = self.experiment_manifest
         if manifest is not None:
             if self.aggressiveness_context is None:
@@ -843,6 +883,12 @@ class AgentInput(DomainModel):
     portfolio_state: PortfolioState
     aggressiveness: Annotated[int, Field(ge=1, le=10)]
     aggressiveness_context: AggressivenessContext | None = None
+    trading_style_context: TradingStyleContext | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    execution_cost_context: ExecutionCostContext | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     experiment_manifest: ExperimentManifest | None = None
     market_selection: MarketSelection | None = None
 
@@ -857,6 +903,10 @@ class AgentInput(DomainModel):
             and self.aggressiveness_context.level != self.aggressiveness
         ):
             raise ValueError("aggressiveness_context level must match aggressiveness")
+        if (self.trading_style_context is None) != (self.execution_cost_context is None):
+            raise ValueError(
+                "trading_style_context and execution_cost_context must be supplied together"
+            )
         selection = self.market_selection
         if selection is not None:
             if selection.cycle_id != self.cycle_id:

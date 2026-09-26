@@ -13,12 +13,14 @@ from ai_spot_trader.core.clock import Clock, SystemClock
 from ai_spot_trader.domain.enums import RiskDecision, TradingAction
 from ai_spot_trader.domain.experiments import (
     aggressiveness_context,
+    trading_style_context as canonical_trading_style_context,
     validate_experiment_manifest_digest,
 )
 from ai_spot_trader.domain.models import (
     AgentInput,
     AgentToolTrace,
     DecisionCandidate,
+    ExecutionCostContext,
     ExecutableMarket,
     ExecutionIntent,
     ExperimentManifest,
@@ -28,6 +30,7 @@ from ai_spot_trader.domain.models import (
     MarketState,
     PortfolioState,
     RiskAssessment,
+    TradingStyleContext,
 )
 from ai_spot_trader.domain.ports import (
     Broker,
@@ -217,6 +220,8 @@ class TradingCycleRunner:
         executable_markets: tuple[ExecutableMarket, ...] | None = None,
         capacity_evaluator: CapacityEvaluator | None = None,
         experiment_manifest: ExperimentManifest | None = None,
+        trading_style_context: TradingStyleContext | None = None,
+        execution_cost_context: ExecutionCostContext | None = None,
         clock: Clock | None = None,
         cycle_id_factory: CycleIdFactory = uuid4,
     ) -> None:
@@ -258,6 +263,16 @@ class TradingCycleRunner:
                 )
 
         context = aggressiveness_context(aggressiveness)
+        if (trading_style_context is None) != (execution_cost_context is None):
+            raise ValueError(
+                "trading_style_context and execution_cost_context must be supplied together"
+            )
+        if trading_style_context is not None:
+            expected_style_context = canonical_trading_style_context(
+                trading_style_context.style
+            )
+            if trading_style_context != expected_style_context:
+                raise ValueError("trading_style_context must match the canonical mapping")
         if experiment_manifest is not None:
             validate_experiment_manifest_digest(experiment_manifest)
             if experiment_manifest.aggressiveness != context:
@@ -293,6 +308,8 @@ class TradingCycleRunner:
         self._broker = broker
         self._aggressiveness = aggressiveness
         self._aggressiveness_context = context
+        self._trading_style_context = trading_style_context
+        self._execution_cost_context = execution_cost_context
         self._experiment_manifest = experiment_manifest
         self._timeouts = timeouts
         self._clock = clock or SystemClock()
@@ -330,6 +347,8 @@ class TradingCycleRunner:
                 executable_markets=self._executable_markets,
                 aggressiveness=self._aggressiveness,
                 aggressiveness_context=self._aggressiveness_context,
+                trading_style_context=self._trading_style_context,
+                execution_cost_context=self._execution_cost_context,
                 experiment_manifest=self._experiment_manifest,
             )
         except Exception as exc:
@@ -431,6 +450,8 @@ class TradingCycleRunner:
                 portfolio_state=portfolio_state,
                 aggressiveness=self._aggressiveness,
                 aggressiveness_context=self._aggressiveness_context,
+                trading_style_context=self._trading_style_context,
+                execution_cost_context=self._execution_cost_context,
                 experiment_manifest=self._experiment_manifest,
                 market_selection=market_selection,
             )
@@ -491,6 +512,8 @@ class TradingCycleRunner:
                 portfolio_state=portfolio_state,
                 aggressiveness=self._aggressiveness,
                 aggressiveness_context=self._aggressiveness_context,
+                trading_style_context=self._trading_style_context,
+                execution_cost_context=self._execution_cost_context,
                 experiment_manifest=self._experiment_manifest,
             )
             market_state = agent_input.market_state

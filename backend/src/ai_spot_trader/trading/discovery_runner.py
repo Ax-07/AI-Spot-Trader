@@ -9,7 +9,13 @@ from pydantic import ConfigDict
 
 from ai_spot_trader.core.clock import Clock
 from ai_spot_trader.domain.enums import MarketType
-from ai_spot_trader.domain.models import ExecutableMarket, MarketSelectionInput, PortfolioState
+from ai_spot_trader.domain.models import (
+    ExecutionCostContext,
+    ExecutableMarket,
+    MarketSelectionInput,
+    PortfolioState,
+    TradingStyleContext,
+)
 from ai_spot_trader.domain.ports import Broker, ExecutableMarketDataSource, LLMProvider
 from ai_spot_trader.domain.symbols import parse_canonical_symbol
 from ai_spot_trader.market.discovery import MarketDiscoveryAudit, MarketDiscoveryCoordinator
@@ -66,6 +72,8 @@ class DynamicMarketTradingCycleRunner:
         capacity_evaluator: CapacityEvaluator,
         discovery: MarketDiscoveryCoordinator,
         settlement_asset: str,
+        trading_style_context: TradingStyleContext | None = None,
+        execution_cost_context: ExecutionCostContext | None = None,
         clock: Clock | None = None,
         cycle_id_factory: Callable[[], UUID] | None = None,
     ) -> None:
@@ -74,6 +82,10 @@ class DynamicMarketTradingCycleRunner:
         normalized_settlement = settlement_asset.strip().upper()
         if not normalized_settlement:
             raise ValueError("dynamic runner settlement_asset cannot be empty")
+        if (trading_style_context is None) != (execution_cost_context is None):
+            raise ValueError(
+                "trading_style_context and execution_cost_context must be supplied together"
+            )
         self._portfolio = portfolio
         self._agent = agent
         self._risk_engine = risk_engine
@@ -85,6 +97,8 @@ class DynamicMarketTradingCycleRunner:
         self._capacity_evaluator = capacity_evaluator
         self._discovery = discovery
         self._settlement_asset = normalized_settlement
+        self._trading_style_context = trading_style_context
+        self._execution_cost_context = execution_cost_context
         self._clock = clock
         self._cycle_id_factory = cycle_id_factory
         self._cycle_lock = asyncio.Lock()
@@ -151,6 +165,8 @@ class DynamicMarketTradingCycleRunner:
             "aggressiveness": self._aggressiveness,
             "timeouts": self._timeouts,
             "experiment_manifest": None,
+            "trading_style_context": self._trading_style_context,
+            "execution_cost_context": self._execution_cost_context,
         }
         if self._clock is not None:
             runner_kwargs["clock"] = self._clock

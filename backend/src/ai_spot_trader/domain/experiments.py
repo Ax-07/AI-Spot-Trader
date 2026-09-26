@@ -3,10 +3,15 @@ import json
 from datetime import datetime
 from decimal import Decimal
 
-from ai_spot_trader.domain.enums import ExperimentVariable, LLMModel
-from ai_spot_trader.domain.models import AggressivenessContext, ExperimentManifest
+from ai_spot_trader.domain.enums import ExperimentVariable, LLMModel, TradingStyle
+from ai_spot_trader.domain.models import (
+    AggressivenessContext,
+    ExperimentManifest,
+    TradingStyleContext,
+)
 
 AGGRESSIVENESS_MAPPING_VERSION = "aggressiveness-map-v1"
+TRADING_STYLE_MAPPING_VERSION = "trading-style-map-v1"
 EXPERIMENT_PROTOCOL_VERSION = "paper-experiment-v1"
 MODEL_EXPERIMENT_PROTOCOL_VERSION = "paper-experiment-v2"
 MULTI_MARKET_MODEL_EXPERIMENT_PROTOCOL_VERSION = "paper-experiment-v3"
@@ -92,6 +97,53 @@ def aggressiveness_context(level: int) -> AggressivenessContext:
         level=level,
         posture=posture,
         strategic_instruction=instruction,
+    )
+
+
+
+
+_TRADING_STYLE_PROFILES: dict[TradingStyle, dict[str, object]] = {
+    TradingStyle.SCALP: {
+        "horizon_guidance": "Short horizon: minutes to short intraday periods.",
+        "preferred_timeframes": ("1m", "5m", "15m", "30m"),
+        "position_holding_guidance": (
+            "Positions are generally short-lived when the thesis resolves, but never close "
+            "solely because a timer elapsed."
+        ),
+        "opportunity_frequency_guidance": (
+            "Evaluate opportunities more frequently while requiring a defensible thesis."
+        ),
+        "cost_sensitivity": "VERY_HIGH",
+    },
+    TradingStyle.SWING: {
+        "horizon_guidance": "Longer horizon: hours to multiple days.",
+        "preferred_timeframes": ("1h", "4h", "1d"),
+        "position_holding_guidance": (
+            "Positions may be held longer while the thesis remains valid; never close solely "
+            "because a timer elapsed."
+        ),
+        "opportunity_frequency_guidance": (
+            "Be more selective and accept a lower opportunity frequency when evidence is weak."
+        ),
+        "cost_sensitivity": "HIGH",
+    },
+}
+
+
+def trading_style_context(style: TradingStyle) -> TradingStyleContext:
+    """Return the deterministic versioned strategic context for one trading style."""
+
+    if not isinstance(style, TradingStyle):
+        raise ValueError("trading style must be a TradingStyle value")
+    profile = _TRADING_STYLE_PROFILES[style]
+    return TradingStyleContext(
+        mapping_version=TRADING_STYLE_MAPPING_VERSION,
+        style=style,
+        horizon_guidance=str(profile["horizon_guidance"]),
+        preferred_timeframes=tuple(profile["preferred_timeframes"]),  # type: ignore[arg-type]
+        position_holding_guidance=str(profile["position_holding_guidance"]),
+        opportunity_frequency_guidance=str(profile["opportunity_frequency_guidance"]),
+        cost_sensitivity=str(profile["cost_sensitivity"]),
     )
 
 

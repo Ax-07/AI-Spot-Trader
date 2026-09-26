@@ -13,8 +13,10 @@ from ai_spot_trader.core.clock import Clock, SystemClock
 from ai_spot_trader.domain.enums import DerivativeContractKind, MarketType
 from ai_spot_trader.domain.models import (
     AggressivenessContext,
+    ExecutionCostContext,
     ExecutableMarket,
     PortfolioState,
+    TradingStyleContext,
 )
 from ai_spot_trader.domain.symbols import parse_canonical_symbol
 from ai_spot_trader.market.research import (
@@ -94,6 +96,12 @@ class MarketDiscoveryInput(DiscoveryModel):
     watchlist_limit: int = Field(ge=1, le=20)
     aggressiveness: int = Field(ge=1, le=10)
     aggressiveness_context: AggressivenessContext
+    trading_style_context: TradingStyleContext | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    execution_cost_context: ExecutionCostContext | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     market_discovery_context: dict[str, object]
 
     @model_validator(mode="after")
@@ -129,6 +137,10 @@ class MarketDiscoveryInput(DiscoveryModel):
             raise ValueError("previous_watchlist must be unique and sorted")
         if self.aggressiveness_context.level != self.aggressiveness:
             raise ValueError("aggressiveness_context level mismatch")
+        if (self.trading_style_context is None) != (self.execution_cost_context is None):
+            raise ValueError(
+                "trading_style_context and execution_cost_context must be supplied together"
+            )
         return self
 
 
@@ -167,6 +179,12 @@ class MarketDiscoveryAudit(DiscoveryModel):
     discovery_id: UUID | None = None
     status: DiscoveryStatus
     observed_at: datetime
+    trading_style_context: TradingStyleContext | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    execution_cost_context: ExecutionCostContext | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     catalogue_refreshed: bool = False
     catalogue_market_count: int = 0
     compatible_market_count: int = 0
@@ -187,6 +205,10 @@ class MarketDiscoveryAudit(DiscoveryModel):
 
     @model_validator(mode="after")
     def validate_audit(self) -> "MarketDiscoveryAudit":
+        if (self.trading_style_context is None) != (self.execution_cost_context is None):
+            raise ValueError(
+                "trading_style_context and execution_cost_context must be supplied together"
+            )
         for value in (
             self.observed_at,
             self.input_created_at,
@@ -256,6 +278,8 @@ class MarketDiscoveryCoordinator:
         bootstrap_markets: tuple[ExecutableMarket, ...],
         aggressiveness: int,
         aggressiveness_context: AggressivenessContext,
+        trading_style_context: TradingStyleContext | None = None,
+        execution_cost_context: ExecutionCostContext | None = None,
         risk_allowed_pairs: frozenset[str] | None = None,
         clock: Clock | None = None,
     ) -> None:
@@ -275,8 +299,14 @@ class MarketDiscoveryCoordinator:
         self._policy = policy
         self._settlement_asset = normalized_settlement
         self._bootstrap = _ordered_markets(bootstrap_markets)
+        if (trading_style_context is None) != (execution_cost_context is None):
+            raise ValueError(
+                "trading_style_context and execution_cost_context must be supplied together"
+            )
         self._aggressiveness = aggressiveness
         self._aggressiveness_context = aggressiveness_context
+        self._trading_style_context = trading_style_context
+        self._execution_cost_context = execution_cost_context
         self._risk_allowed_pairs = risk_allowed_pairs
         self._clock = clock or SystemClock()
         self._catalogue: tuple[MarketResearchMarket, ...] = ()
@@ -305,6 +335,8 @@ class MarketDiscoveryCoordinator:
         audit = MarketDiscoveryAudit(
             status=status,
             observed_at=now,
+            trading_style_context=self._trading_style_context,
+            execution_cost_context=self._execution_cost_context,
             previous_watchlist=self._watchlist,
             effective_watchlist=effective,
             next_refresh_at=self._next_watchlist_refresh_at(),
@@ -355,6 +387,8 @@ class MarketDiscoveryCoordinator:
                     watchlist_limit=self._policy.watchlist_limit,
                     aggressiveness=self._aggressiveness,
                     aggressiveness_context=self._aggressiveness_context,
+                    trading_style_context=self._trading_style_context,
+                    execution_cost_context=self._execution_cost_context,
                     market_discovery_context={
                         "protocol_version": MARKET_DISCOVERY_PROTOCOL_VERSION,
                         "instruction": (
@@ -377,6 +411,8 @@ class MarketDiscoveryCoordinator:
                     discovery_id=discovery_id,
                     status="REFRESHED",
                     observed_at=completed_at,
+                    trading_style_context=self._trading_style_context,
+                    execution_cost_context=self._execution_cost_context,
                     catalogue_refreshed=catalogue_refreshed,
                     catalogue_market_count=len(self._catalogue),
                     compatible_market_count=len(compatible),
@@ -405,6 +441,8 @@ class MarketDiscoveryCoordinator:
                 discovery_id=discovery_id,
                 status="FALLBACK",
                 observed_at=completed_at,
+                trading_style_context=self._trading_style_context,
+                execution_cost_context=self._execution_cost_context,
                 catalogue_refreshed=catalogue_refreshed,
                 catalogue_market_count=len(self._catalogue),
                 compatible_market_count=len(compatible),

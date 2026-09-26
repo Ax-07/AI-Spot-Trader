@@ -4,7 +4,11 @@ import hashlib
 import re
 from dataclasses import dataclass
 
-from ai_spot_trader.domain.models import AggressivenessContext
+from ai_spot_trader.domain.models import (
+    AggressivenessContext,
+    ExecutionCostContext,
+    TradingStyleContext,
+)
 
 # Historical Batch <= 18.8 prompt identity. It stays stable so paper-experiment-v1/v2/v3
 # manifests continue to validate exactly as before.
@@ -180,10 +184,48 @@ def strategy_prompt_digest(value: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def compose_trading_context_sections(
+    *,
+    trading_style_context: TradingStyleContext | None,
+    execution_cost_context: ExecutionCostContext | None,
+) -> tuple[str, ...]:
+    """Render optional structured Campaign contexts without changing the legacy prompt."""
+
+    if (trading_style_context is None) != (execution_cost_context is None):
+        raise ValueError(
+            "trading_style_context and execution_cost_context must be supplied together"
+        )
+    if trading_style_context is None:
+        return ()
+    assert execution_cost_context is not None
+    style_section = (
+        "CONTEXTE DE STYLE DE TRADING CANONIQUE :\n"
+        f"mapping_version={trading_style_context.mapping_version}\n"
+        f"style={trading_style_context.style.value}\n"
+        f"horizon_guidance={trading_style_context.horizon_guidance}\n"
+        "preferred_timeframes="
+        f"{','.join(trading_style_context.preferred_timeframes)}\n"
+        "position_holding_guidance="
+        f"{trading_style_context.position_holding_guidance}\n"
+        "opportunity_frequency_guidance="
+        f"{trading_style_context.opportunity_frequency_guidance}\n"
+        f"cost_sensitivity={trading_style_context.cost_sensitivity}"
+    )
+    cost_section = (
+        "CONTEXTE DE COUTS D'EXECUTION PAPER CANONIQUE :\n"
+        f"fee_rate={execution_cost_context.fee_rate}\n"
+        f"spread_bps={execution_cost_context.spread_bps}\n"
+        f"slippage_bps={execution_cost_context.slippage_bps}"
+    )
+    return style_section, cost_section
+
+
 def compose_agent_instructions(
     *,
     strategy_prompt: str,
     aggressiveness_context: AggressivenessContext,
+    trading_style_context: TradingStyleContext | None = None,
+    execution_cost_context: ExecutionCostContext | None = None,
 ) -> AgentPromptComposition:
     """Canonical composition shared by the provider adapter and the prompt-preview API."""
 
@@ -199,9 +241,14 @@ def compose_agent_instructions(
         f"posture={aggressiveness_context.posture}\n"
         f"instruction={aggressiveness_context.strategic_instruction}"
     )
-    instructions = "\n\n".join(
-        (PROTECTED_AGENT_CONTRACT.rstrip(), strategy_section, aggression_section)
+    sections = [PROTECTED_AGENT_CONTRACT.rstrip(), strategy_section, aggression_section]
+    sections.extend(
+        compose_trading_context_sections(
+            trading_style_context=trading_style_context,
+            execution_cost_context=execution_cost_context,
+        )
     )
+    instructions = "\n\n".join(sections)
     return AgentPromptComposition(
         base_agent_contract_version=BASE_AGENT_CONTRACT_VERSION,
         strategy_prompt=normalized,

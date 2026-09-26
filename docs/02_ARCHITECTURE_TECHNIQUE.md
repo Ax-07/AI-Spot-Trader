@@ -9,6 +9,8 @@ Référence d'audit avant cette fusion documentaire : a254df4d56208c4472bb97b9b8
 Référence fonctionnelle Batch 19.6B : a446628918a614d2ae0ac3b55243881aad5ef410
 Référence fonctionnelle Batch 19.7  : 8b969b434916d89f6b6aa127c3bac9c27e990966
 Référence fonctionnelle Batch 19.8  : f3a8eae8528648c07723aa97350852428254acc7
+Correctif fonctionnel post-19.8      : 0d964624a641aad509f5728264f873c1a837af97
+HEAD GitHub vérifié avant 19.9A     : 97a95ef7e91f6fb66577b7c399ac17af676cd146
 ```
 
 Les Batches 19.1 à 19.8 sont intégrés. Le présent document décrit l'architecture fonctionnelle intégrée jusqu'au Batch 19.8.
@@ -312,3 +314,29 @@ Restent hors de l'état intégré :
 - ranking stratégique déterministe ;
 - calcul Risk/P&L parallèle côté frontend ;
 - second Agent ou contournement du Risk Engine.
+## 22. Batch 19.9A — Overlay Trading Style et coûts Agent
+
+Le Batch 19.9A étend la configuration JSON de Campaign sans migration SQL et sans augmenter `paper-control-plane-config-v1`. Les champs optionnels `trading_style` et `trading_style_mapping_version` sont omis du payload canonique lorsqu'ils sont absents ; les Campaigns historiques gardent donc leur digest précédent.
+
+Flux de contexte :
+
+```text
+CampaignConfiguration
+  -> TradingStyleContext (trading-style-map-v1)
+  -> ExecutionCostContext (fee/spread/slippage PAPER)
+  -> MarketDiscoveryInput
+  -> MarketSelectionInput
+  -> AgentInput
+```
+
+`DynamicMarketTradingCycleRunner` conserve ces deux contextes et les retransmet au `TradingCycleRunner` canonique qu'il reconstruit. Il n'existe aucun second Agent ni pipeline stratégique parallèle. Les faits structurés restent auditables dans les inputs/audits persistés.
+
+Le mapping v1 est purement stratégique :
+
+- `SCALP` préfère `1m`, `5m`, `15m`, `30m` ;
+- `SWING` préfère `1h`, `4h`, `1d` ;
+- aucune préférence de timeframe ne devient une contrainte Risk ni un timer de sortie.
+
+La composition d'instructions ajoute des sections canoniques dérivées des contextes structurés. En leur absence, les Campaigns historiques conservent la composition legacy. `agent-contract-v1` n'est pas modifié.
+
+Le Batch 19.9B devra fournir les données de marché multi-timeframes cohérentes avec ces préférences ; 19.9A ne fabrique pas ces données.
