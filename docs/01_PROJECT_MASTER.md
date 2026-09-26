@@ -4,16 +4,16 @@
 
 AI Spot Trader est une application expérimentale de trading **PAPER** pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement un cockpit de contrôle et de visualisation.
 
-Référence GitHub vérifiée au démarrage du Batch 19.9A :
+Référence GitHub vérifiée après intégration du Batch 19.9A :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 97a95ef7e91f6fb66577b7c399ac17af676cd146
-Commit     : docs: sync post-19.8 session fix state
+HEAD       : 4b6a851addea74d72af2c433827c935a87d4bc04
+Commit     : feat: add canonical scalp swing trading style
 ```
 
-Le Batch 19.9A décrit le patch proposé dans cette livraison ; son intégration GitHub reste une action explicite de l'opérateur.
+Le Batch 19.9A est intégré à GitHub `main`. Le contexte candles multi-timeframes complet reste le périmètre du Batch 19.9B.
 
 ## 2. Invariants fonctionnels
 

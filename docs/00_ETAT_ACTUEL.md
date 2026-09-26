@@ -6,13 +6,12 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub `main` vérifié au démarrage du Batch 19.9A :
-  `97a95ef7e91f6fb66577b7c399ac17af676cd146`
-  (`docs: sync post-19.8 session fix state`).
-- Référence fonctionnelle intégrée : `0d964624a641aad509f5728264f873c1a837af97`
-  (`fix: preserve session creation FK ordering`).
+- HEAD GitHub `main` vérifié après intégration du Batch 19.9A :
+  `4b6a851addea74d72af2c433827c935a87d4bc04`
+  (`feat: add canonical scalp swing trading style`).
+- Référence fonctionnelle intégrée : `4b6a851addea74d72af2c433827c935a87d4bc04`.
 - Batch 19.8 et son correctif PostgreSQL sont intégrés et validés.
-- **Batch 19.9A : patch proposé non intégré à GitHub** dans ce lot de livraison.
+- **Batch 19.9A est intégré à GitHub `main`.**
 
 ## État fonctionnel intégré
 
@@ -99,7 +98,7 @@ Les modifications documentaires locales héritées de 19.6B ont été auditées 
 - `docs/03_AGENT_TRADING_RISK.md` ;
 - `docs/11_AMELIORATIONS_PLANIFIEES.md`.
 
-## Batch 19.9A — Trading Style canonique (patch proposé)
+## Batch 19.9A — Trading Style canonique (intégré)
 
 Fondations ajoutées sans migration SQL ni rupture de `agent-contract-v1` :
 

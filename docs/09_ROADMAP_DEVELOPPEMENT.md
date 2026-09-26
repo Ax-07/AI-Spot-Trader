@@ -3,8 +3,8 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub vérifié avant Batch 19.9A : 97a95ef7e91f6fb66577b7c399ac17af676cd146
-Batch 19.8 intégré                 : feat: add user-facing Sessions workflow
+HEAD GitHub vérifié après Batch 19.9A : 4b6a851addea74d72af2c433827c935a87d4bc04
+Batch 19.9A intégré                 : feat: add canonical scalp swing trading style
 Validation post-correctif 19.8      : backend 607 passed ; frontend tests/lint/typecheck/build passés
 ```
 
@@ -23,7 +23,8 @@ Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batc
 - 19.6A : backend candles, cache borné, recovery et streaming partagé ;
 - 19.6B : vue Marchés, Lightweight Charts et markers de fills persistés ;
 - 19.7 : overlays de position canoniques `Prix moyen`, `Mark backend`, `Liquidation` ;
-- 19.8 : façade utilisateur **Session**, CRUD/lifecycle versionné, configurateur simple/avancé et choix de marchés Automatique IA / Manuel.
+- 19.8 : façade utilisateur **Session**, CRUD/lifecycle versionné, configurateur simple/avancé et choix de marchés Automatique IA / Manuel ;
+- 19.9A : Trading Style canonique `SCALP` / `SWING`, contextes style/coûts Agent et propagation Discovery → Market Selection → décision finale.
 
 ## Batch 19.8 — Sessions v1
 
@@ -85,7 +86,7 @@ Ils sont dérivés des faits persistés et du runtime, jamais stockés comme une
 
 ## Batch 19.9A — Trading Style canonique / contexte Agent
 
-**État : patch proposé non intégré à GitHub dans cette livraison.**
+**État : intégré à GitHub `main` au commit `4b6a851addea74d72af2c433827c935a87d4bc04`.**
 
 Objectif : poser les fondations versionnées `SCALP` / `SWING` dans la Campaign et propager le contexte stratégique et les coûts PAPER au même Agent, sans modifier Risk.
 
