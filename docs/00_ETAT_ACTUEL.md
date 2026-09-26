@@ -6,112 +6,51 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub `main` vérifié après intégration du Batch 19.9A :
+- HEAD GitHub `main` audité au démarrage du Batch 19.9B :
+  `a4f841c7c23e3af1b44a9cbb104ccc44d5cad2d9`
+  (`docs: sync post-19.9A state`).
+- Référence fonctionnelle Batch 19.9A :
   `4b6a851addea74d72af2c433827c935a87d4bc04`
   (`feat: add canonical scalp swing trading style`).
-- Référence fonctionnelle intégrée : `4b6a851addea74d72af2c433827c935a87d4bc04`.
-- Batch 19.8 et son correctif PostgreSQL sont intégrés et validés.
-- **Batch 19.9A est intégré à GitHub `main`.**
+- Batch 19.9A et son sync documentaire post-intégration sont donc présents sur `main`.
 
-## État fonctionnel intégré
+## État fonctionnel intégré au départ
 
-- un seul Agent IA stratégique ; Kraken ; PAPER uniquement ; SPOT + PERPETUAL linéaire ;
-- Risk Engine déterministe = autorité finale ; aucune sortie LLM ne déclenche directement un ordre ;
-- comptabilité/mark-to-market backend, modes `NORMAL` / `MANAGEMENT`, discovery dynamique et watchlist auditée ;
-- explicabilité Agent/Risk/exécution, candles backend, streaming cockpit, vue Marchés, markers persistés et overlays de position canoniques ;
-- frontend = cockpit uniquement ; fermer le frontend n'arrête pas le moteur backend ;
-- **Session** est le concept principal du parcours utilisateur.
+- un seul Agent IA stratégique ; Kraken ; PAPER ; pipeline Risk déterministe inchangé ;
+- Session = concept principal du parcours utilisateur ;
+- Discovery dynamique, Market Selection puis BUY/SELL/HOLD par le même Agent ;
+- candles backend canoniques : `Candle`, `CandleKey`, `CandleCache`, backfill, streaming, recovery, stale et API cockpit ;
+- Trading Style canonique `SCALP` / `SWING` avec `trading-style-map-v1` ;
+- `SCALP` : `1m/5m/15m/30m` ; `SWING` : `1h/4h/1d` ;
+- `TradingStyleContext` et `ExecutionCostContext` déjà propagés vers Discovery, Market Selection et décision finale ;
+- `agent-contract-v1` préservé et campagnes historiques sans `trading_style` supportées.
 
-## Batch 19.8 — Sessions v1
+## Batch 19.9B — patch local proposé
 
-Architecture retenue :
+Le patch 19.9B rend le style opérationnel côté données stratégiques multi-timeframes :
 
-```text
-Session UX
--> Strategy = identité technique stable
--> StrategyRevision(s) immuables
--> Campaign(s) immuables/versionnées
--> paper_run(s) / recovery
-```
+- réutilisation du `CandleStreamService` backend-owned par le cockpit **et** les Campaign runtimes ; aucun second pipeline/cache OHLC ;
+- lecture candles causale `history_as_of(...)` : aucune révision `updated_at > as_of`, aucune candle finale `close_time > as_of` ;
+- une candle active non finalisée n'est utilisable que si sa révision exacte était déjà connue à `as_of` ;
+- contexte versionné `strategic-mtf-v1`, compact et borné, avec disponibilité, couverture, profondeur, gaps, stale, dernière candle/finalité et statistiques descriptives de fenêtre ;
+- profondeur bornée par timeframe et taille sérialisée bornée à 128 KiB ; univers borné à 32 marchés ;
+- snapshot construit une seule fois au `MarketSelectionInput.created_at`, puis réutilisé inchangé par l'`AgentInput` final ;
+- Discovery conserve son contexte candidat léger ; l'enrichissement multi-timeframes intervient après Discovery sur l'univers réellement sélectionnable ;
+- `ExecutionCostContext` reste distinct ; Risk Engine, règles de trading et contrat de sortie LLM inchangés ;
+- compatibilité legacy : sans `trading_style`, aucun chargement multi-timeframes et sérialisation historique inchangée.
 
-Périmètre intégré :
+Détails : `docs/19_BATCH_19_9B_MULTI_TIMEFRAMES.md`.
 
-- façade backend `/api/v1/sessions` ;
-- création atomique Strategy + révision 1 + Campaign ;
-- listing/détail, modification versionnée, duplication indépendante et archivage logique ;
-- statuts dérivés : `Brouillon`, `Prête`, `En cours`, `Arrêtée`, `À reprendre`, `Archivée` ;
-- start/stop/resume/run-cycle via les mécanismes canoniques ;
-- arrêt de Session = fermeture explicite du runtime actif et du `paper_run` ;
-- navigation `Accueil | Sessions | Marchés | Positions | Historique | Réglages` ;
-- création/édition simple + avancée ;
-- modes marchés `Automatique — IA` et `Manuel` ;
-- contrat TypeScript aligné sur `market_discovery` optionnel et `risk_allowed_pairs` nullable ;
-- aucune nouvelle table SQL `sessions`.
+## Validation exécutée par ChatGPT sur le patch local
 
-## Validation locale Batch 19.8
+Dans l'environnement disponible, sans checkout Git complet :
 
-Exécuté par l'opérateur avant intégration du Batch 19.8 :
+- compilation Python (`py_compile`) des fichiers Python modifiés/créés : passée ;
+- tests ciblés `backend/tests/test_strategic_multi_timeframe.py` : **7/7 passés** ;
+- contrôle manuel d'un contexte SCALP complet sérialisé : passé.
 
-- backend complet : **606 tests passés**, 2 warnings de dépendances ;
-- frontend : **21/21 tests passés** ;
-- `pnpm lint` : **passé** ;
-- `pnpm typecheck` : **passé** ;
-- `pnpm build` : **passé** ;
-- `git diff --check` : **aucune erreur de whitespace**.
-
-## Correctif post-19.8 — création Session PostgreSQL
-
-Cause confirmée :
-
-- `CampaignRecord` référence `(strategy_id, strategy_revision)` via la FK composite `fk_campaigns_strategy_revision` ;
-- `CampaignRecord` n'a pas de relation ORM vers `StrategyRevisionRecord` permettant d'exprimer directement cette dépendance d'insertion ;
-- le flush unique de Strategy + Revision + Campaign pouvait envoyer la Campaign avant la Revision sur PostgreSQL ;
-- PostgreSQL rejetait alors la création et l'API répondait `HTTP 409 · session creation conflicted`.
-
-Correction intégrée :
-
-- Strategy + Revision sont flushées avant l'ajout de Campaign ;
-- Campaign est ensuite flushée dans **la même transaction**, donc l'atomicité de création reste intacte ;
-- le test de persistence Session active les foreign keys SQLite pour couvrir explicitement l'ordre de dépendance ;
-- le configurateur Session affiche les erreurs backend au lieu de laisser un échec silencieux.
-
-Validation opérateur du correctif :
-
-- tests ciblés Session persistence + lifecycle : **3 tests passés** ;
-- backend complet : **607 tests passés**, 2 warnings de dépendances ;
-- frontend : **21/21 tests passés** ;
-- `pnpm lint` : **passé** ;
-- `pnpm typecheck` : **passé** ;
-- `pnpm build` : **passé** ;
-- `git diff --check` : aucune erreur de whitespace, uniquement avertissements LF → CRLF ;
-- validation fonctionnelle manuelle : **Créer et démarrer une Session fonctionne après redémarrage backend**.
-
-Commit intégré :
-`0d964624a641aad509f5728264f873c1a837af97`
-(`fix: preserve session creation FK ordering`).
-
-## Documentation consolidée
-
-Les modifications documentaires locales héritées de 19.6B ont été auditées et fusionnées avec l'état intégré 19.7/19.8 dans :
-
-- `docs/02_ARCHITECTURE_TECHNIQUE.md` ;
-- `docs/03_AGENT_TRADING_RISK.md` ;
-- `docs/11_AMELIORATIONS_PLANIFIEES.md`.
-
-## Batch 19.9A — Trading Style canonique (intégré)
-
-Fondations ajoutées sans migration SQL ni rupture de `agent-contract-v1` :
-
-- `TradingStyle` canonique : `SCALP` / `SWING` ;
-- `CampaignConfiguration.trading_style` + `trading_style_mapping_version`, omis du JSON canonique lorsqu'absents afin de préserver les digests historiques ;
-- `TradingStyleContext` versionné (`trading-style-map-v1`) et `ExecutionCostContext` ;
-- style et coûts propagés vers Discovery, Market Selection et `AgentInput`, y compris via le runner dynamique ;
-- style et agressivité restent indépendants ; aucun mapping style → Risk, aucun ranking déterministe, aucune fermeture par timer ;
-- coûts PAPER visibles par l'Agent sans devenir un score algorithmique ;
-- `SCALP` : `1m/5m/15m/30m` ; `SWING` : `1h/4h/1d`.
-
-Le contexte candles multi-timeframes réellement opérationnel reste le **Batch 19.9B**. Aucune UI ne doit présenter SWING comme pleinement opérationnel avant ce batch.
+Le `pytest` complet du repository reste à exécuter localement après extraction du ZIP, car l'environnement ChatGPT ne disposait pas du checkout complet et l'accès Git réseau direct était indisponible.
 
 ## Règle de reprise
 
-À chaque nouveau batch : revérifier le HEAD GitHub réel, lire ce document et distinguer clairement état intégré GitHub, modifications locales et patch proposé.
+Avant intégration : extraire le ZIP à la racine, exécuter les validations locales, inspecter `git status --short` / `git diff --check`, puis seulement committer/pousser si les résultats sont conformes.

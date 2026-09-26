@@ -234,6 +234,27 @@ class CandleCache:
             return ()
         return values[-limit:]
 
+    def history_as_of(
+        self,
+        key: CandleKey,
+        *,
+        as_of: datetime,
+        limit: int | None = None,
+    ) -> tuple[Candle, ...]:
+        """Return only cache observations that were knowable at ``as_of``."""
+
+        as_of = _utc(as_of, label="history as_of")
+        values = tuple(
+            candle
+            for candle in self._series.get(key, {}).values()
+            if _candle_is_causal_at(candle, as_of=as_of)
+        )
+        if limit is None or limit >= len(values):
+            return values
+        if limit <= 0:
+            return ()
+        return values[-limit:]
+
     def latest(self, key: CandleKey) -> Candle | None:
         series = self._series.get(key)
         if not series:
@@ -242,7 +263,7 @@ class CandleCache:
 
 
 class CandleStreamService:
-    """Backend-owned history/cache/stream hub shared by all cockpit consumers."""
+    """Backend-owned history/cache/stream hub shared by all candle consumers."""
 
     def __init__(
         self,
@@ -275,12 +296,39 @@ class CandleStreamService:
         return self._cache
 
     async def history(self, key: CandleKey, *, limit: int = 1000) -> tuple[Candle, ...]:
-        if isinstance(limit, bool) or limit <= 0 or limit > self._cache.max_depth:
-            raise CandleValidationError(
-                f"limit must be between 1 and {self._cache.max_depth}"
-            )
+        self._validate_limit(limit)
         await self._backfill(key, limit=limit)
         return self._cache.history(key, limit=limit)
+
+    async def history_as_of(
+        self,
+        key: CandleKey,
+        *,
+        as_of: datetime,
+        limit: int = 1000,
+    ) -> tuple[Candle, ...]:
+        """Read a causal bounded history for a decision-time snapshot.
+
+        Provider history requested after ``as_of`` may only contribute finalized candles whose
+        close and provider availability timestamps were already knowable by ``as_of``. A cached
+        non-final candle is accepted only when its own ``updated_at`` proves it existed by then.
+        """
+
+        self._validate_limit(limit)
+        as_of = _utc(as_of, label="history as_of")
+        cached = self._cache.history_as_of(key, as_of=as_of, limit=limit)
+        last_closed_boundary = floor_time(as_of, key.timeframe)
+        latest_final_close = max(
+            (
+                candle.close_time.astimezone(UTC)
+                for candle in cached
+                if candle.is_final
+            ),
+            default=None,
+        )
+        if len(cached) < limit or latest_final_close != last_closed_boundary:
+            await self._backfill_as_of(key, limit=limit, as_of=as_of)
+        return self._cache.history_as_of(key, as_of=as_of, limit=limit)
 
     async def subscribe(
         self,
@@ -326,6 +374,12 @@ class CandleStreamService:
         self._tasks.clear()
         self._subscribers.clear()
         await self._provider.aclose()
+
+    def _validate_limit(self, limit: int) -> None:
+        if isinstance(limit, bool) or limit <= 0 or limit > self._cache.max_depth:
+            raise CandleValidationError(
+                f"limit must be between 1 and {self._cache.max_depth}"
+            )
 
     async def _ensure_stream(self, key: CandleKey) -> None:
         existing = self._tasks.get(key)
@@ -399,6 +453,28 @@ class CandleStreamService:
                     self._publish(key, candle)
             return changed
 
+    async def _backfill_as_of(
+        self,
+        key: CandleKey,
+        *,
+        limit: int,
+        as_of: datetime,
+    ) -> tuple[Candle, ...]:
+        lock = self._locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            candles = await self._provider.fetch_history(key, limit=limit, before=as_of)
+            safe = tuple(
+                candle
+                for candle in candles
+                if candle.is_final
+                and candle.open_time.astimezone(UTC) <= as_of
+                and candle.close_time.astimezone(UTC) <= as_of
+                and candle.updated_at.astimezone(UTC) <= as_of
+            )
+            # Merge against the historical decision clock. This rejects any accidental future row.
+            changed = self._cache.merge(safe, now=as_of)
+            return changed
+
     def _publish(self, key: CandleKey, candle: Candle) -> None:
         for queue in tuple(self._subscribers.get(key, ())):
             if queue.full():
@@ -414,6 +490,17 @@ def floor_time(value: datetime, timeframe: CandleTimeframe) -> datetime:
     seconds = int(timeframe.duration.total_seconds())
     epoch = int(value.timestamp())
     return datetime.fromtimestamp(epoch - (epoch % seconds), tz=UTC)
+
+
+def _candle_is_causal_at(candle: Candle, *, as_of: datetime) -> bool:
+    open_time = candle.open_time.astimezone(UTC)
+    close_time = candle.close_time.astimezone(UTC)
+    updated_at = candle.updated_at.astimezone(UTC)
+    if open_time > as_of or updated_at > as_of:
+        return False
+    if candle.is_final:
+        return close_time <= as_of
+    return open_time <= as_of < close_time
 
 
 def _utc(value: datetime, *, label: str) -> datetime:

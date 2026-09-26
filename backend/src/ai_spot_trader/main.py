@@ -75,10 +75,30 @@ def create_app(
     if compose_paper and any(value is not None for value in injected_dependencies):
         raise ValueError("compose_paper cannot be combined with injected runtime dependencies")
 
+    def build_candle_service() -> CandleStreamService:
+        stale_seconds = resolved_settings.kraken_stale_after_seconds or 90.0
+        return CandleStreamService(
+            KrakenCandleProvider(
+                spot_rest_url=resolved_settings.kraken_rest_url,
+                spot_ws_url=resolved_settings.kraken_ws_url,
+                derivatives_rest_url=resolved_settings.kraken_derivatives_rest_url,
+                timeout_seconds=resolved_settings.kraken_rest_timeout_seconds,
+                ws_receive_timeout_seconds=max(
+                    resolved_settings.kraken_ws_receive_timeout_seconds,
+                    30.0,
+                ),
+            ),
+            cache=CandleCache(max_depth=1000),
+            max_streams=32,
+            stale_after=timedelta(seconds=stale_seconds),
+            reconnect_delay_seconds=resolved_settings.kraken_ws_reconnect_delay_seconds,
+        )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         resolved_chat_service: OperatorChatService | None
         control_plane_store: SqlAlchemyControlPlaneStore | None = None
+        resolved_candle_service = candle_service
 
         if compose_paper:
             database_secret = resolved_settings.database_url
@@ -88,6 +108,8 @@ def create_app(
                 base_analytics_reader = SqlAlchemyPaperAnalyticsQueryService(database.sessions)
                 campaign_run_reader = CampaignPaperRunQueryService(database.sessions)
                 control_plane_store = SqlAlchemyControlPlaneStore(database.sessions)
+                if resolved_candle_service is None:
+                    resolved_candle_service = build_candle_service()
                 runtime: AppRuntime | CampaignRuntimeManager = CampaignRuntimeManager(
                     settings=resolved_settings,
                     control_plane_store=control_plane_store,
@@ -95,6 +117,7 @@ def create_app(
                     paper_run_reader=campaign_run_reader,
                     audit_reader=base_audit_reader,
                     analytics_reader=base_analytics_reader,
+                    candle_service=resolved_candle_service,
                 )
             else:
                 raise PaperRuntimeConfigurationError(
@@ -172,26 +195,10 @@ def create_app(
                     context_source=RuntimeChatContextSource(runtime),
                 )
 
-        resolved_candle_service = candle_service
-        if resolved_candle_service is None:
-            stale_seconds = resolved_settings.kraken_stale_after_seconds or 90.0
-            resolved_candle_service = CandleStreamService(
-                KrakenCandleProvider(
-                    spot_rest_url=resolved_settings.kraken_rest_url,
-                    spot_ws_url=resolved_settings.kraken_ws_url,
-                    derivatives_rest_url=resolved_settings.kraken_derivatives_rest_url,
-                    timeout_seconds=resolved_settings.kraken_rest_timeout_seconds,
-                    ws_receive_timeout_seconds=max(
-                        resolved_settings.kraken_ws_receive_timeout_seconds,
-                        30.0,
-                    ),
-                ),
-                cache=CandleCache(max_depth=1000),
-                max_streams=32,
-                stale_after=timedelta(seconds=stale_seconds),
-                reconnect_delay_seconds=resolved_settings.kraken_ws_reconnect_delay_seconds,
-            )
+            if resolved_candle_service is None:
+                resolved_candle_service = build_candle_service()
 
+        assert resolved_candle_service is not None
         app.state.runtime = runtime
         app.state.chat_service = resolved_chat_service
         app.state.control_plane_store = control_plane_store
@@ -200,8 +207,9 @@ def create_app(
             await runtime.initialize()
             yield
         finally:
-            await resolved_candle_service.aclose()
+            # Campaign runtimes may still read the shared candle service while closing.
             await runtime.close()
+            await resolved_candle_service.aclose()
 
     app = FastAPI(
         title=resolved_settings.app_name,

@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Protocol, cast
 from uuid import uuid4
 
+from ai_spot_trader.agent.multi_timeframe import MultiTimeframeDecisionProvider
 from ai_spot_trader.agent.openai_client import OpenAIResponsesClient
 from ai_spot_trader.agent.provider import OpenAIDecisionProvider
 from ai_spot_trader.agent.strategy_client import StrategyInstructionsClient
@@ -37,9 +38,11 @@ from ai_spot_trader.integrations.kraken.market_data import (
 )
 from ai_spot_trader.integrations.kraken.research import KrakenMarketResearchBackend
 from ai_spot_trader.integrations.kraken.resilience import RetryingKrakenDerivativesRestSource
+from ai_spot_trader.market.candles import CandleStreamService
 from ai_spot_trader.market.discovery import MarketDiscoveryCoordinator
 from ai_spot_trader.market.execution import RoutedExecutableMarketDataSource
 from ai_spot_trader.market.research import MarketResearchService
+from ai_spot_trader.market.strategic_context import StrategicMultiTimeframeContextService
 from ai_spot_trader.persistence.analytics import SqlAlchemyPaperAnalyticsQueryService
 from ai_spot_trader.persistence.audit import AuditedTradingCycleRunner, RunBoundCycleAuditWriter
 from ai_spot_trader.persistence.campaign_runs import (
@@ -79,7 +82,7 @@ class CampaignRuntimeComposition:
     portfolio: PaperPortfolioLedger
     mark_to_market: PaperSpotMarkToMarketMonitor
     derivative_mark_to_market: PaperDerivativeMarkToMarketMonitor
-    agent: OpenAIDecisionProvider
+    agent: MultiTimeframeDecisionProvider
     risk_engine: RiskEngine
     broker: PaperBroker
     cost_model: PaperExecutionCostModel
@@ -113,8 +116,9 @@ def build_campaign_runtime(
     campaign: CampaignView,
     revision: StrategyRevisionView,
     resume: bool,
+    candle_service: CandleStreamService,
 ) -> CampaignRuntimeComposition:
-    """Compose the existing canonical PAPER components from one campaign snapshot."""
+    """Compose canonical PAPER components while sharing the backend-owned candle service."""
 
     database_secret = settings.database_url
     openai_secret = settings.openai_api_key
@@ -242,13 +246,15 @@ def build_campaign_runtime(
         openai_client,
         strategy_prompt=revision.strategy_prompt,
     )
-    agent = OpenAIDecisionProvider(
+    base_agent = OpenAIDecisionProvider(
         client=strategy_client,
         model=config.llm_model,
         clock=clock,
         tool_registry=agent_tools,
         max_tool_calls=settings.agent_tool_max_calls,
     )
+    strategic_market_context = StrategicMultiTimeframeContextService(candle_service)
+    agent = MultiTimeframeDecisionProvider(base_agent, strategic_market_context)
 
     execution_spot = build_kraken_market_data_source(
         settings,
@@ -375,7 +381,9 @@ def build_campaign_runtime(
             clock=clock,
         )
     else:
-        watchlist_selector = OpenAIWatchlistSelector(agent)
+        # Discovery deliberately stays on the compact factual candidate snapshots. The richer
+        # candle context is loaded only after Discovery has produced the effective watchlist.
+        watchlist_selector = OpenAIWatchlistSelector(base_agent)
         discovery = MarketDiscoveryCoordinator(
             research=market_research,
             agent=watchlist_selector,

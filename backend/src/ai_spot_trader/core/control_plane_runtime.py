@@ -11,6 +11,7 @@ from ai_spot_trader.core.runtime import (
     TradingEngineCycleFailedError,
     TradingEngineUnavailableError,
 )
+from ai_spot_trader.market.candles import CandleStreamService
 from ai_spot_trader.persistence.analytics import PaperAnalyticsReader
 from ai_spot_trader.persistence.campaign_runs import CampaignPaperRunQueryService
 from ai_spot_trader.persistence.control_plane import (
@@ -42,6 +43,7 @@ class CampaignRuntimeManager:
         paper_run_reader: CampaignPaperRunQueryService,
         audit_reader: CycleAuditReader,
         analytics_reader: PaperAnalyticsReader,
+        candle_service: CandleStreamService | None = None,
     ) -> None:
         self._settings = settings
         self.control_plane_store = control_plane_store
@@ -49,6 +51,7 @@ class CampaignRuntimeManager:
         self.paper_run_reader = paper_run_reader
         self.audit_reader = audit_reader
         self.analytics_reader = analytics_reader
+        self._candle_service = candle_service
         self._active: CampaignRuntimeComposition | None = None
         self._active_campaign_id: UUID | None = None
         self._command_lock = asyncio.Lock()
@@ -137,6 +140,7 @@ class CampaignRuntimeManager:
                     campaign=campaign,
                     revision=revision,
                     resume=resume,
+                    candle_service=self._require_candle_service(),
                 )
             except Exception as exc:
                 raise CampaignActivationError(
@@ -186,6 +190,11 @@ class CampaignRuntimeManager:
                     self._active_campaign_id = None
             finally:
                 await self._database.close()
+
+    def _require_candle_service(self) -> CandleStreamService:
+        if self._candle_service is None:
+            raise CampaignActivationError("campaign runtime requires the backend candle service")
+        return self._candle_service
 
     def _require_active(self) -> CampaignRuntimeComposition:
         if self._active is None:

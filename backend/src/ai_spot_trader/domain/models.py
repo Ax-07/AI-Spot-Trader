@@ -757,6 +757,144 @@ class AgentToolTrace(DomainModel):
         return self
 
 
+StrategicTimeframe = Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
+
+
+class StrategicCandleSnapshot(DomainModel):
+    """Compact causal projection of the latest candle visible at one decision boundary."""
+
+    open_time: UtcDateTime
+    close_time: UtcDateTime
+    open: PositiveDecimal
+    high: PositiveDecimal
+    low: PositiveDecimal
+    close: PositiveDecimal
+    volume: NonNegativeDecimal
+    is_final: bool
+    updated_at: UtcDateTime
+
+
+class StrategicTimeframeContext(DomainModel):
+    """Bounded descriptive facts for one requested strategic timeframe."""
+
+    timeframe: StrategicTimeframe
+    availability: Literal["AVAILABLE", "PARTIAL", "MISSING"]
+    requested_depth: PositiveInt
+    candle_count: NonNegativeInt
+    covered_from: UtcDateTime | None = None
+    covered_to: UtcDateTime | None = None
+    has_gaps: bool
+    gap_count: NonNegativeInt
+    is_stale: bool | None = None
+    latest_candle: StrategicCandleSnapshot | None = None
+    window_open: PositiveDecimal | None = None
+    window_high: PositiveDecimal | None = None
+    window_low: PositiveDecimal | None = None
+    window_close: PositiveDecimal | None = None
+    window_volume: NonNegativeDecimal | None = None
+    return_fraction: Decimal | None = None
+
+    @model_validator(mode="after")
+    def validate_quality_state(self) -> "StrategicTimeframeContext":
+        if self.has_gaps is not (self.gap_count > 0):
+            raise ValueError("has_gaps must match gap_count")
+        summary = (
+            self.covered_from,
+            self.covered_to,
+            self.is_stale,
+            self.latest_candle,
+            self.window_open,
+            self.window_high,
+            self.window_low,
+            self.window_close,
+            self.window_volume,
+        )
+        if self.candle_count == 0:
+            if self.availability != "MISSING":
+                raise ValueError("empty timeframe context must be MISSING")
+            if any(value is not None for value in summary) or self.gap_count != 0:
+                raise ValueError("MISSING timeframe context cannot carry candle facts")
+            if self.return_fraction is not None:
+                raise ValueError("MISSING timeframe context cannot carry return_fraction")
+            return self
+        if self.availability == "MISSING":
+            raise ValueError("non-empty timeframe context cannot be MISSING")
+        if any(value is None for value in summary):
+            raise ValueError("non-empty timeframe context requires complete summary fields")
+        assert self.covered_from is not None
+        assert self.covered_to is not None
+        assert self.latest_candle is not None
+        assert self.window_open is not None
+        assert self.window_close is not None
+        if self.covered_from > self.covered_to:
+            raise ValueError("timeframe coverage cannot be inverted")
+        if not self.latest_candle.open_time <= self.covered_to <= self.latest_candle.close_time:
+            raise ValueError("covered_to must remain inside the latest candle interval")
+        if self.candle_count < self.requested_depth or self.has_gaps:
+            if self.availability != "PARTIAL":
+                raise ValueError("incomplete or gapped timeframe context must be PARTIAL")
+        elif self.availability != "AVAILABLE":
+            raise ValueError("complete contiguous timeframe context must be AVAILABLE")
+        expected_return = self.window_close / self.window_open - Decimal(1)
+        if self.return_fraction != expected_return:
+            raise ValueError("return_fraction must match window endpoints")
+        return self
+
+
+class StrategicMarketTimeframes(DomainModel):
+    """Stable multi-timeframe context for one executable market."""
+
+    symbol: NonEmptyText
+    market_type: MarketType
+    timeframes: Annotated[tuple[StrategicTimeframeContext, ...], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def validate_market_timeframes(self) -> "StrategicMarketTimeframes":
+        parse_canonical_symbol(self.symbol)
+        names = tuple(item.timeframe for item in self.timeframes)
+        if len(set(names)) != len(names):
+            raise ValueError("strategic timeframes must be unique per market")
+        return self
+
+
+class StrategicMultiTimeframeContext(DomainModel):
+    """Versioned compact causal candle context shared across one strategic cycle."""
+
+    context_version: Literal["strategic-mtf-v1"]
+    as_of: UtcDateTime
+    style: TradingStyle
+    style_mapping_version: NonEmptyText
+    markets: Annotated[tuple[StrategicMarketTimeframes, ...], Field(min_length=1)]
+    total_candle_count: NonNegativeInt
+
+    @model_validator(mode="after")
+    def validate_context(self) -> "StrategicMultiTimeframeContext":
+        ordered = tuple(
+            sorted(self.markets, key=lambda item: (item.market_type.value, item.symbol))
+        )
+        if ordered != self.markets:
+            raise ValueError("multi-timeframe markets must use deterministic sorted order")
+        keys = tuple((item.symbol, item.market_type) for item in self.markets)
+        if len(set(keys)) != len(keys):
+            raise ValueError("multi-timeframe markets must be unique")
+        expected_total = sum(
+            timeframe.candle_count
+            for market in self.markets
+            for timeframe in market.timeframes
+        )
+        if self.total_candle_count != expected_total:
+            raise ValueError("total_candle_count must match timeframe counts")
+        for market in self.markets:
+            for timeframe in market.timeframes:
+                latest = timeframe.latest_candle
+                if latest is not None:
+                    if latest.updated_at > self.as_of or latest.open_time > self.as_of:
+                        raise ValueError("multi-timeframe context contains post-as_of candle data")
+                    if latest.is_final and latest.close_time > self.as_of:
+                        raise ValueError("final candle cannot close after multi-timeframe as_of")
+        return self
+
+
 class MarketSelectionInput(DomainModel):
     """Causal research boundary shown to the same strategic Agent before market acquisition."""
 
@@ -770,6 +908,9 @@ class MarketSelectionInput(DomainModel):
         default=None, exclude_if=lambda value: value is None
     )
     execution_cost_context: ExecutionCostContext | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    multi_timeframe_context: StrategicMultiTimeframeContext | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     experiment_manifest: ExperimentManifest | None = None
@@ -800,6 +941,7 @@ class MarketSelectionInput(DomainModel):
             raise ValueError(
                 "trading_style_context and execution_cost_context must be supplied together"
             )
+        self._validate_multi_timeframe_context()
         manifest = self.experiment_manifest
         if manifest is not None:
             if self.aggressiveness_context is None:
@@ -814,6 +956,31 @@ class MarketSelectionInput(DomainModel):
             elif any(market.symbol not in manifest.universe for market in self.executable_markets):
                 raise ValueError("executable market is outside the experiment universe")
         return self
+
+    def _validate_multi_timeframe_context(self) -> None:
+        context = self.multi_timeframe_context
+        style = self.trading_style_context
+        if context is None:
+            return
+        if style is None:
+            raise ValueError("multi_timeframe_context requires trading_style_context")
+        if context.as_of != self.created_at:
+            raise ValueError("multi_timeframe_context as_of must match selection created_at")
+        if (
+            context.style is not style.style
+            or context.style_mapping_version != style.mapping_version
+        ):
+            raise ValueError("multi_timeframe_context trading style identity mismatch")
+        expected_markets = tuple(
+            (market.symbol, market.market_type) for market in self.executable_markets
+        )
+        actual_markets = tuple((market.symbol, market.market_type) for market in context.markets)
+        if actual_markets != expected_markets:
+            raise ValueError("multi_timeframe_context markets must match executable_markets")
+        for market in context.markets:
+            actual_timeframes = tuple(item.timeframe for item in market.timeframes)
+            if actual_timeframes != style.preferred_timeframes:
+                raise ValueError("multi_timeframe_context timeframes must match trading style")
 
 
 def market_selection_digest(
@@ -889,6 +1056,9 @@ class AgentInput(DomainModel):
     execution_cost_context: ExecutionCostContext | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    multi_timeframe_context: StrategicMultiTimeframeContext | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     experiment_manifest: ExperimentManifest | None = None
     market_selection: MarketSelection | None = None
 
@@ -907,6 +1077,7 @@ class AgentInput(DomainModel):
             raise ValueError(
                 "trading_style_context and execution_cost_context must be supplied together"
             )
+        self._validate_multi_timeframe_context()
         selection = self.market_selection
         if selection is not None:
             if selection.cycle_id != self.cycle_id:
@@ -938,6 +1109,36 @@ class AgentInput(DomainModel):
         elif self.market_state.symbol not in manifest.universe:
             raise ValueError("AgentInput symbol is outside the experiment universe")
         return self
+
+    def _validate_multi_timeframe_context(self) -> None:
+        context = self.multi_timeframe_context
+        style = self.trading_style_context
+        if context is None:
+            return
+        if style is None:
+            raise ValueError("multi_timeframe_context requires trading_style_context")
+        if context.as_of > self.created_at:
+            raise ValueError("multi_timeframe_context cannot postdate AgentInput")
+        if (
+            context.style is not style.style
+            or context.style_mapping_version != style.mapping_version
+        ):
+            raise ValueError("multi_timeframe_context trading style identity mismatch")
+        if self.market_selection is None:
+            expected = ((self.market_state.symbol, self.market_state.market_type),)
+        else:
+            # Selection snapshots intentionally contain the entire executable universe and are
+            # reused unchanged for the final decision. The selected market must merely be present.
+            expected = None
+        actual = tuple((market.symbol, market.market_type) for market in context.markets)
+        if expected is not None and actual != expected:
+            raise ValueError("legacy multi_timeframe_context must contain the current market only")
+        if (self.market_state.symbol, self.market_state.market_type) not in actual:
+            raise ValueError("multi_timeframe_context must contain the selected market")
+        for market in context.markets:
+            actual_timeframes = tuple(item.timeframe for item in market.timeframes)
+            if actual_timeframes != style.preferred_timeframes:
+                raise ValueError("multi_timeframe_context timeframes must match trading style")
 
 
 class DecisionCandidate(DomainModel):
