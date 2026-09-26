@@ -420,7 +420,7 @@ class RiskEngine:
             instrument.max_leverage,
             ONE / instrument.initial_margin_rate,
         )
-        if leverage > effective_max_leverage:
+        if not reduce_only and leverage > effective_max_leverage:
             return self._reject(
                 decision=decision,
                 assessed_at=assessed_at,
@@ -453,7 +453,8 @@ class RiskEngine:
             reduce_only=reduce_only,
         )
         if (
-            instrument.max_position_quantity is not None
+            not reduce_only
+            and instrument.max_position_quantity is not None
             and projected_quantity > instrument.max_position_quantity
         ):
             return self._reject(
@@ -466,7 +467,8 @@ class RiskEngine:
 
         projected_notional = market_state.last_price * projected_quantity * instrument.contract_size
         if (
-            self._policy.max_derivative_position_notional is not None
+            not reduce_only
+            and self._policy.max_derivative_position_notional is not None
             and projected_notional > self._policy.max_derivative_position_notional
         ):
             return self._reject(
@@ -484,7 +486,8 @@ class RiskEngine:
         )
         projected_total = total_exposure - existing_notional + projected_notional
         if (
-            self._policy.max_total_derivative_exposure is not None
+            not reduce_only
+            and self._policy.max_total_derivative_exposure is not None
             and projected_total > self._policy.max_total_derivative_exposure
         ):
             return self._reject(

@@ -85,7 +85,13 @@ def decision(
     )
 
 
-def position(side: PositionSide, *, quantity: str = "2", margin: str = "200") -> DerivativePosition:
+def position(
+    side: PositionSide,
+    *,
+    quantity: str = "2",
+    margin: str = "200",
+    leverage: str = "1",
+) -> DerivativePosition:
     q = Decimal(quantity)
     return DerivativePosition(
         symbol="BTC/USD",
@@ -95,7 +101,7 @@ def position(side: PositionSide, *, quantity: str = "2", margin: str = "200") ->
         mark_price=Decimal("100"),
         notional=Decimal("100") * q,
         unrealized_pnl=Decimal("0"),
-        leverage=Decimal("1"),
+        leverage=Decimal(leverage),
         margin_used=Decimal(margin),
         initial_margin_rate=Decimal("0.10"),
         maintenance_margin_rate=Decimal("0.05"),
@@ -165,6 +171,41 @@ def test_leverage_above_instrument_cap_is_rejected() -> None:
     )
     assert result.assessment.status is RiskDecision.REJECT
     assert result.assessment.reasons == (RiskReason.DERIVATIVE_LEVERAGE_EXCEEDED,)
+
+
+def test_reduce_only_can_decrease_position_already_above_current_caps() -> None:
+    legacy_position = position(PositionSide.LONG, quantity="5", leverage="3")
+    result = engine(
+        policy(
+            max_derivative_leverage=Decimal("2"),
+            max_derivative_position_notional=Decimal("100"),
+            max_total_derivative_exposure=Decimal("100"),
+        )
+    ).evaluate(
+        decision=decision(TradingAction.SELL, "1"),
+        market_state=market(),
+        portfolio_state=portfolio(legacy_position),
+    )
+
+    assert result.assessment.status is RiskDecision.ALLOW
+    assert result.assessment.reasons == ()
+    assert result.execution_intent is not None
+    assert result.execution_intent.reduce_only is True
+    assert result.execution_intent.quantity == Decimal("1")
+    assert result.execution_intent.leverage == Decimal("3")
+
+
+def test_position_above_current_leverage_cap_cannot_increase_exposure() -> None:
+    legacy_position = position(PositionSide.LONG, quantity="5", leverage="3")
+    result = engine(policy(max_derivative_leverage=Decimal("2"))).evaluate(
+        decision=decision(TradingAction.BUY, "1"),
+        market_state=market(),
+        portfolio_state=portfolio(legacy_position),
+    )
+
+    assert result.assessment.status is RiskDecision.REJECT
+    assert result.assessment.reasons == (RiskReason.DERIVATIVE_LEVERAGE_EXCEEDED,)
+    assert result.execution_intent is None
 
 
 def test_accidental_reversal_is_clamped_to_reduce_only_when_reduction_enabled() -> None:
