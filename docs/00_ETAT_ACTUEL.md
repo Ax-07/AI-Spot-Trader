@@ -6,31 +6,37 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub `main` vérifié au lancement du correctif PAPER PERPETUAL : `1408a74f5256ff3674b154d3a64794f4ffd012c2` (`docs: sync post-19.12 state`).
-- Ce HEAD ne modifie que la documentation par rapport à `f8397d207be67309db083e49e113253fe88b3624` (`fix: handle OpenAI rate limits and quota errors robustly`).
-- Le correctif PAPER PERPETUAL décrit ci-dessous est un patch proposé, non intégré à GitHub au moment de cette mise à jour.
+- Base GitHub vérifiée avant le Batch 19.13 : `18596ac9d4f6554aa4817a9bdb374ab597c2399f` (`fix: harden paper perpetual execution precision`).
+- Le correctif PAPER PERPETUAL est donc **intégré** à GitHub `main`.
+- Le présent état du repository inclut le Batch 19.13 multi-décisions / multi-marchés, validé avec les résultats ci-dessous.
 
-## État intégré et correctif proposé
+## État courant du Batch 19.13
 
-- un seul Agent IA stratégique ; Risk Engine déterministe avec autorité finale ;
-- versions actuelles en PAPER ; aucune sortie LLM directe vers Broker/Kraken ;
-- Trading Style `SCALP` / `SWING`, contexte multi-timeframes et gestion stratégique des positions intégrés ;
-- erreurs LLM techniques fail-closed et classifiées depuis le Batch 19.12 ;
-- correctif proposé : arithmétique PAPER `Decimal` canonique pour garantir les égalités exactes du `Fill` même avec prix Kraken haute précision et spread/slippage ;
-- correctif proposé : toute quantité PERPETUAL autorisée par Risk est rabattue vers le bas sur le quantum dérivé de `DerivativeInstrument.min_order_quantity` ; pour Kraken, ce champ provient de `contractValueTradePrecision` et représente à la fois le minimum positif et le pas de quantité ;
-- une normalisation ne peut jamais augmenter l'exposition et les minimums/plafonds sont revérifiés avant création de l'`ExecutionIntent` ;
-- l'atomicité `AuditedTradingCycleRunner` reste inchangée : un cycle `FAILED`, notamment au stage `BROKER`, restaure le checkpoint PAPER.
+- un seul Agent IA stratégique ; au stade décisionnel d'un cycle, un seul appel stratégique produit un plan ordonné ;
+- plusieurs décisions `BUY` / `SELL` / `HOLD` peuvent viser des marchés distincts dans le même cycle ;
+- `RiskEngine` est exécuté séquentiellement pour chaque décision et chaque décision suivante observe le portefeuille PAPER après les exécutions précédentes ;
+- `HOLD` et `REJECT` sont auditables et n'interrompent pas les décisions suivantes ;
+- une défaillance technique Risk/Broker fait passer le cycle à `FAILED` et restaure atomiquement le checkpoint PAPER du cycle ;
+- persistence d'audit 1:N pour décisions, évaluations Risk et intentions d'exécution ; API et cockpit exposent la trajectoire ordonnée ;
+- analytics basés sur les fills/trades économiques réellement exécutés, pas sur le nombre de décisions ;
+- `max_decisions_per_cycle` configurable, défaut `6`, limite dure `20` ;
+- migration locale : `0006_paper_control_plane -> 0007_multi_decision_cycles` ;
+- compatibilité historique conservée pour les anciens cycles et configurations.
 
 Principe central : **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
-## Diagnostic différé
+PAPER reste la phase courante. Aucune sortie LLM ne déclenche directement un ordre Kraken. Aucun look-ahead ni rendement n'est garanti.
 
-La persistance d'un diagnostic structuré détaillé pour les `ValidationError` internes n'est pas incluse dans ce correctif ciblé : le contrat actuel ne persiste que `stage`, `error_type` et `timed_out`. Une extension sûre devra utiliser des champs allow-listés et bornés (modèle, chemin de champ, code de validation), sans message brut ni input externe.
+## Validation locale fournie pour le Batch 19.13
 
-## Validation
-
-Le ZIP du correctif contient les régressions PAPER/Risk correspondantes. Les tests backend ciblés et le `pytest` complet doivent être exécutés dans le repository local après extraction ; ne pas considérer ce patch intégré avant cette validation et le commit explicite de l'opérateur.
+- backend ciblé : `51 passed` ;
+- backend complet : `698 passed, 2 warnings` ;
+- `alembic upgrade head` : succès sur PostgreSQL réel ;
+- frontend : `39 passed` ;
+- `pnpm lint` : succès ;
+- `pnpm typecheck` : succès ;
+- `pnpm build` : succès.
 
 ## Règle de reprise
 
-À chaque nouvelle tâche : revérifier le HEAD GitHub réel, relire ce document et distinguer l'état intégré GitHub, les éventuelles modifications locales fournies par l'opérateur et tout patch proposé non encore intégré.
+À chaque nouvelle tâche : revérifier le HEAD GitHub réel, relire ce document et distinguer explicitement l'état intégré GitHub, les modifications locales fournies par l'opérateur et tout patch proposé non encore intégré.

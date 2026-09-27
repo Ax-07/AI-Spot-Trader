@@ -10,6 +10,7 @@ from ai_spot_trader.api.schemas import (
     CycleFailureResponse,
     CyclePageResponse,
     CycleSummaryResponse,
+    DecisionExecutionResponse,
     DecisionPageResponse,
     DecisionResponse,
     ExecutionPageResponse,
@@ -30,6 +31,7 @@ from ai_spot_trader.persistence.query import (
     CycleAuditSummary,
     CycleFailureView,
     DecisionAuditItem,
+    DecisionExecutionAuditItem,
     ExecutionAuditItem,
     FillAuditItem,
     LatestErrorView,
@@ -55,10 +57,7 @@ def _reader(request: Request) -> CycleAuditReader:
     return reader
 
 
-def _resolved_run_id(
-    request: Request,
-    paper_run_id: UUID | None,
-) -> UUID | None:
+def _resolved_run_id(request: Request, paper_run_id: UUID | None) -> UUID | None:
     if paper_run_id is not None:
         return paper_run_id
     runtime = cast(AppRuntime, request.app.state.runtime)
@@ -93,11 +92,7 @@ async def _audit_call[T](operation: Awaitable[T]) -> T:
 def _failure(value: CycleFailureView | None) -> CycleFailureResponse | None:
     if value is None:
         return None
-    return CycleFailureResponse(
-        stage=value.stage,
-        error_type=value.error_type,
-        timed_out=value.timed_out,
-    )
+    return CycleFailureResponse(stage=value.stage, error_type=value.error_type, timed_out=value.timed_out)
 
 
 def _fill(value: FillAuditItem) -> FillResponse:
@@ -107,6 +102,18 @@ def _fill(value: FillAuditItem) -> FillResponse:
         market_state_id=value.market_state_id,
         filled_at=value.filled_at,
         payload=value.payload,
+    )
+
+
+def _decision_execution(value: DecisionExecutionAuditItem) -> DecisionExecutionResponse:
+    return DecisionExecutionResponse(
+        decision_index=value.decision_index,
+        agent_input=value.agent_input,
+        decision=value.decision,
+        risk_assessment=value.risk_assessment,
+        execution_intent=value.execution_intent,
+        fills=tuple(_fill(item) for item in value.fills),
+        portfolio_state_after=value.portfolio_state_after,
     )
 
 
@@ -121,6 +128,14 @@ def _cycle_summary(value: CycleAuditSummary) -> CycleSummaryResponse:
         market_type=cast(CycleMarketType | None, value.market_type),
         risk_status=value.risk_status,
         execution_id=value.execution_id,
+        decision_count=value.decision_count,
+        buy_count=value.buy_count,
+        sell_count=value.sell_count,
+        hold_count=value.hold_count,
+        risk_allow_count=value.risk_allow_count,
+        risk_modify_count=value.risk_modify_count,
+        risk_reject_count=value.risk_reject_count,
+        execution_count=value.execution_count,
         fill_count=value.fill_count,
         failure=_failure(value.failure),
     )
@@ -143,6 +158,9 @@ def _cycle_detail(value: CycleAuditDetail) -> CycleDetailResponse:
         market_selection=value.market_selection,
         agent_input=value.agent_input,
         agent_tool_traces=value.agent_tool_traces,
+        decision_plan_input=value.decision_plan_input,
+        decision_plan=value.decision_plan,
+        decision_results=tuple(_decision_execution(item) for item in value.decision_results),
         decision=value.decision,
         risk_assessment=value.risk_assessment,
         execution_intent=value.execution_intent,
@@ -156,6 +174,7 @@ def _decision(value: DecisionAuditItem) -> DecisionResponse:
     return DecisionResponse(
         decision_id=value.decision_id,
         cycle_id=value.cycle_id,
+        decision_index=value.decision_index,
         created_at=value.created_at,
         action=value.action,
         symbol=value.symbol,
@@ -205,10 +224,7 @@ async def list_cycles(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     order: AuditSortOrder = AuditSortOrder.DESC,
-    status_filter: Annotated[
-        CycleStatusFilter | None,
-        Query(alias="status"),
-    ] = None,
+    status_filter: Annotated[CycleStatusFilter | None, Query(alias="status")] = None,
     action: ActionFilter | None = None,
     risk_status: RiskStatusFilter | None = None,
     paper_run_id: UUID | None = None,
@@ -243,10 +259,7 @@ async def list_cycles(
 
 
 @router.get("/cycles/latest", response_model=CycleDetailResponse)
-async def latest_cycle(
-    request: Request,
-    paper_run_id: UUID | None = None,
-) -> CycleDetailResponse:
+async def latest_cycle(request: Request, paper_run_id: UUID | None = None) -> CycleDetailResponse:
     resolved_run_id = _resolved_run_id(request, paper_run_id)
     operation = (
         _reader(request).latest_cycle()
@@ -255,24 +268,15 @@ async def latest_cycle(
     )
     item = await _audit_call(operation)
     if item is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="cycle not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="cycle not found")
     return _cycle_detail(item)
 
 
 @router.get("/cycles/{cycle_id}", response_model=CycleDetailResponse)
-async def get_cycle(
-    cycle_id: UUID,
-    request: Request,
-) -> CycleDetailResponse:
+async def get_cycle(cycle_id: UUID, request: Request) -> CycleDetailResponse:
     item = await _audit_call(_reader(request).get_cycle(cycle_id))
     if item is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="cycle not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="cycle not found")
     return _cycle_detail(item)
 
 
@@ -283,30 +287,17 @@ async def list_decisions(
     offset: Annotated[int, Query(ge=0)] = 0,
     order: AuditSortOrder = AuditSortOrder.DESC,
     action: ActionFilter | None = None,
-    symbol: Annotated[
-        str | None,
-        Query(min_length=1, max_length=64),
-    ] = None,
+    symbol: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
     paper_run_id: UUID | None = None,
 ) -> DecisionPageResponse:
     resolved_run_id = _resolved_run_id(request, paper_run_id)
-    if resolved_run_id is None:
-        operation = _reader(request).list_decisions(
-            limit=limit,
-            offset=offset,
-            order=order,
-            action=action,
-            symbol=symbol,
+    operation = (
+        _reader(request).list_decisions(limit=limit, offset=offset, order=order, action=action, symbol=symbol)
+        if resolved_run_id is None
+        else _scoped_reader(request).list_decisions_for_run(
+            resolved_run_id, limit=limit, offset=offset, order=order, action=action, symbol=symbol
         )
-    else:
-        operation = _scoped_reader(request).list_decisions_for_run(
-            resolved_run_id,
-            limit=limit,
-            offset=offset,
-            order=order,
-            action=action,
-            symbol=symbol,
-        )
+    )
     page = await _audit_call(operation)
     return DecisionPageResponse(
         items=tuple(_decision(item) for item in page.items),
@@ -322,28 +313,17 @@ async def list_risk_assessments(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     order: AuditSortOrder = AuditSortOrder.DESC,
-    status_filter: Annotated[
-        RiskStatusFilter | None,
-        Query(alias="status"),
-    ] = None,
+    status_filter: Annotated[RiskStatusFilter | None, Query(alias="status")] = None,
     paper_run_id: UUID | None = None,
 ) -> RiskAssessmentPageResponse:
     resolved_run_id = _resolved_run_id(request, paper_run_id)
-    if resolved_run_id is None:
-        operation = _reader(request).list_risk_assessments(
-            limit=limit,
-            offset=offset,
-            order=order,
-            status=status_filter,
+    operation = (
+        _reader(request).list_risk_assessments(limit=limit, offset=offset, order=order, status=status_filter)
+        if resolved_run_id is None
+        else _scoped_reader(request).list_risk_assessments_for_run(
+            resolved_run_id, limit=limit, offset=offset, order=order, status=status_filter
         )
-    else:
-        operation = _scoped_reader(request).list_risk_assessments_for_run(
-            resolved_run_id,
-            limit=limit,
-            offset=offset,
-            order=order,
-            status=status_filter,
-        )
+    )
     page = await _audit_call(operation)
     return RiskAssessmentPageResponse(
         items=tuple(_risk(item) for item in page.items),
@@ -359,34 +339,18 @@ async def list_executions(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     order: AuditSortOrder = AuditSortOrder.DESC,
-    action: Annotated[
-        Literal["BUY", "SELL"] | None,
-        Query(),
-    ] = None,
-    symbol: Annotated[
-        str | None,
-        Query(min_length=1, max_length=64),
-    ] = None,
+    action: Annotated[Literal["BUY", "SELL"] | None, Query()] = None,
+    symbol: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
     paper_run_id: UUID | None = None,
 ) -> ExecutionPageResponse:
     resolved_run_id = _resolved_run_id(request, paper_run_id)
-    if resolved_run_id is None:
-        operation = _reader(request).list_executions(
-            limit=limit,
-            offset=offset,
-            order=order,
-            action=action,
-            symbol=symbol,
+    operation = (
+        _reader(request).list_executions(limit=limit, offset=offset, order=order, action=action, symbol=symbol)
+        if resolved_run_id is None
+        else _scoped_reader(request).list_executions_for_run(
+            resolved_run_id, limit=limit, offset=offset, order=order, action=action, symbol=symbol
         )
-    else:
-        operation = _scoped_reader(request).list_executions_for_run(
-            resolved_run_id,
-            limit=limit,
-            offset=offset,
-            order=order,
-            action=action,
-            symbol=symbol,
-        )
+    )
     page = await _audit_call(operation)
     return ExecutionPageResponse(
         items=tuple(_execution(item) for item in page.items),
@@ -397,10 +361,7 @@ async def list_executions(
 
 
 @router.get("/errors/latest", response_model=LatestErrorResponse)
-async def latest_error(
-    request: Request,
-    paper_run_id: UUID | None = None,
-) -> LatestErrorResponse:
+async def latest_error(request: Request, paper_run_id: UUID | None = None) -> LatestErrorResponse:
     resolved_run_id = _resolved_run_id(request, paper_run_id)
     operation = (
         _reader(request).latest_error()
@@ -409,18 +370,12 @@ async def latest_error(
     )
     item = await _audit_call(operation)
     if item is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="error not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="error not found")
     return _latest_error(item)
 
 
 @router.get("/market/latest", response_model=MarketStateResponse)
-async def latest_market_state(
-    request: Request,
-    paper_run_id: UUID | None = None,
-) -> MarketStateResponse:
+async def latest_market_state(request: Request, paper_run_id: UUID | None = None) -> MarketStateResponse:
     resolved_run_id = _resolved_run_id(request, paper_run_id)
     operation = (
         _reader(request).latest_market_state()
@@ -429,10 +384,7 @@ async def latest_market_state(
     )
     payload = await _audit_call(operation)
     if payload is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="market state not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="market state not found")
     try:
         return MarketStateResponse.model_validate(payload)
     except ValueError as exc:

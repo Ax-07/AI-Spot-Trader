@@ -11,6 +11,7 @@ from ai_spot_trader.domain.models import (
     MarketSelectionInput,
     MarketState,
 )
+from ai_spot_trader.domain.planning import CycleDecisionPlan, CycleDecisionPlanInput
 
 
 class MarketObservationSource(Protocol):
@@ -42,6 +43,16 @@ class MarketSelectingLLMProvider(LLMProvider, Protocol):
     """Same strategic Agent extended with an explicit executable-market selection phase."""
 
     async def select_market(self, selection_input: MarketSelectionInput) -> MarketSelection: ...
+
+
+@runtime_checkable
+class MultiMarketLLMProvider(Protocol):
+    """Same strategic Agent producing one bounded, ordered multi-market plan per cycle."""
+
+    async def generate_decision_plan(
+        self,
+        plan_input: CycleDecisionPlanInput,
+    ) -> CycleDecisionPlan: ...
 
 
 class Broker(Protocol):

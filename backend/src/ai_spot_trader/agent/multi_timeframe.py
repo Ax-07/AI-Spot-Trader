@@ -10,16 +10,12 @@ from ai_spot_trader.domain.models import (
     MarketSelectionInput,
     StrategicMultiTimeframeContext,
 )
+from ai_spot_trader.domain.planning import CycleDecisionPlan, CycleDecisionPlanInput
 from ai_spot_trader.market.strategic_context import StrategicMultiTimeframeContextService
 
 
 class MultiTimeframeDecisionProvider:
-    """Decorate the strategic Agent with one coherent causal candle snapshot per cycle.
-
-    Discovery intentionally keeps using the undecorated provider. The rich candle context is built
-    only for Market Selection (or the legacy one-market final decision) and the exact same snapshot
-    is then reused by the final BUY/SELL/HOLD decision.
-    """
+    """Decorate the single strategic Agent with coherent causal candle snapshots."""
 
     def __init__(
         self,
@@ -33,6 +29,32 @@ class MultiTimeframeDecisionProvider:
     @property
     def last_tool_traces(self) -> tuple[AgentToolTrace, ...]:
         return self._delegate.last_tool_traces
+
+    async def generate_decision_plan(
+        self,
+        plan_input: CycleDecisionPlanInput,
+    ) -> CycleDecisionPlan:
+        """Build one causal MTF snapshot for every market visible to the ordered plan."""
+
+        style = plan_input.trading_style_context
+        if style is not None:
+            context = await self._context_service.build(
+                markets=tuple(
+                    ExecutableMarket(symbol=item.symbol, market_type=item.market_type)
+                    for item in plan_input.market_states
+                ),
+                trading_style_context=style,
+                as_of=plan_input.created_at,
+            )
+            plan_input.multi_timeframe_context = context
+            CycleDecisionPlanInput.model_validate(plan_input.model_dump(mode="python"))
+        generate = getattr(self._delegate, "generate_decision_plan", None)
+        if generate is None:
+            raise TypeError("configured Agent does not implement generate_decision_plan")
+        try:
+            return await generate(plan_input)
+        finally:
+            self._snapshots.pop(plan_input.cycle_id, None)
 
     async def select_market(self, selection_input: MarketSelectionInput) -> MarketSelection:
         await self._attach_selection_context(selection_input)
@@ -86,7 +108,6 @@ class MultiTimeframeDecisionProvider:
         style = selection_input.trading_style_context
         if style is None:
             return
-        # TradingCycleRunner serializes cycles. Clearing here bounds retained failed-cycle state.
         self._snapshots.clear()
         context = await self._context_service.build(
             markets=selection_input.executable_markets,
@@ -94,8 +115,6 @@ class MultiTimeframeDecisionProvider:
             as_of=selection_input.created_at,
         )
         selection_input.multi_timeframe_context = context
-        # Validate after assignment because DomainModel intentionally does not enable
-        # validate_assignment globally.
         MarketSelectionInput.model_validate(selection_input.model_dump(mode="python"))
         self._snapshots[selection_input.cycle_id] = context
 

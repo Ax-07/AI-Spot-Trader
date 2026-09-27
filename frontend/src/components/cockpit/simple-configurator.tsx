@@ -21,6 +21,7 @@ import type { ControlPlaneController } from "@/hooks/use-control-plane";
 import type { ExecutableMarketType, LlmModel, SessionResponse, TradingStyle } from "@/lib/api/types";
 import {
   DEFAULT_MARKET_DISCOVERY_POLICY,
+  MAX_DECISIONS_PER_CYCLE_HARD_LIMIT,
   TRADING_STYLE_MAPPING_VERSION,
   TRADING_STYLE_UI_METADATA,
   buildSessionCampaignConfiguration,
@@ -91,8 +92,8 @@ function ChoiceCard({
   );
 }
 
-function numberString(value: number): string {
-  return Number.isFinite(value) ? String(value) : "";
+function numberString(value: number | null): string {
+  return value !== null && Number.isFinite(value) ? String(value) : "";
 }
 
 export function SimpleConfigurator({
@@ -137,6 +138,9 @@ export function SimpleConfigurator({
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const [cadence, setCadence] = useState(numberString(initialStyle.tradingCadenceSeconds));
+  const [maxDecisionsPerCycle, setMaxDecisionsPerCycle] = useState(
+    numberString(initialStyle.maxDecisionsPerCycle),
+  );
   const [feeRate, setFeeRate] = useState(config?.paper_fee_rate ?? "0.001");
   const [spreadBps, setSpreadBps] = useState(config?.paper_spread_bps ?? "2");
   const [slippageBps, setSlippageBps] = useState(config?.paper_slippage_bps ?? "2");
@@ -210,6 +214,7 @@ export function SimpleConfigurator({
         tradingStyle,
         riskProfile,
         cadence,
+        maxDecisionsPerCycle,
         feeRate,
         spreadBps,
         slippageBps,
@@ -262,6 +267,7 @@ export function SimpleConfigurator({
     marketSelectionMode,
     marketTimeout,
     marketType,
+    maxDecisionsPerCycle,
     maxSnapshotAge,
     minWindowObservations,
     model,
@@ -447,7 +453,7 @@ export function SimpleConfigurator({
           <div className="flex items-center justify-between gap-3">
             <div>
               <CardTitle className="flex items-center gap-2"><Settings2 className="size-4" /> Configuration avancée</CardTitle>
-              <CardDescription className="mt-1">Style effectif, cadence, coûts PAPER, timeouts, caps Risk et paramètres Market Discovery.</CardDescription>
+              <CardDescription className="mt-1">Style effectif, cadence, taille du plan multi-marchés, coûts PAPER, timeouts, caps Risk et paramètres Market Discovery.</CardDescription>
             </div>
             <Badge tone="neutral">{advancedOpen ? "Masquer" : "Afficher"}</Badge>
           </div>
@@ -474,8 +480,18 @@ export function SimpleConfigurator({
 
             <section className="space-y-4 border-t pt-6">
               <div><h3 className="font-semibold">Runtime & coûts PAPER</h3><p className="text-xs text-muted-foreground">Valeurs effectivement persistées dans la prochaine version de configuration.</p></div>
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
                 <Field label="Cadence stratégique (s)"><input className={inputClass} value={cadence} onChange={(e) => setCadence(e.target.value)} /></Field>
+                <Field
+                  label="Décisions max / cycle"
+                  hint={
+                    maxDecisionsPerCycle
+                      ? `Plan ordonné, de 1 à ${MAX_DECISIONS_PER_CYCLE_HARD_LIMIT}. Indépendant de la taille de watchlist.`
+                      : `Session historique : vide conserve le digest existant et utilise ${initialStyle.maxDecisionsPerCycle ?? 6} comme valeur effective. Saisir 1..${MAX_DECISIONS_PER_CYCLE_HARD_LIMIT} crée une configuration explicite.`
+                  }
+                >
+                  <input className={inputClass} value={maxDecisionsPerCycle} onChange={(e) => setMaxDecisionsPerCycle(e.target.value)} inputMode="numeric" placeholder="6" />
+                </Field>
                 <Field label="Frais PAPER"><input className={inputClass} value={feeRate} onChange={(e) => setFeeRate(e.target.value)} /></Field>
                 <Field label="Spread (bps)"><input className={inputClass} value={spreadBps} onChange={(e) => setSpreadBps(e.target.value)} /></Field>
                 <Field label="Slippage (bps)"><input className={inputClass} value={slippageBps} onChange={(e) => setSlippageBps(e.target.value)} /></Field>

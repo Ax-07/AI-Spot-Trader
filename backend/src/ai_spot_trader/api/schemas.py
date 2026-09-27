@@ -9,8 +9,6 @@ JsonObject = dict[str, object]
 
 
 class ApiModel(BaseModel):
-    """Strict response contract owned by the HTTP boundary."""
-
     model_config = ConfigDict(extra="forbid")
 
 
@@ -30,6 +28,14 @@ class CycleSummaryResponse(ApiModel):
     market_type: Literal["SPOT", "PERPETUAL", "FUTURE"] | None = None
     risk_status: str | None = None
     execution_id: UUID | None = None
+    decision_count: int = Field(ge=0)
+    buy_count: int = Field(ge=0)
+    sell_count: int = Field(ge=0)
+    hold_count: int = Field(ge=0)
+    risk_allow_count: int = Field(ge=0)
+    risk_modify_count: int = Field(ge=0)
+    risk_reject_count: int = Field(ge=0)
+    execution_count: int = Field(ge=0)
     fill_count: int = Field(ge=0)
     failure: CycleFailureResponse | None = None
 
@@ -142,14 +148,34 @@ class ExplainabilityCorrelationResponse(ApiModel):
     fill_ids: tuple[UUID, ...] = ()
 
 
+class ExplainabilityDecisionResponse(ApiModel):
+    decision_index: int = Field(ge=0)
+    agent: ExplainabilityAgentResponse
+    risk: ExplainabilityRiskResponse | None = None
+    execution: ExplainabilityExecutionResponse
+    correlation: ExplainabilityCorrelationResponse
+
+
 class CycleExplainabilityResponse(ApiModel):
     context: ExplainabilityContextResponse | None = None
     discovery: ExplainabilityDiscoveryResponse | None = None
     market_selection: ExplainabilityMarketSelectionResponse | None = None
+    plan_rationale: str | None = None
+    decisions: tuple[ExplainabilityDecisionResponse, ...] = ()
     agent: ExplainabilityAgentResponse | None = None
     risk: ExplainabilityRiskResponse | None = None
-    execution: ExplainabilityExecutionResponse
-    correlation: ExplainabilityCorrelationResponse
+    execution: ExplainabilityExecutionResponse | None = None
+    correlation: ExplainabilityCorrelationResponse | None = None
+
+
+class DecisionExecutionResponse(ApiModel):
+    decision_index: int = Field(ge=0)
+    agent_input: JsonObject | None = None
+    decision: JsonObject
+    risk_assessment: JsonObject | None = None
+    execution_intent: JsonObject | None = None
+    fills: tuple[FillResponse, ...] = ()
+    portfolio_state_after: JsonObject | None = None
 
 
 class CycleDetailResponse(ApiModel):
@@ -168,6 +194,9 @@ class CycleDetailResponse(ApiModel):
     market_selection: JsonObject | None = None
     agent_input: JsonObject | None = None
     agent_tool_traces: tuple[JsonObject, ...] = ()
+    decision_plan_input: JsonObject | None = None
+    decision_plan: JsonObject | None = None
+    decision_results: tuple[DecisionExecutionResponse, ...] = ()
     decision: JsonObject | None = None
     risk_assessment: JsonObject | None = None
     execution_intent: JsonObject | None = None
@@ -179,6 +208,7 @@ class CycleDetailResponse(ApiModel):
 class DecisionResponse(ApiModel):
     decision_id: UUID
     cycle_id: UUID
+    decision_index: int = Field(ge=0)
     created_at: datetime
     action: str
     symbol: str

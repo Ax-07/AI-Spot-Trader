@@ -10,6 +10,8 @@ export type SessionMarketSelectionMode = "AUTOMATIC_AI" | "MANUAL";
 export type SessionRiskProfile = "prudent" | "balanced" | "aggressive" | "custom";
 
 export const TRADING_STYLE_MAPPING_VERSION = "trading-style-map-v1" as const;
+export const DEFAULT_MAX_DECISIONS_PER_CYCLE = 6;
+export const MAX_DECISIONS_PER_CYCLE_HARD_LIMIT = 20;
 
 export const TRADING_STYLE_UI_METADATA = {
   SCALP: {
@@ -60,6 +62,7 @@ export type SessionConfigurationInput = {
   tradingStyle: TradingStyle | null;
   riskProfile: SessionRiskProfile;
   cadence: string;
+  maxDecisionsPerCycle?: string;
   feeRate: string;
   spreadBps: string;
   slippageBps: string;
@@ -99,6 +102,8 @@ export function initialSessionStyleValues(
       configuration?.market_discovery?.watchlist_refresh_seconds ??
       recommendations?.watchlistRefreshSeconds ??
       DEFAULT_MARKET_DISCOVERY_POLICY.watchlist_refresh_seconds,
+    maxDecisionsPerCycle:
+      configuration?.max_decisions_per_cycle ?? (editing ? null : DEFAULT_MAX_DECISIONS_PER_CYCLE),
   };
 }
 
@@ -234,6 +239,17 @@ function positiveNumber(value: string, label: string): number {
   return parsed;
 }
 
+function cycleDecisionLimit(value: string | undefined): number | null {
+  if (value === undefined || value.trim() === "") return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_DECISIONS_PER_CYCLE_HARD_LIMIT) {
+    throw new Error(
+      `Le nombre maximal de décisions par cycle doit être un entier entre 1 et ${MAX_DECISIONS_PER_CYCLE_HARD_LIMIT}.`,
+    );
+  }
+  return parsed;
+}
+
 export function buildSessionCampaignConfiguration(input: SessionConfigurationInput): CampaignConfiguration {
   const capital = positiveNumber(input.capital, "Le capital PAPER");
   const marketPlan = parseSessionMarkets(input.pairs, input.marketType);
@@ -252,6 +268,7 @@ export function buildSessionCampaignConfiguration(input: SessionConfigurationInp
 
   if (!risk.maxOrderNotional) throw new Error("Le plafond par ordre est obligatoire.");
   const cadence = positiveNumber(input.cadence, "La cadence stratégique");
+  const maxDecisionsPerCycle = cycleDecisionLimit(input.maxDecisionsPerCycle);
   const marketTimeout = positiveNumber(input.marketTimeout, "Le timeout marché");
   const agentTimeout = positiveNumber(input.agentTimeout, "Le timeout Agent");
   const brokerTimeout = positiveNumber(input.brokerTimeout, "Le timeout Broker");
@@ -271,6 +288,10 @@ export function buildSessionCampaignConfiguration(input: SessionConfigurationInp
       }
     : null;
 
+  const decisionLimit = maxDecisionsPerCycle === null
+    ? {}
+    : { max_decisions_per_cycle: maxDecisionsPerCycle };
+
   const tradingStyle = input.tradingStyle === null
     ? {}
     : {
@@ -283,6 +304,7 @@ export function buildSessionCampaignConfiguration(input: SessionConfigurationInp
     llm_model: input.model,
     aggressiveness: input.aggressiveness,
     trading_cadence_seconds: cadence,
+    ...decisionLimit,
     ...tradingStyle,
     paper_initial_capital: input.capital.trim(),
     paper_settlement_asset: marketPlan.settlementAsset,

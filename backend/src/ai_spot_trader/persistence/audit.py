@@ -3,6 +3,9 @@ from uuid import UUID
 
 from ai_spot_trader.domain.models import PortfolioState
 from ai_spot_trader.trading.engine import TradingCycleResult, TradingCycleStatus
+from ai_spot_trader.trading.multi_market import MultiMarketTradingCycleResult
+
+CycleResult = TradingCycleResult | MultiMarketTradingCycleResult
 
 
 @runtime_checkable
@@ -11,7 +14,7 @@ class CycleAuditWriter(Protocol):
 
     async def ensure_available(self) -> None: ...
 
-    async def record(self, result: TradingCycleResult) -> bool: ...
+    async def record(self, result: CycleResult) -> bool: ...
 
 
 @runtime_checkable
@@ -23,7 +26,7 @@ class RunScopedCycleAuditWriter(Protocol):
     async def record_for_run(
         self,
         paper_run_id: UUID,
-        result: TradingCycleResult,
+        result: CycleResult,
     ) -> bool: ...
 
 
@@ -57,7 +60,7 @@ class RunBoundCycleAuditWriter:
     async def ensure_available(self) -> None:
         await self._delegate.ensure_available_for_run(self._require_run_id())
 
-    async def record(self, result: TradingCycleResult) -> bool:
+    async def record(self, result: CycleResult) -> bool:
         return await self._delegate.record_for_run(self._require_run_id(), result)
 
     def _require_run_id(self) -> UUID:
@@ -70,7 +73,7 @@ class RunBoundCycleAuditWriter:
 class CycleRunner(Protocol):
     """Minimal orchestration surface required by the audited wrapper."""
 
-    async def run_cycle(self) -> TradingCycleResult: ...
+    async def run_cycle(self) -> CycleResult: ...
 
 
 class CycleAuditUnavailableError(RuntimeError):
@@ -104,7 +107,7 @@ class AuditedTradingCycleRunner:
     def paper_run_id(self) -> UUID | None:
         return self._paper_run_id
 
-    async def run_cycle(self) -> TradingCycleResult:
+    async def run_cycle(self) -> CycleResult:
         if self._audit_failed:
             raise CycleAuditUnavailableError(
                 "cycle audit is unavailable; restart after resolving persistence"
@@ -155,7 +158,7 @@ class AuditedTradingCycleRunner:
         assert isinstance(writer, RunScopedCycleAuditWriter)
         await writer.ensure_available_for_run(self._paper_run_id)
 
-    async def _record(self, result: TradingCycleResult) -> bool:
+    async def _record(self, result: CycleResult) -> bool:
         writer = self._audit_writer
         if self._paper_run_id is None:
             assert isinstance(writer, CycleAuditWriter)

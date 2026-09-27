@@ -11,6 +11,7 @@ from ai_spot_trader.api.schemas import (
     ExplainabilityAgentResponse,
     ExplainabilityContextResponse,
     ExplainabilityCorrelationResponse,
+    ExplainabilityDecisionResponse,
     ExplainabilityDiscoveryResponse,
     ExplainabilityExecutionResponse,
     ExplainabilityFillResponse,
@@ -24,13 +25,10 @@ from ai_spot_trader.api.schemas import (
 class FillAuditView(Protocol):
     @property
     def fill_id(self) -> UUID: ...
-
     @property
     def execution_id(self) -> UUID: ...
-
     @property
     def filled_at(self) -> datetime: ...
-
     @property
     def payload(self) -> Mapping[str, object]: ...
 
@@ -38,39 +36,46 @@ class FillAuditView(Protocol):
 class FailureView(Protocol):
     @property
     def stage(self) -> str: ...
-
     @property
     def error_type(self) -> str: ...
-
     @property
     def timed_out(self) -> bool: ...
+
+
+class DecisionExecutionAuditView(Protocol):
+    @property
+    def decision_index(self) -> int: ...
+    @property
+    def decision(self) -> Mapping[str, object]: ...
+    @property
+    def risk_assessment(self) -> Mapping[str, object] | None: ...
+    @property
+    def execution_intent(self) -> Mapping[str, object] | None: ...
+    @property
+    def fills(self) -> tuple[FillAuditView, ...]: ...
 
 
 class CycleAuditDetailView(Protocol):
     @property
     def cycle_id(self) -> UUID: ...
-
     @property
     def status(self) -> str: ...
-
     @property
     def failure(self) -> FailureView | None: ...
-
     @property
     def market_selection_input(self) -> Mapping[str, object] | None: ...
-
     @property
     def market_selection(self) -> Mapping[str, object] | None: ...
-
+    @property
+    def decision_plan(self) -> Mapping[str, object] | None: ...
+    @property
+    def decision_results(self) -> tuple[DecisionExecutionAuditView, ...]: ...
     @property
     def decision(self) -> Mapping[str, object] | None: ...
-
     @property
     def risk_assessment(self) -> Mapping[str, object] | None: ...
-
     @property
     def execution_intent(self) -> Mapping[str, object] | None: ...
-
     @property
     def fills(self) -> tuple[FillAuditView, ...]: ...
 
@@ -78,54 +83,155 @@ class CycleAuditDetailView(Protocol):
 def build_cycle_explainability(
     value: CycleAuditDetailView,
 ) -> CycleExplainabilityResponse | None:
-    """Build a defensive presentation-only view from already persisted canonical facts."""
-
     selection_input = _mapping(value.market_selection_input)
     capacity = _mapping(selection_input.get("capacity_context"))
     discovery = _mapping(selection_input.get("market_discovery"))
     market_selection = _mapping(value.market_selection)
-    decision = _mapping(value.decision)
-    risk = _mapping(value.risk_assessment)
-    execution = _mapping(value.execution_intent)
+    plan = _mapping(getattr(value, "decision_plan", None))
+
+    legacy_decision = _mapping(value.decision)
+    legacy_risk = _mapping(value.risk_assessment)
+    legacy_execution = _mapping(value.execution_intent)
+    legacy_fills = value.fills
+
+    raw_trajectories = getattr(value, "decision_results", ())
+    trajectories = tuple(raw_trajectories) if raw_trajectories is not None else ()
+    decisions = tuple(_decision_view(value, item) for item in trajectories)
+    if not decisions and legacy_decision:
+        decisions = (
+            _legacy_decision_view(
+                value=value,
+                decision=legacy_decision,
+                risk=legacy_risk,
+                execution=legacy_execution,
+                fills=legacy_fills,
+            ),
+        )
 
     if not any(
         (
             capacity,
             discovery,
             market_selection,
-            decision,
-            risk,
-            execution,
-            value.fills,
+            plan,
+            decisions,
+            legacy_risk,
+            legacy_execution,
+            legacy_fills,
             value.failure,
         )
     ):
         return None
 
-    agent = _agent(decision)
-    risk_view = _risk(risk)
-    execution_view = _execution(
-        cycle_status=value.status,
-        failure_present=value.failure is not None,
-        decision=agent,
-        risk=risk_view,
-        execution=execution,
-        fills=value.fills,
-    )
+    singleton = decisions[0] if len(decisions) == 1 else None
+    if singleton is not None:
+        agent_view = singleton.agent
+        risk_view = singleton.risk
+        execution_view = singleton.execution
+        correlation_view = singleton.correlation
+    elif decisions:
+        # Multi-decision cycles intentionally have no synthetic singleton projection.
+        agent_view = None
+        risk_view = None
+        execution_view = None
+        correlation_view = None
+    else:
+        # Preserve the pre-19.13 presentation contract for historical/context-only cycles.
+        agent_view = _agent(legacy_decision)
+        risk_view = _risk(legacy_risk)
+        execution_view = _execution(
+            cycle_status=value.status,
+            failure_present=value.failure is not None,
+            decision=agent_view,
+            risk=risk_view,
+            execution=legacy_execution,
+            fills=legacy_fills,
+        )
+        correlation_view = ExplainabilityCorrelationResponse(
+            cycle_id=value.cycle_id,
+            decision_id=_uuid(legacy_decision.get("decision_id")),
+            risk_assessment_id=_uuid(legacy_risk.get("risk_assessment_id")),
+            execution_id=_uuid(legacy_execution.get("execution_id")),
+            fill_ids=tuple(fill.fill_id for fill in legacy_fills),
+        )
 
     return CycleExplainabilityResponse(
         context=_context(capacity),
         discovery=_discovery(discovery),
         market_selection=_market_selection(market_selection),
+        plan_rationale=_text(plan.get("rationale")),
+        decisions=decisions,
+        agent=agent_view,
+        risk=risk_view,
+        execution=execution_view,
+        correlation=correlation_view,
+    )
+
+
+def _decision_view(
+    cycle: CycleAuditDetailView,
+    value: DecisionExecutionAuditView,
+) -> ExplainabilityDecisionResponse:
+    decision = _mapping(value.decision)
+    risk = _mapping(value.risk_assessment)
+    execution = _mapping(value.execution_intent)
+    agent = _agent(decision)
+    if agent is None:
+        raise ValueError("persisted decision result has no valid Agent decision")
+    risk_view = _risk(risk)
+    execution_view = _execution(
+        cycle_status=cycle.status,
+        failure_present=cycle.failure is not None,
+        decision=agent,
+        risk=risk_view,
+        execution=execution,
+        fills=value.fills,
+    )
+    return ExplainabilityDecisionResponse(
+        decision_index=value.decision_index,
         agent=agent,
         risk=risk_view,
         execution=execution_view,
+        correlation=ExplainabilityCorrelationResponse(
+            cycle_id=cycle.cycle_id,
+            decision_id=_uuid(decision.get("decision_id")),
+            risk_assessment_id=_uuid(risk.get("risk_assessment_id")),
+            execution_id=_uuid(execution.get("execution_id")),
+            fill_ids=tuple(fill.fill_id for fill in value.fills),
+        ),
+    )
+
+
+def _legacy_decision_view(
+    *,
+    value: CycleAuditDetailView,
+    decision: Mapping[str, Any],
+    risk: Mapping[str, Any],
+    execution: Mapping[str, Any],
+    fills: tuple[FillAuditView, ...],
+) -> ExplainabilityDecisionResponse:
+    agent = _agent(decision)
+    if agent is None:
+        raise ValueError("persisted decision has no valid Agent decision")
+    risk_view = _risk(risk)
+    return ExplainabilityDecisionResponse(
+        decision_index=0,
+        agent=agent,
+        risk=risk_view,
+        execution=_execution(
+            cycle_status=value.status,
+            failure_present=value.failure is not None,
+            decision=agent,
+            risk=risk_view,
+            execution=execution,
+            fills=fills,
+        ),
         correlation=ExplainabilityCorrelationResponse(
             cycle_id=value.cycle_id,
             decision_id=_uuid(decision.get("decision_id")),
             risk_assessment_id=_uuid(risk.get("risk_assessment_id")),
             execution_id=_uuid(execution.get("execution_id")),
-            fill_ids=tuple(fill.fill_id for fill in value.fills),
+            fill_ids=tuple(fill.fill_id for fill in fills),
         ),
     )
 
@@ -164,9 +270,7 @@ def _discovery(payload: Mapping[str, Any]) -> ExplainabilityDiscoveryResponse | 
     )
 
 
-def _market_selection(
-    payload: Mapping[str, Any],
-) -> ExplainabilityMarketSelectionResponse | None:
+def _market_selection(payload: Mapping[str, Any]) -> ExplainabilityMarketSelectionResponse | None:
     if not payload:
         return None
     symbol = _text(payload.get("symbol"))
@@ -235,7 +339,6 @@ def _execution(
         outcome = "NOT_CREATED_FAILURE"
     else:
         outcome = "NOT_CREATED"
-
     return ExplainabilityExecutionResponse(
         outcome=outcome,
         execution_id=_uuid(execution.get("execution_id")),
@@ -268,29 +371,22 @@ def _fill(value: FillAuditView) -> ExplainabilityFillResponse:
 
 
 def _watchlist_entries(value: Any) -> tuple[ExplainabilityWatchlistEntryResponse, ...]:
-    items = _sequence(value)
     result: list[ExplainabilityWatchlistEntryResponse] = []
-    for item in items:
+    for item in _sequence(value):
         payload = _mapping(item)
         market = _market(payload.get("market"))
-        if market is None:
-            continue
-        result.append(
-            ExplainabilityWatchlistEntryResponse(
-                market=market,
-                rationale=_text(payload.get("rationale")),
+        if market is not None:
+            result.append(
+                ExplainabilityWatchlistEntryResponse(
+                    market=market,
+                    rationale=_text(payload.get("rationale")),
+                )
             )
-        )
     return tuple(result)
 
 
 def _markets(value: Any) -> tuple[ExplainabilityMarketResponse, ...]:
-    result: list[ExplainabilityMarketResponse] = []
-    for item in _sequence(value):
-        market = _market(item)
-        if market is not None:
-            result.append(market)
-    return tuple(result)
+    return tuple(item for raw in _sequence(value) if (item := _market(raw)) is not None)
 
 
 def _market(value: Any) -> ExplainabilityMarketResponse | None:
@@ -298,10 +394,7 @@ def _market(value: Any) -> ExplainabilityMarketResponse | None:
     symbol = _text(payload.get("symbol"))
     if symbol is None:
         return None
-    return ExplainabilityMarketResponse(
-        symbol=symbol,
-        market_type=_text(payload.get("market_type")),
-    )
+    return ExplainabilityMarketResponse(symbol=symbol, market_type=_text(payload.get("market_type")))
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -331,12 +424,7 @@ def _number_text(value: Any) -> str | None:
 
 
 def _text_tuple(value: Any) -> tuple[str, ...]:
-    result: list[str] = []
-    for item in _sequence(value):
-        text = _text(item)
-        if text is not None:
-            result.append(text)
-    return tuple(result)
+    return tuple(text for item in _sequence(value) if (text := _text(item)) is not None)
 
 
 def _uuid(value: Any) -> UUID | None:

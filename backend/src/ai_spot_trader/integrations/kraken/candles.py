@@ -11,9 +11,12 @@ import httpx
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import WebSocketException
 
-from ai_spot_trader.domain.enums import DerivativeContractKind, MarketType
+from ai_spot_trader.domain.enums import MarketType
 from ai_spot_trader.domain.models import DerivativeInstrument
-from ai_spot_trader.integrations.kraken.derivatives import KrakenDerivativesPublicClient
+from ai_spot_trader.integrations.kraken.derivatives import (
+    KrakenDerivativesPublicClient,
+    build_kraken_linear_perpetual_instrument_map,
+)
 from ai_spot_trader.integrations.kraken.errors import (
     KrakenConnectionError,
     KrakenPayloadError,
@@ -80,6 +83,7 @@ class KrakenCandleProvider:
         self._futures_ws_url = futures_ws_url
         self._ws_receive_timeout_seconds = ws_receive_timeout_seconds
         self._instrument_cache: dict[str, DerivativeInstrument] | None = None
+        self._instrument_cache_lock = asyncio.Lock()
 
     async def fetch_history(
         self,
@@ -168,25 +172,41 @@ class KrakenCandleProvider:
         return _parse_futures_candles(payload, key=key, before=before, limit=requested)
 
     async def _instrument(self, canonical_symbol: str) -> DerivativeInstrument:
-        if self._instrument_cache is None:
-            instruments = await self._derivatives.fetch_instruments()
-            mapping: dict[str, DerivativeInstrument] = {}
-            for instrument in instruments:
-                if (
-                    instrument.market_type is not MarketType.PERPETUAL
-                    or instrument.contract_kind is not DerivativeContractKind.LINEAR
-                ):
-                    continue
-                current = mapping.get(instrument.symbol)
-                if current is None or instrument.venue_symbol < current.venue_symbol:
-                    mapping[instrument.symbol] = instrument
-            self._instrument_cache = mapping
-        instrument = self._instrument_cache.get(canonical_symbol)
+        registry = self._instrument_cache
+        if registry is None:
+            registry = await self._refresh_instrument_cache(observed_cache=None)
+            instrument = registry.get(canonical_symbol)
+            if instrument is None:
+                raise UnknownKrakenSymbolError(
+                    f"no linear Kraken PERPETUAL mapped to {canonical_symbol} after catalogue refresh"
+                )
+            return instrument
+
+        instrument = registry.get(canonical_symbol)
+        if instrument is not None:
+            return instrument
+
+        registry = await self._refresh_instrument_cache(observed_cache=registry)
+        instrument = registry.get(canonical_symbol)
         if instrument is None:
             raise UnknownKrakenSymbolError(
-                f"no linear Kraken PERPETUAL mapped to {canonical_symbol}"
+                f"no linear Kraken PERPETUAL mapped to {canonical_symbol} after catalogue refresh"
             )
         return instrument
+
+    async def _refresh_instrument_cache(
+        self,
+        *,
+        observed_cache: dict[str, DerivativeInstrument] | None,
+    ) -> dict[str, DerivativeInstrument]:
+        async with self._instrument_cache_lock:
+            current = self._instrument_cache
+            if current is not None and current is not observed_cache:
+                return current
+            instruments = await self._derivatives.fetch_instruments()
+            refreshed = build_kraken_linear_perpetual_instrument_map(instruments)
+            self._instrument_cache = refreshed
+            return refreshed
 
     async def _stream_spot(self, key: CandleKey) -> AsyncIterator[Candle]:
         async for update in self._spot_ws.iter_ohlc(

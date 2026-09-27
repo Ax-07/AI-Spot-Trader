@@ -115,6 +115,14 @@ export type CycleSummaryResponse = {
   market_type: HistoricalMarketType | null;
   risk_status: string | null;
   execution_id: string | null;
+  decision_count: number;
+  buy_count: number;
+  sell_count: number;
+  hold_count: number;
+  risk_allow_count: number;
+  risk_modify_count: number;
+  risk_reject_count: number;
+  execution_count: number;
   fill_count: number;
   failure: CycleFailure | null;
 };
@@ -228,19 +236,30 @@ export type ExplainabilityCorrelationResponse = {
   fill_ids: string[];
 };
 
-export type CycleExplainabilityResponse = {
-  context: ExplainabilityContextResponse | null;
-  discovery: ExplainabilityDiscoveryResponse | null;
-  market_selection: ExplainabilityMarketSelectionResponse | null;
-  agent: ExplainabilityAgentResponse | null;
+export type ExplainabilityDecisionResponse = {
+  decision_index: number;
+  agent: ExplainabilityAgentResponse;
   risk: ExplainabilityRiskResponse | null;
   execution: ExplainabilityExecutionResponse;
   correlation: ExplainabilityCorrelationResponse;
 };
 
+export type CycleExplainabilityResponse = {
+  context: ExplainabilityContextResponse | null;
+  discovery: ExplainabilityDiscoveryResponse | null;
+  market_selection: ExplainabilityMarketSelectionResponse | null;
+  plan_rationale: string | null;
+  decisions: ExplainabilityDecisionResponse[];
+  agent: ExplainabilityAgentResponse | null;
+  risk: ExplainabilityRiskResponse | null;
+  execution: ExplainabilityExecutionResponse | null;
+  correlation: ExplainabilityCorrelationResponse | null;
+};
+
 export type DecisionResponse = {
   decision_id: string;
   cycle_id: string;
+  decision_index: number;
   created_at: string;
   action: string;
   symbol: string;
@@ -268,6 +287,16 @@ export type ExecutionResponse = {
   fills: FillResponse[];
 };
 
+export type DecisionExecutionResponse = {
+  decision_index: number;
+  agent_input: JsonObject | null;
+  decision: JsonObject;
+  risk_assessment: JsonObject | null;
+  execution_intent: JsonObject | null;
+  fills: FillResponse[];
+  portfolio_state_after: JsonObject | null;
+};
+
 export type CycleDetailResponse = {
   cycle_id: string;
   paper_run_id: string | null;
@@ -284,6 +313,9 @@ export type CycleDetailResponse = {
   market_selection: JsonObject | null;
   agent_input: JsonObject | null;
   agent_tool_traces: JsonObject[];
+  decision_plan_input: JsonObject | null;
+  decision_plan: JsonObject | null;
+  decision_results: DecisionExecutionResponse[];
   decision: JsonObject | null;
   risk_assessment: JsonObject | null;
   execution_intent: JsonObject | null;
@@ -482,6 +514,7 @@ export type CampaignConfiguration = {
   llm_model: LlmModel;
   aggressiveness: number;
   trading_cadence_seconds: number;
+  max_decisions_per_cycle?: number | null;
   trading_style?: TradingStyle | null;
   trading_style_mapping_version?: "trading-style-map-v1" | null;
   paper_initial_capital: string;

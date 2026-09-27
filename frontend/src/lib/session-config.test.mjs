@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   DEFAULT_MARKET_DISCOVERY_POLICY,
+  DEFAULT_MAX_DECISIONS_PER_CYCLE,
+  MAX_DECISIONS_PER_CYCLE_HARD_LIMIT,
   TRADING_STYLE_MAPPING_VERSION,
   TRADING_STYLE_UI_METADATA,
   buildSessionCampaignConfiguration,
@@ -23,6 +25,7 @@ const base = {
   tradingStyle: "SCALP",
   riskProfile: "balanced",
   cadence: "60",
+  maxDecisionsPerCycle: "6",
   feeRate: "0.001",
   spreadBps: "2",
   slippageBps: "2",
@@ -59,6 +62,35 @@ test("manual mode disables discovery and constrains Risk to the explicit univers
   assert.equal(configuration.market_discovery, null);
   assert.deepEqual(configuration.risk_allowed_pairs, ["BTC/USD", "ETH/USD"]);
   assert.equal(configuration.paper_executable_markets.length, 2);
+});
+
+test("cycle decision limit is persisted independently from watchlist size", () => {
+  const configuration = buildSessionCampaignConfiguration({
+    ...base,
+    maxDecisionsPerCycle: "12",
+    discovery: { ...base.discovery, watchlist_limit: 3 },
+  });
+  assert.equal(configuration.max_decisions_per_cycle, 12);
+  assert.equal(configuration.market_discovery?.watchlist_limit, 3);
+});
+
+test("cycle decision limit defaults to six for new UX and preserves legacy omission", () => {
+  assert.equal(buildSessionCampaignConfiguration(base).max_decisions_per_cycle, DEFAULT_MAX_DECISIONS_PER_CYCLE);
+  const implicit = buildSessionCampaignConfiguration({ ...base, maxDecisionsPerCycle: undefined });
+  assert.equal("max_decisions_per_cycle" in implicit, false);
+  assert.equal(MAX_DECISIONS_PER_CYCLE_HARD_LIMIT, 20);
+  assert.throws(
+    () => buildSessionCampaignConfiguration({ ...base, maxDecisionsPerCycle: "0" }),
+    /décisions par cycle/,
+  );
+  assert.throws(
+    () => buildSessionCampaignConfiguration({ ...base, maxDecisionsPerCycle: "21" }),
+    /décisions par cycle/,
+  );
+  assert.throws(
+    () => buildSessionCampaignConfiguration({ ...base, maxDecisionsPerCycle: "2.5" }),
+    /décisions par cycle/,
+  );
 });
 
 test("market parser rejects mixed settlement assets", () => {
@@ -149,18 +181,20 @@ test("style recommendations are explicit UX defaults only", () => {
   assert.deepEqual(TRADING_STYLE_UI_METADATA.SWING.timeframes, ["1h", "4h", "1d"]);
 });
 
-test("new Session starts with SCALP UX defaults", () => {
+test("new Session starts with SCALP UX defaults and six strategic decisions", () => {
   assert.deepEqual(initialSessionStyleValues(null, false), {
     tradingStyle: "SCALP",
     tradingCadenceSeconds: 60,
     watchlistRefreshSeconds: 300,
+    maxDecisionsPerCycle: 6,
   });
 });
 
-test("editing reconstructs persisted SCALP values instead of reapplying defaults", () => {
+test("editing reconstructs persisted SCALP values and decision limit instead of reapplying defaults", () => {
   const configuration = buildSessionCampaignConfiguration({
     ...base,
     cadence: "120",
+    maxDecisionsPerCycle: "9",
     discovery: {
       ...base.discovery,
       watchlist_refresh_seconds: 720,
@@ -170,23 +204,27 @@ test("editing reconstructs persisted SCALP values instead of reapplying defaults
     tradingStyle: "SCALP",
     tradingCadenceSeconds: 120,
     watchlistRefreshSeconds: 720,
+    maxDecisionsPerCycle: 9,
   });
 });
 
-test("editing a legacy Session does not infer a style", () => {
+test("editing a legacy Session preserves the absent style and decision-limit fields", () => {
   const configuration = buildSessionCampaignConfiguration({
     ...base,
     tradingStyle: null,
     cadence: "120",
+    maxDecisionsPerCycle: undefined,
     discovery: {
       ...base.discovery,
       watchlist_refresh_seconds: 720,
     },
   });
+  assert.equal("max_decisions_per_cycle" in configuration, false);
   assert.deepEqual(initialSessionStyleValues(configuration, true), {
     tradingStyle: null,
     tradingCadenceSeconds: 120,
     watchlistRefreshSeconds: 720,
+    maxDecisionsPerCycle: null,
   });
 });
 

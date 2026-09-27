@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from ai_spot_trader.agent.multi_timeframe import MultiTimeframeDecisionProvider
 from ai_spot_trader.agent.openai_client import OpenAIResponsesClient
-from ai_spot_trader.agent.provider import OpenAIDecisionProvider
+from ai_spot_trader.agent.planner import OpenAIMultiMarketDecisionProvider
 from ai_spot_trader.agent.strategy_client import StrategyInstructionsClient
 from ai_spot_trader.agent.watchlist import OpenAIWatchlistSelector
 from ai_spot_trader.broker.paper import PaperBroker
@@ -62,10 +62,12 @@ from ai_spot_trader.portfolio.mark_to_market import (
 from ai_spot_trader.risk.capacity import CapacityEvaluator
 from ai_spot_trader.risk.engine import RiskEngine
 from ai_spot_trader.risk.policy import RiskPolicy
+from ai_spot_trader.risk.sequential import SequentialCycleRiskEngine
 from ai_spot_trader.tools.market_research import build_market_research_tool_registry
 from ai_spot_trader.tools.read_only import ReadOnlyToolRegistry
 from ai_spot_trader.trading.discovery_runner import DynamicMarketTradingCycleRunner
 from ai_spot_trader.trading.engine import TradingCycleRunner, TradingCycleTimeouts, TradingEngine
+from ai_spot_trader.trading.multi_market import MultiMarketTradingCycleRunner
 
 
 class RuntimeMarketDataSource(MarketDataSource, Protocol):
@@ -86,7 +88,7 @@ class CampaignRuntimeComposition:
     risk_engine: RiskEngine
     broker: PaperBroker
     cost_model: PaperExecutionCostModel
-    cycle_runner: TradingCycleRunner | DynamicMarketTradingCycleRunner
+    cycle_runner: MultiMarketTradingCycleRunner | DynamicMarketTradingCycleRunner
     audited_runner: AuditedTradingCycleRunner
     trading_engine: TradingEngine
     paper_run_lifecycle: CampaignPaperRunLifecycle
@@ -202,7 +204,6 @@ def build_campaign_runtime(
             dynamic_market_types=dynamic_policy.market_types,
         )
 
-    # Research sources remain distinct from executable sources and never reach the ledger.
     research_spot: KrakenMarketDataSource = build_kraken_market_data_source(
         settings, clock=clock
     )
@@ -246,7 +247,7 @@ def build_campaign_runtime(
         openai_client,
         strategy_prompt=revision.strategy_prompt,
     )
-    base_agent = OpenAIDecisionProvider(
+    base_agent = OpenAIMultiMarketDecisionProvider(
         client=strategy_client,
         model=config.llm_model,
         clock=clock,
@@ -314,7 +315,6 @@ def build_campaign_runtime(
             dynamic_policy is not None and MarketType.SPOT in dynamic_policy.market_types
         ),
     )
-
     derivative_mark_to_market = PaperDerivativeMarkToMarketMonitor(
         market_data=monitoring_derivatives,
         portfolio=portfolio,
@@ -353,7 +353,7 @@ def build_campaign_runtime(
         derivative_margin_mode=config.paper_derivative_margin_mode,
     )
     capacity_evaluator = CapacityEvaluator(policy=risk_policy)
-    risk_engine = RiskEngine(
+    risk_engine = SequentialCycleRiskEngine(
         policy=risk_policy,
         cost_model=cost_model,
         clock=clock,
@@ -365,24 +365,26 @@ def build_campaign_runtime(
         broker_seconds=config.cycle_broker_timeout_seconds,
     )
     if dynamic_policy is None:
-        cycle_runner: TradingCycleRunner | DynamicMarketTradingCycleRunner = TradingCycleRunner(
-            executable_market_data=market_data,
-            executable_markets=config.paper_executable_markets,
-            capacity_evaluator=capacity_evaluator,
-            portfolio=portfolio,
-            agent=agent,
-            risk_engine=risk_engine,
-            broker=broker,
-            aggressiveness=config.aggressiveness,
-            timeouts=cycle_timeouts,
-            experiment_manifest=None,
-            trading_style_context=style_context,
-            execution_cost_context=execution_cost_context,
-            clock=clock,
+        cycle_runner: MultiMarketTradingCycleRunner | DynamicMarketTradingCycleRunner = (
+            MultiMarketTradingCycleRunner(
+                executable_market_data=market_data,
+                executable_markets=config.paper_executable_markets,
+                capacity_evaluator=capacity_evaluator,
+                portfolio=portfolio,
+                agent=agent,
+                risk_engine=risk_engine,
+                broker=broker,
+                aggressiveness=config.aggressiveness,
+                max_decisions_per_cycle=config.effective_max_decisions_per_cycle,
+                timeouts=cycle_timeouts,
+                trading_style_context=style_context,
+                execution_cost_context=execution_cost_context,
+                clock=clock,
+            )
         )
     else:
-        # Discovery deliberately stays on the compact factual candidate snapshots. The richer
-        # candle context is loaded only after Discovery has produced the effective watchlist.
+        # Discovery remains a compact deterministic/Agent watchlist phase. The same base Agent
+        # then emits the ordered plan once causal executable states are available.
         watchlist_selector = OpenAIWatchlistSelector(base_agent)
         discovery = MarketDiscoveryCoordinator(
             research=market_research,
@@ -412,6 +414,7 @@ def build_campaign_runtime(
             risk_engine=risk_engine,
             broker=broker,
             aggressiveness=config.aggressiveness,
+            max_decisions_per_cycle=config.effective_max_decisions_per_cycle,
             timeouts=cycle_timeouts,
             trading_style_context=style_context,
             execution_cost_context=execution_cost_context,

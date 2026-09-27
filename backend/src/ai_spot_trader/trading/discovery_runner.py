@@ -15,16 +15,24 @@ from ai_spot_trader.domain.models import (
     PortfolioState,
     TradingStyleContext,
 )
-from ai_spot_trader.domain.ports import Broker, ExecutableMarketDataSource, LLMProvider
+from ai_spot_trader.domain.planning import DEFAULT_MAX_DECISIONS_PER_CYCLE
+from ai_spot_trader.domain.ports import Broker, ExecutableMarketDataSource, MultiMarketLLMProvider
 from ai_spot_trader.market.discovery import MarketDiscoveryAudit, MarketDiscoveryCoordinator
 from ai_spot_trader.risk.capacity import CapacityEvaluator, open_position_markets
 from ai_spot_trader.risk.engine import RiskEngine
 from ai_spot_trader.trading.engine import (
     PortfolioSnapshotSource,
     TradingCycleResult,
-    TradingCycleRunner,
     TradingCycleTimeouts,
 )
+from ai_spot_trader.trading.multi_market import (
+    MultiMarketTradingCycleResult,
+    MultiMarketTradingCycleRunner,
+)
+
+# Backward-compatible monkeypatch/import seam retained while the canonical runtime
+# implementation is now the multi-market runner.
+TradingCycleRunner = MultiMarketTradingCycleRunner
 
 
 class DiscoveredMarketSelectionInput(MarketSelectionInput):
@@ -50,18 +58,13 @@ class _PrefetchedPortfolio:
 
 
 class DynamicMarketTradingCycleRunner:
-    """Resolve an audited dynamic watchlist, then reuse the canonical cycle runner.
-
-    MANAGEMENT is evaluated before any discovery refresh. Existing positions are always injected
-    into the effective universe so a watchlist removal can never make an open position unmanageable.
-    In NORMAL mode those same positions remain visible beside newly discovered opportunities.
-    """
+    """Resolve an audited watchlist, then execute one ordered multi-market strategic plan."""
 
     def __init__(
         self,
         *,
         portfolio: PortfolioSnapshotSource,
-        agent: LLMProvider,
+        agent: MultiMarketLLMProvider,
         risk_engine: RiskEngine,
         broker: Broker,
         aggressiveness: int,
@@ -71,6 +74,7 @@ class DynamicMarketTradingCycleRunner:
         capacity_evaluator: CapacityEvaluator,
         discovery: MarketDiscoveryCoordinator,
         settlement_asset: str,
+        max_decisions_per_cycle: int = DEFAULT_MAX_DECISIONS_PER_CYCLE,
         trading_style_context: TradingStyleContext | None = None,
         execution_cost_context: ExecutionCostContext | None = None,
         clock: Clock | None = None,
@@ -90,6 +94,7 @@ class DynamicMarketTradingCycleRunner:
         self._risk_engine = risk_engine
         self._broker = broker
         self._aggressiveness = aggressiveness
+        self._max_decisions_per_cycle = max_decisions_per_cycle
         self._timeouts = timeouts
         self._executable_market_data = executable_market_data
         self._bootstrap_markets = _ordered(bootstrap_markets)
@@ -102,13 +107,11 @@ class DynamicMarketTradingCycleRunner:
         self._cycle_id_factory = cycle_id_factory
         self._cycle_lock = asyncio.Lock()
 
-    async def run_cycle(self) -> TradingCycleResult:
+    async def run_cycle(self) -> MultiMarketTradingCycleResult:
         async with self._cycle_lock:
             try:
                 portfolio = self._portfolio.snapshot()
             except Exception:
-                # Preserve the canonical runner's FAILED-cycle semantics instead of turning a
-                # preflight portfolio outage into an uncaught/audit-latching exception.
                 return await self._run_canonical(
                     effective=_ordered(self._bootstrap_markets + self._discovery.watchlist),
                     portfolio_source=self._portfolio,
@@ -155,7 +158,7 @@ class DynamicMarketTradingCycleRunner:
         *,
         effective: tuple[ExecutableMarket, ...],
         portfolio_source: PortfolioSnapshotSource,
-    ) -> TradingCycleResult:
+    ) -> MultiMarketTradingCycleResult:
         runner_kwargs: dict[str, object] = {
             "executable_market_data": self._executable_market_data,
             "executable_markets": effective,
@@ -165,8 +168,8 @@ class DynamicMarketTradingCycleRunner:
             "risk_engine": self._risk_engine,
             "broker": self._broker,
             "aggressiveness": self._aggressiveness,
+            "max_decisions_per_cycle": self._max_decisions_per_cycle,
             "timeouts": self._timeouts,
-            "experiment_manifest": None,
             "trading_style_context": self._trading_style_context,
             "execution_cost_context": self._execution_cost_context,
         }
@@ -179,9 +182,9 @@ class DynamicMarketTradingCycleRunner:
 
 
 def _attach_discovery_audit(
-    result: TradingCycleResult,
+    result: MultiMarketTradingCycleResult | TradingCycleResult,
     audit: MarketDiscoveryAudit,
-) -> TradingCycleResult:
+) -> MultiMarketTradingCycleResult | TradingCycleResult:
     value = result.market_selection_input
     if value is None:
         return result
@@ -189,6 +192,26 @@ def _attach_discovery_audit(
         **value.model_dump(),
         market_discovery=audit,
     )
+    if isinstance(result, MultiMarketTradingCycleResult):
+        return MultiMarketTradingCycleResult(
+            cycle_id=result.cycle_id,
+            status=result.status,
+            failure=result.failure,
+            capacity_assessment=result.capacity_assessment,
+            market_selection_input=extended,
+            decision_plan_input=result.decision_plan_input,
+            decision_plan=result.decision_plan,
+            decision_results=result.decision_results,
+            final_portfolio_state=result.final_portfolio_state,
+            agent_tool_traces=result.agent_tool_traces,
+            decision=result.decision,
+            risk_assessment=result.risk_assessment,
+            execution_intent=result.execution_intent,
+            fills=result.fills,
+            portfolio_state_after=result.portfolio_state_after,
+        )
+
+    # Historical tests/callers may still substitute the pre-19.13 canonical runner.
     return TradingCycleResult(
         cycle_id=result.cycle_id,
         status=result.status,

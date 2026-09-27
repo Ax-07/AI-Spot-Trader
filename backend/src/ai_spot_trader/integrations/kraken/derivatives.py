@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -146,6 +146,48 @@ class KrakenDerivativesPublicClient:
             await self._client.aclose()
 
 
+def build_kraken_derivatives_instrument_map(
+    instruments: Iterable[DerivativeInstrument],
+) -> dict[str, DerivativeInstrument]:
+    """Build the deterministic canonical Kraken derivatives registry.
+
+    A linear perpetual is preferred whenever Kraken exposes multiple derivative families for
+    the same canonical pair because it is the only derivative family executable by the current
+    PAPER architecture. Ties are resolved by venue symbol so the result never depends on API
+    row ordering.
+    """
+
+    mapping: dict[str, DerivativeInstrument] = {}
+    for instrument in instruments:
+        current = mapping.get(instrument.symbol)
+        if current is None or _instrument_mapping_rank(instrument) < _instrument_mapping_rank(
+            current
+        ):
+            mapping[instrument.symbol] = instrument
+    return mapping
+
+
+def build_kraken_linear_perpetual_instrument_map(
+    instruments: Iterable[DerivativeInstrument],
+) -> dict[str, DerivativeInstrument]:
+    """Return the executable Kraken PERPETUAL/LINEAR subset of the canonical registry."""
+
+    return {
+        symbol: instrument
+        for symbol, instrument in build_kraken_derivatives_instrument_map(instruments).items()
+        if instrument.market_type is MarketType.PERPETUAL
+        and instrument.contract_kind is DerivativeContractKind.LINEAR
+    }
+
+
+def _instrument_mapping_rank(instrument: DerivativeInstrument) -> tuple[int, str]:
+    executable_linear_perpetual = (
+        instrument.market_type is MarketType.PERPETUAL
+        and instrument.contract_kind is DerivativeContractKind.LINEAR
+    )
+    return (0 if executable_linear_perpetual else 1, instrument.venue_symbol)
+
+
 class KrakenDerivativesMarketDataSource:
     """Public Kraken Derivatives source for canonical PAPER market snapshots."""
 
@@ -237,23 +279,7 @@ class KrakenDerivativesMarketDataSource:
 
     async def refresh_instruments(self) -> dict[str, DerivativeInstrument]:
         discovered = await self._rest_client.fetch_instruments()
-        mapping: dict[str, DerivativeInstrument] = {}
-        for instrument in discovered:
-            existing = mapping.get(instrument.symbol)
-            if existing is not None and existing.venue_symbol != instrument.venue_symbol:
-                # Prefer a linear perpetual for the canonical pair. This is the only derivative
-                # family executable in Batch 16 and avoids ambiguous canonical mappings.
-                if (
-                    existing.market_type is MarketType.PERPETUAL
-                    and existing.contract_kind is DerivativeContractKind.LINEAR
-                ):
-                    continue
-                if not (
-                    instrument.market_type is MarketType.PERPETUAL
-                    and instrument.contract_kind is DerivativeContractKind.LINEAR
-                ):
-                    continue
-            mapping[instrument.symbol] = instrument
+        mapping = build_kraken_derivatives_instrument_map(discovered)
         self._instruments = mapping
         return mapping
 

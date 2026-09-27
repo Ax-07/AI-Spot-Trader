@@ -1,14 +1,12 @@
 # AI Spot Trader
 
-AI Spot Trader est une application expérimentale de trading crypto **PAPER** sur Kraken, pilotée par **un seul Agent IA stratégique**. L'Agent recherche/sélectionne les opportunités puis propose `BUY`, `SELL` ou `HOLD`. Le **Risk Engine déterministe** conserve l'autorité finale : seul Risk peut autoriser, modifier ou refuser une intention d'exécution avant le `PaperBroker`.
+AI Spot Trader est une application expérimentale de trading crypto **PAPER** sur Kraken, pilotée par **un seul Agent IA stratégique**. L'Agent recherche/sélectionne les opportunités puis, au stade décisionnel du cycle, produit un **plan ordonné** de décisions `BUY`, `SELL` ou `HOLD` sur des marchés distincts. Le **Risk Engine déterministe** conserve l'autorité finale sur chaque décision avant toute exécution éventuelle par le `PaperBroker`.
 
 > Objectif expérimental : rechercher une performance élevée, avec une cible de travail de +4 %/jour. Ce n'est ni une promesse ni une garantie de rendement.
 
 ## Parcours utilisateur
 
-Le concept principal du cockpit est désormais la **Session** : l'utilisateur crée une Session, la configure, la démarre, l'arrête, la reprend, la duplique ou la supprime de son parcours courant.
-
-La navigation cible est :
+Le concept principal du cockpit est la **Session** : l'utilisateur crée une Session, la configure, la démarre, l'arrête, la reprend, la duplique ou la retire de son parcours courant.
 
 ```text
 Accueil | Sessions | Marchés | Positions | Historique | Réglages
@@ -28,15 +26,15 @@ Campaign(s)                      configuration versionnée et immuable
 paper_run(s) / recovery         lifetime d'exécution PAPER
 ```
 
-`Strategy`, `StrategyRevision`, `Campaign`, digests et IDs restent consultables dans **Réglages > Avancé** mais ne sont plus nécessaires au parcours normal.
+`Strategy`, `StrategyRevision`, `Campaign`, digests et IDs restent consultables dans **Réglages > Avancé** mais ne sont pas nécessaires au parcours normal.
 
-## Créer une Session
+## Configuration d'une Session
 
-La configuration simple demande :
+La configuration simple demande notamment :
 
-- nom ;
-- capital PAPER ;
+- nom et capital PAPER ;
 - `SPOT` ou `PERPETUAL` ;
+- style `SCALP` ou `SWING` ;
 - mode de marchés ;
 - modèle IA Luna/Sol ;
 - agressivité 1–10 ;
@@ -45,36 +43,38 @@ La configuration simple demande :
 
 Deux modes de marchés sont disponibles :
 
-- **Automatique — laisser l'IA chercher les opportunités** : `market_discovery` utilise le pipeline canonique Kraken → admissibilité déterministe → candidats → même Agent IA → watchlist ; la paire saisie reste un bootstrap/fallback, pas une obligation de trader cet actif ;
-- **Manuel — choisir les marchés** : `market_discovery = null`, l'univers exécutable est exactement la liste fournie et `risk_allowed_pairs` est aligné sur cet univers.
+- **Automatique — IA** : Kraken → admissibilité déterministe → candidats → même Agent IA → watchlist ; le bootstrap reste un fallback, pas une obligation de trader ;
+- **Manuel** : `market_discovery = null`, l'univers exécutable est la liste fournie et la whitelist Risk est alignée sur cet univers.
 
-La **Configuration avancée** expose les valeurs réellement persistées : cadence, frais, spread, slippage, timeouts, paramètres Risk, caps/levier PERPETUAL et paramètres `MarketDiscoveryPolicy` lorsque le mode automatique est utilisé.
+La configuration avancée expose les valeurs réellement persistées : cadence, coûts PAPER, timeouts, paramètres Risk, limites PERPETUAL, paramètres de discovery et, dans le Batch 19.13, `max_decisions_per_cycle`.
 
-## CRUD et versioning
+## Cycle stratégique multi-marchés — Batch 19.13
 
-La façade `/api/v1/sessions` orchestre les écritures côté backend. La création Strategy + révision 1 + Campaign est atomique afin d'éviter les états partiels créés auparavant par plusieurs appels React.
+Le cycle décisionnel n'est plus limité à une seule décision. Après constitution du contexte causal, le même Agent effectue **un seul appel stratégique de planification** et retourne une trajectoire ordonnée bornée.
 
-Une modification ne réécrit jamais l'historique :
+```text
+Kraken / données causales
+-> admissibilité déterministe + watchlist éventuelle
+-> même Agent IA : plan ordonné [décision 1 ... décision N]
+-> pour chaque décision, dans l'ordre :
+     portefeuille courant
+     -> RiskEngine : ALLOW / MODIFY / REJECT
+     -> ExecutionIntent éventuel
+     -> PaperBroker éventuel
+     -> ledger mis à jour
+-> audit durable de la trajectoire complète
+```
 
-- changement d'instructions → nouvelle `StrategyRevision` ;
-- changement de configuration → nouvelle `Campaign` ;
-- simple renommage → identité Strategy conservée sans nouvelle Campaign ;
-- anciennes Campaigns/runs/cycles/decisions/Risk/executions/fills restent intacts.
+Règles principales :
 
-`Supprimer` dans l'UX effectue un **archivage logique** de la Strategy. Aucune donnée d'audit trading n'est supprimée.
+- plusieurs `BUY`, `SELL` et `HOLD` peuvent coexister dans un même cycle sur des marchés distincts ;
+- chaque décision suivante voit les effets PAPER des exécutions précédentes ;
+- `HOLD` et `REJECT` n'arrêtent pas la trajectoire ;
+- une erreur technique Risk/Broker fait échouer le cycle et restaure atomiquement le portefeuille PAPER au checkpoint de début de cycle ;
+- `max_decisions_per_cycle` vaut `6` par défaut et ne peut pas dépasser `20` ;
+- le nombre de décisions n'est pas assimilé au nombre de trades : les analytics comptent les fills/trades économiques réellement exécutés.
 
-## Lifecycle Session
-
-Les statuts UX sont dérivés des faits backend et non stockés dans une nouvelle vérité parallèle :
-
-- `Brouillon` : jamais exécutée ;
-- `Prête` : runtime chargé et moteur arrêté ;
-- `En cours` : moteur RUNNING ;
-- `Arrêtée` : historique existant mais runtime non actif ;
-- `À reprendre` : recovery explicite possible/requis ;
-- `Archivée` : masquée du parcours normal.
-
-Actions : `Démarrer`, `Arrêter`, `Reprendre`, `Tester 1 cycle`. Une Campaign déjà exécutée n'est jamais fresh-activée silencieusement ; la reprise est explicite. Fermer le frontend ne stoppe jamais le backend.
+Le multi-décisions ne crée ni second Agent, ni ranking algorithmique stratégique, ni contournement Risk.
 
 ## Invariants
 
@@ -82,68 +82,41 @@ Actions : `Démarrer`, `Arrêter`, `Reprendre`, `Tester 1 cycle`. Une Campaign d
 - Kraken comme exchange initial ;
 - PAPER uniquement ; LIVE séparé et ultérieur ;
 - SPOT sans short/levier/marge ; PERPETUAL selon les capacités intégrées ;
-- aucune sortie LLM → Broker ;
+- aucune sortie LLM → Broker/Kraken ;
 - Risk Engine déterministe = autorité finale ;
-- frais, spread, slippage et comptabilité restent canoniques côté backend ;
-- toutes les décisions, y compris `HOLD`, sont auditables ;
+- exécution séquentielle et causale des décisions ;
+- frais, spread, slippage, accounting et mark-to-market canoniques côté backend ;
+- toutes les décisions, y compris `HOLD` et les décisions rejetées par Risk, restent auditables ;
 - aucun look-ahead ;
-- aucun secret dans les prompts, logs, réponses UI ou fichiers versionnés ;
+- aucun secret dans prompts, logs, réponses UI ou fichiers versionnés ;
 - frontend = cockpit ; aucune logique Risk/P&L/Broker/discovery stratégique parallèle.
 
 Principe : **l'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
-## Pipeline canonique
+## Lifecycle et historique
 
-```text
-Kraken
--> admissibilité déterministe / données causales
--> même Agent IA : watchlist éventuelle
--> même Agent IA : BUY / SELL / HOLD
--> RiskEngine : ALLOW / MODIFY / REJECT
--> ExecutionIntent éventuel
--> PaperBroker
--> ledger + audit durable
-```
+La façade `/api/v1/sessions` conserve la création atomique, le versioning immuable, l'archivage logique et les actions `Démarrer`, `Arrêter`, `Reprendre`, `Tester 1 cycle`. Fermer le frontend ne stoppe jamais le backend.
 
-Le frontend n'appartient pas à cette chaîne d'exécution.
-
-## API principales
-
-Sous `/api/v1` :
-
-```text
-GET    /sessions
-POST   /sessions
-GET    /sessions/{session_id}
-PUT    /sessions/{session_id}
-POST   /sessions/{session_id}/duplicate
-DELETE /sessions/{session_id}
-POST   /sessions/{session_id}/start
-POST   /sessions/{session_id}/stop
-POST   /sessions/{session_id}/resume
-POST   /sessions/{session_id}/run-cycle
-```
-
-Les routes historiques Strategies/Campaigns/engine restent disponibles pour le mode avancé et la compatibilité technique.
+Un cycle Batch 19.13 expose une trajectoire ordonnée 1:N : plusieurs décisions peuvent posséder leurs évaluations Risk et leurs intentions/fills associés. Les anciens cycles restent lisibles via la compatibilité historique.
 
 ## Persistence
 
-Le Batch 19.8 n'introduit **aucune table `sessions`** et ne nécessite pas de migration SQL : la façade repose sur les faits canoniques déjà persistés.
+Le Batch 19.13 ajoute la migration :
+
+```text
+0006_paper_control_plane
+-> 0007_multi_decision_cycles
+```
+
+La persistence d'audit passe explicitement à des relations 1:N pour les décisions, `RiskAssessment` et `ExecutionIntent` d'un cycle, tout en conservant la lecture des historiques antérieurs.
 
 ## Référence de travail
 
-Le Batch 19.8 — Sessions v1 est intégré à GitHub `main` au commit :
+Base GitHub intégrée vérifiée :
 
 ```text
-f3a8eae8528648c07723aa97350852428254acc7
-feat: add user-facing Sessions workflow
+18596ac9d4f6554aa4817a9bdb374ab597c2399f
+fix: harden paper perpetual execution precision
 ```
 
-Validation locale opérateur du 25 septembre 2026 :
-
-- backend : `606 passed`, 2 warnings de dépendances ;
-- frontend : `21/21` tests passés ;
-- `pnpm lint` : passé ;
-- `pnpm typecheck` : passé ;
-- `pnpm build` : passé ;
-- `git diff --check` : aucune erreur de whitespace.
+Validation du Batch 19.13 : backend `698 passed, 2 warnings`, migration PostgreSQL réelle réussie, frontend `39 passed`, lint/typecheck/build réussis.

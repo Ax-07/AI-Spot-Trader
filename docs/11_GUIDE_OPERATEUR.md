@@ -4,7 +4,7 @@
 
 ## 1. Avant de commencer
 
-AI Spot Trader fonctionne actuellement en **PAPER uniquement** avec Kraken. Le frontend est un cockpit ; le moteur de trading, le mark-to-market, Risk, Broker et la discovery restent dans le backend.
+AI Spot Trader fonctionne actuellement en **PAPER uniquement** avec Kraken. Le frontend est un cockpit ; moteur de trading, mark-to-market, Risk, Broker et discovery restent dans le backend.
 
 **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
@@ -12,18 +12,16 @@ Une sortie LLM ne déclenche jamais directement un ordre. LIVE n'est pas disponi
 
 ## 2. Navigation
 
-Le parcours normal comporte six pages :
+Le parcours normal comporte :
 
 - **Accueil** : état et prochaine action ;
 - **Sessions** : créer et piloter les configurations PAPER ;
 - **Marchés** : watchlist, charts, positions et fills ;
 - **Positions** : portefeuille et P&L backend ;
-- **Historique** : Agent → Risk → exécution PAPER ;
+- **Historique** : trajectoire Agent → Risk → exécution PAPER ;
 - **Réglages** : apparence, aide et mode avancé.
 
 ## 3. Qu'est-ce qu'une Session ?
-
-Une Session est l'objet que vous créez et pilotez. Techniquement, le backend conserve :
 
 ```text
 Session
@@ -33,87 +31,56 @@ Session
 -> paper_run(s)
 ```
 
-Vous n'avez pas besoin de connaître ces objets pour le parcours normal. Ils sont conservés pour l'immuabilité, l'audit et le recovery.
+Ces objets techniques assurent l'immuabilité, l'audit et le recovery mais ne sont pas requis dans le parcours normal.
 
 ## 4. Créer une Session
 
-Ouvrez **Sessions** puis **Nouvelle session**. Si aucune Session n'existe, l'Accueil propose également la création directe.
+La configuration simple demande notamment : nom, marché `SPOT`/`PERPETUAL`, style `SCALP`/`SWING`, mode de marchés, capital PAPER, Luna/Sol, agressivité, profil Risk et instructions.
 
-La configuration simple demande :
-
-1. un nom ;
-2. `SPOT` ou `PERPETUAL` ;
-3. un style de trading `SCALP` ou `SWING` ;
-4. un mode de sélection des marchés ;
-5. un capital PAPER ;
-6. Luna ou Sol ;
-7. agressivité 1–10 ;
-8. profil Risk ;
-9. instructions IA/opérateur.
-
-Deux boutons sont disponibles :
-
-- **Créer** : persiste la Session sans démarrer ;
-- **Créer et démarrer** : crée puis active et démarre explicitement le moteur backend.
-
-La création technique Strategy + revision 1 + Campaign est atomique côté backend.
+`Créer` persiste sans démarrer. `Créer et démarrer` crée puis active explicitement le moteur backend.
 
 ### Style de trading
 
-Pour une nouvelle Session, `SCALP` est le choix UX initial. Les recommandations affichées sont :
-
-| Style | Cadence stratégique | Watchlist refresh | Timeframes stratégiques |
+| Style | Cadence stratégique | Watchlist refresh | Timeframes |
 | --- | ---: | ---: | --- |
 | SCALP | 60 s | 300 s | `1m · 5m · 15m · 30m` |
 | SWING | 900 s | 1800 s | `1h · 4h · 1d` |
 
-Changer de style ne remplace pas automatiquement une cadence ou un refresh déjà personnalisé. Utilisez `Réappliquer les valeurs conseillées` uniquement si vous voulez explicitement reprendre les recommandations du style.
-
-Le style ne choisit ni l'agressivité, ni le mode de marchés, ni le profil Risk. Ces quatre dimensions restent indépendantes.
+Changer de style ne remplace pas automatiquement une cadence déjà personnalisée. Le style, l'agressivité, le mode de marchés et Risk restent indépendants.
 
 ## 5. Mode marchés Automatique — IA
 
-Choisissez **Automatique — laisser l'IA chercher les opportunités**.
+Le bootstrap/fallback n'oblige pas l'Agent à trader les paires saisies.
 
-La ou les paires saisies sont un **bootstrap/fallback**. Elles ne signifient pas que l'Agent est obligé de trader ces actifs.
-
-Le pipeline reste :
+Le pipeline Batch 19.13 devient :
 
 ```text
 Kraken
 -> filtrage déterministe d'admissibilité
 -> candidats
--> même Agent IA choisit la watchlist
--> même Agent décide BUY / SELL / HOLD
--> Risk Engine autorise / modifie / refuse
--> PaperBroker éventuel
+-> même Agent choisit la watchlist si refresh nécessaire
+-> contexte stratégique causal
+-> même Agent produit un plan ordonné de décisions
+-> pour chaque décision : Risk puis PaperBroker éventuel
 ```
 
-La discovery n'est pas un second Agent et le filtre déterministe ne produit aucun score stratégique d'opportunité.
+La discovery n'est pas un second Agent et ne produit aucun score stratégique déterministe.
 
 ## 6. Mode marchés Manuel
 
-Choisissez **Manuel — choisir les marchés** puis fournissez une liste comme :
-
-```text
-BTC/USD
-ETH/USD
-SOL/USD
-```
-
 Dans ce mode :
 
-- aucune Market Discovery n'est utilisée ;
-- l'Agent ne travaille que dans l'univers fourni ;
-- la whitelist Risk est alignée sur ce même univers ;
-- l'Agent conserve BUY / SELL / HOLD ;
-- Risk reste final.
+- aucune Market Discovery ;
+- l'Agent travaille uniquement dans l'univers fourni ;
+- la whitelist Risk est alignée sur cet univers ;
+- le plan peut contenir plusieurs décisions sur des marchés distincts de cet univers ;
+- Risk reste final pour chaque décision.
 
-Toutes les paires doivent utiliser le même actif de règlement dans une Session simple.
+Toutes les paires d'une Session simple conservent le même actif de règlement attendu par les contrats existants.
 
 ## 7. Profils Risk
 
-Les profils sont des raccourcis UX vers des valeurs de CampaignConfiguration ; ils ne remplacent jamais le Risk Engine.
+Les profils sont des raccourcis UX vers la configuration. Ils ne remplacent jamais le Risk Engine.
 
 | Profil | Ordre max | Levier PERP | Position dérivée max | Exposition dérivée totale max | Buffer liquidation |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -122,44 +89,20 @@ Les profils sont des raccourcis UX vers des valeurs de CampaignConfiguration ; i
 | Agressif | 20 % | 3x | 35 % | 70 % | 1.10 |
 | Personnalisé | saisi | saisi | saisi | saisi | saisi |
 
-Le backend valide toujours les limites finales.
+Le plafond d'ordre s'applique décision par décision. Le portefeuille et l'exposition sont recalculés causalement entre les décisions du même cycle.
 
 ## 8. Configuration avancée
 
-Le même formulaire permet d'ouvrir **Configuration avancée**. Il affiche les valeurs effectivement utilisées :
+La configuration avancée expose les valeurs réellement utilisées : style, timeframes, cadence, coûts PAPER, timeouts, caps Risk, paramètres PERPETUAL, whitelist éventuelle et paramètres de Market Discovery.
 
-- style de trading et version `trading-style-map-v1` ;
-- timeframes stratégiques associées, en lecture seule ;
-- cadence stratégique ;
-- frais PAPER ;
-- spread ;
-- slippage ;
-- timeouts marché / Agent / Broker ;
-- caps Risk ;
-- levier et limites PERPETUAL ;
-- whitelist Risk optionnelle en mode automatique.
+Le Batch 19.13 ajoute également `max_decisions_per_cycle` :
 
-Les timeframes affichées sont dérivées du mapping versionné pour information ; elles ne constituent pas un sélecteur indépendant et ne construisent pas le contexte runtime.
+- défaut : `6` ;
+- limite dure backend : `20`.
 
-En mode automatique, les paramètres Market Discovery sont aussi visibles :
+Augmenter cette valeur n'oblige pas l'Agent à produire autant de décisions et n'augmente aucune limite Risk par elle-même.
 
-```text
-catalog_refresh_seconds      900
-watchlist_refresh_seconds    900
-refresh_timeout_seconds      45
-candidate_probe_limit        24
-candidate_limit              12
-watchlist_limit              6
-max_snapshot_age_seconds     120
-min_window_observations      2
-require_complete_window      false
-```
-
-## 9. Lire la page Sessions
-
-Chaque carte affiche le nom, le statut et un résumé : capital, modèle, mode de marchés et agressivité.
-
-Statuts possibles :
+## 9. Statuts Session
 
 - **Brouillon** : jamais exécutée ;
 - **Prête** : runtime chargé, moteur arrêté ;
@@ -168,7 +111,7 @@ Statuts possibles :
 - **À reprendre** : recovery explicite requis/possible ;
 - **Archivée** : retirée de la liste normale.
 
-Ces statuts sont dérivés des faits backend, pas d'un champ manipulé dans le navigateur.
+Ces statuts sont dérivés des faits backend.
 
 ## 10. Démarrer, arrêter, reprendre, tester un cycle
 
@@ -178,61 +121,67 @@ Une Session jamais exécutée utilise une activation fraîche puis démarre le m
 
 ### Arrêter
 
-`Arrêter` termine explicitement la Session active : la boucle est stoppée si nécessaire, le runtime est fermé et le `paper_run` reçoit sa fin durable. Fermer seulement le navigateur ne fait **pas** cela et ne stoppe jamais le moteur backend.
+`Arrêter` stoppe la boucle, ferme le runtime et termine durablement le `paper_run`. Fermer seulement le navigateur ne stoppe pas le moteur.
 
 ### Reprendre
 
-Une Campaign déjà exécutée n'est jamais fresh-activée. `Reprendre` restaure explicitement le ledger compatible et crée la continuité de recovery prévue par le backend.
+Une Campaign déjà exécutée utilise le recovery explicite prévu par le backend ; aucune reprise silencieuse après restart.
 
 ### Tester 1 cycle
 
-`Tester 1 cycle` exécute exactement un cycle canonique et laisse le moteur autonome arrêté. Si la Session n'avait jamais tourné, un run est créé ; si sa Campaign possède un historique, le recovery explicite est utilisé.
+`Tester 1 cycle` exécute exactement **un cycle canonique** puis laisse le moteur autonome arrêté. Depuis le Batch 19.13, ce cycle unique peut contenir plusieurs décisions et plusieurs exécutions PAPER sur des marchés distincts.
 
-## 11. Modifier une Session
+## 11. Comment lire un cycle multi-décisions
 
-`Modifier` ouvre le formulaire prérempli avec la configuration courante.
+L'Historique doit être lu comme une trajectoire ordonnée :
 
-Le backend ne réécrit jamais l'historique :
+```text
+Décision 1
+  -> rationale Agent
+  -> Risk
+  -> exécution/fill éventuel
+Décision 2
+  -> rationale Agent
+  -> Risk sur le portefeuille déjà mis à jour
+  -> exécution/fill éventuel
+...
+```
 
-- modifier seulement le nom renomme la Session ;
-- modifier les instructions crée une nouvelle StrategyRevision ;
-- modifier la configuration crée une nouvelle Campaign ;
-- les anciens runs et leurs faits restent intacts.
+`HOLD` et `REJECT` sont des résultats normaux et auditables. Ils n'empêchent pas l'affichage ni le traitement des décisions suivantes.
 
-Une Session **En cours** ne peut pas être modifiée silencieusement. Arrêtez-la avant d'appliquer une nouvelle version.
+Le nombre de lignes de décision ne correspond pas nécessairement au nombre de trades : seuls les fills réellement exécutés comptent comme activité économique.
 
-À la réouverture, le formulaire reprend les valeurs réellement persistées : style, cadence, watchlist refresh, coûts, Risk, timeouts, marchés et agressivité. Une Session historique sans style affiche `Hérité / non défini` ; aucun SCALP/SWING n'est inféré automatiquement.
+## 12. Échec technique d'un cycle
 
-## 12. Dupliquer une Session
+Si une erreur technique Risk ou Broker intervient après une ou plusieurs exécutions PAPER, le cycle devient `FAILED` et le backend restaure le portefeuille au checkpoint du début du cycle.
 
-`Dupliquer` crée une nouvelle Session indépendante avec les instructions et la configuration courantes. Par défaut le nom reçoit `- copie`.
+Ainsi, un cycle échoué ne laisse pas un portefeuille partiellement muté. L'Historique conserve néanmoins les informations nécessaires pour diagnostiquer le stage technique en échec.
 
-La copie possède un nouvel ID technique et **aucun historique/run** de l'original.
+Un `REJECT` Risk n'est pas une erreur technique et ne déclenche pas ce rollback.
 
-## 13. Supprimer une Session
+## 13. Modifier, dupliquer, archiver
 
-`Supprimer` signifie **archiver** dans le parcours utilisateur. Le backend ne supprime pas physiquement :
+Les règles d'immuabilité restent inchangées :
 
-- revisions ;
-- Campaigns ;
-- paper_runs ;
-- cycles ;
-- décisions ;
-- évaluations Risk ;
-- executions/fills ;
-- données nécessaires au P&L et à l'audit.
+- nom seul : rename Strategy ;
+- instructions : nouvelle StrategyRevision ;
+- configuration : nouvelle Campaign ;
+- duplication : nouvelle Session sans historique ;
+- suppression UX : archivage logique, pas suppression des faits trading.
 
-La restauration d'une Session archivée n'est pas proposée en v1.
+Une Session en cours doit être arrêtée avant modification.
 
 ## 14. SPOT et PERPETUAL
 
 ### SPOT
 
-Pas de short, levier ni marge. SELL ne peut réduire qu'un actif réellement détenu. Accounting, mark, valeur de marché et P&L sont fournis par le backend.
+Pas de short, levier ni marge. `SELL` ne peut réduire qu'un actif réellement détenu. Dans un plan, chaque SELL est évalué sur la quantité encore disponible à cet instant.
 
 ### PERPETUAL
 
-Périmètre actuel : contrats linéaires PAPER selon les capacités intégrées, marge `ISOLATED`, levier configuré/déterministe et caps Risk. Le LLM ne choisit jamais librement le levier.
+Périmètre actuel : contrats linéaires PAPER selon les capacités intégrées, marge `ISOLATED`, levier/caps déterministes. Le LLM ne choisit jamais librement le levier.
+
+Le correctif intégré au HEAD `18596ac…` normalise les quantités autorisées sur le quantum provider-derived et préserve l'exactitude des fills PAPER.
 
 ## 15. Positions, Marchés et Historique
 
@@ -240,26 +189,28 @@ Le frontend affiche les faits backend et ne les reconstruit pas :
 
 - P&L/exposition depuis le backend ;
 - candles via le pipeline backend ;
-- markers uniquement depuis les fills persistés ;
+- markers depuis les fills persistés ;
 - prix moyen/mark/liquidation depuis `/portfolio` ;
-- rationales et statuts Agent/Risk/exécution depuis les faits d'audit.
+- trajectoires de décisions et résultats Risk depuis l'audit.
 
-Une valeur absente reste absente ; aucune causalité ni donnée financière n'est inventée.
+Une valeur absente reste absente ; aucune causalité financière n'est inventée côté navigateur.
 
 ## 16. Réglages > Avancé
 
-Cette surface reste destinée au diagnostic et aux besoins techniques : Strategies, StrategyRevision, Campaigns, comparaison de versions, prompt preview, activation/recovery technique, digests et UUID.
+Surface de diagnostic pour Strategies, StrategyRevision, Campaigns, comparaison de versions, prompt preview, activation/recovery technique, digests, UUID et paramètres détaillés.
 
 Le parcours normal doit privilégier **Sessions**.
 
-## 17. Sécurité
+## 17. Sécurité et invariants
 
 - PAPER uniquement ;
 - un seul Agent IA ;
 - Kraken ;
-- Risk final ;
+- Risk final pour chaque décision ;
 - aucune sortie LLM directe vers Broker ;
-- aucun secret dans les instructions ou fichiers versionnés ;
-- toutes les décisions, HOLD inclus, restent auditables ;
+- décisions exécutées séquentiellement et causalement ;
+- toutes les décisions, `HOLD`/`REJECT` inclus, auditables ;
+- aucune donnée future / look-ahead ;
 - frontend = cockpit seulement ;
-- LIVE reste séparé.
+- LIVE reste séparé ;
+- aucune promesse de rendement.

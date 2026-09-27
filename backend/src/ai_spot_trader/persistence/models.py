@@ -10,6 +10,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     Uuid,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -99,15 +100,11 @@ class PaperRunRecord(Base):
         DateTime(timezone=True), nullable=False, index=True
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
-    # Legacy singleton projection. Multi-market Batch 18.2 runs deliberately keep these NULL
-    # rather than inventing a fake MULTI symbol/type.
     market_type: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     symbol: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     execution_universe_payload: Mapped[list[dict[str, object]]] = mapped_column(
         JsonType, nullable=False
     )
-    # Batch 18.6 keeps one run per backend lifetime, but records an explicit predecessor and the
-    # exact starting ledger snapshot so restart recovery never depends on replaying Agent output.
     resumed_from_paper_run_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("paper_runs.paper_run_id", ondelete="RESTRICT"),
@@ -141,6 +138,7 @@ class CycleRecord(Base):
     failure_stage: Mapped[str | None] = mapped_column(String(32))
     failure_error_type: Mapped[str | None] = mapped_column(String(255))
     failure_timed_out: Mapped[bool | None] = mapped_column(Boolean)
+    # Legacy singleton projection only. Multi-decision cycles deliberately leave these NULL.
     market_state_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), index=True)
     portfolio_state_before_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), index=True)
     portfolio_state_after_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), index=True)
@@ -152,42 +150,76 @@ class CycleRecord(Base):
     agent_input_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
     agent_tool_traces_payload: Mapped[list[dict[str, object]] | None] = mapped_column(JsonType)
     portfolio_after_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
+    decision_plan_input_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
+    decision_plan_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
 
     paper_run: Mapped[PaperRunRecord | None] = relationship(back_populates="cycles")
-    decision: Mapped["DecisionRecord | None"] = relationship(
+    decisions: Mapped[list["DecisionRecord"]] = relationship(
         back_populates="cycle",
         cascade="all, delete-orphan",
-        uselist=False,
+        order_by="DecisionRecord.decision_index",
     )
-    risk_assessment: Mapped["RiskAssessmentRecord | None"] = relationship(
+    risk_assessments: Mapped[list["RiskAssessmentRecord"]] = relationship(
         back_populates="cycle",
         cascade="all, delete-orphan",
-        uselist=False,
     )
-    execution_intent: Mapped["ExecutionIntentRecord | None"] = relationship(
+    execution_intents: Mapped[list["ExecutionIntentRecord"]] = relationship(
         back_populates="cycle",
         cascade="all, delete-orphan",
-        uselist=False,
     )
+
+    @property
+    def decision(self) -> "DecisionRecord | None":
+        return self.decisions[0] if len(self.decisions) == 1 else None
+
+    @decision.setter
+    def decision(self, value: "DecisionRecord | None") -> None:
+        self.decisions = [] if value is None else [value]
+
+    @property
+    def risk_assessment(self) -> "RiskAssessmentRecord | None":
+        return self.risk_assessments[0] if len(self.risk_assessments) == 1 else None
+
+    @risk_assessment.setter
+    def risk_assessment(self, value: "RiskAssessmentRecord | None") -> None:
+        self.risk_assessments = [] if value is None else [value]
+
+    @property
+    def execution_intent(self) -> "ExecutionIntentRecord | None":
+        return self.execution_intents[0] if len(self.execution_intents) == 1 else None
+
+    @execution_intent.setter
+    def execution_intent(self, value: "ExecutionIntentRecord | None") -> None:
+        self.execution_intents = [] if value is None else [value]
 
 
 class DecisionRecord(Base):
     __tablename__ = "audit_decisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "cycle_id",
+            "decision_index",
+            name="uq_audit_decisions_cycle_decision_index",
+        ),
+    )
 
     decision_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     cycle_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("audit_cycles.cycle_id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,
         index=True,
     )
+    decision_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     action: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     symbol: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     payload: Mapped[dict[str, object]] = mapped_column(JsonType, nullable=False)
+    # Decision-local durable context used by 1:N explainability and analytics.
+    agent_input_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
+    portfolio_after_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
 
-    cycle: Mapped[CycleRecord] = relationship(back_populates="decision")
+    cycle: Mapped[CycleRecord] = relationship(back_populates="decisions")
     risk_assessment: Mapped["RiskAssessmentRecord | None"] = relationship(
         back_populates="decision",
         uselist=False,
@@ -202,7 +234,6 @@ class RiskAssessmentRecord(Base):
         Uuid(as_uuid=True),
         ForeignKey("audit_cycles.cycle_id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,
         index=True,
     )
     decision_id: Mapped[UUID] = mapped_column(
@@ -216,7 +247,7 @@ class RiskAssessmentRecord(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     payload: Mapped[dict[str, object]] = mapped_column(JsonType, nullable=False)
 
-    cycle: Mapped[CycleRecord] = relationship(back_populates="risk_assessment")
+    cycle: Mapped[CycleRecord] = relationship(back_populates="risk_assessments")
     decision: Mapped[DecisionRecord] = relationship(back_populates="risk_assessment")
     execution_intent: Mapped["ExecutionIntentRecord | None"] = relationship(
         back_populates="risk_assessment",
@@ -232,7 +263,6 @@ class ExecutionIntentRecord(Base):
         Uuid(as_uuid=True),
         ForeignKey("audit_cycles.cycle_id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,
         index=True,
     )
     decision_id: Mapped[UUID] = mapped_column(
@@ -254,7 +284,7 @@ class ExecutionIntentRecord(Base):
     symbol: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict[str, object]] = mapped_column(JsonType, nullable=False)
 
-    cycle: Mapped[CycleRecord] = relationship(back_populates="execution_intent")
+    cycle: Mapped[CycleRecord] = relationship(back_populates="execution_intents")
     risk_assessment: Mapped[RiskAssessmentRecord] = relationship(
         back_populates="execution_intent"
     )

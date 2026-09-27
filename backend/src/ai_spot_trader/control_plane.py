@@ -12,6 +12,10 @@ from ai_spot_trader.agent.prompt import BASE_AGENT_CONTRACT_VERSION
 from ai_spot_trader.domain.enums import LLMModel, MarginMode, MarketType, TradingStyle
 from ai_spot_trader.domain.experiments import TRADING_STYLE_MAPPING_VERSION
 from ai_spot_trader.domain.models import ExecutableMarket
+from ai_spot_trader.domain.planning import (
+    DEFAULT_MAX_DECISIONS_PER_CYCLE,
+    MAX_DECISIONS_PER_CYCLE_HARD_LIMIT,
+)
 from ai_spot_trader.domain.symbols import parse_canonical_symbol
 from ai_spot_trader.market.discovery import MarketDiscoveryPolicy
 
@@ -43,6 +47,14 @@ class CampaignConfiguration(ControlPlaneModel):
     llm_model: LLMModel
     aggressiveness: int = Field(ge=1, le=10)
     trading_cadence_seconds: float = Field(gt=0)
+    # Optional for digest-compatible loading of Campaigns created before Batch 19.13.
+    # New Session payloads persist this field explicitly; legacy payloads keep their exact digest.
+    max_decisions_per_cycle: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_DECISIONS_PER_CYCLE_HARD_LIMIT,
+        exclude_if=lambda value: value is None,
+    )
     trading_style: TradingStyle | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -52,8 +64,8 @@ class CampaignConfiguration(ControlPlaneModel):
 
     paper_initial_capital: PositiveDecimal
     paper_settlement_asset: str = Field(min_length=1, max_length=16)
-    # In Batch 19.4 this remains an immutable bootstrap/safety universe. When
-    # market_discovery is configured, the strategic watchlist may add Kraken markets at runtime.
+    # This remains an immutable bootstrap/safety universe. When market_discovery is configured,
+    # the strategic watchlist may add Kraken markets at runtime.
     paper_executable_markets: tuple[ExecutableMarket, ...]
     market_discovery: MarketDiscoveryPolicy | None = Field(
         default=None, exclude_if=lambda value: value is None
@@ -94,24 +106,20 @@ class CampaignConfiguration(ControlPlaneModel):
 
         if not isinstance(value, (list, tuple)):
             return value
-
         adapted: list[object] = []
         for item in value:
             if not isinstance(item, dict):
                 adapted.append(item)
                 continue
-
             raw_market_type = item.get("market_type")
             if not isinstance(raw_market_type, str):
                 adapted.append(item)
                 continue
-
             try:
                 market_type = MarketType(raw_market_type)
             except ValueError:
                 adapted.append(item)
                 continue
-
             adapted.append({**item, "market_type": market_type})
         return tuple(adapted)
 
@@ -213,6 +221,10 @@ class CampaignConfiguration(ControlPlaneModel):
         if has_perpetual and self.risk_max_total_derivative_exposure is None:
             raise ValueError("PERPETUAL campaigns require risk_max_total_derivative_exposure")
         return self
+
+    @property
+    def effective_max_decisions_per_cycle(self) -> int:
+        return self.max_decisions_per_cycle or DEFAULT_MAX_DECISIONS_PER_CYCLE
 
     def canonical_payload(self) -> dict[str, object]:
         payload = self.model_dump(mode="json")
