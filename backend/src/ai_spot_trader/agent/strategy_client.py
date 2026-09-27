@@ -287,7 +287,7 @@ def _compose_strategy_context_sections(
         ),
         (
             "CONTEXTE D'AGRESSIVITE CANONIQUE :\n"
-            f"niveau={context.level}/10\n"
+            f"niveat={context.level}/10\n"
             f"posture={context.posture}\n"
             f"instruction={context.strategic_instruction}"
         ),
@@ -326,9 +326,18 @@ Regles protegees :
 - Les seules actions autorisees sont `BUY`, `SELL` et `HOLD`.
 - `BUY` et `SELL` doivent proposer `proposed_quantity` strictement positive.
 - `HOLD` doit toujours proposer `proposed_quantity=null`.
-- Dans la Session canonique courante, l'univers executable est SPOT uniquement : aucun short,
-  levier, marge, future ou perpetual ne doit etre demande.
-- Sur SPOT, `SELL` ne peut que reduire un actif effectivement detenu ; ne vendez jamais a decouvert.
+- Les types executables sont `SPOT` et `PERPETUAL` lineaire, uniquement lorsqu'ils sont
+  presents dans `market_states`. `FUTURE` date n'est pas executable.
+- Consultez `market_type` avant d'interpreter `BUY` ou `SELL`.
+- Sur `SPOT`, `BUY` acquiert l'actif de base ; `SELL` ne peut que reduire un actif SPOT
+  effectivement detenu. Aucun short, levier ou marge n'est autorise sur SPOT.
+- Sur `PERPETUAL`, `BUY` exprime ou augmente une exposition `LONG`, ou reduit une position
+  `SHORT` existante ; `SELL` exprime ou augmente une exposition `SHORT`, ou reduit une
+  position `LONG` existante.
+- Ne supposez jamais qu'un ordre derive de sens oppose peut inverser librement la position.
+  Le Risk Engine determine `reduce_only` et empeche les inversions accidentelles.
+- Ne choisissez, n'augmentez et ne contournez jamais l'effet de levier. Le levier, la marge,
+  l'exposition et les buffers de liquidation relevent exclusivement du Risk Engine deterministe.
 - `PortfolioState` est global et complet. Tenez compte du capital deja engage et des positions
   ouvertes sur tous les marches visibles dans l'input.
 - Si `management_mode=true`, n'ouvrez aucune nouvelle exposition : utilisez uniquement HOLD ou une
@@ -377,7 +386,7 @@ Regles protegees :
 - `candidates` est le seul univers autorise. Il contient des faits Kraken filtres deterministement
   pour compatibilite et disponibilite des donnees ; ce filtrage n'est pas un classement de trade.
 - Selectionnez entre 1 et `watchlist_limit` marches uniquement parmi `candidates`.
-- Dans la Session canonique courante, seuls des marches SPOT sont admissibles a la watchlist.
+- Les types admissibles a la watchlist sont `SPOT` et `PERPETUAL` lineaire, uniquement lorsque le type correspondant est present dans `candidates`. `FUTURE` date est interdit.
 - Vous pouvez retenir plusieurs marches et devez fournir une justification concise par marche et
   une justification globale.
 - La watchlist ne declenche aucun ordre et ne constitue ni BUY, ni SELL, ni HOLD.

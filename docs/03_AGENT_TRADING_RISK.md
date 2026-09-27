@@ -91,26 +91,25 @@ univers effectif = watchlist IA actuelle + toutes les positions ouvertes gérabl
 
 Un retrait de watchlist n'est jamais une clôture forcée. Une position ouverte reste gérable jusqu'à sa clôture.
 
-## 7. SPOT — invariant runtime courant
+## 7. SPOT — règles spécifiques
 
-Le runtime PAPER canonique est actuellement **SPOT uniquement**.
+Le runtime PAPER canonique autorise les marchés `SPOT` et `PERPETUAL` linéaires. Les règles SPOT restent strictes : `BUY` acquiert la base et `SELL` réduit uniquement un actif effectivement détenu. Aucun short, levier ni margin n'est autorisé sur SPOT.
 
-`BUY` acquiert la base ; `SELL` réduit uniquement un actif réellement détenu. Aucun short, levier, margin, future ou perpetual n'est autorisé dans une Session canonique conforme à l'invariant courant.
+Dans un plan multi-décisions, Risk réévalue la quantité disponible après chaque exécution. Un SELL SPOT ne peut donc pas être autorisé à partir d'un inventaire obsolète.
 
-Le runtime refuse l'activation si :
+## 8. PERPETUAL — support PAPER canonique
 
-- un marché bootstrap n'est pas `SPOT` ;
-- la policy de discovery demande un type autre que `SPOT`.
+Les marchés `PERPETUAL` linéaires sont supportés dans les Sessions PAPER et dans la discovery dynamique lorsque le type est présent dans l'univers bootstrap autorisé.
 
-Dans un plan multi-décisions, Risk réévalue la quantité disponible après chaque exécution. Un SELL ne peut donc pas être autorisé à partir d'un inventaire obsolète.
+Sémantique stratégique :
 
-## 8. Compatibilité historique PERPETUAL
+- `BUY` exprime ou augmente une exposition LONG, ou réduit une position SHORT existante ;
+- `SELL` exprime ou augmente une exposition SHORT, ou réduit une position LONG existante ;
+- l'Agent ne choisit jamais le levier, la marge, `reduce_only` ni les limites d'exposition.
 
-Le repository conserve des modèles, adapters, tests historiques et données d'audit liés à PERPETUAL. Cette compatibilité est maintenue afin de ne pas casser la lecture des historiques ni entreprendre une suppression massive hors périmètre.
+Le Risk Engine déterministe conserve l'autorité finale : marge isolée, levier configuré, plafond de levier, notionnel par position, exposition dérivés totale, buffer de liquidation et logique `reduce_only` restent contrôlés hors LLM. Une décision opposée ne peut pas inverser librement une position.
 
-Elle ne signifie pas que PERPETUAL est actif dans la Session canonique courante. Tant que l'invariant SPOT-only est en vigueur, le garde-fou de composition du runtime bloque son activation et sa discovery.
-
-Toute réactivation future des dérivés devra être une décision explicite séparée, avec ses propres invariants et validations.
+`FUTURE` daté reste interdit à l'exécution et à la discovery.
 
 ## 9. Évaluation Risk séquentielle
 
@@ -156,7 +155,7 @@ La rationale Agent et les raisons Risk restent deux catégories distinctes. L'UI
 
 Un plan vide, un JSON invalide, une violation du contrat action/quantité, un dépassement de limite, un doublon ou un marché hors univers échoue avant Risk.
 
-Les erreurs sont catégorisées pour l'opérateur sans persister la réponse LLM brute, un secret, une clé API ou un prompt secret. Il n'existe aucun retry LLM sémantique destiné à « réparer » une décision invalide ; l'invariant d'un seul appel stratégique de planification par cycle est maintenu.
+Les erreurs sont catégorisées pour l'opérateur sans persister la réponse LLM brute, un secret, une clé API ou un prompt secret. Il n'existe aucun retry LLM sémantique destiné à « réparer » une décision invalide ; l'invariant d'un seul appel stratégique de planification par cycle est mainten.
 
 ## 13. Échec technique et rollback PAPER
 
@@ -168,7 +167,7 @@ Le rollback économique ne supprime pas l'information d'audit nécessaire pour c
 
 ## 14. Causalité / no-look-ahead
 
-Aucun candidat, snapshot, candle ou contexte ne peut introduire une donnée postérieure au temps de décision concerné. `history_as_of(...)` reste la primitive de lecture causale pour les candles stratégiques.
+Aucun candidat, snapshot, candle ou contexte ne peut introduire une donnée postérieure au temps de décision concerné. `history_as_of(...)` reste la primitive de lecture causale pour les candles stratégéques.
 
 L'ordre intra-cycle est causal mais n'autorise aucun accès au futur : la décision suivante observe uniquement les effets déjà produits par les étapes précédentes et les faits disponibles dans le contexte du cycle.
 
@@ -213,7 +212,7 @@ Il ne peut pas produire un ranking, recalculer Risk, inventer un fill ou réordo
 - aucun ranking déterministe remplaçant le jugement stratégique ;
 - aucun ordre direct LLM/tool ;
 - aucun contournement Risk ;
-- aucun short, levier, margin, future ou perpetual dans la Session canonique courante ;
+- aucun `FUTURE` daté ; aucun short/levier/margin sur SPOT ; aucun contournement des contrôles de levier, marge ou exposition PERPETUAL ;
 - aucun look-ahead ;
 - aucune obligation de trader ;
 - aucun calcul financier canonique déporté dans le frontend ;

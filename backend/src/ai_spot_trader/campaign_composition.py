@@ -112,31 +112,6 @@ def _campaign_agent_contexts(
     )
 
 
-def _ensure_spot_only_session(config: CampaignConfiguration) -> None:
-    """Fail closed at canonical runtime activation while retaining historical derivative code."""
-
-    non_spot_bootstrap = tuple(
-        market
-        for market in config.paper_executable_markets
-        if market.market_type is not MarketType.SPOT
-    )
-    discovery = config.market_discovery
-    non_spot_discovery = (
-        tuple(
-            market_type
-            for market_type in discovery.market_types
-            if market_type is not MarketType.SPOT
-        )
-        if discovery is not None
-        else ()
-    )
-    if non_spot_bootstrap or non_spot_discovery:
-        raise PaperRuntimeConfigurationError(
-            "current canonical PAPER sessions are SPOT-only; PERPETUAL/FUTURE markets "
-            "cannot be activated or discovered"
-        )
-
-
 def build_campaign_runtime(
     settings: Settings,
     *,
@@ -168,7 +143,6 @@ def build_campaign_runtime(
         raise PaperRuntimeConfigurationError("campaign Agent contract version mismatch")
 
     config = campaign.configuration
-    _ensure_spot_only_session(config)
     dynamic_policy = config.market_discovery
     dynamic_enabled = dynamic_policy is not None
     style_context, execution_cost_context = _campaign_agent_contexts(config)

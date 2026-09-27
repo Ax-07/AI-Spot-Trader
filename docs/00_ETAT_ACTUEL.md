@@ -6,28 +6,40 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub vérifié au lancement du correctif post-Batch 19.13 : `29316d7521accfe46316cb2bc6dfcf7652ba04bf` (`feat: add multi-market multi-decision trading cycles`).
-- Le Batch 19.13 multi-marchés / multi-décisions est donc **intégré** à GitHub `main` à cette référence.
-- Le présent fichier fait partie d'un **patch correctif proposé, non encore intégré à GitHub**.
+- HEAD GitHub vérifié le 27 septembre 2026 : `aa404e46c1f05269ac2279507aa746b3af7a965d` (`fix: harden multi-market LLM plan contract`).
+- Le Batch 19.13 multi-marchés / multi-décisions et son durcissement du contrat LLM sont donc **intégrés** à GitHub `main`.
+- Le présent correctif PERPETUAL est un **patch proposé au-dessus de `aa404e4`, non encore intégré à GitHub**.
 
-## Correctif post-Batch 19.13
+## Correctif ciblé PERPETUAL après `aa404e4`
 
-Le patch corrige la régression `AGENT · LLMOutputValidationError` du nouveau chemin de planification :
+Le commit `aa404e4` a correctement durci le nouveau chemin de planification multi-marchés :
 
-- le JSON Schema Structured Outputs encode désormais explicitement les variantes `BUY` / `SELL` / `HOLD` : quantité strictement positive pour `BUY`/`SELL`, `null` obligatoire pour `HOLD` ;
-- la validation Pydantic reste une seconde barrière fail-closed ; aucun résultat invalide n'est transformé en ordre valide ;
-- `StrategyInstructionsClient` reconnaît le protocole `strategic-multi-market-plan-v1` et injecte un contrat protégé multi-marchés explicite au lieu du protocole final singleton historique ;
-- un seul Agent et un seul appel stratégique de planification restent utilisés par cycle ;
-- les erreurs de plan sont catégorisées sans journaliser la sortie LLM brute ;
-- le runtime PAPER canonique refuse désormais l'activation d'une Session comportant un bootstrap ou une discovery non-SPOT.
+- JSON Schema strict par variante `BUY` / `SELL` / `HOLD` ;
+- `BUY` / `SELL` avec quantité strictement positive et `HOLD` avec `proposed_quantity=null` ;
+- validation fail-closed, univers causal, détection des doublons et `max_decisions_per_cycle` ;
+- diagnostics sans sortie LLM brute et aucun retry LLM silencieux ;
+- un seul Agent stratégique ; aucune sortie LLM ne déclenche directement un ordre ;
+- Risk Engine déterministe avec autorité finale.
 
-Le code historique PERPETUAL reste présent pour compatibilité de lecture et pour éviter une suppression hors périmètre, mais il n'est plus activable par le runtime canonique tant que l'invariant courant reste **SPOT uniquement**.
+Il a cependant ajouté par erreur un garde-fou `_ensure_spot_only_session()` dans `campaign_composition.py` et des instructions protégées SPOT-only dans `strategy_client.py`. Ce garde-fou provoque l'échec d'activation d'une Session PAPER PERPETUAL, ensuite exposé par l'API Sessions sous `HTTP 503 · Session operation is unavailable`.
+
+Le patch courant retire uniquement cette restriction artificielle et réaligne les instructions stratégiques sur l'architecture déjà canonique :
+
+- `SPOT` autorisé en PAPER ;
+- `PERPETUAL` linéaire autorisé en PAPER, avec les règles dérivés et contrôles Risk existants ;
+- `FUTURE` daté reste interdit à l'exécution et à la discovery ;
+- la discovery dynamique, le multi-market, les plafonds d'exposition, la marge isolée, le levier et les protections de liquidation restent déterministes.
 
 Principe central : **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
-## Validation du patch
+## Validation
 
-Les fichiers Python modifiés et le nouveau test ciblé sont compilés syntaxiquement par ChatGPT. L'environnement de travail de ChatGPT ne contient pas un checkout exécutable complet du repository ; les suites `pytest` ciblée et complète doivent donc être exécutées localement après extraction du ZIP.
+Baseline fournie par l'opérateur après `aa404e4`, avant ce correctif :
+
+- tests ciblés multi-market : `36 passed` ;
+- backend complet : `718 passed, 2 warnings`.
+
+Dans l'environnement ChatGPT, les fichiers Python du présent patch sont vérifiés syntaxiquement. Le checkout complet du repository n'est pas disponible dans cet environnement isolé ; les suites `pytest` post-correctif restent donc à exécuter localement après extraction du ZIP.
 
 ## Règle de reprise
 

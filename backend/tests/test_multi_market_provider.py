@@ -16,9 +16,7 @@ from ai_spot_trader.agent.planner import (
     OpenAIMultiMarketDecisionProvider,
 )
 from ai_spot_trader.agent.strategy_client import StrategyInstructionsClient
-from ai_spot_trader.campaign_composition import _ensure_spot_only_session
 from ai_spot_trader.control_plane import CampaignConfiguration
-from ai_spot_trader.core.config import PaperRuntimeConfigurationError
 from ai_spot_trader.domain.enums import LLMModel, MarketType, TradingAction
 from ai_spot_trader.domain.experiments import aggressiveness_context
 from ai_spot_trader.domain.models import (
@@ -324,7 +322,9 @@ def test_strategy_instructions_are_explicitly_multi_market() -> None:
     assert "market_states" in instructions
     assert "max_decisions_per_cycle" in instructions
     assert "Risk Engine" in instructions
-    assert "SPOT uniquement" in instructions
+    assert "SPOT uniquement" not in instructions
+    assert "`SPOT` et `PERPETUAL`" in instructions
+    assert "`FUTURE` date n'est pas executable" in instructions
     assert "Priorise les signaux nets apres couts." in instructions
     assert "exactement un marché" not in instructions
 
@@ -382,25 +382,54 @@ def spot_configuration() -> CampaignConfiguration:
     )
 
 
-def test_canonical_runtime_blocks_perpetual_bootstrap_market() -> None:
-    config = spot_configuration().model_copy(
-        update={
+def perpetual_configuration() -> CampaignConfiguration:
+    payload = spot_configuration().model_dump()
+    payload.update(
+        {
             "paper_executable_markets": (
                 ExecutableMarket(symbol="BTC/USD", market_type=MarketType.PERPETUAL),
-            )
+            ),
+            "risk_max_derivative_position_notional": Decimal("500"),
+            "risk_max_total_derivative_exposure": Decimal("800"),
         }
     )
-    with pytest.raises(PaperRuntimeConfigurationError, match="SPOT-only"):
-        _ensure_spot_only_session(config)
+    return CampaignConfiguration.model_validate(payload)
 
 
-def test_canonical_runtime_blocks_perpetual_discovery_policy() -> None:
-    config = spot_configuration().model_copy(
-        update={
-            "market_discovery": MarketDiscoveryPolicy(
-                market_types=(MarketType.PERPETUAL,),
-            )
-        }
+def test_canonical_session_accepts_spot_bootstrap_market() -> None:
+    config = spot_configuration()
+
+    assert config.paper_executable_markets[0].market_type is MarketType.SPOT
+
+
+def test_canonical_session_accepts_perpetual_bootstrap_market() -> None:
+    config = perpetual_configuration()
+
+    assert config.paper_executable_markets[0].market_type is MarketType.PERPETUAL
+
+
+def test_canonical_session_accepts_perpetual_discovery_policy() -> None:
+    payload = perpetual_configuration().model_dump()
+    payload["market_discovery"] = MarketDiscoveryPolicy(
+        market_types=(MarketType.PERPETUAL,),
     )
-    with pytest.raises(PaperRuntimeConfigurationError, match="SPOT-only"):
-        _ensure_spot_only_session(config)
+
+    config = CampaignConfiguration.model_validate(payload)
+
+    assert config.market_discovery is not None
+    assert config.market_discovery.market_types == (MarketType.PERPETUAL,)
+
+
+def test_canonical_session_still_rejects_dated_future_market() -> None:
+    payload = spot_configuration().model_dump(mode="json")
+    payload["paper_executable_markets"] = (
+        {"symbol": "BTC/USD", "market_type": "FUTURE"},
+    )
+
+    with pytest.raises(ValueError, match="FUTURE"):
+        CampaignConfiguration.model_validate(payload)
+
+
+def test_discovery_still_rejects_dated_future_market() -> None:
+    with pytest.raises(ValueError, match="FUTURE"):
+        MarketDiscoveryPolicy(market_types=(MarketType.FUTURE,))
