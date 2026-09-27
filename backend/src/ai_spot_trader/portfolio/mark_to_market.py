@@ -62,10 +62,11 @@ class PaperSpotMarkToMarketMonitor:
         return self._last_error_type
 
     async def start(self) -> None:
-        """Start the process-local refresh loop; repeated starts are idempotent."""
+        """Refresh once before returning, then start the process-local periodic loop."""
 
         if self.is_running:
             return
+        await self._refresh_initially()
         self._task = asyncio.create_task(self._run(), name="paper-spot-mark-to-market")
         await asyncio.sleep(0)
 
@@ -117,15 +118,25 @@ class PaperSpotMarkToMarketMonitor:
         except asyncio.CancelledError:
             pass
 
+    async def _refresh_initially(self) -> None:
+        try:
+            await self.refresh_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Preserve the historical non-fatal monitor semantics. A failed technical refresh
+            # leaves the canonical portfolio incomplete, so Capacity/Risk remain fail-closed.
+            self._last_error_type = type(exc).__name__
+
     async def _run(self) -> None:
         while True:
+            await asyncio.sleep(self._cadence_seconds)
             try:
                 await self.refresh_once()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self._last_error_type = type(exc).__name__
-            await asyncio.sleep(self._cadence_seconds)
 
 
 class PaperDerivativeMarkToMarketMonitor:
@@ -167,8 +178,11 @@ class PaperDerivativeMarkToMarketMonitor:
         return self._last_error_type
 
     async def start(self) -> None:
+        """Refresh once before returning, then start the process-local periodic loop."""
+
         if self.is_running:
             return
+        await self._refresh_initially()
         self._task = asyncio.create_task(
             self._run(), name="paper-derivative-mark-to-market"
         )
@@ -211,12 +225,22 @@ class PaperDerivativeMarkToMarketMonitor:
         except asyncio.CancelledError:
             pass
 
+    async def _refresh_initially(self) -> None:
+        try:
+            await self.refresh_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Preserve the historical non-fatal monitor semantics. A failed technical refresh
+            # leaves the canonical portfolio incomplete, so Capacity/Risk remain fail-closed.
+            self._last_error_type = type(exc).__name__
+
     async def _run(self) -> None:
         while True:
+            await asyncio.sleep(self._cadence_seconds)
             try:
                 await self.refresh_once()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self._last_error_type = type(exc).__name__
-            await asyncio.sleep(self._cadence_seconds)
