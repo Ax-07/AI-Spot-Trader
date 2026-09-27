@@ -13,7 +13,7 @@ DISCOVERY
 MarketDiscoveryInput -> même Agent -> WatchlistSelection
 
 CYCLE STRATÉGIQUE
-contexte causal multi-marchés -> même Agent -> plan ordonné de décisions
+CycleDecisionPlanInput -> même Agent -> CycleDecisionPlan ordonné
 
 EXÉCUTION DU PLAN
 D1 -> Risk -> Broker éventuel
@@ -22,21 +22,34 @@ D2 -> Risk -> Broker éventuel
 Dn -> Risk -> Broker éventuel
 ```
 
-La discovery utilise toujours le même Agent stratégique et ne constitue pas un second Agent. Le Batch 19.13 garantit surtout qu'au stade décisionnel du cycle, un seul appel stratégique produit la trajectoire ordonnée plutôt qu'une succession d'appels opportunistes.
+La discovery utilise toujours le même Agent stratégique et ne constitue pas un second Agent. Au stade décisionnel du cycle, un seul appel stratégique produit la trajectoire ordonnée plutôt qu'une succession d'appels opportunistes.
+
+Le protocole protégé courant de ce stade est `strategic-multi-market-plan-v1`. Le contrat singleton historique (`MarketSelectionInput -> AgentInput`) reste conservé pour compatibilité et replay, mais il n'est plus injecté comme contrat final du nouveau chemin de planification.
 
 ## 3. Contrat de plan multi-décisions
 
-Le plan peut contenir plusieurs `BUY`, `SELL` et `HOLD` sur des marchés distincts de l'univers exécutable du cycle.
+Le plan peut contenir plusieurs `BUY`, `SELL` et `HOLD` sur des marchés distincts de l'univers causal du cycle.
 
 Contraintes :
 
 - ordre explicite ;
-- symboles/types limités à l'univers autorisé ;
+- symboles/types limités aux `market_states` fournis ;
 - pas de marché inventé ;
+- pas de doublon `symbol + market_type` ;
 - `max_decisions_per_cycle` configurable ;
 - défaut `6` ;
 - limite dure `20` ;
 - sortie structurée validée fail-closed.
+
+Le schéma Structured Outputs et la validation Pydantic portent le même contrat quantité/action :
+
+```text
+BUY  -> proposed_quantity > 0
+SELL -> proposed_quantity > 0
+HOLD -> proposed_quantity = null
+```
+
+Une sortie qui ne respecte pas ce contrat est un échec Agent. Elle n'est jamais réparée silencieusement, convertie en `HOLD`, ni envoyée à Risk.
 
 L'ordre du plan a un sens causal : il détermine l'ordre d'évaluation Risk et d'exécution éventuelle.
 
@@ -44,7 +57,7 @@ L'ordre du plan a un sens causal : il détermine l'ordre d'évaluation Risk et d
 
 Le déterministe peut :
 
-- filtrer type de marché, quote, statut tradable, type de contrat, fraîcheur des données et whitelist ;
+- filtrer type de marché, quote, statut tradable, fraîcheur des données et whitelist ;
 - calculer contexte candles, coûts, portefeuille, exposition et contraintes ;
 - appliquer Risk ;
 - exécuter/persister en PAPER lorsqu'un `ExecutionIntent` autorisé existe.
@@ -78,19 +91,26 @@ univers effectif = watchlist IA actuelle + toutes les positions ouvertes gérabl
 
 Un retrait de watchlist n'est jamais une clôture forcée. Une position ouverte reste gérable jusqu'à sa clôture.
 
-## 7. SPOT
+## 7. SPOT — invariant runtime courant
 
-`BUY` acquiert la base ; `SELL` réduit uniquement un actif réellement détenu. Aucun short, levier ou margin SPOT.
+Le runtime PAPER canonique est actuellement **SPOT uniquement**.
+
+`BUY` acquiert la base ; `SELL` réduit uniquement un actif réellement détenu. Aucun short, levier, margin, future ou perpetual n'est autorisé dans une Session canonique conforme à l'invariant courant.
+
+Le runtime refuse l'activation si :
+
+- un marché bootstrap n'est pas `SPOT` ;
+- la policy de discovery demande un type autre que `SPOT`.
 
 Dans un plan multi-décisions, Risk réévalue la quantité disponible après chaque exécution. Un SELL ne peut donc pas être autorisé à partir d'un inventaire obsolète.
 
-## 8. PERPETUAL
+## 8. Compatibilité historique PERPETUAL
 
-Seuls les PERPETUAL linéaires supportés sont exécutables. Le LLM ne choisit ni levier, ni marge, ni `reduce_only` librement.
+Le repository conserve des modèles, adapters, tests historiques et données d'audit liés à PERPETUAL. Cette compatibilité est maintenue afin de ne pas casser la lecture des historiques ni entreprendre une suppression massive hors périmètre.
 
-Risk conserve le contrôle de taille, quantum de quantité, levier, marge, notional, exposition, liquidation et anti-reversal.
+Elle ne signifie pas que PERPETUAL est actif dans la Session canonique courante. Tant que l'invariant SPOT-only est en vigueur, le garde-fou de composition du runtime bloque son activation et sa discovery.
 
-Le correctif intégré au HEAD `18596ac…` conserve les validations exactes `Fill` et normalise les quantités dérivées exclusivement vers le bas sur le quantum provider-derived.
+Toute réactivation future des dérivés devra être une décision explicite séparée, avec ses propres invariants et validations.
 
 ## 9. Évaluation Risk séquentielle
 
@@ -132,7 +152,13 @@ Toutes les décisions du plan sont auditables, y compris :
 
 La rationale Agent et les raisons Risk restent deux catégories distinctes. L'UI ne fabrique aucune causalité absente.
 
-## 12. Échec technique et rollback PAPER
+## 12. Échec Agent et diagnostic sécurisé
+
+Un plan vide, un JSON invalide, une violation du contrat action/quantité, un dépassement de limite, un doublon ou un marché hors univers échoue avant Risk.
+
+Les erreurs sont catégorisées pour l'opérateur sans persister la réponse LLM brute, un secret, une clé API ou un prompt secret. Il n'existe aucun retry LLM sémantique destiné à « réparer » une décision invalide ; l'invariant d'un seul appel stratégique de planification par cycle est maintenu.
+
+## 13. Échec technique et rollback PAPER
 
 Une erreur technique Risk ou Broker transforme le cycle en `FAILED`.
 
@@ -140,13 +166,13 @@ Le runner audité restaure le checkpoint du ledger PAPER pris au début du cycle
 
 Le rollback économique ne supprime pas l'information d'audit nécessaire pour comprendre l'échec.
 
-## 13. Causalité / no-look-ahead
+## 14. Causalité / no-look-ahead
 
 Aucun candidat, snapshot, candle ou contexte ne peut introduire une donnée postérieure au temps de décision concerné. `history_as_of(...)` reste la primitive de lecture causale pour les candles stratégiques.
 
 L'ordre intra-cycle est causal mais n'autorise aucun accès au futur : la décision suivante observe uniquement les effets déjà produits par les étapes précédentes et les faits disponibles dans le contexte du cycle.
 
-## 14. Persistence 1:N et compatibilité
+## 15. Persistence 1:N et compatibilité
 
 Migration Batch 19.13 :
 
@@ -159,13 +185,13 @@ Un cycle peut désormais posséder plusieurs décisions, plusieurs évaluations 
 
 Les anciens cycles mono-décision restent lisibles sans réécriture de leur historique.
 
-## 15. Analytics
+## 16. Analytics
 
 Le nombre de décisions n'est pas le nombre de trades. Les analytics utilisent les fills/trades économiques réellement exécutés.
 
 Un `HOLD` ou un `REJECT` reste important pour l'audit mais n'incrémente pas artificiellement les métriques d'exécution.
 
-## 16. Frontend
+## 17. Frontend
 
 Le frontend peut afficher :
 
@@ -179,13 +205,15 @@ Le frontend peut afficher :
 
 Il ne peut pas produire un ranking, recalculer Risk, inventer un fill ou réordonner la causalité.
 
-## 17. Interdits maintenus
+## 18. Interdits maintenus
 
 - aucun LIVE implicite ;
 - aucun second Agent ;
+- aucun second appel stratégique de « réparation » du plan ;
 - aucun ranking déterministe remplaçant le jugement stratégique ;
 - aucun ordre direct LLM/tool ;
 - aucun contournement Risk ;
+- aucun short, levier, margin, future ou perpetual dans la Session canonique courante ;
 - aucun look-ahead ;
 - aucune obligation de trader ;
 - aucun calcul financier canonique déporté dans le frontend ;

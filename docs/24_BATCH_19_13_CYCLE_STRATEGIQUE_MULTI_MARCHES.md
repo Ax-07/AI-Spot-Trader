@@ -2,16 +2,16 @@
 
 ## 1. Statut
 
-État au 27 septembre 2026 : **implémentation terminée et validée dans le présent état du repository**.
-
-Base GitHub vérifiée avant le Batch 19.13 :
+État au 27 septembre 2026 : le Batch 19.13 est **intégré** à GitHub `main` au commit :
 
 ```text
 Ax-07/AI-Spot-Trader
 main
-18596ac9d4f6554aa4817a9bdb374ab597c2399f
-fix: harden paper perpetual execution precision
+29316d7521accfe46316cb2bc6dfcf7652ba04bf
+feat: add multi-market multi-decision trading cycles
 ```
+
+Un correctif post-intégration de la frontière LLM et du garde-fou SPOT-only est décrit en section 13. Il reste un patch proposé tant qu'il n'a pas été intégré par l'opérateur.
 
 ## 2. Objectif
 
@@ -145,14 +145,15 @@ Le Batch 19.13 ne change pas :
 - `strategic-mtf-v1` ;
 - `position-management-v1` ;
 - les règles SPOT anti-short/anti-oversell ;
-- les contraintes PERPETUAL ;
 - le no-look-ahead ;
 - l'absence de ranking stratégique déterministe ;
 - l'absence de LIVE implicite.
 
-## 11. Validation locale exécutée
+Les capacités PERPETUAL intégrées historiquement restent dans le code pour compatibilité, mais l'invariant projet courant impose désormais une Session canonique SPOT-only.
 
-Backend :
+## 11. Validation historique du Batch 19.13
+
+Résultats locaux fournis lors de l'intégration du Batch 19.13 :
 
 ```text
 pytest ciblé : 51 passed
@@ -169,9 +170,9 @@ pnpm typecheck : succès
 pnpm build     : succès
 ```
 
-Ces validations sont des résultats locaux fournis pour le Batch 19.13. Elles ne constituent pas encore une intégration GitHub tant que le commit/push n'a pas été effectué par l'opérateur.
+Ces nombres décrivent le Batch 19.13 intégré. Ils ne valent pas validation du correctif post-intégration décrit ci-dessous.
 
-## 12. Invariants à conserver après intégration
+## 12. Invariants à conserver
 
 - l'IA propose ; Risk autorise, modifie ou refuse ;
 - chaque décision suivante voit le portefeuille réellement courant ;
@@ -182,3 +183,62 @@ Ces validations sont des résultats locaux fournis pour le Batch 19.13. Elles ne
 - aucun secret ;
 - aucune promesse de rendement ;
 - aucune transformation silencieuse en bot algorithmique traditionnel.
+
+## 13. Correctif post-intégration du contrat LLM
+
+### 13.1 Régression confirmée
+
+Le premier schéma `STRATEGIC_PLAN_SCHEMA` du Batch 19.13 acceptait `proposed_quantity` comme `number | null` indépendamment de l'action, alors que `_StrategicPlanEntryPayload` imposait :
+
+```text
+BUY / SELL -> quantité strictement positive
+HOLD       -> null
+```
+
+Une sortie pouvait donc être acceptée par le Structured Output strict du fournisseur puis échouer immédiatement dans Pydantic avec `LLMOutputValidationError`.
+
+### 13.2 Correction du schéma
+
+Le correctif encode trois variantes strictes de décision dans un `anyOf` imbriqué :
+
+```text
+BUY  -> number > 0
+SELL -> number > 0
+HOLD -> null
+```
+
+Pydantic reste la seconde barrière de validation. Aucun résultat invalide n'est normalisé ou transformé en ordre valide.
+
+### 13.3 Contrat protégé multi-marchés
+
+`StrategyInstructionsClient` reconnaît `strategic_plan_contract` et utilise un contrat explicite `strategic-multi-market-plan-v1` :
+
+- un seul Agent ;
+- un seul appel stratégique ;
+- `market_states` comme univers causal ;
+- décisions ordonnées et distinctes ;
+- Risk séquentiel avec autorité finale ;
+- maintien des sections stratégie opérateur, agressivité, style et coûts.
+
+Le prompt historique singleton est conservé pour les chemins legacy/replay et n'est pas réécrit rétroactivement.
+
+### 13.4 Diagnostic fail-closed
+
+Le correctif distingue sans inclure la sortie brute :
+
+- sortie vide ;
+- JSON invalide ;
+- action invalide ;
+- incohérence action/quantité ;
+- liste de décisions invalide ;
+- dépassement de `max_decisions_per_cycle` ;
+- doublon ;
+- marché hors univers.
+
+Aucun retry sémantique LLM n'est ajouté.
+
+### 13.5 SPOT-only
+
+La composition du runtime PAPER canonique refuse désormais toute Session dont le bootstrap ou la discovery contient un marché non-SPOT.
+
+Les composants PERPETUAL historiques restent présents uniquement pour compatibilité de code et d'historique. Leur suppression complète ou leur éventuelle réactivation future est hors périmètre de ce correctif.

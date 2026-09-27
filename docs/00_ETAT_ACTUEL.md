@@ -6,36 +6,28 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- Base GitHub vérifiée avant le Batch 19.13 : `18596ac9d4f6554aa4817a9bdb374ab597c2399f` (`fix: harden paper perpetual execution precision`).
-- Le correctif PAPER PERPETUAL est donc **intégré** à GitHub `main`.
-- Le présent état du repository inclut le Batch 19.13 multi-décisions / multi-marchés, validé avec les résultats ci-dessous.
+- HEAD GitHub vérifié au lancement du correctif post-Batch 19.13 : `29316d7521accfe46316cb2bc6dfcf7652ba04bf` (`feat: add multi-market multi-decision trading cycles`).
+- Le Batch 19.13 multi-marchés / multi-décisions est donc **intégré** à GitHub `main` à cette référence.
+- Le présent fichier fait partie d'un **patch correctif proposé, non encore intégré à GitHub**.
 
-## État courant du Batch 19.13
+## Correctif post-Batch 19.13
 
-- un seul Agent IA stratégique ; au stade décisionnel d'un cycle, un seul appel stratégique produit un plan ordonné ;
-- plusieurs décisions `BUY` / `SELL` / `HOLD` peuvent viser des marchés distincts dans le même cycle ;
-- `RiskEngine` est exécuté séquentiellement pour chaque décision et chaque décision suivante observe le portefeuille PAPER après les exécutions précédentes ;
-- `HOLD` et `REJECT` sont auditables et n'interrompent pas les décisions suivantes ;
-- une défaillance technique Risk/Broker fait passer le cycle à `FAILED` et restaure atomiquement le checkpoint PAPER du cycle ;
-- persistence d'audit 1:N pour décisions, évaluations Risk et intentions d'exécution ; API et cockpit exposent la trajectoire ordonnée ;
-- analytics basés sur les fills/trades économiques réellement exécutés, pas sur le nombre de décisions ;
-- `max_decisions_per_cycle` configurable, défaut `6`, limite dure `20` ;
-- migration locale : `0006_paper_control_plane -> 0007_multi_decision_cycles` ;
-- compatibilité historique conservée pour les anciens cycles et configurations.
+Le patch corrige la régression `AGENT · LLMOutputValidationError` du nouveau chemin de planification :
+
+- le JSON Schema Structured Outputs encode désormais explicitement les variantes `BUY` / `SELL` / `HOLD` : quantité strictement positive pour `BUY`/`SELL`, `null` obligatoire pour `HOLD` ;
+- la validation Pydantic reste une seconde barrière fail-closed ; aucun résultat invalide n'est transformé en ordre valide ;
+- `StrategyInstructionsClient` reconnaît le protocole `strategic-multi-market-plan-v1` et injecte un contrat protégé multi-marchés explicite au lieu du protocole final singleton historique ;
+- un seul Agent et un seul appel stratégique de planification restent utilisés par cycle ;
+- les erreurs de plan sont catégorisées sans journaliser la sortie LLM brute ;
+- le runtime PAPER canonique refuse désormais l'activation d'une Session comportant un bootstrap ou une discovery non-SPOT.
+
+Le code historique PERPETUAL reste présent pour compatibilité de lecture et pour éviter une suppression hors périmètre, mais il n'est plus activable par le runtime canonique tant que l'invariant courant reste **SPOT uniquement**.
 
 Principe central : **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
-PAPER reste la phase courante. Aucune sortie LLM ne déclenche directement un ordre Kraken. Aucun look-ahead ni rendement n'est garanti.
+## Validation du patch
 
-## Validation locale fournie pour le Batch 19.13
-
-- backend ciblé : `51 passed` ;
-- backend complet : `698 passed, 2 warnings` ;
-- `alembic upgrade head` : succès sur PostgreSQL réel ;
-- frontend : `39 passed` ;
-- `pnpm lint` : succès ;
-- `pnpm typecheck` : succès ;
-- `pnpm build` : succès.
+Les fichiers Python modifiés et le nouveau test ciblé sont compilés syntaxiquement par ChatGPT. L'environnement de travail de ChatGPT ne contient pas un checkout exécutable complet du repository ; les suites `pytest` ciblée et complète doivent donc être exécutées localement après extraction du ZIP.
 
 ## Règle de reprise
 

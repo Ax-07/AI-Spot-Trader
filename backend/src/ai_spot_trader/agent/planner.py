@@ -21,17 +21,52 @@ PositiveDecimal = Annotated[Decimal, Field(gt=0)]
 StrategicAction = Literal["BUY", "SELL", "HOLD"]
 SelectionMarketType = Literal["SPOT", "PERPETUAL"]
 
+
+def _decision_item_variant(
+    action: StrategicAction,
+    *,
+    proposed_quantity_schema: dict[str, Any],
+) -> dict[str, Any]:
+    """Build one strict Structured Outputs variant without weakening Pydantic validation."""
+
+    return {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": [action]},
+            "symbol": {"type": "string", "minLength": 1},
+            "market_type": {"type": "string", "enum": ["SPOT", "PERPETUAL"]},
+            "proposed_quantity": proposed_quantity_schema,
+            "rationale": {"type": ["string", "null"]},
+        },
+        "required": [
+            "action",
+            "symbol",
+            "market_type",
+            "proposed_quantity",
+            "rationale",
+        ],
+        "additionalProperties": False,
+    }
+
+
+# Nested anyOf is supported by OpenAI Structured Outputs. Keeping the root an object also
+# preserves the strict adapter contract. The quantity constraints now match the Pydantic model:
+# BUY/SELL require a strictly positive number, while HOLD requires null.
 _DECISION_ITEM_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action": {"type": "string", "enum": ["BUY", "SELL", "HOLD"]},
-        "symbol": {"type": "string", "minLength": 1},
-        "market_type": {"type": "string", "enum": ["SPOT", "PERPETUAL"]},
-        "proposed_quantity": {"type": ["number", "null"]},
-        "rationale": {"type": ["string", "null"]},
-    },
-    "required": ["action", "symbol", "market_type", "proposed_quantity", "rationale"],
-    "additionalProperties": False,
+    "anyOf": [
+        _decision_item_variant(
+            "BUY",
+            proposed_quantity_schema={"type": "number", "exclusiveMinimum": 0},
+        ),
+        _decision_item_variant(
+            "SELL",
+            proposed_quantity_schema={"type": "number", "exclusiveMinimum": 0},
+        ),
+        _decision_item_variant(
+            "HOLD",
+            proposed_quantity_schema={"type": "null"},
+        ),
+    ]
 }
 
 STRATEGIC_PLAN_SCHEMA: dict[str, Any] = {
@@ -72,8 +107,11 @@ class _StrategicPlanEntryPayload(BaseModel):
 class _StrategicPlanPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
+    # JSON arrays arrive as Python lists. With strict=True Pydantic must not be asked
+    # to coerce that transport-native list into a tuple before validating entries.
+    # The canonical domain plan is converted to an immutable tuple below.
     decisions: Annotated[
-        tuple[_StrategicPlanEntryPayload, ...],
+        list[_StrategicPlanEntryPayload],
         Field(min_length=1, max_length=MAX_DECISIONS_PER_CYCLE_HARD_LIMIT),
     ]
     rationale: str | None
@@ -216,9 +254,29 @@ def _parse_plan_output(raw_output: str) -> _StrategicPlanPayload:
     try:
         return _StrategicPlanPayload.model_validate(parsed)
     except ValidationError as exc:
-        raise LLMOutputValidationError(
-            "LLM structured output violates the strategic plan schema"
-        ) from exc
+        raise LLMOutputValidationError(_validation_error_message(exc)) from exc
+
+
+def _validation_error_message(exc: ValidationError) -> str:
+    """Return a safe category without embedding the raw LLM payload or validation input."""
+
+    errors = exc.errors(include_url=False, include_context=False, include_input=False)
+    for error in errors:
+        location = tuple(str(item) for item in error.get("loc", ()))
+        error_type = str(error.get("type", ""))
+        message = str(error.get("msg", ""))
+        if "action" in location and error_type == "literal_error":
+            return "LLM strategic plan contains an invalid action"
+        if "proposed_quantity" in location or "quantity" in message.lower():
+            return "LLM strategic plan contains an invalid action/quantity combination"
+        if "decisions" in location and error_type in {
+            "too_long",
+            "too_short",
+            "tuple_type",
+            "list_type",
+        }:
+            return "LLM strategic plan contains an invalid decision list"
+    return "LLM structured output violates the strategic plan schema"
 
 
 def _reject_json_constant(value: str) -> None:

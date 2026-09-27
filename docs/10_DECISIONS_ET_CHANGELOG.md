@@ -4,14 +4,17 @@
 
 ## Principes historiques conservés
 
-Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool directe vers Broker/Kraken, SPOT sans short/levier, PERPETUAL selon les capacités intégrées, audit durable, no-look-ahead, backend indépendant du frontend, `HOLD` valide, aucun secret versionné et LIVE séparé.
+Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool directe vers Broker/Kraken, SPOT sans short/levier/marge, audit durable, no-look-ahead, backend indépendant du frontend, `HOLD` valide, aucun secret versionné et LIVE séparé.
+
+Le code historique PERPETUAL reste présent pour compatibilité, mais la Session canonique courante est SPOT-only.
 
 ## Référence courante
 
 ```text
-Base GitHub avant 19.13 : 18596ac9d4f6554aa4817a9bdb374ab597c2399f
-Commit              : fix: harden paper perpetual execution precision
-Batch 19.13         : présent dans cet état et validé
+HEAD GitHub intégré : 29316d7521accfe46316cb2bc6dfcf7652ba04bf
+Commit              : feat: add multi-market multi-decision trading cycles
+Batch 19.13         : intégré à ce HEAD
+Correctif présent   : patch proposé, non intégré à GitHub
 ```
 
 ## Décisions historiques toujours actives
@@ -22,8 +25,9 @@ Batch 19.13         : présent dans cet état et validé
 - ADR-256 à ADR-258 : UX Session du style et compatibilité legacy ;
 - ADR-259 à ADR-262 : gestion stratégique des positions, `position-management-v1`, plafond Risk par ordre et rotation du capital ;
 - ADR-263 : classification robuste des limites fournisseur OpenAI et fail-closed ;
-- ADR-264 : précision PAPER PERPETUAL et normalisation descendante du quantum, désormais intégrée ;
-- ADR-265 à ADR-268 : décisions Batch 19.13 multi-décisions / multi-marchés.
+- ADR-264 : précision PAPER PERPETUAL et normalisation descendante du quantum, conservées comme compatibilité historique ;
+- ADR-265 à ADR-268 : Batch 19.13 multi-décisions / multi-marchés, désormais intégré au HEAD `29316d…` ;
+- ADR-269 à ADR-272 : correctif post-19.13 du contrat Structured Outputs, instructions multi-marchés, diagnostic sécurisé et garde-fou SPOT-only.
 
 ## ADR-240 — Session est une façade UX, pas un nouvel agrégat persistant
 
@@ -61,7 +65,7 @@ Le style est exposé sans couplage silencieux à l'agressivité, aux marchés ou
 
 `CapacityAssessment.management_markets` reste renseigné même lorsque de nouvelles ouvertures sont possibles. Le même Agent arbitre entre gestion d'inventaire et nouvelles opportunités.
 
-La phrase historique « une seule décision finale par cycle » est **supersédée uniquement sur la cardinalité** par ADR-265. Le principe d'arbitrage stratégique par le même Agent reste actif.
+La phrase historique « une seule décision finale par cycle » est supersédée uniquement sur la cardinalité par ADR-265. Le principe d'arbitrage stratégique par le même Agent reste actif.
 
 ## ADR-260 — `position-management-v1` reste factuel
 
@@ -79,7 +83,7 @@ Le plafond reste applicable aux BUY comme aux SELL réducteurs. Le Batch 19.13 n
 
 **ADOPTÉ AU BATCH 19.10, ÉTENDU PAR LE BATCH 19.13.**
 
-Il n'existe aucune règle `après SELL -> BUY`. Historiquement la rotation se produisait nécessairement sur plusieurs cycles ; ADR-265/266 permettent désormais aussi une rotation intra-cycle lorsque le plan Agent ordonne plusieurs décisions et que Risk les autorise séquentiellement.
+Il n'existe aucune règle `après SELL -> BUY`. ADR-265/266 permettent une rotation intra-cycle uniquement lorsque le plan Agent l'ordonne et que Risk l'autorise séquentiellement.
 
 ## ADR-263 — Les limites fournisseur OpenAI sont classifiées avant retry
 
@@ -89,51 +93,83 @@ Quota/crédit/usage/spend sont non retryables ; les limitations temporaires rest
 
 ## ADR-264 — Précision PAPER PERPETUAL et quantum provider-derived
 
-**ADOPTÉ ET INTÉGRÉ AU HEAD `18596ac9d4f6554aa4817a9bdb374ab597c2399f`.**
+**ADOPTÉ ET INTÉGRÉ HISTORIQUEMENT AU HEAD `18596ac9d4f6554aa4817a9bdb374ab597c2399f`.**
 
-Pour les dérivés Kraken exécutables, le quantum de quantité dérivé du provider est utilisé pour normaliser exclusivement vers le bas les quantités autorisées. Les minimums/plafonds sont revérifiés.
-
-`estimate_paper_execution()` utilise l'ordre canonique `price × quantity × contract_size` et maintient l'égalité exacte attendue entre le delta de prix exécuté et les composantes spread/slippage. Les validations `Fill` restent strictes.
+Les validations de précision dérivées restent dans le repository pour compatibilité. Elles ne réactivent pas PERPETUAL dans la Session canonique SPOT-only actuelle.
 
 ## ADR-265 — Un cycle peut porter un plan stratégique ordonné multi-marchés
 
-**ADOPTÉ LOCALEMENT AU BATCH 19.13 — NON ENCORE INTÉGRÉ.**
+**ADOPTÉ ET INTÉGRÉ AU HEAD `29316d7521accfe46316cb2bc6dfcf7652ba04bf`.**
 
 Au stade décisionnel du cycle, un seul appel du même Agent stratégique produit un plan ordonné contenant plusieurs décisions sur des marchés distincts.
 
 Le plan accepte `BUY`, `SELL` et `HOLD`. `max_decisions_per_cycle` est configurable, vaut `6` par défaut et possède une limite dure de `20`.
 
-Cette décision supprime la contrainte de cardinalité mono-décision sans créer de second Agent, sans boucle d'appels stratégiques indépendants et sans déplacer la décision vers un ranking déterministe.
-
 ## ADR-266 — Risk et Broker suivent l'ordre du plan sur un portefeuille causal
 
-**ADOPTÉ LOCALEMENT AU BATCH 19.13 — NON ENCORE INTÉGRÉ.**
+**ADOPTÉ ET INTÉGRÉ AU HEAD `29316d7521accfe46316cb2bc6dfcf7652ba04bf`.**
 
-Chaque décision est évaluée par Risk après application des éventuelles exécutions précédentes du même cycle. Une décision suivante ne voit jamais un snapshot de portefeuille antérieur à la trajectoire déjà exécutée.
-
-`HOLD` et `REJECT` n'interrompent pas le plan. Risk conserve `ALLOW` / `MODIFY` / `REJECT` pour chaque décision et reste la seule autorité capable de produire une intention d'exécution autorisée.
+Chaque décision est évaluée par Risk après application des éventuelles exécutions précédentes du même cycle. `HOLD` et `REJECT` n'interrompent pas le plan.
 
 ## ADR-267 — Une défaillance technique rend le cycle PAPER atomique
 
-**ADOPTÉ LOCALEMENT AU BATCH 19.13 — NON ENCORE INTÉGRÉ.**
+**ADOPTÉ ET INTÉGRÉ AU HEAD `29316d7521accfe46316cb2bc6dfcf7652ba04bf`.**
 
-Le runner audité checkpoint le ledger PAPER avant la trajectoire multi-décisions. Une erreur technique Risk ou Broker fait passer le cycle à `FAILED` et restaure le portefeuille au checkpoint initial.
-
-Cette règle empêche un cycle partiellement exécuté de laisser des effets économiques orphelins. `HOLD` et `REJECT` restent des résultats métier normaux et ne déclenchent pas le rollback.
+Une erreur technique Risk ou Broker fait passer le cycle à `FAILED` et restaure le portefeuille au checkpoint initial.
 
 ## ADR-268 — L'audit devient 1:N et les analytics restent économiques
 
-**ADOPTÉ LOCALEMENT AU BATCH 19.13 — NON ENCORE INTÉGRÉ.**
+**ADOPTÉ ET INTÉGRÉ AU HEAD `29316d7521accfe46316cb2bc6dfcf7652ba04bf`.**
 
-La migration `0007_multi_decision_cycles` étend la persistence du cycle afin de conserver plusieurs décisions, évaluations Risk et intentions d'exécution dans leur ordre.
+La migration `0007_multi_decision_cycles` conserve plusieurs décisions, évaluations Risk et intentions d'exécution dans leur ordre. Les analytics comptent les fills/trades effectivement exécutés et non le nombre de décisions du plan.
 
-L'API et le cockpit exposent cette trajectoire ordonnée. Les anciens cycles/configurations restent compatibles.
+## ADR-269 — Le schéma Structured Outputs encode le contrat action/quantité
 
-Les analytics comptent les fills/trades effectivement exécutés et non le nombre de décisions du plan ; `HOLD`, `REJECT` ou une intention sans fill ne deviennent pas artificiellement des trades.
+**PROPOSÉ DANS LE CORRECTIF POST-19.13 — NON INTÉGRÉ.**
 
-## Changelog — 2026-09-27 — Batch 19.13 validé, documentation synchronisée
+Le schéma du `CycleDecisionPlan` utilise des variantes strictes par action : `BUY`/`SELL` imposent une quantité numérique strictement positive et `HOLD` impose `null`.
 
-- base GitHub vérifiée : `18596ac9d4f6554aa4817a9bdb374ab597c2399f` ;
+Pydantic conserve la même validation comme seconde barrière. Une sortie invalide reste un échec ; aucune coercition et aucun ordre synthétique ne sont créés.
+
+## ADR-270 — Le nouveau chemin reçoit un contrat protégé multi-marchés explicite
+
+**PROPOSÉ DANS LE CORRECTIF POST-19.13 — NON INTÉGRÉ.**
+
+`StrategyInstructionsClient` détecte `strategic_plan_contract` et injecte `strategic-multi-market-plan-v1`. Le contrat historique singleton est conservé pour les chemins legacy/replay mais n'est plus utilisé comme description finale du nouveau plan.
+
+Les sections stratégie opérateur, agressivité, style et coûts restent présentes. Il n'existe ni second Agent ni second appel stratégique de planification.
+
+## ADR-271 — La Session canonique courante est SPOT-only au runtime
+
+**PROPOSÉ DANS LE CORRECTIF POST-19.13 — NON INTÉGRÉ.**
+
+À l'activation, la composition du runtime refuse toute configuration contenant un bootstrap non-SPOT ou une discovery non-SPOT. Ainsi, une Session canonique ne peut ni découvrir ni exécuter PERPETUAL.
+
+Le code dérivés historique reste présent pour compatibilité et lecture d'historique ; sa suppression complète est explicitement hors périmètre de ce batch.
+
+## ADR-272 — Les erreurs de plan sont diagnostiquées sans sortie brute
+
+**PROPOSÉ DANS LE CORRECTIF POST-19.13 — NON INTÉGRÉ.**
+
+Les catégories distinguent au minimum sortie vide, JSON invalide, violation action/quantité, liste invalide, limite, doublon et marché hors univers. Les messages n'embarquent ni sortie LLM brute ni secret.
+
+Aucun retry sémantique n'est ajouté : un plan invalide échoue avant Risk.
+
+## Changelog — 2026-09-27 — Correctif post-Batch 19.13 proposé
+
+- base GitHub vérifiée : `29316d7521accfe46316cb2bc6dfcf7652ba04bf` ;
+- cause racine confirmée : désalignement JSON Schema / validation Pydantic pour `proposed_quantity` ;
+- contrat protégé `strategic-multi-market-plan-v1` injecté sur le nouveau chemin ;
+- diagnostic Agent sécurisé et plus précis ;
+- aucun retry LLM sémantique ;
+- Risk reste non appelé lorsqu'un plan est invalide ;
+- activation runtime fail-closed sur tout marché/discovery non-SPOT ;
+- code historique PERPETUAL conservé comme compatibilité inactive ;
+- statut : patch proposé, non intégré à GitHub.
+
+## Changelog — 2026-09-27 — Batch 19.13 intégré
+
+- commit `29316d7521accfe46316cb2bc6dfcf7652ba04bf` (`feat: add multi-market multi-decision trading cycles`) ;
 - un seul Agent et un seul appel stratégique de planification au stade décisionnel ;
 - plan ordonné multi-marchés, multi-`BUY` / `SELL` / `HOLD` ;
 - Risk séquentiel et causal sur le portefeuille mis à jour ;
@@ -142,15 +178,9 @@ Les analytics comptent les fills/trades effectivement exécutés et non le nombr
 - persistence 1:N et migration `0007_multi_decision_cycles` ;
 - trajectoire ordonnée exposée par API/cockpit ;
 - analytics basés sur fills/trades réels ;
-- `max_decisions_per_cycle` : défaut `6`, hard limit `20` ;
-- compatibilité historique maintenue ;
-- backend ciblé : `51 passed` ;
-- backend complet : `698 passed, 2 warnings` ;
-- `alembic upgrade head` : succès PostgreSQL réel ;
-- frontend : `39 passed`, lint/typecheck/build réussis ;
-- état : implémenté et validé ; le HEAD GitHub réel détermine l’identifiant de commit effectivement intégré.
+- `max_decisions_per_cycle` : défaut `6`, hard limit `20`.
 
-## Changelog — 2026-09-26 — Correctif PAPER PERPETUAL intégré
+## Changelog — 2026-09-26 — Correctif PAPER PERPETUAL historique
 
 - commit `18596ac9d4f6554aa4817a9bdb374ab597c2399f` (`fix: harden paper perpetual execution precision`) ;
 - arithmétique PAPER `Decimal` canonique ;
