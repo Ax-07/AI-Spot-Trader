@@ -11,11 +11,13 @@ Les Sessions PAPER canoniques autorisent `SPOT` et `PERPETUAL` linéaire. `FUTUR
 ## Référence courante
 
 ```text
-HEAD GitHub intégré : b4f1e50f22164c7d019d11d930485733c01c6711
-Commit              : fix: restore paper perpetual session support
+HEAD GitHub intégré : 5fdd9a32bce45deda30c652b6b6f8c59e4996559
+Commit              : fix: refresh paper marks before trading starts
 Batch 19.13         : intégré depuis 29316d7 ; durcissement LLM intégré dans aa404e4
 Correctif PERPETUAL : intégré dans b4f1e50
-Inspecteur LLM      : patch proposé au-dessus de b4f1e50, non intégré à GitHub
+Inspecteur LLM      : intégré dans 7846d89
+Valorisation PAPER  : correctif de refresh initial intégré dans 5fdd9a3
+Recalibrage prompts : patch proposé au-dessus de 5fdd9a3, non intégré à GitHub
 ```
 
 ## Décisions historiques toujours actives
@@ -31,7 +33,9 @@ Inspecteur LLM      : patch proposé au-dessus de b4f1e50, non intégré à GitH
 - ADR-269, ADR-270 et ADR-272 : Structured Outputs strict, contrat multi-marchés protégé et diagnostic sécurisé ;
 - ADR-271 : garde-fou SPOT-only intégré par erreur dans `aa404e4`, supersédé ;
 - ADR-273 : Sessions PAPER SPOT + PERPETUAL, FUTURE daté interdit ;
-- ADR-274 : inspection en lecture seule du payload OpenAI réel à la frontière `OpenAIResponsesClient`.
+- ADR-274 : inspection en lecture seule du payload OpenAI réel à la frontière `OpenAIResponsesClient` ;
+- ADR-275 : refresh initial des marks PAPER avant ouverture des cycles ;
+- ADR-276 : recalibrage du prompt stratégique sans cible de rendement injectée ni biais de quantité maximale.
 
 ## ADR-240 — Session est une façade UX, pas un nouvel agrégat persistant
 
@@ -63,31 +67,31 @@ Inspecteur LLM      : patch proposé au-dessus de b4f1e50, non intégré à GitH
 
 ## ADR-264 — Précision PAPER PERPETUAL et quantum provider-derived
 
-**ADOPTÉ ET INTÉGRÉ HISTORIQUEMENT AU HEAD `18596ac9d4f6554aa4817a9bdb374ab597c2399f`.** Les validations de précision dérivées restent canoniques.
+**ADOPTÉ ET INTÉGRÉ HISTORIQUEMENT AU COMMIT `18596ac9d4f6554aa4817a9bdb374ab597c2399f`.** Les validations de précision dérivées restent canoniques.
 
 ## ADR-265 — Un cycle peut porter un plan stratégique ordonné multi-marchés
 
-**ADOPTÉ ET INTÉGRÉ AU HEAD `29316d7521accfe46316cb2bc6dfcf7652ba04bf`.** Un seul appel du même Agent stratégique produit un plan ordonné contenant plusieurs décisions sur des marchés distincts. `max_decisions_per_cycle` vaut `6` par défaut, hard limit `20`.
+**ADOPTÉ ET INTÉGRÉ AU COMMIT `29316d7521accfe46316cb2bc6dfcf7652ba04bf`.** Un seul appel du même Agent stratégique produit un plan ordonné contenant plusieurs décisions sur des marchés distincts. `max_decisions_per_cycle` vaut `6` par défaut, hard limit `20`.
 
 ## ADR-266 — Risk et Broker suivent l'ordre du plan sur un portefeuille causal
 
-**ADOPTÉ ET INTÉGRÉ AU HEAD `29316d7521accfe46316cb2bc6dfcf7652ba04bf`.** Chaque décision est évaluée après application des éventuelles exécutions précédentes. `HOLD` et `REJECT` n'interrompent pas le plan.
+**ADOPTÉ ET INTÉGRÉ AU COMMIT `29316d7521accfe46316cb2bc6dfcf7652ba04bf`.** Chaque décision est évaluée après application des éventuelles exécutions précédentes. `HOLD` et `REJECT` n'interrompent pas le plan.
 
 ## ADR-267 — Une défaillance technique rend le cycle PAPER atomique
 
-**ADOPTÉ ET INTÉGRÉ AU HEAD `29316d7521accfe46316cb2bc6dfcf7652ba04bf`.** Une erreur technique Risk ou Broker fait passer le cycle à `FAILED` et restaure le portefeuille au checkpoint initial.
+**ADOPTÉ ET INTÉGRÉ AU COMMIT `29316d7521accfe46316cb2bc6dfcf7652ba04bf`.** Une erreur technique Risk ou Broker fait passer le cycle à `FAILED` et restaure le portefeuille au checkpoint initial.
 
 ## ADR-268 — L'audit devient 1:N et les analytics restent économiques
 
-**ADOPTÉ ET INTÉGRÉ AU HEAD `29316d7521accfe46316cb2bc6dfcf7652ba04bf`.** La migration `0007_multi_decision_cycles` conserve plusieurs décisions, évaluations Risk et intentions d'exécution dans leur ordre.
+**ADOPTÉ ET INTÉGRÉ AU COMMIT `29316d7521accfe46316cb2bc6dfcf7652ba04bf`.** La migration `0007_multi_decision_cycles` conserve plusieurs décisions, évaluations Risk et intentions d'exécution dans leur ordre.
 
 ## ADR-269 — Le schéma Structured Outputs encode le contrat action/quantité
 
-**ADOPTÉ ET INTÉGRÉ AU HEAD `aa404e46c1f05269ac2279507aa746b3af7a965d`.** `BUY`/`SELL` imposent une quantité strictement positive et `HOLD` impose `null`.
+**ADOPTÉ ET INTÉGRÉ AU COMMIT `aa404e46c1f05269ac2279507aa746b3af7a965d`.** `BUY`/`SELL` imposent une quantité strictement positive et `HOLD` impose `null`.
 
 ## ADR-270 — Le nouveau chemin reçoit un contrat protégé multi-marchés explicite
 
-**ADOPTÉ ET INTÉGRÉ AU HEAD `aa404e46c1f05269ac2279507aa746b3af7a965d`.** `StrategyInstructionsClient` injecte `strategic-multi-market-plan-v1`. Le singleton historique reste disponible pour legacy/replay.
+**ADOPTÉ ET INTÉGRÉ AU COMMIT `aa404e46c1f05269ac2279507aa746b3af7a965d`.** `StrategyInstructionsClient` injecte `strategic-multi-market-plan-v1`. Le singleton historique reste disponible pour legacy/replay.
 
 ## ADR-271 — Garde-fou SPOT-only du runtime
 
@@ -95,41 +99,78 @@ Inspecteur LLM      : patch proposé au-dessus de b4f1e50, non intégré à GitH
 
 ## ADR-272 — Les erreurs de plan sont diagnostiquées sans sortie brute
 
-**ADOPTÉ ET INTÉGRÉ AU HEAD `aa404e46c1f05269ac2279507aa746b3af7a965d`.** Les erreurs de contrat sont catégorisées sans persister la sortie LLM brute ; aucun retry sémantique n'est ajouté.
+**ADOPTÉ ET INTÉGRÉ AU COMMIT `aa404e46c1f05269ac2279507aa746b3af7a965d`.** Les erreurs de contrat sont catégorisées sans persister la sortie LLM brute ; aucun retry sémantique n'est ajouté.
 
 ## ADR-273 — Les Sessions PAPER supportent SPOT et PERPETUAL ; FUTURE reste interdit
 
-**ADOPTÉ ET INTÉGRÉ AU HEAD `b4f1e50f22164c7d019d11d930485733c01c6711`.** Le garde-fou SPOT-only est retiré. Les marchés `SPOT` et `PERPETUAL` linéaires restent soumis au pipeline Agent -> Risk -> Broker PAPER. `FUTURE` daté reste refusé.
+**ADOPTÉ ET INTÉGRÉ AU COMMIT `b4f1e50f22164c7d019d11d930485733c01c6711`.** Le garde-fou SPOT-only est retiré. Les marchés `SPOT` et `PERPETUAL` linéaires restent soumis au pipeline Agent -> Risk -> Broker PAPER. `FUTURE` daté reste refusé.
 
 ## ADR-274 — L'inspection LLM se fait à la frontière canonique OpenAI
 
-**PROPOSÉ DANS LE BATCH INSPECTEUR LLM — NON INTÉGRÉ.**
+**ADOPTÉ ET INTÉGRÉ AU COMMIT `7846d892d2c4b3aea3fb7ca628d5976639eac0c0`.**
 
 `OpenAIResponsesClient` capture en best-effort le dictionnaire exact utilisé comme body JSON de chaque appel Responses API réussi. La trace expose `instructions`, `input`, Structured Output, tools, `parallel_tool_calls`, `store`, output fournisseur et texte final lorsqu'il existe. Les headers HTTP, la clé OpenAI, les chaînes de connexion et secrets ne sont jamais ajoutés au record.
 
-Les tool loops sont représentées par plusieurs records ordonnés, ce qui permet de voir le `function_call` reçu puis le `function_call_output` réellement renvoyé au modèle. La corrélation cycle/discovery est inférée des inputs canoniques ; le chat ajoute `session_id` via un `ContextVar` asynchrone sans modifier le prompt transmis.
+Les tool loops sont représentées par plusieurs records ordonnés. La corrélation cycle/discovery est inférée des inputs canoniques ; le chat ajoute `session_id` via un `ContextVar` asynchrone sans modifier le prompt transmis. La rétention est bornée en mémoire et une exception de l'audit ne peut pas faire échouer le moteur.
 
-La rétention est bornée à 200 records et 512 Kio par record, en mémoire du processus. Cette première version évite une migration DB supplémentaire : l'inspecteur est destiné au diagnostic immédiat des prompts et n'est pas une nouvelle source de vérité durable. Une exception de l'audit est absorbée et ne peut pas faire échouer le moteur.
+## ADR-275 — Les marks PAPER sont rafraîchis avant le premier cycle
 
-## Anomalies de prompt constatées pendant l'audit
+**ADOPTÉ ET INTÉGRÉ AU HEAD `5fdd9a32bce45deda30c652b6b6f8c59e4996559`.**
 
-**CONFIRMÉES, NON CORRIGÉES DANS CE BATCH :**
+Les moniteurs SPOT et PERPETUAL terminent un premier `refresh_once()` avant de rendre le runtime initialisé. Une erreur de refresh ne fabrique aucune valorisation : le portefeuille reste incomplet et Capacity/Risk conservent leur comportement fail-closed.
 
-- `OPERATOR_CHAT_SYSTEM_PROMPT` dit encore `Trading is SPOT only and PAPER only.` ;
-- `_compose_strategy_context_sections()` produit `niveat=...` ;
-- le prompt legacy `agent/prompt.py` dit que `FUTURE` daté « peut être découvrable », alors que l'invariant projet courant l'interdit à la discovery et à l'exécution.
+## ADR-276 — L'agressivité ne détermine pas une quantité maximale
 
-Ces points doivent faire l'objet d'un correctif de prompt explicite après observation des payloads réels dans le cockpit.
+**PROPOSÉ DANS LE PRÉSENT BATCH — NON INTÉGRÉ.**
 
-## Changelog — 2026-09-27 — Inspecteur LLM proposé
+Les instructions stratégiques canoniques des Sessions/Campaigns ne contiennent plus la cible expérimentale `+4 %/jour`. Cette cible demeure documentée au niveau projet et reste explicitement non garantie.
 
-- base GitHub vérifiée : `b4f1e50f22164c7d019d11d930485733c01c6711` ;
+Le mapping durable `aggressiveness-map-v1` est conservé à l'identique pour les manifests/replays. Un mapping LLM courant `aggressiveness-map-v2` conserve une progression réelle de posture : sélectivité aux niveaux bas, initiative/volonté d'agir/rotation potentielle plus élevées aux niveaux hauts. En revanche, les formulations `very large strategic quantities` et `largest quantities` sont supprimées. Le niveau 10 reste `maximum_experimental` mais signifie **initiative stratégique maximale**, pas taille d'ordre maximale.
+
+Le contrat protégé courant fixe les invariants suivants :
+
+- agressivité élevée, y compris 10/10, != quantité maximale ;
+- sizing proportionné à la thèse, aux faits fournis, aux coûts et au capital déjà exposé ;
+- aucun trade pour produire de l'activité ou atteindre une cible de rendement ;
+- qualité de la thèse > fréquence ;
+- `HOLD` reste toujours valide si la thèse n'est pas suffisamment défendable ;
+- Risk garde l'autorité finale et ses contrôles ne sont jamais relâchés par l'agressivité.
+
+La section d'agressivité est désormais rendue par un helper partagé, ce qui corrige `niveat=` en `niveau=` sans créer de seconde implémentation parallèle.
+
+Le `AGENT_SYSTEM_PROMPT` historique `agent-strategy-v4` reste figé pour les protocoles v1/v2/v3 et leurs replays ; le recalibrage porte sur les instructions courantes composées par `StrategyInstructionsClient`.
+
+## SCALP — audit de fraîcheur associé
+
+Aucun changement de politique dans ce batch. `RiskEngine` / `SequentialCycleRiskEngine` possèdent déjà les rejets `MARKET_FRESHNESS_UNAVAILABLE` et `MARKET_DATA_STALE`. `kraken_stale_after_seconds` est toujours optionnel et vaut `None` par défaut. Au HEAD audité, `campaign_composition.py` ne renseigne pas `RiskPolicy.stale_after`, donc le rejet stale Risk n'est pas activé par défaut dans les Campaigns courantes.
+
+Un durcissement SCALP éventuel doit être traité séparément après mesure de la latence `MarketState -> LLM -> Risk`, afin de choisir un seuil fondé sur la distribution réelle des latences.
+
+## Changelog — 2026-09-27 — Recalibrage prompts proposé
+
+- base GitHub vérifiée : `5fdd9a32bce45deda30c652b6b6f8c59e4996559` ;
+- suppression de `+4 %/jour` des contrats stratégiques courants ;
+- mapping agressivité 1–10 recalibré sans biais de quantité maximale ;
+- garde-fou explicite « 10/10 != max quantity » ;
+- qualité de thèse > fréquence ; `HOLD` conservé ;
+- `niveat=` corrigé via renderer partagé ;
+- règles SPOT/PERPETUAL/Risk/multi-décisions inchangées ;
+- aucune modification frontend ;
+- politique SCALP stale inchangée.
+
+## Changelog — 2026-09-27 — Correctif valorisation PAPER intégré
+
+- commit `5fdd9a32bce45deda30c652b6b6f8c59e4996559` (`fix: refresh paper marks before trading starts`) ;
+- premier refresh des marks avant démarrage effectif des cycles ;
+- fail-closed conservé si le refresh échoue.
+
+## Changelog — 2026-09-27 — Inspecteur LLM intégré
+
+- commit `7846d892d2c4b3aea3fb7ca628d5976639eac0c0` (`feat: add read-only LLM request inspector`) ;
 - instrumentation canonique : `OpenAIResponsesClient` ;
 - endpoint lecture seule : `GET /api/v1/llm-audit` ;
 - cockpit : Réglages -> Inspecteur LLM ;
-- rétention bornée et fail-open de l'observabilité ;
-- aucun changement de stratégie, Risk, Broker ou contrat d'ordre ;
-- anomalies de prompt documentées, non corrigées.
+- rétention bornée et fail-open de l'observabilité.
 
 ## Changelog — 2026-09-27 — Correctif PERPETUAL intégré
 

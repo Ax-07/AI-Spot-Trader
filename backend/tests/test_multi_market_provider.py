@@ -18,7 +18,10 @@ from ai_spot_trader.agent.planner import (
 from ai_spot_trader.agent.strategy_client import StrategyInstructionsClient
 from ai_spot_trader.control_plane import CampaignConfiguration
 from ai_spot_trader.domain.enums import LLMModel, MarketType, TradingAction
-from ai_spot_trader.domain.experiments import aggressiveness_context
+from ai_spot_trader.domain.experiments import (
+    STRATEGIC_AGGRESSIVENESS_MAPPING_VERSION,
+    aggressiveness_context,
+)
 from ai_spot_trader.domain.models import (
     AssetBalance,
     ExecutableMarket,
@@ -112,14 +115,14 @@ def portfolio() -> PortfolioState:
     )
 
 
-def plan_input(*, max_decisions: int = 6) -> CycleDecisionPlanInput:
+def plan_input(*, max_decisions: int = 6, aggressiveness: int = 5) -> CycleDecisionPlanInput:
     return CycleDecisionPlanInput(
         cycle_id=uuid4(),
         created_at=NOW,
         portfolio_state=portfolio(),
         market_states=(market("BTC/USD"), market("ETH/USD")),
-        aggressiveness=5,
-        aggressiveness_context=aggressiveness_context(5),
+        aggressiveness=aggressiveness,
+        aggressiveness_context=aggressiveness_context(aggressiveness),
         max_decisions_per_cycle=max_decisions,
     )
 
@@ -327,6 +330,36 @@ def test_strategy_instructions_are_explicitly_multi_market() -> None:
     assert "`FUTURE` date n'est pas executable" in instructions
     assert "Priorise les signaux nets apres couts." in instructions
     assert "exactement un marché" not in instructions
+    assert "+4 % par jour" not in instructions
+    assert "niveat=" not in instructions
+    assert "niveau=5/10" in instructions
+    assert "n'implique jamais d'utiliser la quantité maximale" in instructions
+    assert "La qualité de la thèse prime sur la fréquence des trades" in instructions
+
+    sent_input = json.loads(client.calls[0]["input_text"])
+    assert sent_input["aggressiveness_context"]["mapping_version"] == (
+        STRATEGIC_AGGRESSIVENESS_MAPPING_VERSION
+    )
+    assert "largest quantities" not in sent_input["aggressiveness_context"]["strategic_instruction"]
+    assert "very large strategic quantities" not in sent_input["aggressiveness_context"]["strategic_instruction"]
+
+
+def test_level_ten_prompt_keeps_high_initiative_without_max_quantity_bias() -> None:
+    agent, client = provider(
+        output([decision("HOLD", "BTC/USD", None)]),
+        strategy=True,
+    )
+    asyncio.run(agent.generate_decision_plan(plan_input(aggressiveness=10)))
+
+    instructions = client.calls[0]["instructions"]
+    assert "niveau=10/10" in instructions
+    assert "posture=maximum_experimental" in instructions
+    assert "highest experimental strategic initiative" in instructions
+    assert "less-perfect but still defensible thesis" in instructions
+    assert "largest quantities" not in instructions
+    assert "very large strategic quantities" not in instructions
+    assert "never implies maximum quantity" in instructions
+    assert "HOLD remains valid when no defensible trade exists" in instructions
 
 
 def test_invalid_provider_plan_fails_before_risk() -> None:

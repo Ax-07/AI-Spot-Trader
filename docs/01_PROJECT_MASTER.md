@@ -4,16 +4,16 @@
 
 AI Spot Trader est une application expérimentale de trading **PAPER** pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement un cockpit de contrôle et de visualisation.
 
-Base GitHub vérifiée avant le Batch 19.13 :
+Référence GitHub intégrée vérifiée au lancement du présent recalibrage :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-BASE       : 18596ac9d4f6554aa4817a9bdb374ab597c2399f
-Commit     : fix: harden paper perpetual execution precision
+HEAD       : 5fdd9a32bce45deda30c652b6b6f8c59e4996559
+Commit     : fix: refresh paper marks before trading starts
 ```
 
-Le correctif PAPER PERPETUAL est intégré dans cette base. Le présent état du repository inclut le Batch 19.13 multi-décisions / multi-marchés validé.
+Le correctif PAPER PERPETUAL, le cycle multi-décisions / multi-marchés, l'inspecteur LLM et le refresh initial des marks PAPER sont intégrés dans cette base.
 
 ## 2. Invariants fonctionnels
 
@@ -21,6 +21,7 @@ Le correctif PAPER PERPETUAL est intégré dans cette base. Le présent état du
 - Kraken ;
 - PAPER uniquement, LIVE séparé ;
 - SPOT + PERPETUAL selon les capacités intégrées ;
+- FUTURE daté interdit ;
 - actions `BUY`, `SELL`, `HOLD` ;
 - Luna par défaut, Sol sélectionnable ;
 - Risk Engine déterministe = autorité finale ;
@@ -32,6 +33,8 @@ Le correctif PAPER PERPETUAL est intégré dans cette base. Le présent état du
 - frontend non nécessaire au fonctionnement du moteur.
 
 Principe central : **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
+
+L'objectif expérimental `+4 %/jour` reste une cible de recherche non garantie au niveau projet. Il ne doit pas être injecté dans les instructions stratégiques courantes du LLM ni être utilisé pour forcer de l'activité.
 
 ## 3. Modèle utilisateur : Session
 
@@ -115,9 +118,27 @@ Le contexte `position-management-v1` reste descriptif et reconstructible. Il ne 
 
 Le style enrichit le jugement de l'Agent mais ne devient ni une règle Risk, ni un timer de sortie, ni un ranking déterministe.
 
-## 9. Cycle stratégique multi-marchés / multi-décisions — Batch 19.13
+Le style SCALP actuel est un mode minute/intraday. Il n'est pas assimilé à du HFT sub-milliseconde et reste compatible avec un Agent LLM tant que les contrôles de fraîcheur et les latences observées sont cohérents avec le cas d'usage.
 
-Le Batch 19.13 remplace la limite historique « une décision finale par cycle » par un plan stratégique ordonné et borné.
+## 9. Agressivité stratégique
+
+L'agressivité reste un niveau canonique entier de `1` à `10`. Le mapping historique `aggressiveness-map-v1` reste réservé aux identités expérimentales durables ; les instructions LLM courantes utilisent `aggressiveness-map-v2`.
+
+Elle peut influencer :
+
+- la volonté d'agir ;
+- le degré d'initiative ;
+- la fréquence potentielle d'action ;
+- la rotation stratégique ;
+- l'acceptation d'une opportunité moins parfaite mais encore défendable.
+
+Elle ne doit pas imposer une taille d'ordre. Même au niveau `10/10`, la quantité proposée reste proportionnée à la qualité/conviction de la thèse, aux faits fournis, aux coûts, à l'exposition existante et au capital déjà engagé.
+
+`HOLD` reste valide à tous les niveaux. La qualité de la thèse prime sur la fréquence des trades ; aucun trade ne doit être généré simplement pour produire de l'activité ou atteindre une cible de rendement.
+
+## 10. Cycle stratégique multi-marchés / multi-décisions
+
+Le cycle décisionnel utilise un plan stratégique ordonné et borné.
 
 Au **stade décisionnel du cycle**, le même Agent effectue un seul appel stratégique et produit plusieurs décisions portant sur des marchés distincts :
 
@@ -135,7 +156,7 @@ contexte causal du cycle
 
 Le plan peut mélanger `BUY`, `SELL` et `HOLD`. Il ne s'agit pas de plusieurs Agents ni de plusieurs appels stratégiques indépendants servant à contourner les contraintes : l'ordre est fourni par le même plan Agent et l'exécution est ensuite séquentielle.
 
-## 10. Causalité intra-cycle et autorité Risk
+## 11. Causalité intra-cycle et autorité Risk
 
 Pour chaque décision, Risk évalue l'état de portefeuille **courant**, donc après les éventuelles exécutions des décisions précédentes du même cycle.
 
@@ -148,24 +169,36 @@ Conséquences :
 
 Risk conserve la décision finale `ALLOW` / `MODIFY` / `REJECT` pour chaque élément du plan. Aucun output LLM ne devient directement un ordre.
 
-## 11. Atomicité PAPER du cycle
+## 12. Contrat quantité/action
+
+Le schéma Structured Outputs et la validation applicative restent alignés :
+
+```text
+BUY  -> proposed_quantity > 0
+SELL -> proposed_quantity > 0
+HOLD -> proposed_quantity = null
+```
+
+Le chemin multi-marchés conserve `market_states` comme univers causal, `management_mode=true` comme restriction de gestion, l'interdiction du short SPOT et le contrôle Risk exclusif du levier, de la marge, de l'exposition, de la liquidation et de `reduce_only`.
+
+## 13. Atomicité PAPER du cycle
 
 Le cycle multi-décisions est transactionnel au niveau du ledger PAPER : un checkpoint est pris au début de la trajectoire.
 
-Si une défaillance **technique** survient dans Risk ou Broker après des mutations PAPER, le cycle devient `FAILED` et le ledger est restauré au checkpoint du début du cycle. Les faits d'échec restent auditables ; les effets économiques partiels du cycle ne subsistent pas dans le portefeuille PAPER.
+Si une défaillance **technique** survient dans Risk ou Broker après des mutations PAPER, le cycle devient `FAILED` et le ledger est restauré au checkpoint du début de cycle. Les faits d'échec restent auditables ; les effets économiques partiels du cycle ne subsistent pas dans le portefeuille PAPER.
 
 `HOLD` et `REJECT` ne sont pas des erreurs techniques et ne provoquent pas de rollback.
 
-## 12. Persistence et compatibilité historique
+## 14. Persistence et compatibilité historique
 
-Migration locale du Batch 19.13 :
+Migration :
 
 ```text
 0006_paper_control_plane
 -> 0007_multi_decision_cycles
 ```
 
-La persistence d'audit supporte désormais explicitement des relations 1:N :
+La persistence d'audit supporte explicitement des relations 1:N :
 
 ```text
 TradingCycle
@@ -177,7 +210,9 @@ TradingCycle
 
 Les anciens cycles/configurations restent lisibles. La compatibilité historique ne transforme pas artificiellement un ancien cycle mono-décision en plusieurs décisions.
 
-## 13. API, cockpit et analytics
+Le `AGENT_SYSTEM_PROMPT` historique `agent-strategy-v4` reste figé pour préserver les protocoles expérimentaux v1/v2/v3 et leurs replays. Les Sessions/Campaigns actuelles passent par `StrategyInstructionsClient`, dont le contrat protégé courant peut évoluer de manière auditée.
+
+## 15. API, cockpit et analytics
 
 L'API et le cockpit exposent la trajectoire ordonnée du cycle plutôt qu'un seul triplet Agent/Risk/exécution.
 
@@ -185,27 +220,30 @@ Les analytics restent économiques : ils comptent les fills/trades réellement e
 
 Le frontend ne recalcule ni Risk, ni P&L, ni causalité. Il affiche les faits persistés dans leur ordre.
 
-## 14. Comptabilité, monitoring et charts
+L'inspecteur LLM intégré permet de visualiser en lecture seule les payloads réellement envoyés à la Responses API, avec rétention bornée et sans exposer les secrets de transport.
+
+## 16. Comptabilité, monitoring et charts
 
 Accounting, mark-to-market, equity, exposition, monitors, candles, streaming, markers de fills et overlays restent canoniques côté backend. Le contexte candles sert à informer l'Agent ; il n'est jamais une source parallèle de vérité d'exécution ou de portefeuille.
 
-## 15. Correctif PAPER PERPETUAL intégré
+Les moniteurs PAPER effectuent désormais un premier refresh de marks avant que le runtime soit considéré initialisé. En cas d'échec, la valorisation reste incomplète et Capacity/Risk restent fail-closed.
 
-Le HEAD GitHub `18596ac9d4f6554aa4817a9bdb374ab597c2399f` intègre le durcissement de précision PAPER PERPETUAL :
+## 17. Fraîcheur des données
 
-- ordre canonique du notional `price × quantity × contract_size` ;
-- cohérence exacte spread/slippage avec la validation `Fill` ;
-- normalisation descendante des quantités dérivées sur le quantum provider-derived ;
-- revalidation des minimums/plafonds ;
-- rollback audité préservé en cas d'échec BROKER.
+Risk possède un contrôle explicite de fraîcheur :
 
-## 16. Compatibilité avec la rotation du capital 19.10
+- timestamp indisponible -> `MARKET_FRESHNESS_UNAVAILABLE` ;
+- dépassement de `RiskPolicy.stale_after` -> `MARKET_DATA_STALE`.
 
-Le Batch 19.10 avait rendu la gestion des positions stratégique et la rotation du capital possible sur plusieurs cycles. Le Batch 19.13 **étend** cette capacité : une libération de capital et une nouvelle allocation peuvent désormais apparaître dans le même plan ordonné lorsque l'Agent le décide et que Risk l'autorise.
+La configuration `kraken_stale_after_seconds` est optionnelle et vaut `None` par défaut. Elle qualifie la fraîcheur des données provider lorsqu'elle est configurée. Au HEAD audité, la composition Campaign ne renseigne pas `RiskPolicy.stale_after`, donc le rejet stale existe dans Risk mais n'est pas activé par défaut sur ce chemin. Un futur durcissement SCALP doit d'abord mesurer la latence réelle `MarketState -> LLM -> Risk` avant de fixer un seuil spécifique.
 
-Il n'existe toujours aucune règle déterministe `SELL -> BUY`, aucun take-profit fixe et aucun timer de liquidation. La rotation peut aussi continuer à s'étaler sur plusieurs cycles.
+## 18. Compatibilité avec la rotation du capital
 
-## 17. Hors périmètre actuel
+La gestion stratégique des positions et la rotation peuvent s'étaler sur plusieurs cycles ou apparaître dans le même plan ordonné lorsque l'Agent le décide et que Risk l'autorise.
+
+Il n'existe aucune règle déterministe `SELL -> BUY`, aucun take-profit fixe et aucun timer de liquidation.
+
+## 19. Hors périmètre actuel
 
 - LIVE ;
 - `ADAPTIVE_AI` tant qu'il n'est pas cadré ;
@@ -214,12 +252,9 @@ Il n'existe toujours aucune règle déterministe `SELL -> BUY`, aucun take-profi
 - take-profit fixe ou trailing stop déterministe ;
 - ranking technique déterministe d'opportunité ;
 - second pipeline/cache OHLC ou second Agent stratégique ;
-- promesse de rendement.
+- promesse de rendement ;
+- seuil SCALP stale spécifique non mesuré.
 
-## 18. Validation locale Batch 19.13
+## 20. Validation
 
-- backend ciblé : `51 passed` ;
-- backend complet : `698 passed, 2 warnings` ;
-- migration `alembic upgrade head` : succès sur PostgreSQL réel ;
-- frontend : `39 passed` ;
-- lint, typecheck et build : succès.
+Les validations historiques des batches intégrés restent consultables dans leur documentation et dans Git. Toute validation du présent recalibrage doit être distinguée explicitement de ces résultats historiques.

@@ -53,7 +53,33 @@ Une sortie qui ne respecte pas ce contrat est un échec Agent. Elle n'est jamais
 
 L'ordre du plan a un sens causal : il détermine l'ordre d'évaluation Risk et d'exécution éventuelle.
 
-## 4. Ce que fait le déterministe
+## 4. Recalibrage stratégique du prompt
+
+Le chemin Session/Campaign courant ne reçoit plus la cible expérimentale `+4 %/jour` dans ses instructions LLM. Cette cible reste un objectif expérimental documenté et non garanti ; elle ne doit pas agir comme un signal implicite de sur-trading.
+
+Le mapping durable `aggressiveness-map-v1` reste figé pour les manifests/replays historiques. Le chemin LLM courant utilise `aggressiveness-map-v2`, toujours sur l'échelle 1–10, et conserve un effet stratégique réel :
+
+- niveaux bas : sélectivité et retenue accrues ;
+- niveaux élevés : volonté d'agir plus forte, initiative et rotation stratégique plus élevées, acceptation possible d'une opportunité moins parfaite mais toujours défendable ;
+- tous niveaux : `HOLD` reste valide lorsqu'aucune thèse suffisamment défendable n'existe.
+
+Invariant de sizing :
+
+> Un niveau d'agressivité élevé, y compris 10/10, n'implique jamais d'utiliser la quantité maximale. La quantité proposée doit rester proportionnée à la qualité et à la conviction de la thèse, aux faits réellement fournis, aux coûts, à l'exposition existante et au capital déjà engagé.
+
+Le contrat protégé courant rappelle également :
+
+- ne jamais trader simplement pour produire de l'activité ;
+- ne jamais trader pour atteindre une cible de rendement ;
+- qualité de la thèse > fréquence des trades ;
+- agressivité != relâchement de Risk ;
+- frais, spread, slippage et portefeuille exposé restent des éléments du jugement stratégique.
+
+La section `CONTEXTE D'AGRESSIVITE CANONIQUE` est composée par un helper partagé entre le chemin singleton courant, la discovery et le plan multi-marchés. Le champ est `niveau=<1..10>/10` ; le typo historique `niveat=` est supprimé du chemin courant.
+
+Le `AGENT_SYSTEM_PROMPT` `agent-strategy-v4` reste volontairement figé pour préserver l'identité des protocoles expérimentaux historiques v1/v2/v3 et leurs replays. Il ne constitue pas le contrat injecté par les Sessions/Campaigns actuelles via `StrategyInstructionsClient`.
+
+## 5. Ce que fait le déterministe
 
 Le déterministe peut :
 
@@ -64,7 +90,7 @@ Le déterministe peut :
 
 Il ne calcule pas un ranking stratégique destiné à remplacer le plan Agent, ne force pas BUY/SELL et ne choisit pas une rotation automatique.
 
-## 5. NORMAL et MANAGEMENT
+## 6. NORMAL et MANAGEMENT
 
 ### NORMAL
 
@@ -81,7 +107,7 @@ Lorsque la capacité d'ouverture est indisponible ou incertaine :
 
 Le passage au multi-décisions n'autorise pas une décision à sortir de l'univers de marché ou des contraintes de capacité.
 
-## 6. Watchlist + positions ouvertes
+## 7. Watchlist + positions ouvertes
 
 Invariant :
 
@@ -91,13 +117,13 @@ univers effectif = watchlist IA actuelle + toutes les positions ouvertes gérabl
 
 Un retrait de watchlist n'est jamais une clôture forcée. Une position ouverte reste gérable jusqu'à sa clôture.
 
-## 7. SPOT — règles spécifiques
+## 8. SPOT — règles spécifiques
 
 Le runtime PAPER canonique autorise les marchés `SPOT` et `PERPETUAL` linéaires. Les règles SPOT restent strictes : `BUY` acquiert la base et `SELL` réduit uniquement un actif effectivement détenu. Aucun short, levier ni margin n'est autorisé sur SPOT.
 
 Dans un plan multi-décisions, Risk réévalue la quantité disponible après chaque exécution. Un SELL SPOT ne peut donc pas être autorisé à partir d'un inventaire obsolète.
 
-## 8. PERPETUAL — support PAPER canonique
+## 9. PERPETUAL — support PAPER canonique
 
 Les marchés `PERPETUAL` linéaires sont supportés dans les Sessions PAPER et dans la discovery dynamique lorsque le type est présent dans l'univers bootstrap autorisé.
 
@@ -111,7 +137,7 @@ Le Risk Engine déterministe conserve l'autorité finale : marge isolée, levier
 
 `FUTURE` daté reste interdit à l'exécution et à la discovery.
 
-## 9. Évaluation Risk séquentielle
+## 10. Évaluation Risk séquentielle
 
 Pour chaque décision `Di`, Risk reçoit le portefeuille courant après `D1 ... D(i-1)`.
 
@@ -125,7 +151,7 @@ Cette règle empêche le plan de réserver implicitement plusieurs fois le même
 
 Un `REJECT` n'arrête pas le reste du plan. Un `HOLD` n'arrête pas non plus le reste du plan. Les décisions suivantes continuent avec le portefeuille réellement courant.
 
-## 10. Rotation du capital
+## 11. Rotation du capital
 
 Le Batch 19.10 autorisait déjà la gestion stratégique des positions et la rotation sur plusieurs cycles. Le Batch 19.13 permet aussi une trajectoire causale intra-cycle, par exemple :
 
@@ -139,7 +165,7 @@ SELL marché A
 
 Cet exemple n'est pas une règle. Il n'existe aucun automatisme `SELL -> BUY`, aucun take-profit fixe et aucun seuil P&L déterministe imposant la rotation.
 
-## 11. HOLD, REJECT et audit
+## 12. HOLD, REJECT et audit
 
 Toutes les décisions du plan sont auditables, y compris :
 
@@ -151,13 +177,13 @@ Toutes les décisions du plan sont auditables, y compris :
 
 La rationale Agent et les raisons Risk restent deux catégories distinctes. L'UI ne fabrique aucune causalité absente.
 
-## 12. Échec Agent et diagnostic sécurisé
+## 13. Échec Agent et diagnostic sécurisé
 
 Un plan vide, un JSON invalide, une violation du contrat action/quantité, un dépassement de limite, un doublon ou un marché hors univers échoue avant Risk.
 
-Les erreurs sont catégorisées pour l'opérateur sans persister la réponse LLM brute, un secret, une clé API ou un prompt secret. Il n'existe aucun retry LLM sémantique destiné à « réparer » une décision invalide ; l'invariant d'un seul appel stratégique de planification par cycle est mainten.
+Les erreurs sont catégorisées pour l'opérateur sans persister la réponse LLM brute, un secret, une clé API ou un prompt secret. Il n'existe aucun retry LLM sémantique destiné à « réparer » une décision invalide ; l'invariant d'un seul appel stratégique de planification par cycle est maintenu.
 
-## 13. Échec technique et rollback PAPER
+## 14. Échec technique et rollback PAPER
 
 Une erreur technique Risk ou Broker transforme le cycle en `FAILED`.
 
@@ -165,13 +191,23 @@ Le runner audité restaure le checkpoint du ledger PAPER pris au début du cycle
 
 Le rollback économique ne supprime pas l'information d'audit nécessaire pour comprendre l'échec.
 
-## 14. Causalité / no-look-ahead
+## 15. Causalité / no-look-ahead
 
-Aucun candidat, snapshot, candle ou contexte ne peut introduire une donnée postérieure au temps de décision concerné. `history_as_of(...)` reste la primitive de lecture causale pour les candles stratégéques.
+Aucun candidat, snapshot, candle ou contexte ne peut introduire une donnée postérieure au temps de décision concerné. `history_as_of(...)` reste la primitive de lecture causale pour les candles stratégiques.
 
 L'ordre intra-cycle est causal mais n'autorise aucun accès au futur : la décision suivante observe uniquement les effets déjà produits par les étapes précédentes et les faits disponibles dans le contexte du cycle.
 
-## 15. Persistence 1:N et compatibilité
+## 16. Fraîcheur et SCALP
+
+Le style `SCALP` correspond ici à un horizon minute / intraday, pas à du HFT sub-milliseconde. Son usage avec le LLM reste donc supporté.
+
+Le Risk Engine possède déjà un contrôle fail-closed de fraîcheur : absence de timestamp exploitable -> `MARKET_FRESHNESS_UNAVAILABLE`, dépassement de `RiskPolicy.stale_after` -> `MARKET_DATA_STALE`.
+
+La configuration provider `kraken_stale_after_seconds` reste optionnelle et vaut `None` par défaut. Ce réglage concerne la qualification de fraîcheur du MarketState provider ; il ne doit pas être confondu avec la politique Risk ni avec le `paper_mark_to_market_stale_after_seconds` du portefeuille PAPER. Au HEAD audité, `campaign_composition.py` construit la `RiskPolicy` sans renseigner `stale_after` : le mécanisme Risk existe donc, mais n'est pas activé par défaut dans les Campaigns courantes.
+
+Aucun seuil SCALP supplémentaire n'est imposé dans ce batch. Un futur durcissement doit d'abord mesurer la latence réelle `MarketState -> LLM -> Risk` et ses distributions avant de choisir un seuil.
+
+## 17. Persistence 1:N et compatibilité
 
 Migration Batch 19.13 :
 
@@ -184,13 +220,13 @@ Un cycle peut désormais posséder plusieurs décisions, plusieurs évaluations 
 
 Les anciens cycles mono-décision restent lisibles sans réécriture de leur historique.
 
-## 16. Analytics
+## 18. Analytics
 
 Le nombre de décisions n'est pas le nombre de trades. Les analytics utilisent les fills/trades économiques réellement exécutés.
 
 Un `HOLD` ou un `REJECT` reste important pour l'audit mais n'incrémente pas artificiellement les métriques d'exécution.
 
-## 17. Frontend
+## 19. Frontend
 
 Le frontend peut afficher :
 
@@ -204,7 +240,7 @@ Le frontend peut afficher :
 
 Il ne peut pas produire un ranking, recalculer Risk, inventer un fill ou réordonner la causalité.
 
-## 18. Interdits maintenus
+## 20. Interdits maintenus
 
 - aucun LIVE implicite ;
 - aucun second Agent ;
@@ -215,6 +251,7 @@ Il ne peut pas produire un ranking, recalculer Risk, inventer un fill ou réordo
 - aucun `FUTURE` daté ; aucun short/levier/margin sur SPOT ; aucun contournement des contrôles de levier, marge ou exposition PERPETUAL ;
 - aucun look-ahead ;
 - aucune obligation de trader ;
+- aucune taille maximale imposée par l'agressivité ;
 - aucun calcul financier canonique déporté dans le frontend ;
 - aucun effacement d'historique ;
 - aucune promesse de rendement.

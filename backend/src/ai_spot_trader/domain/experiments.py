@@ -10,7 +10,10 @@ from ai_spot_trader.domain.models import (
     TradingStyleContext,
 )
 
+# Historical mapping used by paper-experiment-v1/v2/v3 manifests and replays.
 AGGRESSIVENESS_MAPPING_VERSION = "aggressiveness-map-v1"
+# Current LLM-facing mapping used by StrategyInstructionsClient / prompt composition.
+STRATEGIC_AGGRESSIVENESS_MAPPING_VERSION = "aggressiveness-map-v2"
 TRADING_STYLE_MAPPING_VERSION = "trading-style-map-v1"
 EXPERIMENT_PROTOCOL_VERSION = "paper-experiment-v1"
 MODEL_EXPERIMENT_PROTOCOL_VERSION = "paper-experiment-v2"
@@ -29,6 +32,7 @@ _MODEL_COMPARISON_PROTOCOLS = {
     MULTI_MARKET_MODEL_EXPERIMENT_PROTOCOL_VERSION,
 }
 
+# Exact historical v1 wording: do not change without breaking old manifest validation/replay.
 _AGGRESSIVENESS_PROFILES: tuple[tuple[str, str], ...] = (
     (
         "capital_preservation",
@@ -85,21 +89,99 @@ _AGGRESSIVENESS_PROFILES: tuple[tuple[str, str], ...] = (
     ),
 )
 
+# Current LLM-facing v2 wording. High initiative is deliberately decoupled from maximum sizing.
+_STRATEGIC_AGGRESSIVENESS_PROFILES: tuple[tuple[str, str], ...] = (
+    (
+        "capital_preservation",
+        "Prefer HOLD unless the supplied facts make a trade unusually compelling. When acting, "
+        "keep sizing conservative and proportionate to thesis quality, costs, and existing exposure.",
+    ),
+    (
+        "very_conservative",
+        "Require strong evidence before trading. Prefer HOLD when the thesis is marginal or mixed, "
+        "and keep sizing conservative and proportionate to the supplied facts.",
+    ),
+    (
+        "conservative",
+        "Trade selectively on clear evidence. Use HOLD readily when conviction is limited, and keep "
+        "sizing proportionate to thesis quality, costs, and existing exposure.",
+    ),
+    (
+        "measured",
+        "Favor selective trades with measured initiative. Do not force activity when the evidence is "
+        "inconclusive; size only in proportion to the supported thesis.",
+    ),
+    (
+        "balanced",
+        "Balance opportunity and restraint. Trade when the supplied facts support a clear thesis and "
+        "otherwise HOLD; keep sizing proportionate to conviction and portfolio context.",
+    ),
+    (
+        "active",
+        "Be moderately more willing to act on a supported thesis and rotate capital when justified. "
+        "Sizing may scale with conviction, but never with aggressiveness alone.",
+    ),
+    (
+        "assertive",
+        "Act assertively when the supplied facts support a coherent thesis. Take more initiative in "
+        "capital rotation while preserving HOLD for weak evidence and thesis-proportionate sizing.",
+    ),
+    (
+        "aggressive",
+        "Be willing to act on a broader set of defensible opportunities and take more initiative in "
+        "capital rotation. Do not trade merely to increase activity; sizing remains thesis-proportionate.",
+    ),
+    (
+        "very_aggressive",
+        "Favor action when the supplied facts support a plausible and coherent opportunity, with high "
+        "initiative and potentially higher action frequency. HOLD remains valid, and aggressiveness "
+        "alone never justifies larger sizing.",
+    ),
+    (
+        "maximum_experimental",
+        "Use the highest experimental strategic initiative: act decisively on supported opportunities, "
+        "accept a less-perfect but still defensible thesis, and rotate capital actively when justified. "
+        "HOLD remains valid when no defensible trade exists. This level never implies maximum quantity; "
+        "sizing must remain proportionate to thesis quality, supplied facts, costs, and existing exposure.",
+    ),
+)
 
-def aggressiveness_context(level: int) -> AggressivenessContext:
-    """Return the canonical discrete strategic mapping for one level from 1 to 10."""
 
+def _aggressiveness_context_from_profiles(
+    level: int,
+    *,
+    mapping_version: str,
+    profiles: tuple[tuple[str, str], ...],
+) -> AggressivenessContext:
     if isinstance(level, bool) or not isinstance(level, int) or not 1 <= level <= 10:
         raise ValueError("aggressiveness must be an integer between 1 and 10")
-    posture, instruction = _AGGRESSIVENESS_PROFILES[level - 1]
+    posture, instruction = profiles[level - 1]
     return AggressivenessContext(
-        mapping_version=AGGRESSIVENESS_MAPPING_VERSION,
+        mapping_version=mapping_version,
         level=level,
         posture=posture,
         strategic_instruction=instruction,
     )
 
 
+def aggressiveness_context(level: int) -> AggressivenessContext:
+    """Return the exact historical v1 mapping used by durable experiment identities."""
+
+    return _aggressiveness_context_from_profiles(
+        level,
+        mapping_version=AGGRESSIVENESS_MAPPING_VERSION,
+        profiles=_AGGRESSIVENESS_PROFILES,
+    )
+
+
+def strategic_aggressiveness_context(level: int) -> AggressivenessContext:
+    """Return the current LLM-facing v2 strategic interpretation for one level from 1 to 10."""
+
+    return _aggressiveness_context_from_profiles(
+        level,
+        mapping_version=STRATEGIC_AGGRESSIVENESS_MAPPING_VERSION,
+        profiles=_STRATEGIC_AGGRESSIVENESS_PROFILES,
+    )
 
 
 _TRADING_STYLE_PROFILES: dict[TradingStyle, dict[str, object]] = {

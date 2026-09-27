@@ -4,6 +4,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 
+from ai_spot_trader.domain.experiments import strategic_aggressiveness_context
 from ai_spot_trader.domain.models import (
     AggressivenessContext,
     ExecutionCostContext,
@@ -26,7 +27,20 @@ _STRATEGY_SECRET_PATTERNS = (
     ),
 )
 
-PROTECTED_AGENT_CONTRACT = """\
+AGGRESSIVENESS_QUANTITY_GUARDRAIL = (
+    "Un niveau d'agressivité élevé, y compris 10/10, n'implique jamais d'utiliser la quantité "
+    "maximale. La quantité proposée doit rester proportionnée à la qualité et à la conviction de "
+    "la thèse, aux faits réellement fournis, aux coûts, à l'exposition existante et au capital "
+    "déjà engagé."
+)
+
+SIGNAL_QUALITY_GUARDRAIL = (
+    "Ne tradez jamais simplement pour produire de l'activité ou atteindre une cible de rendement. "
+    "HOLD reste valide lorsque la thèse n'est pas suffisamment défendable. La qualité de la thèse "
+    "prime sur la fréquence des trades."
+)
+
+PROTECTED_AGENT_CONTRACT = f"""\
 Vous êtes l'unique agent de trading stratégique pour AI Spot Trader.
 
 Contrat applicatif protégé : agent-contract-v1.
@@ -50,7 +64,7 @@ Règles protégées :
   visible via un tool ou dans un catalogue Kraken n'est pas automatiquement exécutable.
 - Sélectionnez uniquement une paire canonique et un type présents exactement dans
   `MarketSelectionInput.executable_markets`. Les types exécutables sont `SPOT` et `PERPETUAL`
-  linéaire. `FUTURE` daté peut être découvrable mais n'est pas exécutable.
+  linéaire. `FUTURE` daté est interdit.
 - Les tools fournissent uniquement des faits publics normalisés. Ils ne calculent aucun score
   d'opportunité, ne proposent pas d'action, n'autorisent aucun ordre et ne peuvent appeler ni
   Risk ni Broker.
@@ -89,10 +103,11 @@ Règles protégées :
 - N'utilisez que les faits présents dans l'entrée structurée et les résultats de tools obtenus
   au cours de la phase de sélection du même cycle. N'inventez aucun prix, solde, position,
   indicateur, actualité ou donnée absente de ces sources.
-- L'agressivité est uniquement un contexte stratégique. Elle peut influencer la volonté d'agir
-  et la quantité proposée, mais ne relâche jamais les limites déterministes de Risk.
-- L'objectif expérimental de +4 % par jour est une cible de recherche, jamais une obligation de
-  trader ni une garantie de rendement.
+- L'agressivité est uniquement un contexte stratégique. Elle peut influencer la volonté d'agir,
+  la fréquence potentielle d'action, le degré d'initiative et la rotation stratégique, mais ne
+  relâche jamais les limites déterministes de Risk.
+- {AGGRESSIVENESS_QUANTITY_GUARDRAIL}
+- {SIGNAL_QUALITY_GUARDRAIL}
 - Le champ `rationale` est explicatif uniquement et ne constitue jamais une instruction
   d'exécution. Rédigez toujours `rationale` en français.
 - Ne transmettez aucune instruction au Broker, à Kraken ou au Risk Engine. Aucune sortie LLM
@@ -197,6 +212,19 @@ def strategy_prompt_digest(value: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def compose_aggressiveness_section(context: AggressivenessContext) -> str:
+    """Render the current v2 LLM-facing aggressiveness context on all current Agent paths."""
+
+    current = strategic_aggressiveness_context(context.level)
+    return (
+        "CONTEXTE D'AGRESSIVITE CANONIQUE :\n"
+        f"mapping_version={current.mapping_version}\n"
+        f"niveau={current.level}/10\n"
+        f"posture={current.posture}\n"
+        f"instruction={current.strategic_instruction}"
+    )
+
+
 def compose_trading_context_sections(
     *,
     trading_style_context: TradingStyleContext | None,
@@ -248,13 +276,11 @@ def compose_agent_instructions(
         "STRATEGIE OPERATEUR EDITABLE (subordonnee au contrat protege) :\n"
         f"{normalized}"
     )
-    aggression_section = (
-        "CONTEXTE D'AGRESSIVITE CANONIQUE :\n"
-        f"niveau={aggressiveness_context.level}/10\n"
-        f"posture={aggressiveness_context.posture}\n"
-        f"instruction={aggressiveness_context.strategic_instruction}"
-    )
-    sections = [PROTECTED_AGENT_CONTRACT.rstrip(), strategy_section, aggression_section]
+    sections = [
+        PROTECTED_AGENT_CONTRACT.rstrip(),
+        strategy_section,
+        compose_aggressiveness_section(aggressiveness_context),
+    ]
     sections.extend(
         compose_trading_context_sections(
             trading_style_context=trading_style_context,

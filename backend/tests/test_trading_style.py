@@ -8,12 +8,17 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from ai_spot_trader.agent.prompt import PROTECTED_AGENT_CONTRACT, compose_agent_instructions
+from ai_spot_trader.agent.prompt import (
+    PROTECTED_AGENT_CONTRACT,
+    compose_agent_instructions,
+    compose_aggressiveness_section,
+)
 from ai_spot_trader.agent.strategy_client import StrategyInstructionsClient
 from ai_spot_trader.campaign_composition import _campaign_agent_contexts
 from ai_spot_trader.control_plane import CampaignConfiguration
 from ai_spot_trader.domain.enums import LLMModel, MarketType, TradingStyle
 from ai_spot_trader.domain.experiments import (
+    STRATEGIC_AGGRESSIVENESS_MAPPING_VERSION,
     TRADING_STYLE_MAPPING_VERSION,
     aggressiveness_context,
     trading_style_context,
@@ -236,13 +241,11 @@ def test_prompt_composition_adds_canonical_style_and_cost_sections_only_when_con
             PROTECTED_AGENT_CONTRACT.rstrip(),
             "STRATEGIE OPERATEUR EDITABLE (subordonnee au contrat protege) :\n"
             "Cherche une opportunite defendable.",
-            "CONTEXTE D'AGRESSIVITE CANONIQUE :\n"
-            "niveau=5/10\n"
-            f"posture={aggression.posture}\n"
-            f"instruction={aggression.strategic_instruction}",
+            compose_aggressiveness_section(aggression),
         )
     )
     assert legacy.instructions == expected_legacy
+    assert f"mapping_version={STRATEGIC_AGGRESSIVENESS_MAPPING_VERSION}" in legacy.instructions
     assert "CONTEXTE DE STYLE DE TRADING CANONIQUE" not in legacy.instructions
     assert "CONTEXTE DE COUTS D'EXECUTION PAPER CANONIQUE" not in legacy.instructions
 

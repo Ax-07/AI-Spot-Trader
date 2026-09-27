@@ -2,7 +2,7 @@
 
 AI Spot Trader est une application expérimentale de trading crypto **PAPER** sur Kraken, pilotée par **un seul Agent IA stratégique**. L'Agent recherche/sélectionne les opportunités puis, au stade décisionnel du cycle, produit un **plan ordonné** de décisions `BUY`, `SELL` ou `HOLD` sur des marchés distincts. Le **Risk Engine déterministe** conserve l'autorité finale sur chaque décision avant toute exécution éventuelle par le `PaperBroker`.
 
-> Objectif expérimental : rechercher une performance élevée, avec une cible de travail de +4 %/jour. Ce n'est ni une promesse ni une garantie de rendement.
+> Objectif expérimental : rechercher une performance élevée, avec une cible de travail de +4 %/jour. Ce n'est ni une promesse ni une garantie de rendement. Cette cible n'est pas injectée dans les instructions stratégiques courantes du LLM.
 
 ## Parcours utilisateur
 
@@ -46,9 +46,9 @@ Deux modes de marchés sont disponibles :
 - **Automatique — IA** : Kraken → admissibilité déterministe → candidats → même Agent IA → watchlist ; le bootstrap reste un fallback, pas une obligation de trader ;
 - **Manuel** : `market_discovery = null`, l'univers exécutable est la liste fournie et la whitelist Risk est alignée sur cet univers.
 
-La configuration avancée expose les valeurs réellement persistées : cadence, coûts PAPER, timeouts, paramètres Risk, limites PERPETUAL, paramètres de discovery et, dans le Batch 19.13, `max_decisions_per_cycle`.
+La configuration avancée expose les valeurs réellement persistées : cadence, coûts PAPER, timeouts, paramètres Risk, limites PERPETUAL, paramètres de discovery et `max_decisions_per_cycle`.
 
-## Cycle stratégique multi-marchés — Batch 19.13
+## Cycle stratégique multi-marchés
 
 Le cycle décisionnel n'est plus limité à une seule décision. Après constitution du contexte causal, le même Agent effectue **un seul appel stratégique de planification** et retourne une trajectoire ordonnée bornée.
 
@@ -76,12 +76,19 @@ Règles principales :
 
 Le multi-décisions ne crée ni second Agent, ni ranking algorithmique stratégique, ni contournement Risk.
 
+## Agressivité et qualité du signal
+
+L'agressivité 1–10 influence la posture stratégique : volonté d'agir, initiative, fréquence potentielle d'action et rotation du capital. Les prompts courants utilisent `aggressiveness-map-v2`, tandis que le mapping v1 reste figé pour les identités expérimentales historiques. Elle ne relâche jamais Risk et n'impose jamais une taille maximale.
+
+Même à 10/10, la quantité proposée doit rester proportionnée à la qualité/conviction de la thèse, aux faits fournis, aux coûts et au capital déjà exposé. `HOLD` reste valide lorsqu'aucune thèse suffisamment défendable n'existe ; aucun trade ne doit être produit simplement pour créer de l'activité ou poursuivre une cible de rendement.
+
 ## Invariants
 
 - un seul Agent IA stratégique ;
 - Kraken comme exchange initial ;
 - PAPER uniquement ; LIVE séparé et ultérieur ;
 - SPOT sans short/levier/marge ; PERPETUAL selon les capacités intégrées ;
+- FUTURE daté interdit ;
 - aucune sortie LLM → Broker/Kraken ;
 - Risk Engine déterministe = autorité finale ;
 - exécution séquentielle et causale des décisions ;
@@ -97,26 +104,28 @@ Principe : **l'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
 La façade `/api/v1/sessions` conserve la création atomique, le versioning immuable, l'archivage logique et les actions `Démarrer`, `Arrêter`, `Reprendre`, `Tester 1 cycle`. Fermer le frontend ne stoppe jamais le backend.
 
-Un cycle Batch 19.13 expose une trajectoire ordonnée 1:N : plusieurs décisions peuvent posséder leurs évaluations Risk et leurs intentions/fills associés. Les anciens cycles restent lisibles via la compatibilité historique.
+Un cycle expose une trajectoire ordonnée 1:N : plusieurs décisions peuvent posséder leurs évaluations Risk et leurs intentions/fills associés. Les anciens cycles restent lisibles via la compatibilité historique.
 
 ## Persistence
 
-Le Batch 19.13 ajoute la migration :
+La persistence d'audit utilise la migration :
 
 ```text
 0006_paper_control_plane
 -> 0007_multi_decision_cycles
 ```
 
-La persistence d'audit passe explicitement à des relations 1:N pour les décisions, `RiskAssessment` et `ExecutionIntent` d'un cycle, tout en conservant la lecture des historiques antérieurs.
+Les relations 1:N couvrent les décisions, `RiskAssessment` et `ExecutionIntent` d'un cycle, tout en conservant la lecture des historiques antérieurs.
 
 ## Référence de travail
 
-Base GitHub intégrée vérifiée :
+HEAD GitHub intégré vérifié le 27 septembre 2026 :
 
 ```text
-18596ac9d4f6554aa4817a9bdb374ab597c2399f
-fix: harden paper perpetual execution precision
+5fdd9a32bce45deda30c652b6b6f8c59e4996559
+fix: refresh paper marks before trading starts
 ```
 
-Validation du Batch 19.13 : backend `698 passed, 2 warnings`, migration PostgreSQL réelle réussie, frontend `39 passed`, lint/typecheck/build réussis.
+Ce HEAD inclut notamment l'inspecteur LLM en lecture seule (`7846d89`) et le refresh initial des marks PAPER avant démarrage des cycles (`5fdd9a3`).
+
+Les chiffres de validation `698 passed, 2 warnings`, migration PostgreSQL réelle réussie, frontend `39 passed` et lint/typecheck/build réussis correspondent à la validation historique du Batch 19.13 ; ils ne doivent pas être interprétés comme une exécution du présent recalibrage de prompts.

@@ -5,11 +5,15 @@ from typing import Any, Protocol, cast
 
 from ai_spot_trader.agent.position_management import build_position_management_context
 from ai_spot_trader.agent.prompt import (
+    AGGRESSIVENESS_QUANTITY_GUARDRAIL,
+    SIGNAL_QUALITY_GUARDRAIL,
     compose_agent_instructions,
+    compose_aggressiveness_section,
     compose_trading_context_sections,
     normalize_strategy_prompt,
 )
 from ai_spot_trader.domain.enums import LLMModel
+from ai_spot_trader.domain.experiments import strategic_aggressiveness_context
 from ai_spot_trader.domain.models import (
     AggressivenessContext,
     ExecutionCostContext,
@@ -76,7 +80,8 @@ class StrategyInstructionsClient:
                 execution_cost_context=execution_costs,
             )
         else:
-            # Preserve the historical singleton contract for legacy inputs and experiment replay.
+            # Preserve the singleton Campaign shape for legacy inputs. Historical experiment
+            # replay keeps using AGENT_SYSTEM_PROMPT outside this wrapper.
             instructions = compose_agent_instructions(
                 strategy_prompt=self._strategy_prompt,
                 aggressiveness_context=context,
@@ -103,7 +108,7 @@ class StrategyInstructionsClient:
         return await self._delegate.generate_structured_decision(
             model=model,
             instructions=self.effective_instructions(input_text),
-            input_text=input_text,
+            input_text=_current_llm_input_text(input_text),
             schema=schema,
         )
 
@@ -122,11 +127,21 @@ class StrategyInstructionsClient:
         return await delegate.generate_structured_decision_with_tools(
             model=model,
             instructions=self.effective_instructions(input_text),
-            input_text=input_text,
+            input_text=_current_llm_input_text(input_text),
             schema=schema,
             tool_registry=tool_registry,
             max_tool_calls=max_tool_calls,
         )
+
+
+def _current_llm_input_text(input_text: str) -> str:
+    """Replace historical v1 aggressiveness wording only at the current LLM transport boundary."""
+
+    payload = _input_payload(input_text)
+    context = _aggressiveness_context_from_payload(payload)
+    current = strategic_aggressiveness_context(context.level)
+    payload["aggressiveness_context"] = current.model_dump(mode="json")
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _input_payload(input_text: str) -> dict[str, object]:
@@ -285,12 +300,7 @@ def _compose_strategy_context_sections(
             "STRATEGIE OPERATEUR EDITABLE (subordonnee au contrat protege) :\n"
             f"{strategy_prompt}"
         ),
-        (
-            "CONTEXTE D'AGRESSIVITE CANONIQUE :\n"
-            f"niveat={context.level}/10\n"
-            f"posture={context.posture}\n"
-            f"instruction={context.strategic_instruction}"
-        ),
+        compose_aggressiveness_section(context),
     ]
     sections.extend(
         compose_trading_context_sections(
@@ -308,7 +318,7 @@ def _compose_multi_market_plan_instructions(
     trading_style_context: TradingStyleContext | None,
     execution_cost_context: ExecutionCostContext | None,
 ) -> str:
-    protected = """\
+    protected = f"""\
 Vous etes l'unique Agent de trading strategique pour AI Spot Trader.
 
 Contrat protege de planification : strategic-multi-market-plan-v1.
@@ -344,8 +354,8 @@ Regles protegees :
   action visant a reduire/cloturer une position deja ouverte.
 - Les frais, spread, slippage, style de trading et agressivite sont des contextes strategiques ;
   ils ne relachent jamais les contraintes deterministes de Risk.
-- L'objectif experimental de +4 % par jour est une cible de recherche, jamais une obligation de
-  trader ni une garantie de rendement.
+- {AGGRESSIVENESS_QUANTITY_GUARDRAIL}
+- {SIGNAL_QUALITY_GUARDRAIL}
 - N'inventez aucun prix, solde, position, indicateur ou fait absent de l'input ou des tools read-only
   utilises pendant ce meme appel.
 - Aucune sortie LLM ne constitue un ordre Broker/Kraken. L'IA propose ; le Risk Engine autorise,
