@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel
 
+from ai_spot_trader.agent.llm_audit import llm_audit_context
 from ai_spot_trader.chat.errors import ChatContextNotFoundError, ChatSessionNotFoundError
 from ai_spot_trader.chat.models import (
     ChatContextSnapshot,
@@ -217,10 +218,14 @@ class OperatorChatService:
             )
             prospective_history = (*history, operator_message)
             try:
-                reply_text = await self._provider.reply(
-                    history=prospective_history,
-                    context=context,
-                )
+                with llm_audit_context(
+                    session_id=resolved_session_id,
+                    cycle_id=context.historical_cycle_id,
+                ):
+                    reply_text = await self._provider.reply(
+                        history=prospective_history,
+                        context=context,
+                    )
             except Exception:
                 if created_session:
                     self._sessions.pop(resolved_session_id, None)

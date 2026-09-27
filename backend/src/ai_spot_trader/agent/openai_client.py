@@ -17,6 +17,7 @@ from ai_spot_trader.agent.errors import (
     LLMTransientError,
     LLMTransportError,
 )
+from ai_spot_trader.agent.llm_audit import GLOBAL_LLM_AUDIT_STORE
 from ai_spot_trader.core.retry import LLM_PRE_DECISION_RETRY_POLICY, RetryPolicy, Sleep, retry_async
 from ai_spot_trader.domain.enums import LLMModel
 from ai_spot_trader.domain.models import AgentToolTrace
@@ -98,7 +99,13 @@ class OpenAIResponsesClient:
             raise LLMProviderError("OpenAI response body is not valid JSON") from exc
         if not isinstance(payload, dict):
             raise LLMProviderError("OpenAI response body must be a JSON object")
-        return cast(dict[str, Any], payload)
+        typed_payload = cast(dict[str, Any], payload)
+        try:
+            GLOBAL_LLM_AUDIT_STORE.append(request=cast(dict[str, object], request), response=cast(dict[str, object], typed_payload))
+        except Exception:
+            # Observability must never change the strategic/chat execution path.
+            pass
+        return typed_payload
 
     async def _post(self, url: str, *, headers: dict[str, str], json: dict[str, Any]) -> httpx.Response:
         async def operation() -> httpx.Response:

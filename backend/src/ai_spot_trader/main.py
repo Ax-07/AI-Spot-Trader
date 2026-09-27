@@ -13,6 +13,7 @@ from ai_spot_trader.api.routes.chat import router as chat_router
 from ai_spot_trader.api.routes.control_plane import router as control_plane_router
 from ai_spot_trader.api.routes.engine import router as engine_router
 from ai_spot_trader.api.routes.health import router as health_router
+from ai_spot_trader.api.routes.llm_audit import router as llm_audit_router
 from ai_spot_trader.api.routes.paper_runs import router as paper_runs_router
 from ai_spot_trader.api.routes.portfolio import router as portfolio_router
 from ai_spot_trader.api.routes.sessions import router as sessions_router
@@ -221,6 +222,7 @@ def create_app(
     app.include_router(engine_router)
     app.include_router(portfolio_router)
     app.include_router(audit_router)
+    app.include_router(llm_audit_router)
     app.include_router(analytics_router)
     app.include_router(paper_runs_router)
     app.include_router(control_plane_router)

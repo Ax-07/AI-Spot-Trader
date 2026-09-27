@@ -1,20 +1,22 @@
 "use client";
 
-import { BookOpenText, MessageSquareText, Palette, Settings2, ShieldCheck } from "lucide-react";
+import { BookOpenText, FileSearch2, MessageSquareText, Palette, Settings2, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 
 import { ChatPanel } from "@/components/cockpit/chat-panel";
 import { ControlPlanePanel } from "@/components/cockpit/control-plane-panel";
+import { LlmAuditPanel } from "@/components/cockpit/llm-audit-panel";
 import { OperatorGuide } from "@/components/cockpit/operator-guide";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
-type SettingsView = "help" | "assistant" | "advanced";
+type SettingsView = "help" | "assistant" | "llm-audit" | "advanced";
 
 const OPTIONS = [
   { id: "help" as const, label: "Aide", detail: "Guide opérateur", icon: BookOpenText },
   { id: "assistant" as const, label: "Assistant", detail: "Chat informatif", icon: MessageSquareText },
+  { id: "llm-audit" as const, label: "Inspecteur LLM", detail: "Payloads OpenAI réels", icon: FileSearch2 },
   { id: "advanced" as const, label: "Avancé", detail: "Strategies, versions et Campaigns", icon: Settings2 },
 ];
 
@@ -43,7 +45,7 @@ export function SettingsPanel() {
           </CardContent>
         </Card>
 
-        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {OPTIONS.map((option) => {
             const Icon = option.icon;
             const active = view === option.id;
@@ -79,6 +81,7 @@ export function SettingsPanel() {
 
       {view === "help" ? <OperatorGuide /> : null}
       {view === "assistant" ? <ChatPanel /> : null}
+      {view === "llm-audit" ? <LlmAuditPanel /> : null}
       {view === "advanced" ? <ControlPlanePanel /> : null}
     </div>
   );

@@ -6,40 +6,39 @@
 
 - Repository : `Ax-07/AI-Spot-Trader`
 - Branche : `main`
-- HEAD GitHub vérifié le 27 septembre 2026 : `aa404e46c1f05269ac2279507aa746b3af7a965d` (`fix: harden multi-market LLM plan contract`).
-- Le Batch 19.13 multi-marchés / multi-décisions et son durcissement du contrat LLM sont donc **intégrés** à GitHub `main`.
-- Le présent correctif PERPETUAL est un **patch proposé au-dessus de `aa404e4`, non encore intégré à GitHub**.
+- HEAD GitHub vérifié le 27 septembre 2026 : `b4f1e50f22164c7d019d11d930485733c01c6711` (`fix: restore paper perpetual session support`).
+- `docs/00_ETAT_ACTUEL.md` était en retard d'un commit : il référençait encore `aa404e4` alors que le correctif PERPETUAL est désormais intégré à `main`.
+- Le présent Batch inspecteur LLM est un **patch proposé au-dessus de `b4f1e50`, non intégré à GitHub**.
 
-## Correctif ciblé PERPETUAL après `aa404e4`
+## État fonctionnel confirmé
 
-Le commit `aa404e4` a correctement durci le nouveau chemin de planification multi-marchés :
+- un seul Agent stratégique ;
+- PAPER uniquement ;
+- SPOT et PERPETUAL linéaire autorisés selon la configuration ;
+- FUTURE daté non exécutable ;
+- plan stratégique multi-marchés / multi-décisions ;
+- Risk Engine déterministe avec autorité finale ;
+- aucune sortie LLM ne déclenche directement un ordre.
 
-- JSON Schema strict par variante `BUY` / `SELL` / `HOLD` ;
-- `BUY` / `SELL` avec quantité strictement positive et `HOLD` avec `proposed_quantity=null` ;
-- validation fail-closed, univers causal, détection des doublons et `max_decisions_per_cycle` ;
-- diagnostics sans sortie LLM brute et aucun retry LLM silencieux ;
-- un seul Agent stratégique ; aucune sortie LLM ne déclenche directement un ordre ;
-- Risk Engine déterministe avec autorité finale.
+## Batch inspecteur LLM proposé
 
-Il a cependant ajouté par erreur un garde-fou `_ensure_spot_only_session()` dans `campaign_composition.py` et des instructions protégées SPOT-only dans `strategy_client.py`. Ce garde-fou provoque l'échec d'activation d'une Session PAPER PERPETUAL, ensuite exposé par l'API Sessions sous `HTTP 503 · Session operation is unavailable`.
+Le patch ajoute une instrumentation en lecture seule à la frontière canonique `OpenAIResponsesClient`. Chaque appel Responses API réussi conserve, de façon bornée et best-effort, le payload exact réellement transmis (`model`, `instructions`, `input`, Structured Output, tools, `parallel_tool_calls`, `store`) ainsi que l'output fournisseur et le texte final lorsqu'il existe.
 
-Le patch courant retire uniquement cette restriction artificielle et réaligne les instructions stratégiques sur l'architecture déjà canonique :
+La corrélation est extraite des inputs canoniques (`cycle_id`, `discovery_id`) et complétée par un contexte asynchrone pour l'Operator Chat (`session_id`). Les tool loops produisent plusieurs entrées ordonnées : l'appel contenant le `function_call`, puis l'appel suivant contenant le `function_call_output` réellement renvoyé au modèle.
 
-- `SPOT` autorisé en PAPER ;
-- `PERPETUAL` linéaire autorisé en PAPER, avec les règles dérivés et contrôles Risk existants ;
-- `FUTURE` daté reste interdit à l'exécution et à la discovery ;
-- la discovery dynamique, le multi-market, les plafonds d'exposition, la marge isolée, le levier et les protections de liquidation restent déterministes.
+Rétention proposée : 200 appels maximum en mémoire du processus, 512 Kio maximum par entrée. Une panne de l'audit est ignorée à la frontière OpenAI afin de ne jamais perturber le moteur. Le cockpit ne fait que lire `/api/v1/llm-audit`.
 
-Principe central : **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
+## Anomalies de prompt confirmées mais non corrigées dans ce batch
+
+1. `backend/src/ai_spot_trader/chat/prompt.py` affirme encore `Trading is SPOT only and PAPER only.` alors que SPOT + PERPETUAL linéaire sont supportés en PAPER.
+2. `backend/src/ai_spot_trader/agent/strategy_client.py` contient `niveat={context.level}/10` au lieu de `niveau=...`.
+3. `backend/src/ai_spot_trader/agent/prompt.py` indique encore que `FUTURE` daté « peut être découvrable », alors que l'invariant courant interdit FUTURE daté à la discovery et à l'exécution.
+
+Ces incohérences sont documentées séparément afin que l'inspecteur permette d'observer les prompts réels avant une correction stratégique dédiée.
 
 ## Validation
 
-Baseline fournie par l'opérateur après `aa404e4`, avant ce correctif :
-
-- tests ciblés multi-market : `36 passed` ;
-- backend complet : `718 passed, 2 warnings`.
-
-Dans l'environnement ChatGPT, les fichiers Python du présent patch sont vérifiés syntaxiquement. Le checkout complet du repository n'est pas disponible dans cet environnement isolé ; les suites `pytest` post-correctif restent donc à exécuter localement après extraction du ZIP.
+Dans l'environnement ChatGPT, les nouveaux/modifiés fichiers Python ont été compilés syntaxiquement. Le checkout complet du repository et ses dépendances ne sont pas disponibles dans le conteneur ; `pytest`, le typecheck et le build frontend restent à exécuter localement après extraction.
 
 ## Règle de reprise
 
