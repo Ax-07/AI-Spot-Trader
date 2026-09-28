@@ -37,7 +37,8 @@ Recalibrage net/cost: ADR-277 intégré dans 463850d
 - ADR-274 : inspection en lecture seule du payload OpenAI réel à la frontière `OpenAIResponsesClient` ;
 - ADR-275 : refresh initial des marks PAPER avant ouverture des cycles ;
 - ADR-276 : recalibrage du prompt stratégique sans cible de rendement injectée ni biais de quantité maximale ;
-- ADR-277 : recalibrage cost-aware vers l'equity nette, allocation du capital et agressivité sans turnover obligatoire.
+- ADR-277 : recalibrage cost-aware vers l'equity nette, allocation du capital et agressivité sans turnover obligatoire ;
+- ADR-278 : historique économique Session/run comme projection en lecture seule, sans second ledger ni seconde comptabilité.
 
 ## ADR-240 — Session est une façade UX, pas un nouvel agrégat persistant
 
@@ -163,11 +164,55 @@ Classification :
 
 Aucun quota LONG/SHORT ni contre-biais déterministe n'est introduit.
 
+## ADR-278 — L'historique économique est une projection, pas une seconde comptabilité
+
+**ADOPTÉ DANS LE BATCH 25.**
+
+Base GitHub auditée avant intégration : `59f92938bf5159004783ae004fe99c808cb2c8c2`.
+
+Le cockpit doit pouvoir expliquer un run de plusieurs heures sans reconstruire manuellement des centaines de cycles. La solution retenue réutilise exclusivement les faits persistés et les analytics canoniques :
+
+- `PaperAnalyticsReport` reste source de vérité pour equity, P&L brut/net, drawdown, exposition, frais, spread, slippage et funding ;
+- les opérations économiques sont projetées depuis les fills économiquement engagés et les snapshots de portefeuille avant/après ;
+- les fills d'un cycle `FAILED` restent auditables mais sont exclus de la projection économique, conformément à l'atomicité PAPER ;
+- `Fill.realized_pnl` est réutilisé directement ; aucun P&L réalisé n'est recalculé parallèlement ;
+- le turnover est défini comme `total_notional / initial_equity` ;
+- les coûts totaux sont définis comme `fees + spread + slippage - funding_pnl`, en conservant la convention de signe canonique du funding ;
+- l'effet d'un BUY/SELL PERPETUAL est déduit de la position signée avant/après, afin de distinguer ouverture, augmentation, réduction, clôture et flip LONG/SHORT ;
+- le frontend filtre et affiche les valeurs fournies par le backend, sans recalcul financier.
+
+La Session reste une façade : le cockpit associe Session -> Campaign -> têtes de lineage PAPER existantes, puis sélectionne explicitement le run économique à afficher. Aucune table Session, aucun ledger et aucune migration SQL ne sont ajoutés.
+
 ## SCALP — audit de fraîcheur associé
 
 Aucun changement de politique dans ce batch. `RiskEngine` / `SequentialCycleRiskEngine` possèdent déjà les rejets `MARKET_FRESHNESS_UNAVAILABLE` et `MARKET_DATA_STALE`. `kraken_stale_after_seconds` est toujours optionnel et vaut `None` par défaut. Au HEAD audité, `campaign_composition.py` ne renseigne pas `RiskPolicy.stale_after`, donc le rejet stale Risk n'est pas activé par défaut dans les Campaigns courantes.
 
 Un durcissement SCALP éventuel doit être traité séparément après mesure de la latence `MarketState -> LLM -> Risk`, afin de choisir un seuil fondé sur la distribution réelle des latences.
+
+## Changelog — 2026-09-28 — Batch 25 historique économique Session/run
+
+- base GitHub vérifiée : `59f92938bf5159004783ae004fe99c808cb2c8c2` ;
+- dernier commit fonctionnel intégré inchangé : `463850d8281faebe86a6ee733d58781c349015d0` ;
+- projection économique en lecture seule ajoutée au-dessus d'analytics + audit existants ;
+- nouveaux endpoints `GET /api/v1/economic-history` et `/api/v1/economic-history/export` ;
+- distinction explicite `trade_count` / `fill_count` / décisions ;
+- turnover, coûts/notional, coûts/equity, fills/heure et rotation entre marchés ajoutés ;
+- classification PERPETUAL fondée sur la position avant/après, sans hypothèse `SELL = clôture` ;
+- écran Historique orienté Session/run avec filtres action/marché/type et export JSON ;
+- aucun changement Agent, prompt, `aggressiveness-map-v3`, Risk, Broker, cadence ou coûts ;
+- aucune migration SQL ;
+- validations de préparation : compilation Python, parsing TS/TSX, harness projection et `git diff --check` ;
+- validation locale finale : backend ciblé `11/11`, suite backend complète à `100 %`, frontend `39/39`, `pnpm lint` passé et `pnpm typecheck` passé ;
+- deux warnings de dépréciation Starlette/AnyIO et les warnings Node `MODULE_TYPELESS_PACKAGE_JSON` restent non bloquants et hors périmètre.
+
+## Changelog — 2026-09-28 — Correctif Batch 25 validé
+
+- validation locale initiale : échec unique backend sur désérialisation stricte `PortfolioState` ;
+- correction : relecture des payloads durables via `model_validate_json(json.dumps(...))` pour `PortfolioState` et `Fill` ;
+- quatre erreurs lint introduites dans `history-panel.tsx` corrigées sans changer le comportement métier ;
+- erreur lint préexistante de `llm-audit-panel.tsx` corrigée en lecture seule pour permettre la validation `pnpm lint` globale ;
+- `pnpm test` initial : `39/39` passés ; `pnpm typecheck` initial : passé ;
+- rerun après correctif : tests backend ciblés `11/11` passés, suite backend complète passée à `100 %`, frontend `pnpm test` `39/39`, `pnpm lint` passé, `pnpm typecheck` passé.
 
 ## Changelog — 2026-09-28 — Recalibrage net/cost-aware intégré
 

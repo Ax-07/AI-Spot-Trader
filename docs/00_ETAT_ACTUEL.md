@@ -5,12 +5,32 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
+HEAD GitHub vérifié        : 59f92938bf5159004783ae004fe99c808cb2c8c2
+HEAD                        : docs: distinguish functional baseline from branch head
 Dernier commit fonctionnel : 463850d8281faebe86a6ee733d58781c349015d0
-Commit                     : refactor: make strategic agent cost aware
-Vérifié    : 2026-09-28
+Commit fonctionnel          : refactor: make strategic agent cost aware
+Vérifié                     : 2026-09-28
 ```
 
-Le recalibrage stratégique net/cost-aware est **intégré** à GitHub `main` dans `463850d`. Des commits documentaires peuvent être postérieurs sans modifier cet état fonctionnel ; le HEAD exact de `main` doit être revérifié en direct à chaque reprise.
+Le recalibrage stratégique net/cost-aware est **intégré** à GitHub `main` dans `463850d`. Des commits documentaires sont postérieurs sans modifier cet état fonctionnel ; le HEAD exact de `main` doit être revérifié en direct à chaque reprise.
+
+## Batch 25 — historique économique par Session
+
+Le checkout courant contient le batch d'observabilité **historique économique par Session**, construit sur la base GitHub `59f92938bf5159004783ae004fe99c808cb2c8c2` et validé localement le 28 septembre 2026.
+
+Il ajoute une projection de lecture seule au-dessus des faits canoniques déjà persistés :
+
+- sélection Session → Campaign/run économique dans le cockpit ;
+- opérations économiques exécutées distinctes des `HOLD` / `REJECT` ;
+- distinction SPOT / PERPETUAL et effet économique des BUY/SELL PERPETUAL à partir des positions avant/après ;
+- coûts d'exécution, funding, P&L réalisé fourni par les fills, notional et turnover ;
+- fills/heure, rotations entre marchés, ouvertures/augmentations/réductions/clôtures/flips ;
+- export JSON du run ;
+- aucun nouveau ledger, aucune migration SQL, aucun changement Agent/Risk/Broker.
+
+Les métriques de P&L, equity, drawdown, exposition et funding restent issues de `PaperAnalyticsReport`. La nouvelle projection n'est pas une seconde comptabilité.
+
+Voir `docs/25_BATCH_HISTORIQUE_ECONOMIQUE_SESSION.md`.
 
 ## État fonctionnel à préserver
 
@@ -58,7 +78,26 @@ Validation locale réalisée le 28 septembre 2026 :
 - suite backend complète `pytest -q` : `100 %` passée, sans échec ;
 - deux avertissements de dépréciation Starlette/AnyIO restent présents et sont hors périmètre de ce batch.
 
+Ces résultats concernent le commit intégré `463850d`. La validation complète du Batch 25 est documentée séparément ci-dessous et dans `docs/25_BATCH_HISTORIQUE_ECONOMIQUE_SESSION.md`.
+
+
+## Validation du Batch 25
+
+Validation locale complète réalisée le 28 septembre 2026 après correctif :
+
+- tests backend ciblés : `11/11` passés ;
+- suite backend complète `pytest -q` : `100 %` passée, sans échec ;
+- frontend `pnpm test` : `39/39` passés ;
+- frontend `pnpm lint` : passé ;
+- frontend `pnpm typecheck` : passé ;
+- deux avertissements de dépréciation Starlette/AnyIO restent présents et sont hors périmètre ;
+- les avertissements Node `MODULE_TYPELESS_PACKAGE_JSON` observés pendant les tests frontend sont non bloquants et hors périmètre.
+
+La référence GitHub immédiatement antérieure au Batch 25 reste `59f92938bf5159004783ae004fe99c808cb2c8c2`; le HEAD GitHub doit être revérifié après intégration.
+
 ## Fichiers principaux concernés
+
+État intégré cost-aware :
 
 - `backend/src/ai_spot_trader/agent/prompt.py`
 - `backend/src/ai_spot_trader/agent/strategy_client.py`
@@ -71,3 +110,22 @@ Validation locale réalisée le 28 septembre 2026 :
 - `docs/03_AGENT_TRADING_RISK.md`
 - `docs/10_DECISIONS_ET_CHANGELOG.md`
 - `docs/24_BATCH_19_13_CYCLE_STRATEGIQUE_MULTI_MARCHES.md`
+
+Correctif Batch 25 validé localement :
+
+- désérialisation JSON stricte corrigée dans la projection économique ;
+- effets React de l’écran Historique rendus conformes au lint ;
+- correctif lint-only de l’inspecteur LLM inclus pour débloquer `pnpm lint` global ;
+- aucune modification des règles Agent / Risk / Broker.
+
+Batch 25 historique économique :
+
+- `backend/src/ai_spot_trader/economic_history.py`
+- `backend/src/ai_spot_trader/api/economic_history_schemas.py`
+- `backend/src/ai_spot_trader/api/routes/analytics.py`
+- `backend/tests/test_economic_history.py`
+- `frontend/src/lib/economic-history.ts`
+- `frontend/src/components/cockpit/history-panel.tsx`
+- `docs/01_PROJECT_MASTER.md`
+- `docs/10_DECISIONS_ET_CHANGELOG.md`
+- `docs/25_BATCH_HISTORIQUE_ECONOMIQUE_SESSION.md`

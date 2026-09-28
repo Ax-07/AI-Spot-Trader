@@ -2,29 +2,61 @@
 
 import {
   Activity,
-  Bot,
-  CheckCircle2,
-  Database,
-  Radar,
+  ChevronDown,
+  ChevronUp,
+  Download,
   RefreshCw,
+  ReceiptText,
   ShieldCheck,
-  XCircle,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { useCockpit } from "@/hooks/use-cockpit";
 import { api, ApiError } from "@/lib/api/client";
 import { formatDecimal, formatFailure, formatTimestamp, shortUuid } from "@/lib/api/format";
 import type {
+  CampaignResponse,
   CycleDetailResponse,
-  CycleExplainabilityResponse,
   CycleSummaryResponse,
-  ExplainabilityDecisionResponse,
-  ExplainabilityExecutionResponse,
+  PaperRunResponse,
+  SessionResponse,
 } from "@/lib/api/types";
+import {
+  economicHistoryExportPath,
+  fetchEconomicHistory,
+  type EconomicHistoryResponse,
+  type EconomicOperationResponse,
+} from "@/lib/economic-history";
+
+type ReferenceState =
+  | { kind: "loading" }
+  | {
+      kind: "ready";
+      sessions: SessionResponse[];
+      campaigns: CampaignResponse[];
+      runs: PaperRunResponse[];
+    }
+  | { kind: "error"; message: string };
+
+type HistoryState =
+  | { kind: "idle" }
+  | { kind: "ready"; paperRunId: string; data: EconomicHistoryResponse }
+  | { kind: "error"; paperRunId: string; message: string };
+
+type DetailState =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "ready"; data: CycleDetailResponse }
+  | { kind: "error"; message: string };
+
+function percent(value: string | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return value;
+  return `${new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 }).format(parsed * 100)} %`;
+}
 
 function actionTone(action: string | null | undefined) {
   if (action === "BUY") return "success" as const;
@@ -32,345 +64,488 @@ function actionTone(action: string | null | undefined) {
   return "neutral" as const;
 }
 
-function riskTone(status: string | null | undefined) {
-  if (status === "ALLOW") return "success" as const;
-  if (status === "MODIFY") return "warning" as const;
-  if (status === "REJECT") return "danger" as const;
+function riskTone(value: string | null | undefined) {
+  if (value === "ALLOW") return "success" as const;
+  if (value === "MODIFY") return "warning" as const;
+  if (value === "REJECT") return "danger" as const;
   return "neutral" as const;
 }
 
-function discoveryTone(status: string | null | undefined) {
-  if (status === "REFRESHED") return "success" as const;
-  if (status === "FALLBACK") return "warning" as const;
-  if (status === "SKIPPED_MANAGEMENT") return "info" as const;
-  return "neutral" as const;
+function effectLabel(effect: string): string {
+  const labels: Record<string, string> = {
+    OPEN_SPOT: "Ouverture SPOT",
+    INCREASE_SPOT: "Augmentation SPOT",
+    REDUCE_SPOT: "Réduction SPOT",
+    CLOSE_SPOT: "Clôture SPOT",
+    OPEN_LONG: "Ouverture LONG",
+    INCREASE_LONG: "Augmentation LONG",
+    REDUCE_LONG: "Réduction LONG",
+    CLOSE_LONG: "Clôture LONG",
+    OPEN_SHORT: "Ouverture SHORT",
+    INCREASE_SHORT: "Augmentation SHORT",
+    REDUCE_SHORT: "Réduction SHORT",
+    CLOSE_SHORT: "Clôture SHORT",
+    FLIP_LONG_TO_SHORT: "LONG → SHORT",
+    FLIP_SHORT_TO_LONG: "SHORT → LONG",
+    EXECUTED_LONG: "Exécution LONG",
+    EXECUTED_SHORT: "Exécution SHORT",
+    EXECUTED_SPOT: "Exécution SPOT",
+    EXECUTED_FLAT: "Exécution à plat",
+  };
+  return labels[effect] ?? effect.replaceAll("_", " ");
 }
 
-function codeLabel(value: string | null | undefined) {
-  return value ? value.replaceAll("_", " ") : "—";
+function positionLabel(value: string, marketType: string): string {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return value;
+  if (marketType === "SPOT") return formatDecimal(value);
+  if (parsed > 0) return `LONG ${formatDecimal(value)}`;
+  if (parsed < 0) return `SHORT ${formatDecimal(Math.abs(parsed))}`;
+  return "FLAT";
 }
 
-function discoveryDescription(explanation: CycleExplainabilityResponse | null) {
-  const discovery = explanation?.discovery;
-  if (!discovery) return "Discovery non disponible pour cet historique.";
-  if (discovery.status === "REFRESHED") {
-    return "Nouvelle watchlist sélectionnée par le même Agent IA à partir des candidats admis.";
+async function loadAllPaperRuns(): Promise<PaperRunResponse[]> {
+  const result: PaperRunResponse[] = [];
+  let offset = 0;
+  while (true) {
+    const page = await api.paperRuns(100, offset);
+    result.push(...page.items);
+    offset += page.items.length;
+    if (offset >= page.total || page.items.length === 0) break;
   }
-  if (discovery.status === "CACHE_REUSED") {
-    return "Watchlist réutilisée : aucun nouvel appel IA de sélection n’a été effectué.";
-  }
-  if (discovery.status === "FALLBACK") {
-    return "Refresh en échec : la dernière watchlist valide ou le bootstrap a été conservé.";
-  }
-  if (discovery.status === "SKIPPED_MANAGEMENT") {
-    return "Discovery volontairement non lancée : le cycle était en mode MANAGEMENT.";
-  }
-  return `Statut discovery persistant : ${discovery.status}.`;
+  return result;
 }
 
-function executionDescription(execution: ExplainabilityExecutionResponse) {
-  if (execution.outcome === "FILLED") {
-    return `Exécution PAPER : ${execution.fill_count} fill(s) persisté(s).`;
-  }
-  if (execution.outcome === "INTENT_CREATED_NO_FILL") {
-    return "ExecutionIntent créé par Risk, mais aucun fill PAPER n’est persisté.";
-  }
-  if (execution.outcome === "NOT_CREATED_HOLD") {
-    return "HOLD : l’absence d’exécution est le comportement métier attendu.";
-  }
-  if (execution.outcome === "NOT_CREATED_RISK_REJECT") {
-    return "Risk a rejeté cette proposition ; les décisions suivantes du plan restent évaluées.";
-  }
-  if (execution.outcome === "NOT_CREATED_FAILURE") {
-    return "Cette trajectoire n’a pas atteint la création d’un ExecutionIntent à cause d’un échec technique.";
-  }
-  return "Aucun ExecutionIntent n’est persisté pour cette décision.";
+function sessionRunHeads(
+  sessionId: string | null,
+  campaigns: CampaignResponse[],
+  runs: PaperRunResponse[],
+): PaperRunResponse[] {
+  if (!sessionId) return [];
+  const campaignIds = new Set(
+    campaigns.filter((item) => item.strategy_id === sessionId).map((item) => item.campaign_id),
+  );
+  const sessionRuns = runs.filter((item) => item.campaign_id && campaignIds.has(item.campaign_id));
+  const resumedParents = new Set(
+    sessionRuns
+      .map((item) => item.resumed_from_paper_run_id)
+      .filter((item): item is string => Boolean(item)),
+  );
+  return sessionRuns
+    .filter((item) => !resumedParents.has(item.paper_run_id))
+    .sort((left, right) => right.started_at.localeCompare(left.started_at));
 }
 
-type DetailState =
-  | { kind: "loading" }
-  | { kind: "ready"; data: CycleDetailResponse }
-  | { kind: "error"; message: string };
-
-function DecisionPath({ item }: { item: ExplainabilityDecisionResponse }) {
-  const agent = item.agent;
-  const risk = item.risk;
-  const execution = item.execution;
-  const firstFill = execution.fills[0] ?? null;
-
+function MetricCard({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
-    <div className="rounded-xl border bg-muted/10 p-3">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
-          Décision {item.decision_index + 1}
-        </span>
-        <Badge tone={actionTone(agent.action)}>{agent.action}</Badge>
-        <span className="text-sm font-semibold">{agent.symbol}</span>
-        {agent.market_type ? <Badge tone={agent.market_type === "PERPETUAL" ? "warning" : "info"}>{agent.market_type}</Badge> : null}
-      </div>
-
-      <div className="grid gap-3 xl:grid-cols-3">
-        <div className="rounded-lg border bg-background/75 p-4">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">
-            <Bot className="size-3.5" /> Agent IA
-          </div>
-          <p className="mt-3 text-xs font-semibold">Pourquoi BUY / SELL / HOLD ?</p>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            {agent.rationale ?? "Rationale non disponible pour cet historique"}
-          </p>
-          {agent.proposed_quantity ? (
-            <p className="mt-3 text-xs">Quantité proposée : <strong>{formatDecimal(agent.proposed_quantity)}</strong></p>
-          ) : agent.action === "HOLD" ? (
-            <p className="mt-3 text-xs text-muted-foreground">HOLD ne propose aucune quantité d’exécution.</p>
-          ) : null}
-        </div>
-
-        <div className="rounded-lg border bg-background/75 p-4">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">
-            <ShieldCheck className="size-3.5" /> Risk Engine
-          </div>
-          <div className="mt-3">
-            {risk ? <Badge tone={riskTone(risk.status)}>Risk {risk.status}</Badge> : <Badge>Risk —</Badge>}
-          </div>
-          {risk?.requested_quantity ? (
-            <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-              <div className="rounded-lg border bg-muted/15 p-2.5">
-                <span className="text-muted-foreground">Demandée</span>
-                <strong className="mt-1 block">{formatDecimal(risk.requested_quantity)}</strong>
-              </div>
-              <div className="rounded-lg border bg-muted/15 p-2.5">
-                <span className="text-muted-foreground">Autorisée</span>
-                <strong className="mt-1 block">{risk.authorized_quantity ? formatDecimal(risk.authorized_quantity) : "—"}</strong>
-              </div>
-            </div>
-          ) : null}
-          {risk?.reasons.length ? (
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {risk.reasons.map((reason) => (
-                <Badge key={reason} tone={risk.status === "REJECT" ? "danger" : "warning"}>{codeLabel(reason)}</Badge>
-              ))}
-            </div>
-          ) : null}
-        </div>
-
-        <div className="rounded-lg border bg-background/75 p-4">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">
-            <Database className="size-3.5" /> Exécution PAPER
-          </div>
-          <div className="mt-3 flex items-center gap-2">
-            {execution.outcome === "FILLED" ? (
-              <Badge tone="success"><CheckCircle2 className="mr-1 size-3" /> Exécuté</Badge>
-            ) : (
-              <Badge tone="neutral"><XCircle className="mr-1 size-3" /> Non exécuté</Badge>
-            )}
-            <span className="text-xs text-muted-foreground">{execution.fill_count} fill(s)</span>
-          </div>
-          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{executionDescription(execution)}</p>
-          {execution.quantity ? (
-            <p className="mt-3 text-xs">Quantité intent : <strong>{formatDecimal(execution.quantity)}</strong></p>
-          ) : null}
-          {firstFill ? (
-            <div className="mt-3 rounded-lg border bg-muted/15 p-3 text-xs">
-              <p className="font-semibold">Fill PAPER</p>
-              <p className="mt-1 text-muted-foreground">
-                {firstFill.quantity ? `${formatDecimal(firstFill.quantity)} ` : ""}
-                {firstFill.symbol ?? agent.symbol}
-                {firstFill.price ? ` @ ${formatDecimal(firstFill.price)}` : ""}
-              </p>
-              {firstFill.fee ? <p className="mt-1 text-[11px] text-muted-foreground">Frais : {formatDecimal(firstFill.fee)}</p> : null}
-            </div>
-          ) : null}
-        </div>
-      </div>
+    <div className="rounded-xl border bg-muted/15 p-4">
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className="mt-1 text-xl font-semibold tracking-tight">{value}</p>
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{detail}</p>
     </div>
   );
 }
 
-function CycleHistoryCard({ cycle }: { cycle: CycleSummaryResponse }) {
-  const [detail, setDetail] = useState<DetailState>({ kind: "loading" });
+function AuditCycleCard({ cycle }: { cycle: CycleSummaryResponse }) {
+  const [expanded, setExpanded] = useState(false);
+  const [detail, setDetail] = useState<DetailState>({ kind: "idle" });
 
-  useEffect(() => {
-    let active = true;
+  function toggleDetails() {
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+    setExpanded(true);
+    if (detail.kind !== "idle") return;
+    setDetail({ kind: "loading" });
     void api
       .cycle(cycle.cycle_id)
-      .then((data) => {
-        if (active) setDetail({ kind: "ready", data });
-      })
+      .then((data) => setDetail({ kind: "ready", data }))
       .catch((error: unknown) => {
-        if (!active) return;
         setDetail({
           kind: "error",
           message: error instanceof ApiError ? error.message : "Détail du cycle indisponible",
         });
       });
-    return () => {
-      active = false;
-    };
-  }, [cycle.cycle_id]);
+  }
 
-  const cycleDetail = detail.kind === "ready" ? detail.data : null;
-  const explanation = cycleDetail?.explainability ?? null;
-  const context = explanation?.context ?? null;
-  const discovery = explanation?.discovery ?? null;
-  const selection = explanation?.market_selection ?? null;
-  const decisions = explanation?.decisions ?? [];
-  const summaryTitle = cycle.decision_count > 1
-    ? `${cycle.decision_count} décisions stratégiques`
-    : decisions[0]?.agent.symbol ?? cycle.symbol ?? "Cycle sans décision";
+  const decisions = detail.kind === "ready" ? detail.data.explainability?.decisions ?? [] : [];
 
   return (
     <Card>
-      <CardHeader className="gap-3">
+      <CardHeader className="pb-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <CardTitle className="text-base">{summaryTitle}</CardTitle>
-              {cycle.market_type ? (
-                <Badge tone={cycle.market_type === "PERPETUAL" ? "warning" : "info"}>{cycle.market_type}</Badge>
-              ) : null}
+              <CardTitle className="text-base">Cycle {shortUuid(cycle.cycle_id)}</CardTitle>
               <Badge tone={cycle.status === "FAILED" ? "danger" : "neutral"}>{cycle.status}</Badge>
-              {context?.mode ? <Badge tone={context.mode === "MANAGEMENT" ? "warning" : "info"}>{context.mode}</Badge> : null}
+              {cycle.market_type ? <Badge tone={cycle.market_type === "PERPETUAL" ? "warning" : "info"}>{cycle.market_type}</Badge> : null}
             </div>
-            <CardDescription className="mt-1">
-              {formatTimestamp(cycle.recorded_at)} · cycle {shortUuid(cycle.cycle_id)}
-            </CardDescription>
-            <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
-              <Badge>{cycle.decision_count} décision(s)</Badge>
-              {cycle.buy_count ? <Badge tone="success">{cycle.buy_count} BUY</Badge> : null}
-              {cycle.sell_count ? <Badge tone="danger">{cycle.sell_count} SELL</Badge> : null}
-              {cycle.hold_count ? <Badge>{cycle.hold_count} HOLD</Badge> : null}
-              {cycle.risk_reject_count ? <Badge tone="warning">{cycle.risk_reject_count} REJECT</Badge> : null}
-              {cycle.execution_count ? <Badge tone="info">{cycle.execution_count} intent(s)</Badge> : null}
-            </div>
+            <CardDescription className="mt-1">{formatTimestamp(cycle.recorded_at)}</CardDescription>
           </div>
-          <span className="text-xs text-muted-foreground">{cycle.fill_count} fill(s)</span>
+          <Button variant="ghost" size="sm" onClick={toggleDetails}>
+            {expanded ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+            {expanded ? "Masquer" : "Détails"}
+          </Button>
+        </div>
+        <div className="flex flex-wrap gap-1.5 pt-1 text-[11px]">
+          <Badge>{cycle.decision_count} décision(s)</Badge>
+          {cycle.buy_count ? <Badge tone="success">{cycle.buy_count} BUY</Badge> : null}
+          {cycle.sell_count ? <Badge tone="danger">{cycle.sell_count} SELL</Badge> : null}
+          {cycle.hold_count ? <Badge>{cycle.hold_count} HOLD</Badge> : null}
+          {cycle.risk_reject_count ? <Badge tone="warning">{cycle.risk_reject_count} REJECT</Badge> : null}
+          {cycle.fill_count ? <Badge tone="info">{cycle.fill_count} fill(s)</Badge> : null}
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
-        {detail.kind === "error" ? (
-          <div className="rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning-foreground">
-            {detail.message}. Le résumé du cycle reste visible, mais aucune explication n’est inventée.
-          </div>
-        ) : null}
 
-        <div className="rounded-xl border bg-muted/15 p-4">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">
-            <Radar className="size-3.5" /> Discovery / contexte causal
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {discovery ? <Badge tone={discoveryTone(discovery.status)}>{discovery.status}</Badge> : <Badge>Legacy / —</Badge>}
-            {context?.mode ? <Badge tone={context.mode === "MANAGEMENT" ? "warning" : "info"}>{context.mode}</Badge> : null}
-          </div>
-          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-            {detail.kind === "loading" ? "Chargement des faits corrélés du cycle…" : discoveryDescription(explanation)}
-          </p>
-          {context?.reason ? (
-            <p className="mt-2 text-[11px] text-muted-foreground">Capacité : <code>{codeLabel(context.reason)}</code></p>
+      {expanded ? (
+        <CardContent className="space-y-3 border-t pt-4">
+          {detail.kind === "loading" ? <p className="text-sm text-muted-foreground">Chargement du détail canonique…</p> : null}
+          {detail.kind === "error" ? <p className="text-sm text-destructive">{detail.message}</p> : null}
+          {detail.kind === "ready" && decisions.length === 0 ? (
+            <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+              Aucune décision explicable persistée pour ce cycle.
+            </p>
           ) : null}
-          {discovery?.selection_rationale ? (
-            <div className="mt-3 rounded-lg border bg-background/70 p-3 text-xs">
-              <p className="font-semibold">Pourquoi cette watchlist ?</p>
-              <p className="mt-1 leading-relaxed text-muted-foreground">{discovery.selection_rationale}</p>
+          {decisions.map((item) => (
+            <div key={`${cycle.cycle_id}-${item.decision_index}`} className="rounded-lg border bg-muted/10 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Décision {item.decision_index + 1}</span>
+                <Badge tone={actionTone(item.agent.action)}>{item.agent.action}</Badge>
+                <span className="text-sm font-semibold">{item.agent.symbol}</span>
+                {item.agent.market_type ? <Badge>{item.agent.market_type}</Badge> : null}
+                {item.risk ? <Badge tone={riskTone(item.risk.status)}>Risk {item.risk.status}</Badge> : null}
+                <Badge tone={item.execution.outcome === "FILLED" ? "success" : "neutral"}>{item.execution.outcome}</Badge>
+              </div>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {item.agent.rationale ?? "Rationale non disponible pour cet historique."}
+              </p>
+              {item.risk?.reasons.length ? (
+                <p className="mt-2 text-[11px] text-muted-foreground">Risk : {item.risk.reasons.join(" · ")}</p>
+              ) : null}
+            </div>
+          ))}
+          {detail.kind === "ready" && detail.data.failure ? (
+            <div className="rounded-lg border border-destructive/30 bg-destructive-subtle p-3 text-xs text-destructive-subtle-foreground">
+              {formatFailure(detail.data.failure)}
             </div>
           ) : null}
-          {selection ? (
-            <div className="mt-3 rounded-lg border bg-background/70 p-3 text-xs">
-              <p className="font-semibold">Sélection singleton historique</p>
-              <p className="mt-1 leading-relaxed text-muted-foreground">{selection.rationale ?? "Rationale non disponible"}</p>
-            </div>
-          ) : null}
-          {explanation?.plan_rationale ? (
-            <div className="mt-3 rounded-lg border bg-background/70 p-3 text-xs">
-              <p className="font-semibold">Rationale globale du plan</p>
-              <p className="mt-1 leading-relaxed text-muted-foreground">{explanation.plan_rationale}</p>
-            </div>
-          ) : null}
-          {discovery?.error_type ? (
-            <p className="mt-2 text-[11px] text-warning-foreground">Erreur discovery : {discovery.error_type}</p>
-          ) : null}
-        </div>
-
-        {decisions.length ? (
-          <div className="space-y-3">
-            {decisions.map((item) => (
-              <DecisionPath key={`${cycle.cycle_id}-${item.decision_index}`} item={item} />
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-xl border border-dashed p-4 text-xs text-muted-foreground">
-            Aucune décision stratégique persistée pour ce cycle.
-          </div>
-        )}
-
-        {(cycleDetail?.failure ?? cycle.failure) ? (
-          <div className="rounded-lg border border-destructive/30 bg-destructive-subtle px-3 py-2 text-xs text-destructive-subtle-foreground">
-            Échec technique distinct de Risk : {formatFailure(cycleDetail?.failure ?? cycle.failure!)}
-          </div>
-        ) : null}
-
-        {cycleDetail ? (
-          <details className="rounded-lg border bg-muted/15 px-3 py-2 text-xs">
-            <summary className="cursor-pointer rounded font-semibold">Détails techniques canoniques</summary>
-            <div className="mt-3 grid gap-3 xl:grid-cols-2">
-              <pre className="overflow-auto whitespace-pre-wrap rounded-lg border bg-background p-3 font-mono text-[10px] leading-relaxed text-foreground">
-                {JSON.stringify({
-                  market_selection_input: cycleDetail.market_selection_input,
-                  decision_plan_input: cycleDetail.decision_plan_input,
-                  decision_plan: cycleDetail.decision_plan,
-                }, null, 2)}
-              </pre>
-              <pre className="overflow-auto whitespace-pre-wrap rounded-lg border bg-background p-3 font-mono text-[10px] leading-relaxed text-foreground">
-                {JSON.stringify({
-                  decision_results: cycleDetail.decision_results,
-                  portfolio_state_after: cycleDetail.portfolio_state_after,
-                }, null, 2)}
-              </pre>
-            </div>
-          </details>
-        ) : null}
-      </CardContent>
+        </CardContent>
+      ) : null}
     </Card>
   );
 }
 
-export function HistoryPanel() {
-  const cockpit = useCockpit();
-  const cycles = cockpit.resources.cycles.kind === "ready" ? cockpit.resources.cycles.data.items : [];
-  const latestError = cockpit.resources.latestError.kind === "ready" ? cockpit.resources.latestError.data : null;
+function OperationsTable({ operations }: { operations: EconomicOperationResponse[] }) {
+  if (operations.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+        Aucune opération économique ne correspond aux filtres.
+      </div>
+    );
+  }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-6 px-4 py-6 sm:px-6 xl:px-8">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div className="overflow-x-auto rounded-xl border">
+      <table className="min-w-[1500px] w-full text-sm">
+        <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2 font-medium">Horodatage</th>
+            <th className="px-3 py-2 font-medium">Cycle / ordre</th>
+            <th className="px-3 py-2 font-medium">Marché</th>
+            <th className="px-3 py-2 font-medium">Action</th>
+            <th className="px-3 py-2 font-medium">Effet économique</th>
+            <th className="px-3 py-2 text-right font-medium">Quantité</th>
+            <th className="px-3 py-2 text-right font-medium">Prix</th>
+            <th className="px-3 py-2 text-right font-medium">Notional</th>
+            <th className="px-3 py-2 text-right font-medium">Coûts</th>
+            <th className="px-3 py-2 text-right font-medium">P&L réalisé</th>
+            <th className="px-3 py-2 font-medium">Position avant → après</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y">
+          {operations.map((item) => (
+            <tr key={item.execution_id} className="align-top">
+              <td className="px-3 py-3 whitespace-nowrap">{formatTimestamp(item.filled_at)}</td>
+              <td className="px-3 py-3">
+                <div className="font-mono text-xs">{shortUuid(item.cycle_id)}</div>
+                <div className="mt-1 text-[11px] text-muted-foreground">décision {item.decision_index + 1} · {item.fill_count} fill(s)</div>
+              </td>
+              <td className="px-3 py-3">
+                <div className="font-semibold">{item.symbol}</div>
+                <Badge tone={item.market_type === "PERPETUAL" ? "warning" : "info"}>{item.market_type}</Badge>
+              </td>
+              <td className="px-3 py-3"><Badge tone={actionTone(item.action)}>{item.action}</Badge></td>
+              <td className="px-3 py-3 font-medium">{effectLabel(item.economic_effect)}</td>
+              <td className="px-3 py-3 text-right font-mono">{formatDecimal(item.quantity)}</td>
+              <td className="px-3 py-3 text-right font-mono">
+                {formatDecimal(item.price)}
+                <div className="text-[10px] text-muted-foreground">ref. {formatDecimal(item.reference_price)}</div>
+              </td>
+              <td className="px-3 py-3 text-right font-mono">{formatDecimal(item.notional)}</td>
+              <td className="px-3 py-3 text-right font-mono">
+                {formatDecimal(item.total_costs)}
+                <div className="text-[10px] text-muted-foreground">
+                  fee {formatDecimal(item.fee)} · spread {formatDecimal(item.spread_cost)} · slip {formatDecimal(item.slippage_cost)}
+                </div>
+                {Number(item.funding_pnl) !== 0 ? <div className="text-[10px] text-muted-foreground">funding {formatDecimal(item.funding_pnl)}</div> : null}
+              </td>
+              <td className="px-3 py-3 text-right font-mono">{formatDecimal(item.realized_pnl)}</td>
+              <td className="px-3 py-3 text-xs">
+                {positionLabel(item.position_before, item.market_type)} → {positionLabel(item.position_after, item.market_type)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function HistoryPanel() {
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const [reference, setReference] = useState<ReferenceState>({ kind: "loading" });
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [history, setHistory] = useState<HistoryState>({ kind: "idle" });
+  const [actionFilter, setActionFilter] = useState<"ALL" | "BUY" | "SELL">("ALL");
+  const [marketTypeFilter, setMarketTypeFilter] = useState<"ALL" | "SPOT" | "PERPETUAL">("ALL");
+  const [symbolFilter, setSymbolFilter] = useState("ALL");
+
+  useEffect(() => {
+    let active = true;
+    void Promise.all([api.sessions(), api.campaigns(), loadAllPaperRuns()])
+      .then(([sessions, campaigns, runs]) => {
+        if (!active) return;
+        setReference({ kind: "ready", sessions, campaigns, runs });
+        setSelectedSessionId((current) => {
+          if (current && sessions.some((item) => item.session_id === current)) return current;
+          return sessions.find((item) => item.status === "RUNNING")?.session_id ?? sessions[0]?.session_id ?? null;
+        });
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setReference({
+          kind: "error",
+          message: error instanceof ApiError ? error.message : "Historique des Sessions indisponible",
+        });
+      });
+    return () => {
+      active = false;
+    };
+  }, [refreshNonce]);
+
+  const runHeads = useMemo(() => {
+    if (reference.kind !== "ready") return [];
+    return sessionRunHeads(selectedSessionId, reference.campaigns, reference.runs);
+  }, [reference, selectedSessionId]);
+  const effectiveRunId =
+    selectedRunId && runHeads.some((item) => item.paper_run_id === selectedRunId)
+      ? selectedRunId
+      : runHeads[0]?.paper_run_id ?? null;
+
+  useEffect(() => {
+    if (!effectiveRunId) return;
+    let active = true;
+    void fetchEconomicHistory(effectiveRunId)
+      .then((data) => {
+        if (active) setHistory({ kind: "ready", paperRunId: effectiveRunId, data });
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setHistory({
+            kind: "error",
+            paperRunId: effectiveRunId,
+            message: error instanceof Error ? error.message : "Historique économique indisponible",
+          });
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [effectiveRunId, refreshNonce]);
+
+  const report = history.kind === "ready" && history.paperRunId === effectiveRunId ? history.data : null;
+  const historyError = history.kind === "error" && history.paperRunId === effectiveRunId ? history.message : null;
+  const historyLoading = Boolean(effectiveRunId) && report === null && historyError === null;
+  const symbols = useMemo(
+    () => [...new Set(report?.operations.map((item) => item.symbol) ?? [])].sort(),
+    [report],
+  );
+  const filteredOperations = useMemo(() => {
+    if (!report) return [];
+    return report.operations.filter((item) => {
+      if (actionFilter !== "ALL" && item.action !== actionFilter) return false;
+      if (marketTypeFilter !== "ALL" && item.market_type !== marketTypeFilter) return false;
+      if (symbolFilter !== "ALL" && item.symbol !== symbolFilter) return false;
+      return true;
+    });
+  }, [actionFilter, marketTypeFilter, report, symbolFilter]);
+
+  const summary = report?.summary ?? null;
+
+  return (
+    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 px-4 py-6 sm:px-6 xl:px-8">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">Journal PAPER</p>
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">Historique économique PAPER</p>
           <h2 className="mt-1 text-3xl font-semibold tracking-tight">Historique</h2>
-          <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
-            Chaque cycle est relu dans son ordre stratégique : contexte causal → décisions Agent → Risk séquentiel → exécutions PAPER.
+          <p className="mt-1 max-w-4xl text-sm leading-relaxed text-muted-foreground">
+            Session → run économique → opérations réellement exécutées. Les P&L, coûts, positions et métriques proviennent du backend canonique ; le cockpit ne les recalcule pas.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => void cockpit.refresh()} disabled={cockpit.refreshing}>
-          <RefreshCw className={cockpit.refreshing ? "size-3.5 animate-spin" : "size-3.5"} /> Actualiser
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setReference({ kind: "loading" });
+            setHistory({ kind: "idle" });
+            setRefreshNonce((value) => value + 1);
+          }}
+          disabled={reference.kind === "loading" || historyLoading}
+        >
+          <RefreshCw className={reference.kind === "loading" || historyLoading ? "size-3.5 animate-spin" : "size-3.5"} /> Actualiser
         </Button>
       </div>
 
-      {latestError ? (
-        <div className="rounded-xl border border-destructive/30 bg-destructive-subtle p-4 text-sm text-destructive-subtle-foreground">
-          <p className="font-semibold">Dernière erreur technique</p>
-          <p className="mt-1 text-xs">{formatFailure(latestError.failure)} · {formatTimestamp(latestError.recorded_at)}</p>
-        </div>
-      ) : null}
+      <Card>
+        <CardContent className="grid gap-4 py-5 lg:grid-cols-2">
+          <label className="space-y-1.5 text-sm">
+            <span className="text-xs font-medium text-muted-foreground">Session</span>
+            <select
+              className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+              value={selectedSessionId ?? ""}
+              onChange={(event) => {
+                setActionFilter("ALL");
+                setMarketTypeFilter("ALL");
+                setSymbolFilter("ALL");
+                setHistory({ kind: "idle" });
+                setSelectedRunId(null);
+                setSelectedSessionId(event.target.value || null);
+              }}
+              disabled={reference.kind !== "ready"}
+            >
+              {reference.kind === "ready" && reference.sessions.length === 0 ? <option value="">Aucune Session</option> : null}
+              {reference.kind === "ready" ? reference.sessions.map((session) => (
+                <option key={session.session_id} value={session.session_id}>{session.name} · {session.status}</option>
+              )) : <option value="">Chargement…</option>}
+            </select>
+          </label>
+          <label className="space-y-1.5 text-sm">
+            <span className="text-xs font-medium text-muted-foreground">Run économique / Campaign</span>
+            <select
+              className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+              value={effectiveRunId ?? ""}
+              onChange={(event) => {
+                setActionFilter("ALL");
+                setMarketTypeFilter("ALL");
+                setSymbolFilter("ALL");
+                setHistory({ kind: "idle" });
+                setSelectedRunId(event.target.value || null);
+              }}
+              disabled={runHeads.length === 0}
+            >
+              {runHeads.length === 0 ? <option value="">Aucun run PAPER pour cette Session</option> : runHeads.map((run) => (
+                <option key={run.paper_run_id} value={run.paper_run_id}>
+                  {formatTimestamp(run.started_at)} · {run.ended_at ? "terminé" : "actif / reprenable"} · {shortUuid(run.paper_run_id)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </CardContent>
+      </Card>
 
-      <div className="space-y-4">
-        {cycles.length ? cycles.map((cycle) => <CycleHistoryCard key={cycle.cycle_id} cycle={cycle} />) : (
-          <Card className="border-dashed">
-            <CardContent className="flex flex-col items-center gap-2 py-12 text-center text-muted-foreground">
-              <Activity className="size-6" />
-              <p className="text-sm font-medium text-foreground">Aucun cycle journalisé</p>
-              <p className="max-w-md text-xs">Démarre un test ou utilise « Tester 1 cycle » pour voir apparaître le parcours explicable complet.</p>
+      {reference.kind === "error" ? <div className="rounded-xl border border-destructive/30 bg-destructive-subtle p-4 text-sm text-destructive-subtle-foreground">{reference.message}</div> : null}
+      {historyError ? <div className="rounded-xl border border-destructive/30 bg-destructive-subtle p-4 text-sm text-destructive-subtle-foreground">{historyError}</div> : null}
+      {historyLoading ? <Card><CardContent className="py-10 text-center text-sm text-muted-foreground">Reconstruction de l’historique économique depuis les faits persistés…</CardContent></Card> : null}
+
+      {summary && report ? (
+        <>
+          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+            <MetricCard label="Equity" value={`${formatDecimal(summary.initial_equity)} → ${formatDecimal(summary.ending_equity)}`} detail="Initiale → finale / actuelle" />
+            <MetricCard label="P&L net" value={formatDecimal(summary.net_pnl)} detail={`Brut ${formatDecimal(summary.gross_pnl)}`} />
+            <MetricCard label="P&L réalisé" value={formatDecimal(summary.realized_pnl)} detail={`Latent ${formatDecimal(summary.unrealized_pnl)}`} />
+            <MetricCard label="Coûts totaux" value={formatDecimal(summary.total_costs)} detail={`Exécution ${formatDecimal(summary.execution_costs)} · funding ${formatDecimal(summary.funding_pnl)}`} />
+            <MetricCard label="Turnover" value={percent(summary.turnover_fraction)} detail={`Notional ${formatDecimal(summary.total_notional)} / equity initiale`} />
+            <MetricCard label="Cadence réelle" value={summary.fills_per_hour === null ? "—" : `${formatDecimal(summary.fills_per_hour)} fills/h`} detail={`${summary.trade_count} trade(s) · ${summary.fill_count} fill(s)`} />
+          </section>
+
+          <section className="grid gap-4 xl:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base"><ReceiptText className="size-4" /> Coûts & rotation</CardTitle>
+                <CardDescription>Ratios descriptifs, sans score stratégique.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <MetricCard label="Frais" value={formatDecimal(summary.fees)} detail="Fills PAPER" />
+                <MetricCard label="Spread" value={formatDecimal(summary.spread_cost)} detail="Coût d’exécution" />
+                <MetricCard label="Slippage" value={formatDecimal(summary.slippage_cost)} detail="Coût d’exécution" />
+                <MetricCard label="Coûts / notional" value={percent(summary.costs_to_notional_fraction)} detail="Coûts totaux / notional échangé" />
+                <MetricCard label="Coûts / equity" value={percent(summary.costs_to_initial_equity_fraction)} detail="Coûts totaux / equity initiale" />
+                <MetricCard label="Changements de marché" value={String(summary.market_switch_count)} detail={summary.market_switches_per_hour === null ? "cadence indisponible" : `${formatDecimal(summary.market_switches_per_hour)} / h`} />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base"><ShieldCheck className="size-4" /> Décisions & effets</CardTitle>
+                <CardDescription>HOLD et REJECT restent de l’audit ; ils ne deviennent pas des trades.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <MetricCard label="Décisions" value={String(summary.decision_count)} detail={`BUY ${summary.buy_decision_count} · SELL ${summary.sell_decision_count}`} />
+                <MetricCard label="Sans exécution" value={`HOLD ${summary.hold_count}`} detail={`REJECT ${summary.reject_count} · MODIFY ${summary.modify_count}`} />
+                <MetricCard label="Ouvertures" value={String(summary.open_count)} detail={`augmentations ${summary.increase_count}`} />
+                <MetricCard label="Réductions" value={String(summary.reduce_count)} detail={`clôtures ${summary.close_count} · flips ${summary.flip_count}`} />
+                <MetricCard label="Effets LONG" value={String(summary.long_effect_count)} detail="Opérations PERPETUAL liées au LONG" />
+                <MetricCard label="Effets SHORT" value={String(summary.short_effect_count)} detail="Opérations PERPETUAL liées au SHORT" />
+              </CardContent>
+            </Card>
+          </section>
+
+          <Card>
+            <CardHeader className="gap-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <CardTitle>Opérations économiques</CardTitle>
+                  <CardDescription>
+                    Une ligne par exécution économique ; plusieurs fills d’un même ExecutionIntent sont agrégés sans reconstruire le P&L côté frontend.
+                  </CardDescription>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => { window.location.href = economicHistoryExportPath(report.paper_run_id); }}>
+                  <Download className="size-3.5" /> Exporter JSON
+                </Button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3">
+                <select className="h-9 rounded-md border bg-background px-3 text-xs" value={actionFilter} onChange={(event) => setActionFilter(event.target.value as "ALL" | "BUY" | "SELL")}>
+                  <option value="ALL">Toutes les actions</option><option value="BUY">BUY</option><option value="SELL">SELL</option>
+                </select>
+                <select className="h-9 rounded-md border bg-background px-3 text-xs" value={marketTypeFilter} onChange={(event) => setMarketTypeFilter(event.target.value as "ALL" | "SPOT" | "PERPETUAL")}>
+                  <option value="ALL">Tous les types</option><option value="SPOT">SPOT</option><option value="PERPETUAL">PERPETUAL</option>
+                </select>
+                <select className="h-9 rounded-md border bg-background px-3 text-xs" value={symbolFilter} onChange={(event) => setSymbolFilter(event.target.value)}>
+                  <option value="ALL">Tous les marchés</option>
+                  {symbols.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
+                </select>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <OperationsTable operations={filteredOperations} />
+              <p className="mt-3 text-xs text-muted-foreground">{filteredOperations.length} opération(s) affichée(s) sur {report.operations.length}. Source {report.calculation_version} · digest {report.source_digest.slice(0, 12)}…</p>
             </CardContent>
           </Card>
-        )}
-      </div>
+
+          <section className="space-y-4">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">Audit Agent → Risk → PAPER</p>
+              <h3 className="mt-1 text-xl font-semibold">Décisions récentes du run</h3>
+              <p className="mt-1 text-sm text-muted-foreground">Les HOLD, REJECT et échecs restent consultables séparément des opérations économiques.</p>
+            </div>
+            {report.cycles.length ? report.cycles.slice(0, 12).map((cycle) => <AuditCycleCard key={cycle.cycle_id} cycle={cycle} />) : (
+              <Card className="border-dashed"><CardContent className="flex flex-col items-center gap-2 py-10 text-center text-muted-foreground"><Activity className="size-5" /><p className="text-sm">Aucun cycle journalisé pour ce run.</p></CardContent></Card>
+            )}
+          </section>
+        </>
+      ) : null}
     </div>
   );
 }

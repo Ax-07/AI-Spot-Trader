@@ -56,8 +56,23 @@ export function LlmAuditPanel() {
   }, []);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    let active = true;
+    void fetch("/backend/api/v1/llm-audit?limit=100", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = (await response.json()) as AuditPage;
+        if (!active) return;
+        setData(payload);
+        setError(null);
+      })
+      .catch((cause: unknown) => {
+        if (!active) return;
+        setError(cause instanceof Error ? cause.message : "Audit LLM indisponible");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-6 px-4 py-6 sm:px-6 xl:px-8">

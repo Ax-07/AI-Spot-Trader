@@ -292,3 +292,45 @@ Validation locale du recalibrage intégré dans `463850d`, réalisée le 28 sept
 - deux avertissements de dépréciation Starlette/AnyIO restent présents et sont hors périmètre.
 
 Les validations historiques des batches précédents restent consultables dans leur documentation et dans Git.
+
+## 23. Historique économique Session/run — Batch 25
+
+Le Batch 25 ajoute une projection économique de lecture seule au-dessus des composants canoniques existants. Il ne change ni la stratégie, ni le ledger, ni Risk, ni Broker. La validation locale complète du 28 septembre 2026 a passé les tests backend ciblés (`11/11`), la suite backend complète, `pnpm test` (`39/39`), `pnpm lint` et `pnpm typecheck`.
+
+La chaîne est :
+
+```text
+Session UX
+-> Campaign(s)
+-> tête de lineage PAPER sélectionnée
+-> PaperAnalyticsReport canonique
+   + audit durable des cycles/décisions/fills
+-> projection economic-history-v1
+-> cockpit Historique / export JSON
+```
+
+Principes :
+
+- `PaperAnalyticsReport` reste source de vérité pour equity, P&L brut/net, drawdown, exposition et coûts canoniques ;
+- une opération économique correspond à une exécution réellement engagée, éventuellement composée de plusieurs fills ;
+- `HOLD`, `REJECT` et cycles `FAILED` restent auditables mais ne sont pas transformés en trades économiques ;
+- `trade_count` et `fill_count` sont explicitement distincts ;
+- `Fill.realized_pnl` est réutilisé directement ;
+- le P&L latent final est lu dans le `PortfolioState` terminal lorsqu'il est canoniquement disponible ;
+- le turnover est défini comme `total_notional / initial_equity` ;
+- les coûts totaux suivent `fees + spread + slippage - funding_pnl` ;
+- pour PERPETUAL, la quantité de position est signée (`LONG > 0`, `SHORT < 0`) et l'effet économique est dérivé de la transition avant/après, jamais de BUY/SELL seul ;
+- le frontend se limite à la sélection, au filtrage et à l'affichage des valeurs backend.
+
+Endpoints du patch :
+
+```text
+GET /api/v1/economic-history?paper_run_id=<uuid>
+GET /api/v1/economic-history/export?paper_run_id=<uuid>
+```
+
+Métriques descriptives ajoutées : notional total, turnover, coûts/notional, coûts/equity initiale, fills/heure, changements de marché, ouvertures, augmentations, réductions, clôtures, flips et effets LONG/SHORT.
+
+Le cockpit sélectionne la Session, associe les Campaigns existantes via leur `strategy_id`, puis présente les têtes de lineage PAPER comme runs économiques. Cette structure permet de comparer ultérieurement plusieurs runs sans introduire de nouvel agrégat persistant.
+
+La documentation détaillée du patch est `docs/25_BATCH_HISTORIQUE_ECONOMIQUE_SESSION.md`.
