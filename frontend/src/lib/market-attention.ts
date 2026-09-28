@@ -1,5 +1,7 @@
 export type RadarStatus = "AVAILABLE" | "PARTIAL" | "NOT_CONFIGURED" | "STALE" | "ERROR";
 export type MarketActivityState = "UNKNOWN" | "NORMAL" | "ELEVATED" | "ACCELERATING" | "VERY_HIGH";
+export type ActivityDataQuality = "COMPLETE" | "NO_TRADE_GAPS" | "INSUFFICIENT_HISTORY" | "DISCONTINUOUS_HISTORY" | "TECHNICAL_ERROR";
+export type LiquidityRegime = "UNKNOWN" | "MICRO" | "LOW" | "MEDIUM" | "HIGH" | "VERY_HIGH";
 export type PublicAttentionDirection = "UNKNOWN" | "FALLING" | "STABLE" | "RISING";
 export type CrossAttentionState = "NORMAL" | "MARKET_ONLY" | "PUBLIC_ONLY" | "CONVERGING";
 export type AttentionLevel = "NORMAL" | "MEDIUM" | "HIGH";
@@ -18,11 +20,18 @@ export type ActivityHorizonSnapshot = {
   volume_ratio: string | null;
   volume_change: string | null;
   volume_acceleration: string | null;
+  current_notional_usd: string | null;
+  baseline_notional_usd: string | null;
+  notional_delta_usd: string | null;
+  notional_method: string | null;
   price_return: string | null;
   price_range: string | null;
   realized_volatility: string | null;
   observation_count: number;
   baseline_period_count: number;
+  no_trade_interval_count: number;
+  unexplained_gap_count: number;
+  data_quality: ActivityDataQuality;
   complete: boolean;
 };
 
@@ -31,8 +40,11 @@ export type MarketActivitySnapshot = {
   observed_at: string;
   status: RadarStatus;
   activity_state: MarketActivityState;
+  liquidity_regime: LiquidityRegime;
+  liquidity_reference_usd: string | null;
   freshness_seconds: string | null;
   horizons: ActivityHorizonSnapshot[];
+  data_quality: ActivityDataQuality;
   error_type: string | null;
 };
 
@@ -44,6 +56,19 @@ export type ActivityStatusCounts = {
 };
 
 export type ActivityStateCounts = Record<MarketActivityState, number>;
+export type ActivityDataQualityCounts = Record<ActivityDataQuality, number>;
+export type ActivityErrorCounts = {
+  KrakenConnectionError: number;
+  KrakenPayloadError: number;
+  UnknownKrakenSymbolError: number;
+  CandleValidationError: number;
+  Other: number;
+};
+export type ActivityMarketTypeStatusCounts = {
+  SPOT: ActivityStatusCounts;
+  PERPETUAL: ActivityStatusCounts;
+};
+export type LiquidityRegimeCounts = Record<LiquidityRegime, number>;
 
 export type SubthresholdActivitySnapshot = {
   market: AttentionMarket;
@@ -111,10 +136,29 @@ export type MarketAttentionOverview = {
   web_search_count: number;
   activity_status_counts: ActivityStatusCounts;
   activity_state_counts: ActivityStateCounts;
+  activity_data_quality_counts: ActivityDataQualityCounts;
+  activity_error_counts: ActivityErrorCounts;
+  activity_market_type_status_counts: ActivityMarketTypeStatusCounts;
+  liquidity_regime_counts: LiquidityRegimeCounts;
   subthreshold_activity: SubthresholdActivitySnapshot[];
   shortlist: MarketAttentionSnapshot[];
   error_type: string | null;
 };
+
+export function activityErrorEntries(
+  counts: ActivityErrorCounts,
+): Array<[keyof ActivityErrorCounts, number]> {
+  const order: Array<keyof ActivityErrorCounts> = [
+    "KrakenConnectionError",
+    "KrakenPayloadError",
+    "UnknownKrakenSymbolError",
+    "CandleValidationError",
+    "Other",
+  ];
+  return order
+    .map((name) => [name, counts[name]] as [keyof ActivityErrorCounts, number])
+    .filter((entry) => entry[1] > 0);
+}
 
 export function attentionHorizon(
   item: MarketAttentionSnapshot,
@@ -146,6 +190,23 @@ export function formatSignedPercent(value: string | null | undefined): string {
   if (!Number.isFinite(parsed)) return "—";
   const percent = parsed * 100;
   return `${percent > 0 ? "+" : ""}${percent.toFixed(2)} %`;
+}
+
+export function formatUsdCompact(
+  value: string | number | null | undefined,
+  options: { signed?: boolean } = {},
+): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "—";
+  const sign = options.signed && parsed > 0 ? "+" : "";
+  const absolute = Math.abs(parsed);
+
+  if (absolute >= 1_000_000_000) return `${sign}${(parsed / 1_000_000_000).toFixed(1)} B$`;
+  if (absolute >= 1_000_000) return `${sign}${(parsed / 1_000_000).toFixed(1)} M$`;
+  if (absolute >= 1_000) return `${sign}${(parsed / 1_000).toFixed(1)} k$`;
+  if (absolute >= 10) return `${sign}${Math.round(parsed).toLocaleString("fr-FR")} $`;
+  return `${sign}${parsed.toFixed(2)} $`;
 }
 
 export function marketAttentionStatusMessage(overview: MarketAttentionOverview): string {

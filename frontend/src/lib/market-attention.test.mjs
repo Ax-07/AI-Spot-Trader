@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  activityErrorEntries,
   attentionHorizon,
   citedPublicSources,
   formatSignedPercent,
@@ -20,6 +21,7 @@ const item = {
       { timeframe: "5m", volume_ratio: "2.8", price_return: "0.01", complete: true },
       { timeframe: "15m", volume_ratio: "2.05", price_return: "0.031", complete: true },
     ],
+    data_quality: "COMPLETE",
     error_type: null,
   },
   public_attention: {
@@ -54,6 +56,12 @@ const overview = (status, candidateCount = 0) => ({
   web_search_count: 0,
   activity_status_counts: { AVAILABLE: 80, PARTIAL: 0, STALE: 0, ERROR: 0 },
   activity_state_counts: { UNKNOWN: 10, NORMAL: 70, ELEVATED: 0, ACCELERATING: 0, VERY_HIGH: 0 },
+  activity_data_quality_counts: { COMPLETE: 70, NO_TRADE_GAPS: 10, INSUFFICIENT_HISTORY: 0, DISCONTINUOUS_HISTORY: 0, TECHNICAL_ERROR: 0 },
+  activity_error_counts: { KrakenConnectionError: 0, KrakenPayloadError: 0, UnknownKrakenSymbolError: 0, CandleValidationError: 0, Other: 0 },
+  activity_market_type_status_counts: {
+    SPOT: { AVAILABLE: 50, PARTIAL: 0, STALE: 0, ERROR: 0 },
+    PERPETUAL: { AVAILABLE: 30, PARTIAL: 0, STALE: 0, ERROR: 0 },
+  },
   subthreshold_activity: [
     { market: { symbol: "SOL/USD", market_type: "SPOT" }, peak_volume_ratio: "1.31", peak_timeframe: "15m" },
   ],
@@ -90,8 +98,28 @@ test("keeps a genuinely partial empty shortlist distinguishable", () => {
 test("preserves diagnostic counters and subthreshold payload mapping", () => {
   const value = overview("AVAILABLE");
   value.activity_status_counts.PARTIAL = 8;
+  value.activity_market_type_status_counts.SPOT.PARTIAL = 5;
+  value.activity_market_type_status_counts.PERPETUAL.ERROR = 3;
   assert.equal(value.activity_status_counts.PARTIAL, 8);
   assert.equal(value.activity_state_counts.NORMAL, 70);
+  assert.equal(value.activity_data_quality_counts.NO_TRADE_GAPS, 10);
+  assert.equal(value.activity_market_type_status_counts.SPOT.PARTIAL, 5);
+  assert.equal(value.activity_market_type_status_counts.PERPETUAL.ERROR, 3);
   assert.equal(value.subthreshold_activity[0].peak_volume_ratio, "1.31");
   assert.equal(value.subthreshold_activity[0].peak_timeframe, "15m");
+});
+
+test("returns only non-zero bounded error categories in deterministic order", () => {
+  const counts = {
+    KrakenConnectionError: 8,
+    KrakenPayloadError: 0,
+    UnknownKrakenSymbolError: 2,
+    CandleValidationError: 0,
+    Other: 1,
+  };
+  assert.deepEqual(activityErrorEntries(counts), [
+    ["KrakenConnectionError", 8],
+    ["UnknownKrakenSymbolError", 2],
+    ["Other", 1],
+  ]);
 });

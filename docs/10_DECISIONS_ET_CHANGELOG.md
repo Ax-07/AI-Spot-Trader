@@ -13,12 +13,12 @@ Market Attention Radar v1 reste **strictement observationnel** : sa shortlist ne
 ## Référence courante
 
 ```text
-HEAD GitHub audité     : d011faa98e7e347875186f12cb24b5e7041aa25c
-HEAD                   : feat: add trading reasoning doctrine
+HEAD GitHub audité     : 354e8cf083b2c45233c45e019bdaa7f4bf6b1d96
+HEAD                   : feat: improve market attention observability
 Recalibrage net/cost   : ADR-277 intégré dans 463850d
 Historique économique  : ADR-278 intégré dans b46f463c
 Doctrine reasoning     : ADR-279 intégrée dans d011faa
-Market Attention Radar : ADR-280 à ADR-284 proposés dans le présent patch
+Market Attention Radar : ADR-280 à ADR-284 intégrés ; Batch 29 observabilité intégré
 ```
 
 ## Décisions historiques toujours actives
@@ -40,7 +40,7 @@ Market Attention Radar : ADR-280 à ADR-284 proposés dans le présent patch
 - ADR-277 : recalibrage cost-aware vers l'equity nette, allocation du capital et agressivité sans turnover obligatoire ;
 - ADR-278 : historique économique Session/run comme projection en lecture seule, sans second ledger ni seconde comptabilité ;
 - ADR-279 : doctrine qualitative de raisonnement trading pour les prompts stratégiques courants, sans règles mécaniques ;
-- ADR-280 à ADR-284 : Market Attention Radar v1, proposés dans ce batch.
+- ADR-280 à ADR-284 : Market Attention Radar v1, intégrés ; observabilité opérationnelle renforcée au Batch 29.
 
 ## ADR-240 — Session est une façade UX, pas un nouvel agrégat persistant
 
@@ -204,7 +204,7 @@ L'invalidation d'une thèse est explicitement un concept de raisonnement straté
 
 ## ADR-280 — Market Attention Radar v1 est observationnel et séparé du trading
 
-**PROPOSÉ DANS LE PRÉSENT PATCH.**
+**ADOPTÉ ET INTÉGRÉ.**
 
 Le Radar possède ses propres modèles, cadence, cache et API read-only. Il ne modifie ni `CycleDecisionPlan`, ni prompts stratégiques, ni Market Discovery, ni Risk, ni Broker. Sa shortlist signifie seulement « marchés présentant une attention/activité inhabituelle à examiner ».
 
@@ -212,7 +212,7 @@ Aucune donnée Radar n'est fournie à l'Agent stratégique dans la v1.
 
 ## ADR-281 — L'activité marché réutilise les candles canoniques et privilégie le volume relatif
 
-**PROPOSÉ DANS LE PRÉSENT PATCH.**
+**ADOPTÉ ET INTÉGRÉ.**
 
 Le Radar réutilise `CandleStreamService` et les volumes déjà présents dans les candles Kraken. Il ne crée aucune seconde pipeline OHLCV.
 
@@ -222,7 +222,7 @@ Le tri d'attention utilise le caractère relatif/inhabituel ; le volume absolu d
 
 ## ADR-282 — La recherche publique utilise hosted web_search sans API sociale dédiée
 
-**PROPOSÉ DANS LE PRÉSENT PATCH.**
+**ADOPTÉ ET INTÉGRÉ.**
 
 La v1 n'introduit aucune API X/Twitter, Reddit, LunarCrush ou Google Trends, aucune clé dédiée et aucun scraper généraliste.
 
@@ -240,7 +240,7 @@ Le prompt auxiliaire interdit explicitement BUY/SELL/HOLD, recommandation, LONG/
 
 ## ADR-283 — La recherche web est bornée, cachée, dédupliquée et fail-soft
 
-**PROPOSÉ DANS LE PRÉSENT PATCH.**
+**ADOPTÉ ET INTÉGRÉ.**
 
 Le scanner tourne indépendamment du cycle stratégique. Le catalogue et les résultats ont des TTL. Le scan Kraken est borné par batch avec rotation ; la shortlist marché est bornée à 30 ; les recherches web sont bornées à 30 et valent 8 par défaut. Un même actif SPOT/PERPETUAL partage une recherche publique afin d'éviter les appels redondants.
 
@@ -248,7 +248,7 @@ Un timeout, 429/5xx ou autre erreur OpenAI dégrade `public_attention` en `ERROR
 
 ## ADR-284 — La v1 historise uniquement les snapshots agrégés en mémoire
 
-**PROPOSÉ DANS LE PRÉSENT PATCH.**
+**ADOPTÉ ET INTÉGRÉ.**
 
 Aucune migration PostgreSQL n'est ajoutée. Le Radar garde un historique process-local borné d'agrégats et sources. Il ne persiste ni candles dupliquées, ni copies de pages, ni posts Reddit/X, ni résultats de recherche bruts, ni prompts massifs.
 
@@ -259,6 +259,20 @@ Cette solution permet d'observer l'utilité et le coût réel du Radar avant de 
 Aucun changement de politique dans ce batch. `RiskEngine` / `SequentialCycleRiskEngine` possèdent déjà les rejets `MARKET_FRESHNESS_UNAVAILABLE` et `MARKET_DATA_STALE`. `kraken_stale_after_seconds` est toujours optionnel et vaut `None` par défaut. Au HEAD audité, `campaign_composition.py` ne renseigne pas `RiskPolicy.stale_after`, donc le rejet stale Risk n'est pas activé par défaut dans les Campaigns courantes.
 
 Un durcissement SCALP éventuel doit être traité séparément après mesure de la latence `MarketState -> LLM -> Risk`, afin de choisir un seuil fondé sur la distribution réelle des latences.
+
+## Changelog — 2026-09-28 — Batch 30 robustesse Market Activity Radar (patch livré)
+
+- base GitHub auditée : `354e8cf083b2c45233c45e019bdaa7f4bf6b1d96` (`feat: improve market attention observability`) ;
+- contrat SPOT Kraken pris en compte explicitement : les intervalles OHLC absents, lorsqu'ils sont encadrés par une fenêtre effectivement couverte, peuvent compter comme volume nul sans candle OHLC synthétique ;
+- historique PERPETUAL du provider canonique basculé de candles `mark` vers candles `trade` avec fenêtre `from/to`, afin que le ratio d'activité repose sur le volume réellement échangé ;
+- diagnostic borné ajouté par type d'erreur et par `SPOT/PERPETUAL`, avec qualité de données `COMPLETE / NO_TRADE_GAPS / INSUFFICIENT_HISTORY / DISCONTINUOUS_HISTORY / TECHNICAL_ERROR` ;
+- vrais échecs fournisseur/transport/mapping restent `ERROR`; données insuffisantes ou discontinuités non justifiées restent `PARTIAL` ;
+- seuils `1.40 / 1.75 / 2.50`, Agent, Market Discovery, Risk, Broker, persistence et budget web inchangés ;
+- diagnostics exclus du chemin candidat et de toute recherche web ;
+- cockpit enrichi de façon compacte avec ventilation marché et catégories d'erreur ;
+- tests isolés exécutés par ChatGPT : backend robustesse activité `8/8`, backend provider PERPETUAL `3/3`, frontend mapping `7/7`, plus compilation Python des fichiers modifiés ;
+- validation locale utilisateur : suite backend complète `pytest -q` passée à `100 %`, frontend `46/46`, `pnpm lint`, `pnpm typecheck`, `pnpm build` et `git diff --check` passés ; seuls restent des avertissements de dépréciation Python, Node `MODULE_TYPELESS_PACKAGE_JSON` et LF -> CRLF non bloquants ;
+- validation fonctionnelle runtime du Radar à poursuivre sur plusieurs rotations pour mesurer la répartition réelle des erreurs et la couverture `AVAILABLE`.
 
 ## Changelog — 2026-09-28 — Market Attention Radar v1 (patch proposé)
 

@@ -157,18 +157,26 @@ class KrakenCandleProvider:
     ) -> tuple[Candle, ...]:
         instrument = await self._instrument(key.symbol)
         requested = min(limit, KRAKEN_FUTURES_HISTORY_TARGET_ROWS)
+        since = before - (key.timeframe.duration * (requested + 2))
         try:
+            # Market activity needs traded volume. Kraken Futures exposes separate chart
+            # tick types for mark-price and trade candles; mark candles are not a valid
+            # source for relative traded-volume analysis.
             response = await self._charts.get(
-                f"mark/{instrument.venue_symbol}/{key.timeframe.futures_resolution}",
-                params={"to": int(before.timestamp()), "count": requested},
+                f"trade/{instrument.venue_symbol}/{key.timeframe.futures_resolution}",
+                params={
+                    "from": int(since.timestamp()),
+                    "to": int(before.timestamp()),
+                    "count": requested,
+                },
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise KrakenConnectionError("Kraken Futures chart candles request failed") from exc
+            raise KrakenConnectionError("Kraken Futures trade candles request failed") from exc
         try:
             payload = response.json()
         except ValueError as exc:
-            raise KrakenPayloadError("Kraken Futures chart candles returned invalid JSON") from exc
+            raise KrakenPayloadError("Kraken Futures trade candles returned invalid JSON") from exc
         return _parse_futures_candles(payload, key=key, before=before, limit=requested)
 
     async def _instrument(self, canonical_symbol: str) -> DerivativeInstrument:

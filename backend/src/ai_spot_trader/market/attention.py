@@ -34,6 +34,23 @@ class MarketActivityState(StrEnum):
     VERY_HIGH = "VERY_HIGH"
 
 
+class ActivityDataQuality(StrEnum):
+    COMPLETE = "COMPLETE"
+    NO_TRADE_GAPS = "NO_TRADE_GAPS"
+    INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"
+    DISCONTINUOUS_HISTORY = "DISCONTINUOUS_HISTORY"
+    TECHNICAL_ERROR = "TECHNICAL_ERROR"
+
+
+class LiquidityRegime(StrEnum):
+    UNKNOWN = "UNKNOWN"
+    MICRO = "MICRO"
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    VERY_HIGH = "VERY_HIGH"
+
+
 class PublicAttentionDirection(StrEnum):
     UNKNOWN = "UNKNOWN"
     FALLING = "FALLING"
@@ -93,11 +110,18 @@ class ActivityHorizonSnapshot(AttentionModel):
     volume_ratio: Decimal | None = None
     volume_change: Decimal | None = None
     volume_acceleration: Decimal | None = None
+    current_notional_usd: Decimal | None = Field(default=None, ge=0)
+    baseline_notional_usd: Decimal | None = Field(default=None, ge=0)
+    notional_delta_usd: Decimal | None = None
+    notional_method: str | None = None
     price_return: Decimal | None = None
     price_range: Decimal | None = None
     realized_volatility: Decimal | None = None
     observation_count: int = Field(ge=0)
     baseline_period_count: int = Field(ge=0)
+    no_trade_interval_count: int = Field(default=0, ge=0)
+    unexplained_gap_count: int = Field(default=0, ge=0)
+    data_quality: ActivityDataQuality = ActivityDataQuality.COMPLETE
     complete: bool
 
 
@@ -106,8 +130,11 @@ class MarketActivitySnapshot(AttentionModel):
     observed_at: datetime
     status: RadarStatus
     activity_state: MarketActivityState
+    liquidity_regime: LiquidityRegime = LiquidityRegime.UNKNOWN
+    liquidity_reference_usd: Decimal | None = Field(default=None, ge=0)
     freshness_seconds: Decimal | None = Field(default=None, ge=0)
     horizons: tuple[ActivityHorizonSnapshot, ...]
+    data_quality: ActivityDataQuality = ActivityDataQuality.COMPLETE
     error_type: str | None = None
 
     @model_validator(mode="after")
@@ -131,6 +158,36 @@ class ActivityStateCounts(AttentionModel):
     NORMAL: int = Field(default=0, ge=0)
     ELEVATED: int = Field(default=0, ge=0)
     ACCELERATING: int = Field(default=0, ge=0)
+    VERY_HIGH: int = Field(default=0, ge=0)
+
+
+class ActivityDataQualityCounts(AttentionModel):
+    COMPLETE: int = Field(default=0, ge=0)
+    NO_TRADE_GAPS: int = Field(default=0, ge=0)
+    INSUFFICIENT_HISTORY: int = Field(default=0, ge=0)
+    DISCONTINUOUS_HISTORY: int = Field(default=0, ge=0)
+    TECHNICAL_ERROR: int = Field(default=0, ge=0)
+
+
+class ActivityErrorCounts(AttentionModel):
+    KrakenConnectionError: int = Field(default=0, ge=0)
+    KrakenPayloadError: int = Field(default=0, ge=0)
+    UnknownKrakenSymbolError: int = Field(default=0, ge=0)
+    CandleValidationError: int = Field(default=0, ge=0)
+    Other: int = Field(default=0, ge=0)
+
+
+class ActivityMarketTypeStatusCounts(AttentionModel):
+    SPOT: ActivityStatusCounts = Field(default_factory=ActivityStatusCounts)
+    PERPETUAL: ActivityStatusCounts = Field(default_factory=ActivityStatusCounts)
+
+
+class LiquidityRegimeCounts(AttentionModel):
+    UNKNOWN: int = Field(default=0, ge=0)
+    MICRO: int = Field(default=0, ge=0)
+    LOW: int = Field(default=0, ge=0)
+    MEDIUM: int = Field(default=0, ge=0)
+    HIGH: int = Field(default=0, ge=0)
     VERY_HIGH: int = Field(default=0, ge=0)
 
 
@@ -223,6 +280,14 @@ class MarketAttentionOverview(AttentionModel):
     web_search_count: int = Field(default=0, ge=0)
     activity_status_counts: ActivityStatusCounts = Field(default_factory=ActivityStatusCounts)
     activity_state_counts: ActivityStateCounts = Field(default_factory=ActivityStateCounts)
+    activity_data_quality_counts: ActivityDataQualityCounts = Field(
+        default_factory=ActivityDataQualityCounts
+    )
+    activity_error_counts: ActivityErrorCounts = Field(default_factory=ActivityErrorCounts)
+    activity_market_type_status_counts: ActivityMarketTypeStatusCounts = Field(
+        default_factory=ActivityMarketTypeStatusCounts
+    )
+    liquidity_regime_counts: LiquidityRegimeCounts = Field(default_factory=LiquidityRegimeCounts)
     subthreshold_activity: tuple[SubthresholdActivitySnapshot, ...] = ()
     shortlist: tuple[MarketAttentionSnapshot, ...] = ()
     error_type: str | None = None
@@ -277,6 +342,7 @@ class MarketActivityAnalyzer:
         market: ExecutableMarket,
         candles: tuple[Candle, ...],
         observed_at: datetime,
+        missing_intervals_mean_no_trades: bool = False,
     ) -> MarketActivitySnapshot:
         observed_at = _utc(observed_at)
         final = tuple(
@@ -290,21 +356,29 @@ class MarketActivityAnalyzer:
         )
         final = tuple(sorted(final, key=lambda item: item.open_time))
         if not final:
+            horizons = tuple(self._empty_horizon(timeframe) for timeframe in self.HORIZONS)
             return MarketActivitySnapshot(
                 market=market,
                 observed_at=observed_at,
                 status=RadarStatus.PARTIAL,
                 activity_state=MarketActivityState.UNKNOWN,
                 freshness_seconds=None,
-                horizons=tuple(
-                    self._empty_horizon(timeframe) for timeframe in self.HORIZONS
-                ),
+                horizons=horizons,
+                data_quality=ActivityDataQuality.INSUFFICIENT_HISTORY,
             )
 
         freshness_seconds = Decimal(
             str(max(0.0, (observed_at - final[-1].close_time.astimezone(UTC)).total_seconds()))
         )
-        horizons = tuple(self._horizon(final, timeframe) for timeframe in self.HORIZONS)
+        horizons = tuple(
+            self._horizon(
+                final,
+                timeframe,
+                market=market,
+                missing_intervals_mean_no_trades=missing_intervals_mean_no_trades,
+            )
+            for timeframe in self.HORIZONS
+        )
         complete_ratios = [
             item.volume_ratio
             for item in horizons
@@ -329,6 +403,7 @@ class MarketActivityAnalyzer:
             activity_state=activity_state,
             freshness_seconds=freshness_seconds,
             horizons=horizons,
+            data_quality=_snapshot_data_quality(horizons),
         )
 
     def _empty_horizon(self, timeframe: CandleTimeframe) -> ActivityHorizonSnapshot:
@@ -336,6 +411,29 @@ class MarketActivityAnalyzer:
             timeframe=timeframe,
             observation_count=0,
             baseline_period_count=0,
+            no_trade_interval_count=0,
+            unexplained_gap_count=0,
+            data_quality=ActivityDataQuality.INSUFFICIENT_HISTORY,
+            complete=False,
+        )
+
+    def _incomplete_horizon(
+        self,
+        timeframe: CandleTimeframe,
+        *,
+        observation_count: int,
+        baseline_period_count: int,
+        data_quality: ActivityDataQuality,
+        no_trade_interval_count: int = 0,
+        unexplained_gap_count: int = 0,
+    ) -> ActivityHorizonSnapshot:
+        return ActivityHorizonSnapshot(
+            timeframe=timeframe,
+            observation_count=max(0, observation_count),
+            baseline_period_count=max(0, baseline_period_count),
+            no_trade_interval_count=max(0, no_trade_interval_count),
+            unexplained_gap_count=max(0, unexplained_gap_count),
+            data_quality=data_quality,
             complete=False,
         )
 
@@ -343,47 +441,106 @@ class MarketActivityAnalyzer:
         self,
         candles: tuple[Candle, ...],
         timeframe: CandleTimeframe,
+        *,
+        market: ExecutableMarket,
+        missing_intervals_mean_no_trades: bool,
     ) -> ActivityHorizonSnapshot:
         bars = int(timeframe.duration / CandleTimeframe.M5.duration)
         required = bars * (self._baseline_periods + 2)
-        if len(candles) < required:
-            return ActivityHorizonSnapshot(
-                timeframe=timeframe,
-                observation_count=min(len(candles), bars),
-                baseline_period_count=max(0, (len(candles) // bars) - 2),
-                complete=False,
+        step = CandleTimeframe.M5.duration
+        if not candles:
+            return self._incomplete_horizon(
+                timeframe,
+                observation_count=0,
+                baseline_period_count=0,
+                data_quality=ActivityDataQuality.INSUFFICIENT_HISTORY,
             )
 
-        comparable_tail = candles[-required:]
-        if not _is_contiguous(comparable_tail):
-            return ActivityHorizonSnapshot(
-                timeframe=timeframe,
+        end = candles[-1].close_time.astimezone(UTC)
+        start = end - (step * required)
+        first_open = candles[0].open_time.astimezone(UTC)
+        if first_open > start:
+            return self._incomplete_horizon(
+                timeframe,
                 observation_count=min(len(candles), bars),
                 baseline_period_count=max(0, (len(candles) // bars) - 2),
-                complete=False,
+                data_quality=ActivityDataQuality.INSUFFICIENT_HISTORY,
             )
 
-        current = comparable_tail[-bars:]
-        previous = comparable_tail[-2 * bars : -bars]
-        baseline_pool = comparable_tail[: -2 * bars]
+        window = tuple(
+            candle
+            for candle in candles
+            if candle.open_time.astimezone(UTC) >= start
+            and candle.close_time.astimezone(UTC) <= end
+        )
+        expected_opens = tuple(start + (step * index) for index in range(required))
+        expected_set = set(expected_opens)
+        by_open: dict[datetime, Candle] = {}
+        malformed = 0
+        for candle in window:
+            open_time = candle.open_time.astimezone(UTC)
+            close_time = candle.close_time.astimezone(UTC)
+            if close_time - open_time != step or open_time not in expected_set or open_time in by_open:
+                malformed += 1
+                continue
+            by_open[open_time] = candle
+
+        missing_opens = tuple(value for value in expected_opens if value not in by_open)
+        if malformed:
+            return self._incomplete_horizon(
+                timeframe,
+                observation_count=sum(value in by_open for value in expected_opens[-bars:]),
+                baseline_period_count=max(0, (len(by_open) // bars) - 2),
+                data_quality=ActivityDataQuality.DISCONTINUOUS_HISTORY,
+                unexplained_gap_count=malformed + len(missing_opens),
+            )
+
+        if missing_opens:
+            # A missing first slot can be a truncated provider window. Keep it partial rather
+            # than silently manufacturing an initial zero-volume interval.
+            if missing_opens[0] == expected_opens[0]:
+                return self._incomplete_horizon(
+                    timeframe,
+                    observation_count=sum(value in by_open for value in expected_opens[-bars:]),
+                    baseline_period_count=max(0, (len(by_open) // bars) - 2),
+                    data_quality=ActivityDataQuality.INSUFFICIENT_HISTORY,
+                    unexplained_gap_count=len(missing_opens),
+                )
+            if not missing_intervals_mean_no_trades:
+                return self._incomplete_horizon(
+                    timeframe,
+                    observation_count=sum(value in by_open for value in expected_opens[-bars:]),
+                    baseline_period_count=max(0, (len(by_open) // bars) - 2),
+                    data_quality=ActivityDataQuality.DISCONTINUOUS_HISTORY,
+                    unexplained_gap_count=len(missing_opens),
+                )
+
+        slots: tuple[Candle | None, ...] = tuple(by_open.get(value) for value in expected_opens)
+        current = slots[-bars:]
+        previous = slots[-2 * bars : -bars]
+        baseline_pool = slots[: -2 * bars]
         baseline_groups = tuple(
             baseline_pool[index : index + bars]
             for index in range(0, len(baseline_pool), bars)
         )
-        baseline_groups = tuple(group for group in baseline_groups if len(group) == bars)
         if len(baseline_groups) < 3:
-            return ActivityHorizonSnapshot(
-                timeframe=timeframe,
-                observation_count=len(current),
+            return self._incomplete_horizon(
+                timeframe,
+                observation_count=sum(item is not None for item in current),
                 baseline_period_count=len(baseline_groups),
-                complete=False,
+                data_quality=ActivityDataQuality.INSUFFICIENT_HISTORY,
+                no_trade_interval_count=len(missing_opens) if missing_intervals_mean_no_trades else 0,
             )
 
-        current_volume = sum((item.volume for item in current), Decimal(0))
-        previous_volume = sum((item.volume for item in previous), Decimal(0))
-        baseline_volumes = tuple(
-            sum((item.volume for item in group), Decimal(0)) for group in baseline_groups
-        )
+        def volume(group: tuple[Candle | None, ...]) -> Decimal:
+            return sum((item.volume if item is not None else Decimal(0) for item in group), Decimal(0))
+
+        def real(group: tuple[Candle | None, ...]) -> tuple[Candle, ...]:
+            return tuple(item for item in group if item is not None)
+
+        current_volume = volume(current)
+        previous_volume = volume(previous)
+        baseline_volumes = tuple(volume(group) for group in baseline_groups)
         baseline_volume = Decimal(median(baseline_volumes))
         volume_ratio = _safe_ratio(current_volume, baseline_volume)
         current_vs_previous = _safe_ratio(current_volume, previous_volume)
@@ -396,13 +553,41 @@ class MarketActivityAnalyzer:
             if current_vs_previous is not None and previous_vs_baseline is not None
             else None
         )
-        price_return = _safe_ratio(current[-1].close, current[0].open)
-        price_return = price_return - Decimal(1) if price_return is not None else None
-        high = max(item.high for item in current)
-        low = min(item.low for item in current)
-        price_range = _safe_ratio(high, low)
-        price_range = price_range - Decimal(1) if price_range is not None else None
-        realized_volatility = _realized_volatility(current)
+
+        current_real = real(current)
+        baseline_real_groups = tuple(real(group) for group in baseline_groups)
+        current_notional_usd = _spot_usd_notional(current_real, market=market)
+        baseline_notional_usd: Decimal | None = None
+        notional_delta_usd: Decimal | None = None
+        notional_method: str | None = None
+        if current_notional_usd is not None:
+            baseline_notionals = tuple(
+                value
+                for group in baseline_real_groups
+                if (value := _spot_usd_notional(group, market=market)) is not None
+            )
+            if len(baseline_notionals) == len(baseline_groups):
+                baseline_notional_usd = Decimal(median(baseline_notionals))
+                notional_delta_usd = current_notional_usd - baseline_notional_usd
+                notional_method = "SPOT_BASE_VOLUME_X_5M_CLOSE_ESTIMATE"
+
+        price_return: Decimal | None = None
+        price_range: Decimal | None = None
+        realized_volatility: Decimal | None = None
+        if current_real:
+            price_return = _safe_ratio(current_real[-1].close, current_real[0].open)
+            price_return = price_return - Decimal(1) if price_return is not None else None
+            high = max(item.high for item in current_real)
+            low = min(item.low for item in current_real)
+            price_range = _safe_ratio(high, low)
+            price_range = price_range - Decimal(1) if price_range is not None else None
+            realized_volatility = _realized_volatility(current_real)
+
+        quality = (
+            ActivityDataQuality.NO_TRADE_GAPS
+            if missing_opens and missing_intervals_mean_no_trades
+            else ActivityDataQuality.COMPLETE
+        )
         return ActivityHorizonSnapshot(
             timeframe=timeframe,
             current_volume=current_volume,
@@ -411,11 +596,18 @@ class MarketActivityAnalyzer:
             volume_ratio=volume_ratio,
             volume_change=volume_change,
             volume_acceleration=volume_acceleration,
+            current_notional_usd=current_notional_usd,
+            baseline_notional_usd=baseline_notional_usd,
+            notional_delta_usd=notional_delta_usd,
+            notional_method=notional_method,
             price_return=price_return,
             price_range=price_range,
             realized_volatility=realized_volatility,
-            observation_count=len(current),
+            observation_count=len(current_real),
             baseline_period_count=len(baseline_groups),
+            no_trade_interval_count=len(missing_opens) if missing_intervals_mean_no_trades else 0,
+            unexplained_gap_count=0,
+            data_quality=quality,
             complete=volume_ratio is not None,
         )
 
@@ -481,9 +673,13 @@ class MarketAttentionRadar:
                 scan_batch = self._next_scan_batch(catalogue)
                 scanned_count = len(scan_batch)
                 await self._scan_activity(scan_batch, now=now)
-                fresh_activities = self._fresh_activities(now)
+                fresh_activities = self._classify_liquidity(self._fresh_activities(now))
                 status_counts = _activity_status_counts(fresh_activities)
                 state_counts = _activity_state_counts(fresh_activities)
+                data_quality_counts = _activity_data_quality_counts(fresh_activities)
+                error_counts = _activity_error_counts(fresh_activities)
+                market_type_status_counts = _activity_market_type_status_counts(fresh_activities)
+                liquidity_counts = _liquidity_regime_counts(fresh_activities)
                 subthreshold_activity = self._subthreshold_activity(fresh_activities)
                 candidates = self._candidates_from(fresh_activities)
                 public_by_asset, web_search_count = await self._public_attention(
@@ -531,13 +727,17 @@ class MarketAttentionRadar:
                     web_search_count=web_search_count,
                     activity_status_counts=status_counts,
                     activity_state_counts=state_counts,
+                    activity_data_quality_counts=data_quality_counts,
+                    activity_error_counts=error_counts,
+                    activity_market_type_status_counts=market_type_status_counts,
+                    liquidity_regime_counts=liquidity_counts,
                     subthreshold_activity=subthreshold_activity,
                     shortlist=shortlist,
                 )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                fresh_activities = self._fresh_activities(now)
+                fresh_activities = self._classify_liquidity(self._fresh_activities(now))
                 overview = MarketAttentionOverview(
                     observed_at=now,
                     status=RadarStatus.ERROR,
@@ -549,6 +749,12 @@ class MarketAttentionRadar:
                     web_search_count=web_search_count,
                     activity_status_counts=_activity_status_counts(fresh_activities),
                     activity_state_counts=_activity_state_counts(fresh_activities),
+                    activity_data_quality_counts=_activity_data_quality_counts(fresh_activities),
+                    activity_error_counts=_activity_error_counts(fresh_activities),
+                    activity_market_type_status_counts=_activity_market_type_status_counts(
+                        fresh_activities
+                    ),
+                    liquidity_regime_counts=_liquidity_regime_counts(fresh_activities),
                     subthreshold_activity=self._subthreshold_activity(fresh_activities),
                     error_type=type(exc).__name__,
                 )
@@ -636,6 +842,9 @@ class MarketAttentionRadar:
                         market=market,
                         candles=candles,
                         observed_at=now,
+                        missing_intervals_mean_no_trades=(
+                            market.market_type is MarketType.SPOT
+                        ),
                     )
                 except asyncio.CancelledError:
                     raise
@@ -650,6 +859,7 @@ class MarketAttentionRadar:
                             self._analyzer._empty_horizon(timeframe)
                             for timeframe in self._analyzer.HORIZONS
                         ),
+                        data_quality=ActivityDataQuality.TECHNICAL_ERROR,
                         error_type=type(exc).__name__,
                     )
                 self._activity_cache[market] = snapshot
@@ -665,8 +875,39 @@ class MarketAttentionRadar:
             if now - snapshot.observed_at.astimezone(UTC) <= ttl
         )
 
+    def _classify_liquidity(
+        self,
+        activities: tuple[MarketActivitySnapshot, ...],
+    ) -> tuple[MarketActivitySnapshot, ...]:
+        references: dict[MarketType, tuple[Decimal, ...]] = {}
+        reference_by_market: dict[ExecutableMarket, Decimal | None] = {}
+        for snapshot in activities:
+            reference = _liquidity_reference_usd(snapshot)
+            reference_by_market[snapshot.market] = reference
+        for market_type in (MarketType.SPOT, MarketType.PERPETUAL):
+            values = tuple(
+                reference
+                for snapshot in activities
+                if snapshot.market.market_type is market_type
+                and (reference := reference_by_market[snapshot.market]) is not None
+            )
+            references[market_type] = tuple(sorted(values))
+
+        return tuple(
+            snapshot.model_copy(
+                update={
+                    "liquidity_reference_usd": reference_by_market[snapshot.market],
+                    "liquidity_regime": _liquidity_regime(
+                        reference_by_market[snapshot.market],
+                        references[snapshot.market.market_type],
+                    ),
+                }
+            )
+            for snapshot in activities
+        )
+
     def _candidates(self, now: datetime) -> tuple[MarketActivitySnapshot, ...]:
-        return self._candidates_from(self._fresh_activities(now))
+        return self._candidates_from(self._classify_liquidity(self._fresh_activities(now)))
 
     def _candidates_from(
         self,
@@ -683,9 +924,30 @@ class MarketAttentionRadar:
             if snapshot.status is RadarStatus.AVAILABLE
             and snapshot.activity_state in unusual_states
         )
-        return tuple(
-            sorted(eligible, key=_activity_sort_key, reverse=True)[: self._policy.candidate_limit]
+        if not eligible:
+            return ()
+
+        ranked = tuple(sorted(eligible, key=_activity_sort_key, reverse=True))
+        by_regime: dict[LiquidityRegime, list[MarketActivitySnapshot]] = {}
+        for snapshot in ranked:
+            by_regime.setdefault(snapshot.liquidity_regime, []).append(snapshot)
+
+        regime_leaders = sorted(
+            (items[0] for items in by_regime.values()),
+            key=_activity_sort_key,
+            reverse=True,
         )
+        chosen: list[MarketActivitySnapshot] = regime_leaders[: self._policy.candidate_limit]
+        chosen_markets = {snapshot.market for snapshot in chosen}
+        if len(chosen) < self._policy.candidate_limit:
+            for snapshot in ranked:
+                if snapshot.market in chosen_markets:
+                    continue
+                chosen.append(snapshot)
+                chosen_markets.add(snapshot.market)
+                if len(chosen) >= self._policy.candidate_limit:
+                    break
+        return tuple(chosen)
 
     def _subthreshold_activity(
         self,
@@ -900,6 +1162,94 @@ def _activity_state_counts(
     )
 
 
+def _snapshot_data_quality(
+    horizons: tuple[ActivityHorizonSnapshot, ...],
+) -> ActivityDataQuality:
+    qualities = {item.data_quality for item in horizons}
+    if ActivityDataQuality.TECHNICAL_ERROR in qualities:
+        return ActivityDataQuality.TECHNICAL_ERROR
+    if ActivityDataQuality.DISCONTINUOUS_HISTORY in qualities:
+        return ActivityDataQuality.DISCONTINUOUS_HISTORY
+    if ActivityDataQuality.INSUFFICIENT_HISTORY in qualities:
+        return ActivityDataQuality.INSUFFICIENT_HISTORY
+    if ActivityDataQuality.NO_TRADE_GAPS in qualities:
+        return ActivityDataQuality.NO_TRADE_GAPS
+    return ActivityDataQuality.COMPLETE
+
+
+def _activity_data_quality_counts(
+    activities: tuple[MarketActivitySnapshot, ...],
+) -> ActivityDataQualityCounts:
+    return ActivityDataQualityCounts(
+        COMPLETE=sum(item.data_quality is ActivityDataQuality.COMPLETE for item in activities),
+        NO_TRADE_GAPS=sum(
+            item.data_quality is ActivityDataQuality.NO_TRADE_GAPS for item in activities
+        ),
+        INSUFFICIENT_HISTORY=sum(
+            item.data_quality is ActivityDataQuality.INSUFFICIENT_HISTORY for item in activities
+        ),
+        DISCONTINUOUS_HISTORY=sum(
+            item.data_quality is ActivityDataQuality.DISCONTINUOUS_HISTORY for item in activities
+        ),
+        TECHNICAL_ERROR=sum(
+            item.data_quality is ActivityDataQuality.TECHNICAL_ERROR for item in activities
+        ),
+    )
+
+
+def _activity_error_counts(
+    activities: tuple[MarketActivitySnapshot, ...],
+) -> ActivityErrorCounts:
+    known = {
+        "KrakenConnectionError",
+        "KrakenPayloadError",
+        "UnknownKrakenSymbolError",
+        "CandleValidationError",
+    }
+    raw = {name: 0 for name in known}
+    other = 0
+    for item in activities:
+        if item.status is not RadarStatus.ERROR:
+            continue
+        if item.error_type in known:
+            raw[item.error_type] += 1  # type: ignore[index]
+        else:
+            other += 1
+    return ActivityErrorCounts(
+        KrakenConnectionError=raw["KrakenConnectionError"],
+        KrakenPayloadError=raw["KrakenPayloadError"],
+        UnknownKrakenSymbolError=raw["UnknownKrakenSymbolError"],
+        CandleValidationError=raw["CandleValidationError"],
+        Other=other,
+    )
+
+
+def _activity_market_type_status_counts(
+    activities: tuple[MarketActivitySnapshot, ...],
+) -> ActivityMarketTypeStatusCounts:
+    return ActivityMarketTypeStatusCounts(
+        SPOT=_activity_status_counts(
+            tuple(item for item in activities if item.market.market_type is MarketType.SPOT)
+        ),
+        PERPETUAL=_activity_status_counts(
+            tuple(item for item in activities if item.market.market_type is MarketType.PERPETUAL)
+        ),
+    )
+
+
+def _liquidity_regime_counts(
+    activities: tuple[MarketActivitySnapshot, ...],
+) -> LiquidityRegimeCounts:
+    return LiquidityRegimeCounts(
+        UNKNOWN=sum(item.liquidity_regime is LiquidityRegime.UNKNOWN for item in activities),
+        MICRO=sum(item.liquidity_regime is LiquidityRegime.MICRO for item in activities),
+        LOW=sum(item.liquidity_regime is LiquidityRegime.LOW for item in activities),
+        MEDIUM=sum(item.liquidity_regime is LiquidityRegime.MEDIUM for item in activities),
+        HIGH=sum(item.liquidity_regime is LiquidityRegime.HIGH for item in activities),
+        VERY_HIGH=sum(item.liquidity_regime is LiquidityRegime.VERY_HIGH for item in activities),
+    )
+
+
 def _attention_sort_key(
     snapshot: MarketAttentionSnapshot,
 ) -> tuple[int, int, int, Decimal, Decimal]:
@@ -949,6 +1299,58 @@ def _overview_status(
     if statuses == {RadarStatus.STALE}:
         return RadarStatus.STALE
     return RadarStatus.PARTIAL
+
+
+def _spot_usd_notional(
+    candles: tuple[Candle, ...],
+    *,
+    market: ExecutableMarket,
+) -> Decimal | None:
+    if market.market_type is not MarketType.SPOT:
+        return None
+    _base, quote = parse_canonical_symbol(market.symbol)
+    if quote != "USD":
+        return None
+    return sum((item.volume * item.close for item in candles), Decimal(0))
+
+
+def _liquidity_reference_usd(snapshot: MarketActivitySnapshot) -> Decimal | None:
+    normalized: list[Decimal] = []
+    hour_seconds = Decimal(3600)
+    for horizon in snapshot.horizons:
+        baseline = horizon.baseline_notional_usd
+        if baseline is None or baseline <= 0:
+            continue
+        duration_seconds = Decimal(str(horizon.timeframe.duration.total_seconds()))
+        if duration_seconds <= 0:
+            continue
+        normalized.append(baseline * hour_seconds / duration_seconds)
+    if not normalized:
+        return None
+    return Decimal(median(normalized))
+
+
+def _liquidity_regime(
+    reference: Decimal | None,
+    population: tuple[Decimal, ...],
+) -> LiquidityRegime:
+    if reference is None or reference < 0 or not population:
+        return LiquidityRegime.UNKNOWN
+    if len(population) == 1:
+        return LiquidityRegime.MEDIUM
+
+    first = population.index(reference)
+    last = len(population) - 1 - tuple(reversed(population)).index(reference)
+    percentile = Decimal(first + last) / Decimal(2 * (len(population) - 1))
+    if percentile < Decimal("0.20"):
+        return LiquidityRegime.MICRO
+    if percentile < Decimal("0.40"):
+        return LiquidityRegime.LOW
+    if percentile < Decimal("0.60"):
+        return LiquidityRegime.MEDIUM
+    if percentile < Decimal("0.80"):
+        return LiquidityRegime.HIGH
+    return LiquidityRegime.VERY_HIGH
 
 
 def _safe_ratio(numerator: Decimal, denominator: Decimal) -> Decimal | None:
