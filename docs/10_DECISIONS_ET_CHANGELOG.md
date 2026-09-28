@@ -11,7 +11,7 @@ Les Sessions PAPER canoniques autorisent `SPOT` et `PERPETUAL` linéaire. `FUTUR
 ## Référence courante
 
 ```text
-HEAD GitHub intégré : 463850d8281faebe86a6ee733d58781c349015d0
+Dernier commit fonctionnel intégré : 463850d8281faebe86a6ee733d58781c349015d0
 Commit              : refactor: make strategic agent cost aware
 Batch 19.13         : intégré depuis 29316d7 ; durcissement LLM intégré dans aa404e4
 Correctif PERPETUAL : intégré dans b4f1e50

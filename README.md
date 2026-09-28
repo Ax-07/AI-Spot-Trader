@@ -127,11 +127,11 @@ Les relations 1:N couvrent les décisions, `RiskAssessment` et `ExecutionIntent`
 
 ## Référence de travail
 
-HEAD GitHub intégré vérifié le 28 septembre 2026 :
+Dernier commit fonctionnel intégré vérifié le 28 septembre 2026 :
 
 ```text
 463850d8281faebe86a6ee733d58781c349015d0
 refactor: make strategic agent cost aware
 ```
 
-Le recalibrage net/cost-aware est intégré à GitHub `main` dans `463850d`. Les prompts Campaign courants utilisent donc l'objectif économique net après coûts et `aggressiveness-map-v3`, tandis que les identités historiques restent inchangées.
+Le recalibrage net/cost-aware est intégré à GitHub `main` dans `463850d`. Des commits purement documentaires peuvent suivre ce commit sans modifier l'état fonctionnel ; le HEAD exact de `main` doit être vérifié en direct au début de toute nouvelle tâche. Les prompts Campaign courants utilisent l'objectif économique net après coûts et `aggressiveness-map-v3`, tandis que les identités historiques restent inchangées.

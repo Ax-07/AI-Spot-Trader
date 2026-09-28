@@ -9,8 +9,8 @@ Référence GitHub intégrée vérifiée après le recalibrage net/cost-aware :
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 463850d8281faebe86a6ee733d58781c349015d0
-Commit     : refactor: make strategic agent cost aware
+Dernier commit fonctionnel : 463850d8281faebe86a6ee733d58781c349015d0
+Commit                     : refactor: make strategic agent cost aware
 ```
 
 Le correctif PAPER PERPETUAL, le cycle multi-décisions / multi-marchés, l'inspecteur LLM, le refresh initial des marks PAPER, le premier recalibrage des prompts stratégiques et le recalibrage **cost-aware / net-equity-aware** sont intégrés dans cette base.

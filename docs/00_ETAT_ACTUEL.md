@@ -5,12 +5,12 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 463850d8281faebe86a6ee733d58781c349015d0
-Commit     : refactor: make strategic agent cost aware
+Dernier commit fonctionnel : 463850d8281faebe86a6ee733d58781c349015d0
+Commit                     : refactor: make strategic agent cost aware
 Vérifié    : 2026-09-28
 ```
 
-Le recalibrage stratégique net/cost-aware est **intégré** à GitHub `main` dans `463850d`.
+Le recalibrage stratégique net/cost-aware est **intégré** à GitHub `main` dans `463850d`. Des commits documentaires peuvent être postérieurs sans modifier cet état fonctionnel ; le HEAD exact de `main` doit être revérifié en direct à chaque reprise.
 
 ## État fonctionnel à préserver
 
