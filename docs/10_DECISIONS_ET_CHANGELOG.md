@@ -390,3 +390,34 @@ Revalidation ChatGPT du correctif : `py_compile` succès, harness Radar PASS ave
 - rollback PAPER atomique ;
 - persistence 1:N et migration `0007_multi_decision_cycles` ;
 - analytics basés sur fills/trades réels.
+
+## Changelog — 2026-09-28 — Batch 32 Market Attention Balanced Coverage
+
+- base GitHub auditée : `1850ff8783d0d29a5dd6628bdf1e9bb11a08ca63` (`feat: add robust market attention liquidity context`) ;
+- Batch 30 + Batch 31 confirmés intégrés dans cette base ;
+- remplacement du curseur global Market Attention par des curseurs indépendants `SPOT` / `PERPETUAL` ;
+- allocation de `scan_limit` proportionnelle aux populations, avec représentation minimale de chaque famille disponible et redistribution déterministe ;
+- rotation indépendante des ratios d'activité et sans starvation ;
+- ajout des diagnostics `scanned_market_type_counts` et `fresh_market_type_counts` dans l'overview/cockpit ;
+- libellé cockpit « Qualité structurelle » pour clarifier la distinction avec un `status=PARTIAL` ;
+- audit PERPETUAL : aucune normalisation USD activée, car l'unité de `Candle.volume` n'est pas reliée canoniquement au `contract_size` dans le pipeline Radar ;
+- notionnel SPOT/USD Batch 31, SPOT non USD `null`, régimes de liquidité et seuils d'activité inchangés ;
+- `candidate_limit=20` et `max_web_searches_per_refresh=8` inchangés ;
+- aucune influence Radar sur Agent, Market Discovery, Risk Engine, Broker, sizing ou ordres ;
+- Batch 32 reste patch proposé/local tant qu'il n'est pas explicitement validé puis poussé.
+
+## ADR-285 — Le scan Market Attention est stratifié par type de marché
+
+**PROPOSÉ DANS LE BATCH 32, NON INTÉGRÉ TANT QUE LE PATCH N'EST PAS POUSSÉ.**
+
+Le Radar conserve une rotation déterministe indépendante des résultats d'activité. `SPOT` et `PERPETUAL` disposent chacun d'un curseur propre. `scan_limit` est réparti proportionnellement aux populations disponibles, avec au moins une place par famille lorsque la capacité le permet et redistribution déterministe du reliquat.
+
+Cette décision évite qu'un tri groupé par `MarketType` monopolise un refresh et garantit l'absence de starvation sans introduire un quota arbitraire 50/50.
+
+## ADR-286 — Le notionnel PERPETUAL reste indisponible sans unité de volume canonique
+
+**CONFIRMÉ PAR L'AUDIT DU BATCH 32.**
+
+Les candles Futures `trade` alimentent `Candle.volume`, mais le contrat canonique ne transporte ni unité de volume ni `contract_size`, et le Radar travaille sur `ExecutableMarket`. Une formule économique USD n'est donc pas démontrable avec les données actuellement transportées.
+
+Le Batch 32 conserve explicitement les champs notionnels PERPETUAL à `null` et `liquidity_regime=UNKNOWN`. Aucune multiplication `volume × close` ou conversion contractuelle implicite n'est introduite.

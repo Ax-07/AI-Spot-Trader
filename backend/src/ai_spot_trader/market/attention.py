@@ -182,6 +182,11 @@ class ActivityMarketTypeStatusCounts(AttentionModel):
     PERPETUAL: ActivityStatusCounts = Field(default_factory=ActivityStatusCounts)
 
 
+class MarketTypeCounts(AttentionModel):
+    SPOT: int = Field(default=0, ge=0)
+    PERPETUAL: int = Field(default=0, ge=0)
+
+
 class LiquidityRegimeCounts(AttentionModel):
     UNKNOWN: int = Field(default=0, ge=0)
     MICRO: int = Field(default=0, ge=0)
@@ -276,6 +281,8 @@ class MarketAttentionOverview(AttentionModel):
     catalogue_market_count: int = Field(default=0, ge=0)
     cached_activity_market_count: int = Field(default=0, ge=0)
     scanned_market_count: int = Field(default=0, ge=0)
+    scanned_market_type_counts: MarketTypeCounts = Field(default_factory=MarketTypeCounts)
+    fresh_market_type_counts: MarketTypeCounts = Field(default_factory=MarketTypeCounts)
     candidate_market_count: int = Field(default=0, ge=0)
     web_search_count: int = Field(default=0, ge=0)
     activity_status_counts: ActivityStatusCounts = Field(default_factory=ActivityStatusCounts)
@@ -633,7 +640,10 @@ class MarketAttentionRadar:
         )
         self._catalogue: tuple[ExecutableMarket, ...] = ()
         self._catalogue_at: datetime | None = None
-        self._scan_cursor = 0
+        self._scan_cursors: dict[MarketType, int] = {
+            MarketType.SPOT: 0,
+            MarketType.PERPETUAL: 0,
+        }
         self._activity_cache: dict[ExecutableMarket, MarketActivitySnapshot] = {}
         self._public_cache: dict[str, PublicAttentionSnapshot] = {}
         self._history: deque[MarketAttentionOverview] = deque(maxlen=self._policy.history_limit)
@@ -667,13 +677,18 @@ class MarketAttentionRadar:
         async with self._refresh_lock:
             now = _utc(observed_at or datetime.now(UTC))
             scanned_count = 0
+            scanned_market_type_counts = MarketTypeCounts()
             web_search_count = 0
             try:
                 catalogue = await self._catalogue_if_due(now)
                 scan_batch = self._next_scan_batch(catalogue)
                 scanned_count = len(scan_batch)
+                scanned_market_type_counts = _market_type_counts(scan_batch)
                 await self._scan_activity(scan_batch, now=now)
                 fresh_activities = self._classify_liquidity(self._fresh_activities(now))
+                fresh_market_type_counts = _market_type_counts(
+                    tuple(snapshot.market for snapshot in fresh_activities)
+                )
                 status_counts = _activity_status_counts(fresh_activities)
                 state_counts = _activity_state_counts(fresh_activities)
                 data_quality_counts = _activity_data_quality_counts(fresh_activities)
@@ -723,6 +738,8 @@ class MarketAttentionRadar:
                     catalogue_market_count=len(catalogue),
                     cached_activity_market_count=len(fresh_activities),
                     scanned_market_count=scanned_count,
+                    scanned_market_type_counts=scanned_market_type_counts,
+                    fresh_market_type_counts=fresh_market_type_counts,
                     candidate_market_count=len(shortlist),
                     web_search_count=web_search_count,
                     activity_status_counts=status_counts,
@@ -738,6 +755,9 @@ class MarketAttentionRadar:
                 raise
             except Exception as exc:
                 fresh_activities = self._classify_liquidity(self._fresh_activities(now))
+                fresh_market_type_counts = _market_type_counts(
+                    tuple(snapshot.market for snapshot in fresh_activities)
+                )
                 overview = MarketAttentionOverview(
                     observed_at=now,
                     status=RadarStatus.ERROR,
@@ -745,6 +765,8 @@ class MarketAttentionRadar:
                     catalogue_market_count=len(self._catalogue),
                     cached_activity_market_count=len(fresh_activities),
                     scanned_market_count=scanned_count,
+                    scanned_market_type_counts=scanned_market_type_counts,
+                    fresh_market_type_counts=fresh_market_type_counts,
                     candidate_market_count=0,
                     web_search_count=web_search_count,
                     activity_status_counts=_activity_status_counts(fresh_activities),
@@ -802,8 +824,14 @@ class MarketAttentionRadar:
                 )
             )
             self._catalogue_at = now
-            if self._scan_cursor >= len(self._catalogue):
-                self._scan_cursor = 0
+            for market_type in (MarketType.SPOT, MarketType.PERPETUAL):
+                population = sum(
+                    market.market_type is market_type for market in self._catalogue
+                )
+                if population:
+                    self._scan_cursors[market_type] %= population
+                else:
+                    self._scan_cursors[market_type] = 0
         return self._catalogue
 
     def _next_scan_batch(
@@ -812,11 +840,29 @@ class MarketAttentionRadar:
     ) -> tuple[ExecutableMarket, ...]:
         if not catalogue:
             return ()
-        count = min(len(catalogue), self._policy.scan_limit)
-        start = self._scan_cursor % len(catalogue)
-        indices = tuple((start + offset) % len(catalogue) for offset in range(count))
-        self._scan_cursor = (start + count) % len(catalogue)
-        return tuple(catalogue[index] for index in indices)
+
+        families = {
+            market_type: tuple(
+                market for market in catalogue if market.market_type is market_type
+            )
+            for market_type in (MarketType.SPOT, MarketType.PERPETUAL)
+        }
+        allocations = _scan_allocations(
+            {market_type: len(markets) for market_type, markets in families.items()},
+            limit=self._policy.scan_limit,
+        )
+        selected: list[ExecutableMarket] = []
+        for market_type in (MarketType.SPOT, MarketType.PERPETUAL):
+            family = families[market_type]
+            count = allocations[market_type]
+            if not family or count <= 0:
+                continue
+            start = self._scan_cursors[market_type] % len(family)
+            selected.extend(
+                family[(start + offset) % len(family)] for offset in range(count)
+            )
+            self._scan_cursors[market_type] = (start + count) % len(family)
+        return tuple(selected)
 
     async def _scan_activity(
         self,
@@ -1134,6 +1180,71 @@ def _best_ratio_horizon(snapshot: MarketActivitySnapshot) -> ActivityHorizonSnap
             item.volume_acceleration or Decimal(0),
             abs(item.price_return) if item.price_return is not None else Decimal(0),
         ),
+    )
+
+
+def _scan_allocations(
+    populations: dict[MarketType, int],
+    *,
+    limit: int,
+) -> dict[MarketType, int]:
+    """Allocate a bounded scan proportionally while representing every available family."""
+
+    market_types = (MarketType.SPOT, MarketType.PERPETUAL)
+    allocation = {market_type: 0 for market_type in market_types}
+    available = tuple(
+        market_type for market_type in market_types if populations.get(market_type, 0) > 0
+    )
+    total_population = sum(populations.get(market_type, 0) for market_type in available)
+    target = min(limit, total_population)
+    if target <= 0:
+        return allocation
+    if target < len(available):
+        for market_type in available[:target]:
+            allocation[market_type] = 1
+        return allocation
+
+    exact = {
+        market_type: Decimal(target) * Decimal(populations[market_type]) / Decimal(total_population)
+        for market_type in available
+    }
+    for market_type in available:
+        allocation[market_type] = min(
+            populations[market_type],
+            max(1, int(exact[market_type])),
+        )
+
+    remaining = target - sum(allocation.values())
+    order = {market_type: index for index, market_type in enumerate(market_types)}
+    while remaining > 0:
+        candidates = tuple(
+            market_type
+            for market_type in available
+            if allocation[market_type] < populations[market_type]
+        )
+        if not candidates:
+            break
+        chosen = max(
+            candidates,
+            key=lambda market_type: (
+                exact[market_type] - Decimal(allocation[market_type]),
+                populations[market_type] - allocation[market_type],
+                -order[market_type],
+            ),
+        )
+        allocation[chosen] += 1
+        remaining -= 1
+    return allocation
+
+
+def _market_type_counts(markets: Iterable[ExecutableMarket]) -> MarketTypeCounts:
+    counts = {MarketType.SPOT: 0, MarketType.PERPETUAL: 0}
+    for market in markets:
+        if market.market_type in counts:
+            counts[market.market_type] += 1
+    return MarketTypeCounts(
+        SPOT=counts[MarketType.SPOT],
+        PERPETUAL=counts[MarketType.PERPETUAL],
     )
 
 

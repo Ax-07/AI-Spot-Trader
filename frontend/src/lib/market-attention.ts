@@ -68,6 +68,10 @@ export type ActivityMarketTypeStatusCounts = {
   SPOT: ActivityStatusCounts;
   PERPETUAL: ActivityStatusCounts;
 };
+export type MarketTypeCounts = {
+  SPOT: number;
+  PERPETUAL: number;
+};
 export type LiquidityRegimeCounts = Record<LiquidityRegime, number>;
 
 export type SubthresholdActivitySnapshot = {
@@ -132,6 +136,8 @@ export type MarketAttentionOverview = {
   catalogue_market_count: number;
   cached_activity_market_count: number;
   scanned_market_count: number;
+  scanned_market_type_counts: MarketTypeCounts;
+  fresh_market_type_counts: MarketTypeCounts;
   candidate_market_count: number;
   web_search_count: number;
   activity_status_counts: ActivityStatusCounts;

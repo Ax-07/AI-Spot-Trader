@@ -52,6 +52,8 @@ const overview = (status, candidateCount = 0) => ({
   catalogue_market_count: 100,
   cached_activity_market_count: 80,
   scanned_market_count: 20,
+  scanned_market_type_counts: { SPOT: 12, PERPETUAL: 8 },
+  fresh_market_type_counts: { SPOT: 42, PERPETUAL: 38 },
   candidate_market_count: candidateCount,
   web_search_count: 0,
   activity_status_counts: { AVAILABLE: 80, PARTIAL: 0, STALE: 0, ERROR: 0 },
@@ -62,6 +64,7 @@ const overview = (status, candidateCount = 0) => ({
     SPOT: { AVAILABLE: 50, PARTIAL: 0, STALE: 0, ERROR: 0 },
     PERPETUAL: { AVAILABLE: 30, PARTIAL: 0, STALE: 0, ERROR: 0 },
   },
+  liquidity_regime_counts: { UNKNOWN: 80, MICRO: 0, LOW: 0, MEDIUM: 0, HIGH: 0, VERY_HIGH: 0 },
   subthreshold_activity: [
     { market: { symbol: "SOL/USD", market_type: "SPOT" }, peak_volume_ratio: "1.31", peak_timeframe: "15m" },
   ],
@@ -95,7 +98,7 @@ test("keeps a genuinely partial empty shortlist distinguishable", () => {
   assert.match(marketAttentionStatusMessage(overview("PARTIAL")), /partiellement disponible/i);
 });
 
-test("preserves diagnostic counters and subthreshold payload mapping", () => {
+test("preserves diagnostic counters, balanced scan mapping and subthreshold payload", () => {
   const value = overview("AVAILABLE");
   value.activity_status_counts.PARTIAL = 8;
   value.activity_market_type_status_counts.SPOT.PARTIAL = 5;
@@ -103,6 +106,8 @@ test("preserves diagnostic counters and subthreshold payload mapping", () => {
   assert.equal(value.activity_status_counts.PARTIAL, 8);
   assert.equal(value.activity_state_counts.NORMAL, 70);
   assert.equal(value.activity_data_quality_counts.NO_TRADE_GAPS, 10);
+  assert.deepEqual(value.scanned_market_type_counts, { SPOT: 12, PERPETUAL: 8 });
+  assert.deepEqual(value.fresh_market_type_counts, { SPOT: 42, PERPETUAL: 38 });
   assert.equal(value.activity_market_type_status_counts.SPOT.PARTIAL, 5);
   assert.equal(value.activity_market_type_status_counts.PERPETUAL.ERROR, 3);
   assert.equal(value.subthreshold_activity[0].peak_volume_ratio, "1.31");

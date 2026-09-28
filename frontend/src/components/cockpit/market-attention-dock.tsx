@@ -249,6 +249,17 @@ export function MarketAttentionDock() {
                   <Fact label="Recherches web" value={String(data.web_search_count)} />
                 </div>
 
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-lg border bg-muted/10 px-3 py-2">
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Scan du refresh</p>
+                    <p className="mt-1 font-mono text-xs font-semibold tabular-nums">SPOT {data.scanned_market_type_counts.SPOT} · PERPETUAL {data.scanned_market_type_counts.PERPETUAL}</p>
+                  </div>
+                  <div className="rounded-lg border bg-muted/10 px-3 py-2">
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Couverture fraîche</p>
+                    <p className="mt-1 font-mono text-xs font-semibold tabular-nums">SPOT {data.fresh_market_type_counts.SPOT} · PERPETUAL {data.fresh_market_type_counts.PERPETUAL}</p>
+                  </div>
+                </div>
+
                 <div className="rounded-lg border bg-muted/10 px-3 py-2 text-xs font-medium">
                   {marketAttentionStatusMessage(data)}
                 </div>
@@ -288,7 +299,7 @@ export function MarketAttentionDock() {
 
                 <div className="grid gap-3 lg:grid-cols-3">
                   <div className="rounded-lg border p-3">
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Qualité activité</p>
+                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Qualité structurelle</p>
                     <div className="grid grid-cols-2 gap-x-5 gap-y-1.5">
                       <CountLine label="COMPLETE" value={data.activity_data_quality_counts.COMPLETE} />
                       <CountLine label="NO_TRADE_GAPS" value={data.activity_data_quality_counts.NO_TRADE_GAPS} />
@@ -296,6 +307,7 @@ export function MarketAttentionDock() {
                       <CountLine label="DISCONTINUOUS" value={data.activity_data_quality_counts.DISCONTINUOUS_HISTORY} />
                       <CountLine label="TECHNICAL_ERROR" value={data.activity_data_quality_counts.TECHNICAL_ERROR} />
                     </div>
+                    <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">La qualité décrit la cohérence OHLC/trades ; un marché peut rester PARTIAL si un horizon ne produit pas encore une métrique exploitable.</p>
                   </div>
                   <div className="rounded-lg border p-3">
                     <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Par marché</p>
