@@ -4,23 +4,25 @@
 
 AI Spot Trader est une application expérimentale de trading **PAPER** pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement un cockpit de contrôle et de visualisation.
 
-Référence GitHub intégrée vérifiée après le recalibrage net/cost-aware :
+Référence GitHub intégrée vérifiée au démarrage du présent batch :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-Dernier commit fonctionnel : 463850d8281faebe86a6ee733d58781c349015d0
-Commit                     : refactor: make strategic agent cost aware
+HEAD GitHub vérifié : d011faa98e7e347875186f12cb24b5e7041aa25c
+Commit              : feat: add trading reasoning doctrine
 ```
 
-Le correctif PAPER PERPETUAL, le cycle multi-décisions / multi-marchés, l'inspecteur LLM, le refresh initial des marks PAPER, le premier recalibrage des prompts stratégiques et le recalibrage **cost-aware / net-equity-aware** sont intégrés dans cette base.
+Le correctif PAPER PERPETUAL, le cycle multi-décisions / multi-marchés, l'inspecteur LLM, le refresh initial des marks PAPER, l'historique économique Session/run, le recalibrage **cost-aware / net-equity-aware** et la **Trading Reasoning Doctrine v1** sont intégrés dans cette base.
+
+Le présent patch ajoute **Market Attention Radar v1**, strictement informatif et sans influence sur le trading.
 
 ## 2. Invariants fonctionnels
 
 - un seul Agent IA stratégique ;
 - Kraken ;
 - PAPER uniquement, LIVE séparé ;
-- SPOT + PERPETUAL selon les capacités intégrées ;
+- SPOT + PERPETUAL linéaire selon les capacités intégrées ;
 - FUTURE daté interdit ;
 - actions `BUY`, `SELL`, `HOLD` ;
 - Luna par défaut, Sol sélectionnable ;
@@ -30,7 +32,9 @@ Le correctif PAPER PERPETUAL, le cycle multi-décisions / multi-marchés, l'insp
 - toutes les décisions, sélections, `HOLD` et `REJECT` auditables ;
 - aucun look-ahead ;
 - aucun secret dans prompts/logs/frontend/Git ;
-- frontend non nécessaire au fonctionnement du moteur.
+- frontend non nécessaire au fonctionnement du moteur ;
+- Market Attention Radar v1 = observation uniquement ;
+- aucune donnée Radar n'est actuellement fournie à l'Agent stratégique.
 
 Principe central : **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
@@ -103,6 +107,8 @@ require_complete_window      = false
 
 Le filtrage déterministe reste technique/factuel et ne produit aucun score stratégique. Les recommandations UX de cadence liées au style n'écrasent jamais silencieusement les valeurs persistées.
 
+**Market Discovery et Market Attention Radar sont distincts.** La shortlist Radar ne remplace jamais la watchlist de Market Discovery et n'est pas un input de l'Agent dans la v1.
+
 ## 7. NORMAL / MANAGEMENT et gestion des positions
 
 Les positions ouvertes restent gérables en `NORMAL` comme en `MANAGEMENT`. `CapacityAssessment.management_markets` conserve les marchés correspondant aux positions ouvertes afin que le même Agent puisse arbitrer entre gestion d'inventaire, nouvelle opportunité et abstention.
@@ -124,6 +130,8 @@ Le style enrichit le jugement de l'Agent mais ne devient ni une règle Risk, ni 
 
 Le style SCALP actuel est un mode minute/intraday. Il n'est pas assimilé à du HFT sub-milliseconde et reste compatible avec un Agent LLM tant que les contrôles de fraîcheur et les latences observées sont cohérents avec le cas d'usage.
 
+Le Radar possède ses propres horizons descriptifs `5m / 15m / 1h / 4h`. Ils servent uniquement à détecter des changements de régime d'activité et ne modifient pas les timeframes stratégiques du style.
+
 ## 9. Agressivité stratégique
 
 L'agressivité reste un niveau canonique entier de `1` à `10`. Le mapping historique `aggressiveness-map-v1` reste réservé aux identités expérimentales durables ; les instructions LLM courantes utilisent désormais `aggressiveness-map-v3`. Le mapping courant précédent `v2` reste un état Git historique et n'est pas réécrit.
@@ -137,6 +145,8 @@ L'agressivité courante peut influencer :
 Elle ne doit pas être interprétée comme une obligation d'augmenter le nombre de trades, le turnover, les micro-trades ou la rotation. Même au niveau `10/10`, la quantité proposée reste proportionnée à la qualité/conviction de la thèse, aux faits fournis, aux coûts, à l'exposition existante et au capital déjà engagé.
 
 `HOLD`, conserver du cash ou conserver une position existante restent des allocations stratégiques valides à tous les niveaux. Une faible conviction ne doit pas être transformée mécaniquement en petite position « pour essayer ».
+
+L'agressivité n'a aucun effet sur la présélection Radar v1.
 
 ## 10. Allocation du capital et coût d'opportunité
 
@@ -165,6 +175,8 @@ contexte causal du cycle
 `max_decisions_per_cycle` est configurable, vaut `6` par défaut et possède une limite dure de `20`.
 
 Le plan peut mélanger `BUY`, `SELL` et `HOLD`. Il ne s'agit pas de plusieurs Agents ni de plusieurs appels stratégiques indépendants servant à contourner les contraintes : l'ordre est fourni par le même plan Agent et l'exécution est ensuite séquentielle.
+
+Le cycle ne lit aucun `MarketAttentionSnapshot` dans la v1.
 
 ## 12. Causalité intra-cycle et autorité Risk
 
@@ -201,6 +213,8 @@ Si une défaillance **technique** survient dans Risk ou Broker après des mutati
 
 `HOLD` et `REJECT` ne sont pas des erreurs techniques et ne provoquent pas de rollback.
 
+Une panne de recherche web Radar ne peut pas transformer un cycle en `FAILED`, car le Radar n'appartient pas au cycle.
+
 ## 15. Persistence et compatibilité historique
 
 Migration :
@@ -224,6 +238,8 @@ Les anciens cycles/configurations restent lisibles. La compatibilité historique
 
 Le `AGENT_SYSTEM_PROMPT` historique `agent-strategy-v4` reste figé pour préserver les protocoles expérimentaux v1/v2/v3 et leurs replays. Les Sessions/Campaigns actuelles passent par `StrategyInstructionsClient`, dont le contrat protégé courant peut évoluer de manière auditée.
 
+Market Attention v1 ne crée pas de table : son historique de snapshots agrégés est process-local et borné. Cette décision pourra être revue ultérieurement, sans réutiliser les tables de trading comme stockage opportuniste.
+
 ## 16. API, cockpit et analytics
 
 L'API et le cockpit exposent la trajectoire ordonnée du cycle plutôt qu'un seul triplet Agent/Risk/exécution.
@@ -234,11 +250,22 @@ Le frontend ne recalcule ni Risk, ni P&L, ni causalité. Il affiche les faits pe
 
 L'inspecteur LLM intégré permet de visualiser en lecture seule les payloads réellement envoyés à la Responses API, avec rétention bornée et sans exposer les secrets de transport.
 
+Market Attention ajoute une API distincte en lecture seule :
+
+```text
+GET /api/v1/market-attention
+GET /api/v1/market-attention/history
+```
+
+Le cockpit affiche un panneau global clairement marqué informatif. Les sources web sont des liens cliquables. Le frontend n'en déduit aucun signal, score de rendement ou ordre.
+
 ## 17. Comptabilité, monitoring et charts
 
 Accounting, mark-to-market, equity, exposition, monitors, candles, streaming, markers de fills et overlays restent canoniques côté backend. Le contexte candles sert à informer l'Agent ; il n'est jamais une source parallèle de vérité d'exécution ou de portefeuille.
 
 Les moniteurs PAPER effectuent désormais un premier refresh de marks avant que le runtime soit considéré initialisé. En cas d'échec, la valorisation reste incomplète et Capacity/Risk restent fail-closed.
+
+Le Radar réutilise les candles backend existantes pour ses faits d'activité. Il ne duplique ni OHLCV, ni source de vérité marché.
 
 ## 18. Fraîcheur des données
 
@@ -248,6 +275,8 @@ Risk possède un contrôle explicite de fraîcheur :
 - dépassement de `RiskPolicy.stale_after` -> `MARKET_DATA_STALE`.
 
 La configuration `kraken_stale_after_seconds` est optionnelle et vaut `None` par défaut. Elle qualifie la fraîcheur des données provider lorsqu'elle est configurée. Au HEAD audité, la composition Campaign ne renseigne pas `RiskPolicy.stale_after`, donc le rejet stale existe dans Risk mais n'est pas activé par défaut sur ce chemin. Un futur durcissement SCALP doit d'abord mesurer la latence réelle `MarketState -> LLM -> Risk` avant de fixer un seuil spécifique.
+
+Le Radar possède sa propre notion de `STALE`, purement informative, indépendante de Risk.
 
 ## 19. Constat expérimental motivant le recalibrage cost-aware
 
@@ -281,7 +310,11 @@ Aucun quota LONG/SHORT, contre-biais déterministe ni modification du Risk Engin
 - quota LONG/SHORT ;
 - second pipeline/cache OHLC ou second Agent stratégique ;
 - promesse de rendement ;
-- seuil SCALP stale spécifique non mesuré.
+- seuil SCALP stale spécifique non mesuré ;
+- utilisation du Market Attention Radar comme input de l'Agent ;
+- API dédiées X/Reddit/LunarCrush ;
+- scraping de plateformes sociales ;
+- persistence durable du Radar avant besoin démontré.
 
 ## 22. Validation
 
@@ -292,6 +325,13 @@ Validation locale du recalibrage intégré dans `463850d`, réalisée le 28 sept
 - deux avertissements de dépréciation Starlette/AnyIO restent présents et sont hors périmètre.
 
 Les validations historiques des batches précédents restent consultables dans leur documentation et dans Git.
+
+Validation ChatGPT du patch Market Attention :
+
+- compilation Python des cinq fichiers runtime backend : succès ;
+- harness backend isolé couvrant activité multi-horizon, fail-soft web et contrat OpenAI : succès ;
+- test frontend isolé : `3/3` passés ;
+- suite complète backend/frontend : à exécuter localement.
 
 ## 23. Historique économique Session/run — Batch 25
 
@@ -322,7 +362,7 @@ Principes :
 - pour PERPETUAL, la quantité de position est signée (`LONG > 0`, `SHORT < 0`) et l'effet économique est dérivé de la transition avant/après, jamais de BUY/SELL seul ;
 - le frontend se limite à la sélection, au filtrage et à l'affichage des valeurs backend.
 
-Endpoints du patch :
+Endpoints :
 
 ```text
 GET /api/v1/economic-history?paper_run_id=<uuid>
@@ -333,4 +373,60 @@ Métriques descriptives ajoutées : notional total, turnover, coûts/notional, c
 
 Le cockpit sélectionne la Session, associe les Campaigns existantes via leur `strategy_id`, puis présente les têtes de lineage PAPER comme runs économiques. Cette structure permet de comparer ultérieurement plusieurs runs sans introduire de nouvel agrégat persistant.
 
-La documentation détaillée du patch est `docs/25_BATCH_HISTORIQUE_ECONOMIQUE_SESSION.md`.
+La documentation détaillée est `docs/25_BATCH_HISTORIQUE_ECONOMIQUE_SESSION.md`.
+
+## 24. Market Attention Radar v1 — observation uniquement
+
+### 24.1 Finalité
+
+Le Radar répond à une question distincte de la stratégie :
+
+> « Sur quels marchés crypto quelque chose d'inhabituel semble-t-il commencer à se produire ? »
+
+Il croise deux axes gardés séparés jusqu'au dernier niveau :
+
+```text
+market_activity
+public_attention
+cross_context
+```
+
+### 24.2 Activité marché
+
+Le calcul déterministe part des candles `5m` Kraken du `CandleStreamService` partagé. Pour chaque marché, il forme des fenêtres comparables `5m`, `15m`, `1h`, `4h` et conserve notamment : volume courant, volume précédent comparable, baseline médiane, ratio, changement, accélération, retour, range, volatilité réalisée, observations et fraîcheur.
+
+Le volume relatif est central. Un actif n'est pas prioritaire parce que son volume absolu est structurellement élevé.
+
+### 24.3 Préfiltrage et coûts
+
+Le catalogue SPOT + PERPETUAL linéaire est scanné par batch borné avec rotation et cache TTL. La shortlist d'activité est bornée à 30 candidats, défaut 20. La recherche web est ensuite dédupliquée par actif et bornée à 30 appels, défaut 8 par refresh.
+
+Ces bornes sont des contrôles de charge et de coût, pas des règles de trading.
+
+### 24.4 Recherche publique
+
+`OpenAIWebAttentionResearcher` utilise Responses API, `web_search`, Structured Output strict et les métadonnées de sources/citations. Aucune API dédiée X/Reddit/LunarCrush n'est ajoutée. Une page LunarCrush, Reddit, X ou autre n'est exploitable que si elle est publiquement accessible via la recherche web ; aucune exhaustivité n'est supposée.
+
+La recherche conserve séparément métriques quantitatives, observations qualitatives, catalyseurs possibles et sources. Une métrique glissante `24h` reste explicitement une fenêtre `24h`.
+
+### 24.5 Croisement
+
+`NORMAL`, `MARKET_ONLY`, `PUBLIC_ONLY`, `CONVERGING` décrivent la présence simultanée ou non des deux axes. `NORMAL/MEDIUM/HIGH` est uniquement un niveau d'attention. Aucun champ expected return, probability up/down, LONG/SHORT preference ou position size n'existe.
+
+### 24.6 Mode dégradé
+
+L'absence de clé OpenAI produit `NOT_CONFIGURED` côté public mais laisse l'activité marché exploitable. Timeout/erreur web produit un statut dégradé sans exception remontée vers le moteur. Les données stale restent explicitement stale.
+
+### 24.7 Historique et persistence
+
+La v1 maintient un historique agrégé process-local borné. Elle ne persiste ni candles dupliquées, ni pages web, ni posts, ni prompts/résultats bruts. Une migration durable n'est pas justifiée avant observation de l'usage réel.
+
+### 24.8 API et cockpit
+
+Le backend expose uniquement la lecture. Le cockpit affiche les sources publiques cliquables et le message explicite `INFORMATIF — N’INFLUENCE PAS LE TRADING`.
+
+### 24.9 Invariant de non-influence
+
+Aucun fichier Agent, Risk, Broker, planner ou Market Discovery n'est modifié par le cœur du Radar. L'intégration FastAPI se limite au lifecycle, à l'état applicatif et à un router read-only.
+
+Documentation détaillée : `docs/28_BATCH_MARKET_ATTENTION_RADAR_V1.md`.

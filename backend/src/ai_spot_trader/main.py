@@ -14,6 +14,7 @@ from ai_spot_trader.api.routes.control_plane import router as control_plane_rout
 from ai_spot_trader.api.routes.engine import router as engine_router
 from ai_spot_trader.api.routes.health import router as health_router
 from ai_spot_trader.api.routes.llm_audit import router as llm_audit_router
+from ai_spot_trader.api.routes.market_attention import router as market_attention_router
 from ai_spot_trader.api.routes.paper_runs import router as paper_runs_router
 from ai_spot_trader.api.routes.portfolio import router as portfolio_router
 from ai_spot_trader.api.routes.sessions import router as sessions_router
@@ -30,7 +31,10 @@ from ai_spot_trader.core.runtime import (
     PortfolioSnapshotSource,
     StoppableTradingEngine,
 )
+from ai_spot_trader.integrations.kraken.attention import KrakenAttentionCatalogue
 from ai_spot_trader.integrations.kraken.candles import KrakenCandleProvider
+from ai_spot_trader.integrations.openai_market_attention import OpenAIWebAttentionResearcher
+from ai_spot_trader.market.attention import MarketAttentionPolicy, MarketAttentionRadar
 from ai_spot_trader.market.candles import CandleCache, CandleStreamService
 from ai_spot_trader.persistence.analytics import (
     PaperAnalyticsReader,
@@ -59,6 +63,7 @@ def create_app(
     paper_run_reader: PaperRunReader | None = None,
     chat_service: OperatorChatService | None = None,
     candle_service: CandleStreamService | None = None,
+    market_attention: MarketAttentionRadar | None = None,
     compose_paper: bool = False,
 ) -> FastAPI:
     """Create FastAPI; market-data streams remain backend-owned and campaign-independent."""
@@ -95,11 +100,35 @@ def create_app(
             reconnect_delay_seconds=resolved_settings.kraken_ws_reconnect_delay_seconds,
         )
 
+    def build_market_attention(candles: CandleStreamService) -> MarketAttentionRadar:
+        api_key = resolved_settings.openai_api_key
+        researcher = (
+            OpenAIWebAttentionResearcher(
+                api_key=api_key,
+                model=resolved_settings.llm_model,
+                base_url=resolved_settings.openai_base_url,
+                timeout_seconds=resolved_settings.openai_timeout_seconds,
+            )
+            if api_key is not None and api_key.get_secret_value().strip()
+            else None
+        )
+        return MarketAttentionRadar(
+            candle_service=candles,
+            catalogue=KrakenAttentionCatalogue(
+                spot_rest_url=resolved_settings.kraken_rest_url,
+                derivatives_rest_url=resolved_settings.kraken_derivatives_rest_url,
+                timeout_seconds=resolved_settings.kraken_rest_timeout_seconds,
+            ),
+            researcher=researcher,
+            policy=MarketAttentionPolicy(),
+        )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         resolved_chat_service: OperatorChatService | None
         control_plane_store: SqlAlchemyControlPlaneStore | None = None
         resolved_candle_service = candle_service
+        resolved_market_attention = market_attention
 
         if compose_paper:
             database_secret = resolved_settings.database_url
@@ -141,6 +170,8 @@ def create_app(
                     ),
                     context_source=RuntimeChatContextSource(runtime),  # type: ignore[arg-type]
                 )
+            if resolved_market_attention is None:
+                resolved_market_attention = build_market_attention(resolved_candle_service)
         else:
             owned_database: Database | None = None
             resolved_audit_reader = audit_reader
@@ -204,10 +235,15 @@ def create_app(
         app.state.chat_service = resolved_chat_service
         app.state.control_plane_store = control_plane_store
         app.state.candle_service = resolved_candle_service
+        app.state.market_attention = resolved_market_attention
         try:
             await runtime.initialize()
+            if resolved_market_attention is not None:
+                resolved_market_attention.start()
             yield
         finally:
+            if resolved_market_attention is not None:
+                await resolved_market_attention.aclose()
             # Campaign runtimes may still read the shared candle service while closing.
             await runtime.close()
             await resolved_candle_service.aclose()
@@ -229,6 +265,7 @@ def create_app(
     app.include_router(sessions_router)
     app.include_router(chat_router)
     app.include_router(candles_router)
+    app.include_router(market_attention_router)
     return app
 
 

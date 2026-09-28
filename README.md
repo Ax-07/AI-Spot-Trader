@@ -12,6 +12,12 @@ Le concept principal du cockpit est la **Session** : l'utilisateur crée une Ses
 Accueil | Sessions | Marchés | Positions | Historique | Réglages
 ```
 
+Le cockpit expose également un panneau global **Market Attention**. Ce panneau est volontairement séparé de la navigation stratégique et porte le badge :
+
+```text
+INFORMATIF — N’INFLUENCE PAS LE TRADING
+```
+
 Les objets techniques historiques restent canoniques derrière cette façade :
 
 ```text
@@ -88,12 +94,55 @@ L'Agent raisonne en allocation et coût d'opportunité entre cash, positions exi
 
 Une faible conviction ne doit pas être transformée mécaniquement en petite position « pour essayer ».
 
+## Market Attention Radar v1
+
+Le Radar cherche à indiquer où une activité inhabituelle commence potentiellement à émerger, sans transformer cette observation en signal de trading.
+
+```text
+candles Kraken canoniques
+-> activité marché relative 5m / 15m / 1h / 4h
+-> candidats inhabituels bornés
+-> recherche publique OpenAI web_search
+-> faits publics structurés + sources
+-> croisement Market / Public Attention
+-> shortlist informative dans le cockpit
+```
+
+### Activité marché
+
+Le calcul réutilise `CandleStreamService` et les volumes OHLCV Kraken existants. Il mesure notamment :
+
+- volume courant et précédent comparable ;
+- baseline de volume ;
+- ratio et changement de volume ;
+- accélération ;
+- rendement, range et volatilité réalisée ;
+- nombre d'observations et fraîcheur.
+
+Le cœur du classement est le **volume relatif**, pas le volume absolu.
+
+### Attention publique
+
+La v1 utilise l'infrastructure OpenAI Responses API et le hosted `web_search`. Elle n'ajoute aucune API dédiée X/Twitter, Reddit, LunarCrush ou Google Trends et ne suppose jamais que ces plateformes sont indexées exhaustivement.
+
+Les résultats sont structurés en métriques quantitatives lorsqu'elles existent réellement, observations qualitatives, catalyseurs possibles et sources publiques. Les URL issues des métadonnées/citations OpenAI restent visibles et cliquables dans le cockpit.
+
+Le contrat interdit toute sortie `BUY`, `SELL`, `HOLD`, probabilité de hausse/baisse, préférence LONG/SHORT ou sizing.
+
+### Coûts et mode dégradé
+
+Le Radar possède une cadence indépendante, des caches/TTL, un scan Kraken borné, une shortlist bornée et un maximum d'appels web par refresh. Une panne de recherche web laisse le Market Activity Radar disponible et n'interrompt jamais monitoring, cycle stratégique, Risk ou Broker PAPER.
+
+La v1 garde un historique agrégé borné en mémoire. Elle n'ajoute aucune migration et ne persiste ni copies de pages web, ni posts sociaux complets, ni résultats de recherche bruts.
+
+**Aucune donnée du Radar n'est actuellement fournie à l'Agent stratégique.**
+
 ## Invariants
 
 - un seul Agent IA stratégique ;
 - Kraken comme exchange initial ;
 - PAPER uniquement ; LIVE séparé et ultérieur ;
-- SPOT sans short/levier/marge ; PERPETUAL selon les capacités intégrées ;
+- SPOT sans short/levier/marge ; PERPETUAL linéaire selon les capacités intégrées ;
 - FUTURE daté interdit ;
 - aucune sortie LLM → Broker/Kraken ;
 - Risk Engine déterministe = autorité finale ;
@@ -102,7 +151,8 @@ Une faible conviction ne doit pas être transformée mécaniquement en petite po
 - toutes les décisions, y compris `HOLD` et les décisions rejetées par Risk, restent auditables ;
 - aucun look-ahead ;
 - aucun secret dans prompts, logs, réponses UI ou fichiers versionnés ;
-- frontend = cockpit ; aucune logique Risk/P&L/Broker/discovery stratégique parallèle.
+- frontend = cockpit ; aucune logique Risk/P&L/Broker/discovery stratégique parallèle ;
+- Market Attention Radar v1 = observation uniquement, aucune influence sur le trading.
 
 Principe : **l'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
@@ -114,9 +164,11 @@ Un cycle expose une trajectoire ordonnée 1:N : plusieurs décisions peuvent pos
 
 Le `AGENT_SYSTEM_PROMPT` historique `agent-strategy-v4` reste figé pour préserver les protocoles expérimentaux existants ; le recalibrage courant s'applique via `StrategyInstructionsClient`.
 
+Le Radar est backend-owned en composition PAPER et continue de fonctionner indépendamment du cockpit tant que le backend tourne.
+
 ## Persistence
 
-La persistence d'audit utilise la migration :
+La persistence d'audit trading utilise la migration :
 
 ```text
 0006_paper_control_plane
@@ -125,13 +177,15 @@ La persistence d'audit utilise la migration :
 
 Les relations 1:N couvrent les décisions, `RiskAssessment` et `ExecutionIntent` d'un cycle, tout en conservant la lecture des historiques antérieurs.
 
+Market Attention Radar v1 n'ajoute aucune migration : son historique agrégé est process-local et borné.
+
 ## Référence de travail
 
-Dernier commit fonctionnel intégré vérifié le 28 septembre 2026 :
+HEAD GitHub vérifié au démarrage du batch Market Attention, le 28 septembre 2026 :
 
 ```text
-463850d8281faebe86a6ee733d58781c349015d0
-refactor: make strategic agent cost aware
+d011faa98e7e347875186f12cb24b5e7041aa25c
+feat: add trading reasoning doctrine
 ```
 
-Le recalibrage net/cost-aware est intégré à GitHub `main` dans `463850d`. Des commits purement documentaires peuvent suivre ce commit sans modifier l'état fonctionnel ; le HEAD exact de `main` doit être vérifié en direct au début de toute nouvelle tâche. Les prompts Campaign courants utilisent l'objectif économique net après coûts et `aggressiveness-map-v3`, tandis que les identités historiques restent inchangées.
+Le parent direct `b46f463c` contient le Batch 25 d'historique économique. Le recalibrage net/cost-aware est intégré dans `463850d`. Le HEAD exact de `main` doit toujours être vérifié en direct au début de toute nouvelle tâche.

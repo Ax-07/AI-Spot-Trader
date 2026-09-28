@@ -8,14 +8,17 @@ Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool
 
 Les Sessions PAPER canoniques autorisent `SPOT` et `PERPETUAL` linéaire. `FUTURE` daté reste interdit.
 
+Market Attention Radar v1 reste **strictement observationnel** : sa shortlist ne constitue ni une watchlist d'exécution ni un input Agent.
+
 ## Référence courante
 
 ```text
-HEAD GitHub audité     : b46f463c474e25a38da7ddcaebf588753922031b
-HEAD                   : feat: add session economic history
+HEAD GitHub audité     : d011faa98e7e347875186f12cb24b5e7041aa25c
+HEAD                   : feat: add trading reasoning doctrine
 Recalibrage net/cost   : ADR-277 intégré dans 463850d
 Historique économique  : ADR-278 intégré dans b46f463c
-Doctrine reasoning     : ADR-279 proposée dans le présent patch local
+Doctrine reasoning     : ADR-279 intégrée dans d011faa
+Market Attention Radar : ADR-280 à ADR-284 proposés dans le présent patch
 ```
 
 ## Décisions historiques toujours actives
@@ -36,7 +39,8 @@ Doctrine reasoning     : ADR-279 proposée dans le présent patch local
 - ADR-276 : recalibrage du prompt stratégique sans cible de rendement injectée ni biais de quantité maximale ;
 - ADR-277 : recalibrage cost-aware vers l'equity nette, allocation du capital et agressivité sans turnover obligatoire ;
 - ADR-278 : historique économique Session/run comme projection en lecture seule, sans second ledger ni seconde comptabilité ;
-- ADR-279 : doctrine qualitative de raisonnement trading pour les prompts stratégiques courants, sans règles mécaniques.
+- ADR-279 : doctrine qualitative de raisonnement trading pour les prompts stratégiques courants, sans règles mécaniques ;
+- ADR-280 à ADR-284 : Market Attention Radar v1, proposés dans ce batch.
 
 ## ADR-240 — Session est une façade UX, pas un nouvel agrégat persistant
 
@@ -181,7 +185,7 @@ La Session reste une façade : le cockpit associe Session -> Campaign -> têtes 
 
 ## ADR-279 — Les prompts courants reçoivent une Trading Reasoning Doctrine qualitative
 
-**PROPOSÉ DANS LE PRÉSENT PATCH LOCAL SUR LA BASE `b46f463c`.**
+**ADOPTÉ ET INTÉGRÉ AU COMMIT `d011faa98e7e347875186f12cb24b5e7041aa25c`.**
 
 La doctrine `trading-reasoning-doctrine-v1` est une section canonique concise qui guide la façon dont le LLM construit une thèse à partir des faits disponibles. Elle couvre régime/structure, cohérence multi-timeframe, momentum/volatilité, qualité breakout/pullback lorsque les données le permettent, comparaison cash/positions/opportunités, coûts et invalidation de la thèse.
 
@@ -198,33 +202,110 @@ Décision :
 
 L'invalidation d'une thèse est explicitement un concept de raisonnement stratégique et non un ordre automatique de sortie. `HOLD` ou conserver du cash restent des décisions valides lorsque les faits ne soutiennent pas une thèse suffisamment convaincante après coûts.
 
+## ADR-280 — Market Attention Radar v1 est observationnel et séparé du trading
+
+**PROPOSÉ DANS LE PRÉSENT PATCH.**
+
+Le Radar possède ses propres modèles, cadence, cache et API read-only. Il ne modifie ni `CycleDecisionPlan`, ni prompts stratégiques, ni Market Discovery, ni Risk, ni Broker. Sa shortlist signifie seulement « marchés présentant une attention/activité inhabituelle à examiner ».
+
+Aucune donnée Radar n'est fournie à l'Agent stratégique dans la v1.
+
+## ADR-281 — L'activité marché réutilise les candles canoniques et privilégie le volume relatif
+
+**PROPOSÉ DANS LE PRÉSENT PATCH.**
+
+Le Radar réutilise `CandleStreamService` et les volumes déjà présents dans les candles Kraken. Il ne crée aucune seconde pipeline OHLCV.
+
+Les fenêtres retenues pour v1 sont `5m`, `15m`, `1h`, `4h`, calculées à partir des candles `5m` finalisées. Les facts incluent volume courant, précédent comparable, baseline médiane, ratio, changement, accélération, rendement, range, volatilité réalisée, nombre d'observations et fraîcheur.
+
+Le tri d'attention utilise le caractère relatif/inhabituel ; le volume absolu d'un gros actif n'est pas un critère d'intérêt en soi.
+
+## ADR-282 — La recherche publique utilise hosted web_search sans API sociale dédiée
+
+**PROPOSÉ DANS LE PRÉSENT PATCH.**
+
+La v1 n'introduit aucune API X/Twitter, Reddit, LunarCrush ou Google Trends, aucune clé dédiée et aucun scraper généraliste.
+
+`OpenAIWebAttentionResearcher` est un adaptateur Responses API séparé du client stratégique. Il utilise :
+
+- `tools: [{"type": "web_search"}]` ;
+- Structured Output strict `public_attention_v1` via `text.format` ;
+- `store=false` ;
+- `include=["web_search_call.action.sources"]` ;
+- retry borné ;
+- parsing des citations/sources fournisseur ;
+- rejet comme source canonique d'une URL uniquement inventée dans le JSON structuré si elle n'est pas aussi exposée par les métadonnées de recherche web.
+
+Le prompt auxiliaire interdit explicitement BUY/SELL/HOLD, recommandation, LONG/SHORT, taille et probabilité de hausse/baisse.
+
+## ADR-283 — La recherche web est bornée, cachée, dédupliquée et fail-soft
+
+**PROPOSÉ DANS LE PRÉSENT PATCH.**
+
+Le scanner tourne indépendamment du cycle stratégique. Le catalogue et les résultats ont des TTL. Le scan Kraken est borné par batch avec rotation ; la shortlist marché est bornée à 30 ; les recherches web sont bornées à 30 et valent 8 par défaut. Un même actif SPOT/PERPETUAL partage une recherche publique afin d'éviter les appels redondants.
+
+Un timeout, 429/5xx ou autre erreur OpenAI dégrade `public_attention` en `ERROR/PARTIAL` mais ne propage aucune exception vers monitoring, cycle stratégique, Risk ou Broker.
+
+## ADR-284 — La v1 historise uniquement les snapshots agrégés en mémoire
+
+**PROPOSÉ DANS LE PRÉSENT PATCH.**
+
+Aucune migration PostgreSQL n'est ajoutée. Le Radar garde un historique process-local borné d'agrégats et sources. Il ne persiste ni candles dupliquées, ni copies de pages, ni posts Reddit/X, ni résultats de recherche bruts, ni prompts massifs.
+
+Cette solution permet d'observer l'utilité et le coût réel du Radar avant de figer un schéma durable. La contrepartie explicite est la perte de l'historique Radar au redémarrage ; une persistence durable reste **à décider**.
+
 ## SCALP — audit de fraîcheur associé
 
 Aucun changement de politique dans ce batch. `RiskEngine` / `SequentialCycleRiskEngine` possèdent déjà les rejets `MARKET_FRESHNESS_UNAVAILABLE` et `MARKET_DATA_STALE`. `kraken_stale_after_seconds` est toujours optionnel et vaut `None` par défaut. Au HEAD audité, `campaign_composition.py` ne renseigne pas `RiskPolicy.stale_after`, donc le rejet stale Risk n'est pas activé par défaut dans les Campaigns courantes.
 
 Un durcissement SCALP éventuel doit être traité séparément après mesure de la latence `MarketState -> LLM -> Risk`, afin de choisir un seuil fondé sur la distribution réelle des latences.
 
-## Changelog — 2026-09-28 — Trading Reasoning Doctrine v1 (patch local)
+## Changelog — 2026-09-28 — Market Attention Radar v1 (patch proposé)
 
-- HEAD GitHub resynchronisé : `b46f463c474e25a38da7ddcaebf588753922031b` ;
-- doctrine qualitative centralisée dans `prompt.py` ;
+- resynchronisation GitHub confirmée sur `d011faa98e7e347875186f12cb24b5e7041aa25c` ;
+- correction de la dérive de `docs/00_ETAT_ACTUEL.md` qui mentionnait encore `b46f463c` ;
+- nouveau domaine `market/attention.py` : modèles stricts, calculs 5m/15m/1h/4h, cache/TTL, shortlist d'attention, états dégradés et historique borné ;
+- nouveau catalogue Kraken read-only SPOT + PERPETUAL linéaire ;
+- nouvel adaptateur OpenAI Responses API + hosted `web_search`, Structured Output et sources/citations ;
+- nouveaux endpoints read-only `/api/v1/market-attention` et `/history` ;
+- intégration lifecycle FastAPI indépendante des Campaigns ;
+- nouveau panneau cockpit global `Market Attention`, sources cliquables et badge `INFORMATIF — N’INFLUENCE PAS LE TRADING` ;
+- aucun changement Agent/Risk/Broker/Market Discovery ;
+- aucune migration SQL ;
+- compilation Python runtime : succès ;
+- harness backend isolé : PASS ;
+- test frontend Radar isolé : `3/3` passés ;
+- suites complètes backend/frontend : à exécuter localement.
+
+## Changelog — 2026-09-28 — Trading Reasoning Doctrine v1 intégrée
+
+- commit `d011faa98e7e347875186f12cb24b5e7041aa25c` (`feat: add trading reasoning doctrine`) ;
+- doctrine qualitative centralisée ;
 - injection singleton courant + plan multi-marchés ;
 - discovery laissée volontairement sans doctrine finale ;
-- `AGENT_SYSTEM_PROMPT` historique et mappings d'agressivité inchangés ;
+- `AGENT_SYSTEM_PROMPT` historique et mappings d'agressivité préservés ;
 - SPOT/PERPETUAL, HOLD, net-cost-aware et autorité Risk préservés ;
-- aucun signal mécanique, scoring, quota ou changement Risk/Broker/planner ;
-- compilation Python des quatre fichiers runtime/tests modifiés : succès ;
-- harness local de composition des prompts : PASS ;
-- `test_trading_reasoning_doctrine.py` dans le harness isolé : `3/3` passés ;
-- validation locale utilisateur : suite ciblée `44/44` passée ;
-- premier `pytest -q` complet : un seul échec dans `test_trading_style.py`, dû à une attente exacte de composition non mise à jour pour la nouvelle section canonique ;
-- correctif : ajout de `TRADING_REASONING_DOCTRINE` à cette attente et contrôle d'unicité, sans modification runtime ;
-- rerun complet restant à effectuer localement après extraction du ZIP correctif.
+- aucun signal mécanique, scoring, quota ou changement Risk/Broker/planner.
+
+## Changelog — 2026-09-28 — Correctif Market Attention Radar v1
+
+Validation locale du premier ZIP Radar : frontend `42/42`, typecheck et build passés ; un échec backend de statut insuffisant/stale et une erreur ESLint React dans le dock restaient.
+
+Correctif :
+
+- un snapshot Market Activity n'est `AVAILABLE` que si les quatre horizons `5m/15m/1h/4h` sont complets ;
+- une couverture incomplète reste `PARTIAL` sans fausse statistique ;
+- `STALE` qualifie un snapshot complet dont la donnée la plus récente dépasse le seuil ;
+- le test insuffisant utilise une tranche récente ;
+- le refresh initial du cockpit est déclenché par l'événement d'ouverture et non plus synchroniquement dans `useEffect` ;
+- aucun changement Agent, Risk, Broker, Market Discovery, ordre ou stratégie.
+
+Revalidation ChatGPT du correctif : `py_compile` succès, harness Radar PASS avec distinction `PARTIAL` frais / `STALE` complet, test frontend isolé `3/3` passé. Rerun complet local requis après extraction du ZIP correctif.
 
 ## Changelog — 2026-09-28 — Batch 25 historique économique Session/run
 
-- base GitHub vérifiée avant intégration : `59f92938bf5159004783ae004fe99c808cb2c8c2` ;
-- intégration GitHub constatée au HEAD `b46f463c474e25a38da7ddcaebf588753922031b` ;
+- base GitHub avant intégration : `59f92938bf5159004783ae004fe99c808cb2c8c2` ;
+- intégration GitHub : `b46f463c474e25a38da7ddcaebf588753922031b` ;
 - projection économique en lecture seule ajoutée au-dessus d'analytics + audit existants ;
 - nouveaux endpoints `GET /api/v1/economic-history` et `/api/v1/economic-history/export` ;
 - distinction explicite `trade_count` / `fill_count` / décisions ;
