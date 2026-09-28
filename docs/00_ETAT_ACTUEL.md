@@ -1,51 +1,70 @@
-# 00 — État actuel
+﻿# 00 â€” Ã‰tat actuel
 
-> Mémoire courte de reprise. À garder synthétique, factuelle et alignée avec GitHub `main` et les éventuelles modifications locales en cours.
+## RÃ©fÃ©rence GitHub vÃ©rifiÃ©e
 
-## Référence technique
+```text
+Repository : Ax-07/AI-Spot-Trader
+Branche    : main
+HEAD       : 282267b1f491bb07b2644f6b9c5dca01c539697f
+Commit     : refactor: recalibrate strategic LLM prompts
+VÃ©rifiÃ©    : 2026-09-28
+```
 
-- Repository : `Ax-07/AI-Spot-Trader`
-- Branche : `main`
-- HEAD GitHub vérifié le 27 septembre 2026 : `5fdd9a32bce45deda30c652b6b6f8c59e4996559` (`fix: refresh paper marks before trading starts`).
-- Le document intégré était en retard de deux commits : l'inspecteur LLM `7846d89` et le correctif de rafraîchissement initial des marks `5fdd9a3` sont désormais intégrés à `main`.
-- Le présent recalibrage des prompts stratégiques est un **patch proposé au-dessus de `5fdd9a3`, non intégré à GitHub**.
+La dÃ©rive documentaire prÃ©cÃ©dente est corrigÃ©e dans ce patch : `282267b` est bien **intÃ©grÃ©** Ã  GitHub `main`. Le prÃ©sent recalibrage net/cost-aware est un patch proposÃ© **au-dessus de `282267b`** et n'est pas intÃ©grÃ© Ã  GitHub tant que l'opÃ©rateur ne l'a pas appliquÃ©, validÃ© et poussÃ©.
 
-## État fonctionnel confirmé
+## Ã‰tat fonctionnel Ã  prÃ©server
 
-- un seul Agent stratégique ;
+- un seul Agent IA stratÃ©gique ;
 - PAPER uniquement ;
-- SPOT et PERPETUAL linéaire autorisés selon la configuration ;
-- FUTURE daté interdit ;
-- plan stratégique multi-marchés / multi-décisions ;
-- Risk Engine déterministe avec autorité finale et évaluation séquentielle ;
-- aucune sortie LLM ne déclenche directement un ordre ;
-- inspecteur LLM en lecture seule intégré ;
-- rafraîchissement initial des marks PAPER terminé avant le démarrage des cycles.
+- SPOT + PERPETUAL linÃ©aire ; FUTURE datÃ© interdit ;
+- BUY / SELL / HOLD ; SPOT sans short ; PERPETUAL LONG/SHORT ;
+- plan multi-marchÃ©s / multi-dÃ©cisions ordonnÃ© ;
+- Risk Engine dÃ©terministe = autoritÃ© finale ;
+- aucune sortie LLM -> ordre direct ;
+- dÃ©cisions sÃ©quentielles et causales ;
+- `HOLD` journalisÃ© ; `management_mode` conservÃ© ;
+- historique expÃ©rimental/replays prÃ©servÃ© ;
+- `AGENT_SYSTEM_PROMPT` historique `agent-strategy-v4` et `aggressiveness-map-v1` inchangÃ©s.
 
-## Recalibrage de prompt proposé
+## Recalibrage stratÃ©gique proposÃ©
 
-Le chemin Session/Campaign courant ne doit plus injecter la cible expérimentale `+4 %/jour` dans les instructions du LLM. Cette cible reste documentée comme objectif expérimental non garanti du projet.
+Le prompt Campaign courant est rendu explicitement orientÃ© vers la **progression de l'equity nette aprÃ¨s coÃ»ts** plutÃ´t que vers l'activitÃ© brute. Frais, spread, slippage et funding lorsqu'il est disponible dans les faits fournis font partie du rÃ©sultat Ã©conomique.
 
-L'agressivité reste un contexte stratégique 1–10. Le mapping durable historique `aggressiveness-map-v1` reste intact pour les manifests/replays ; les prompts courants utilisent `aggressiveness-map-v2`. Les niveaux élevés augmentent l'initiative, la volonté d'agir et la rotation potentielle, mais n'impliquent jamais une quantité maximale. Le sizing proposé reste proportionné à la qualité/conviction de la thèse, aux faits fournis, aux coûts et au capital déjà exposé.
+L'Agent doit raisonner en allocation et coÃ»t d'opportunitÃ© entre cash, positions existantes et nouvelles opportunitÃ©s. `HOLD`, conserver du cash et conserver une position sont des allocations valides. Une rotation doit Ãªtre justifiÃ©e face aux coÃ»ts cumulÃ©s des rÃ©ductions/clÃ´tures et nouvelles ouvertures ; aucune rÃ¨gle dÃ©terministe de profit, cooldown, durÃ©e minimale, quota de trades ou score d'opportunitÃ© n'est ajoutÃ©e.
 
-Le contrat courant rappelle explicitement que la qualité de la thèse prime sur la fréquence des trades, qu'aucun trade ne doit être produit pour créer de l'activité ou poursuivre une cible de rendement, et que `HOLD` reste valide lorsque la thèse n'est pas suffisamment défendable.
+Le mapping LLM courant devient `aggressiveness-map-v3` : davantage d'initiative aux niveaux Ã©levÃ©s lorsque l'opportunitÃ© est convaincante, mais aucune obligation de turnover, micro-trades, frÃ©quence minimale ou taille maximale.
 
-La section d'agressivité est rendue par un helper canonique partagé ; le typo `niveat=` disparaît au profit de `niveau=`. Les garde-fous SPOT/PERPETUAL, `management_mode`, quantité BUY/SELL positive, HOLD `null`, contrôle Risk du levier/marge/exposition/liquidation/`reduce_only` et causalité multi-décisions restent inchangés.
+## Constat PAPER motivant le patch
 
-`AGENT_SYSTEM_PROMPT` / `agent-strategy-v4` reste volontairement figé pour les protocoles expérimentaux historiques v1/v2/v3 et leurs replays ; le recalibrage cible les instructions canoniques actuelles composées par `StrategyInstructionsClient`.
+Une session rÃ©elle d'environ 9 h a montrÃ© un turnover Ã©levÃ© (`1 246` fills / `395` cycles), un P&L brut positif (~`+0,727`) mais un P&L net nÃ©gatif (~`-2,287`) aprÃ¨s coÃ»ts, pour une equity finale ~`97,713` depuis `100`.
 
-## SCALP / fraîcheur
+Ce run motive le recalibrage cost-aware. **Il ne prouve pas la performance gÃ©nÃ©rale de la stratÃ©gie.**
 
-Audit confirmé sans modification de politique : Risk possède déjà un contrôle de fraîcheur (`MARKET_FRESHNESS_UNAVAILABLE` / `MARKET_DATA_STALE`) et `kraken_stale_after_seconds` reste optionnel avec `None` par défaut. Au HEAD audité, la `RiskPolicy` des Campaigns ne renseigne toutefois pas `stale_after`, donc ce rejet Risk n'est pas activé par défaut sur ce chemin. Le style SCALP reste un style minute/intraday supporté ; aucun argument ne justifie de le supprimer dans ce batch.
+## Audit SELL / SHORT PERPETUAL
 
-Un durcissement spécifique SCALP doit rester un batch séparé, précédé d'une mesure réelle de la latence `MarketState -> LLM -> Risk` afin de fixer une politique de fraîcheur sur des données observées plutôt que sur une hypothèse.
+- **confirmÃ©** : BUY/SELL PERPETUAL, planner, sÃ©lection multi-marchÃ©s et Risk sont directionnellement symÃ©triques ; aucune cause centrale n'impose SHORT ;
+- **confirmÃ©** : le mapping d'agressivitÃ© `v2` pouvait pousser le turnover global ;
+- **confirmÃ©** : la formulation gÃ©nÃ©rique Â« signal automatique de vente Â» Ã©tait asymÃ©trique pour la rÃ©duction d'un SHORT ; le patch la neutralise ;
+- **obsolÃ¨te** : rÃ©fÃ©rence documentaire Ã  `5fdd9a3` comme HEAD courant et statut Â« non intÃ©grÃ© Â» de `282267b` ;
+- **manquant avant ce patch** : objectif net-equity, coÃ»t d'opportunitÃ© et coÃ»ts de rotation explicites ;
+- **Ã  dÃ©cider** : existence d'un biais SHORT persistant du modÃ¨le sur plusieurs runs comparables.
 
-## Validation du patch proposé
+Aucun quota LONG/SHORT ni modification du Risk Engine n'est introduit.
 
-Dans l'environnement ChatGPT, les fichiers Python modifiés ont été compilés syntaxiquement. Un smoke contractuel isolé vérifie la conservation du v1 historique, le mapping LLM v2, l'absence de `+4 %/jour` dans le contrat courant, `niveau=10/10`, le remplacement du contexte d'agressivité dans l'input réellement transmis et la présence des garde-fous multi-marchés. Un `pytest` isolé de `test_control_plane_prompt.py` a produit `7 passed`.
+## Fichiers principaux du patch
 
-Le checkout complet du repository et ses dépendances n'étant pas disponibles dans le conteneur, les tests ciblés du vrai backend et le `pytest` complet restent à exécuter localement après extraction du ZIP.
+- `backend/src/ai_spot_trader/agent/prompt.py`
+- `backend/src/ai_spot_trader/agent/strategy_client.py`
+- `backend/src/ai_spot_trader/domain/experiments.py`
+- `backend/tests/test_control_plane_prompt.py`
+- `backend/tests/test_multi_market_provider.py`
+- `docs/00_ETAT_ACTUEL.md`
+- `docs/01_PROJECT_MASTER.md`
+- `docs/03_AGENT_TRADING_RISK.md`
+- `docs/10_DECISIONS_ET_CHANGELOG.md`
+- `docs/24_BATCH_19_13_CYCLE_STRATEGIQUE_MULTI_MARCHES.md`
 
-## Règle de reprise
+## Validation
 
-À chaque nouvelle tâche : revérifier le HEAD GitHub réel, relire ce document et distinguer explicitement l'état intégré GitHub, les modifications locales fournies par l'opérateur et tout patch proposé non encore intégré.
+Les rÃ©sultats du prÃ©sent patch doivent Ãªtre distinguÃ©s des validations historiques. Aucun rÃ©sultat de test n'est dÃ©clarÃ© ici avant exÃ©cution rÃ©elle.
+

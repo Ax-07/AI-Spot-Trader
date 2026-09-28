@@ -76,11 +76,17 @@ Règles principales :
 
 Le multi-décisions ne crée ni second Agent, ni ranking algorithmique stratégique, ni contournement Risk.
 
-## Agressivité et qualité du signal
+## Agressivité, coûts et allocation du capital
 
-L'agressivité 1–10 influence la posture stratégique : volonté d'agir, initiative, fréquence potentielle d'action et rotation du capital. Les prompts courants utilisent `aggressiveness-map-v2`, tandis que le mapping v1 reste figé pour les identités expérimentales historiques. Elle ne relâche jamais Risk et n'impose jamais une taille maximale.
+Les prompts Campaign courants utilisent `aggressiveness-map-v3`, tandis que le mapping historique `aggressiveness-map-v1` reste figé pour les identités expérimentales et replays existants.
 
-Même à 10/10, la quantité proposée doit rester proportionnée à la qualité/conviction de la thèse, aux faits fournis, aux coûts et au capital déjà exposé. `HOLD` reste valide lorsqu'aucune thèse suffisamment défendable n'existe ; aucun trade ne doit être produit simplement pour créer de l'activité ou poursuivre une cible de rendement.
+L'agressivité 1–10 influence la volonté d'agir et le degré d'initiative lorsqu'une opportunité est convaincante. Elle ne relâche jamais Risk, n'impose jamais une taille maximale et ne doit pas être interprétée comme une obligation d'augmenter le turnover, la fréquence des trades ou les micro-trades.
+
+L'objectif économique stratégique courant est la progression de l'**equity nette après coûts**. Frais, spread, slippage et funding lorsqu'il est disponible dans les faits fournis font partie du résultat économique.
+
+L'Agent raisonne en allocation et coût d'opportunité entre cash, positions existantes et nouvelles opportunités. `HOLD`, conserver du cash ou conserver une position sont des allocations stratégiques valides. Une rotation doit être préférable à l'allocation actuelle après prise en compte des coûts cumulés, sans seuil de profit, cooldown, durée minimale ou score déterministe.
+
+Une faible conviction ne doit pas être transformée mécaniquement en petite position « pour essayer ».
 
 ## Invariants
 
@@ -106,6 +112,8 @@ La façade `/api/v1/sessions` conserve la création atomique, le versioning immu
 
 Un cycle expose une trajectoire ordonnée 1:N : plusieurs décisions peuvent posséder leurs évaluations Risk et leurs intentions/fills associés. Les anciens cycles restent lisibles via la compatibilité historique.
 
+Le `AGENT_SYSTEM_PROMPT` historique `agent-strategy-v4` reste figé pour préserver les protocoles expérimentaux existants ; le recalibrage courant s'applique via `StrategyInstructionsClient`.
+
 ## Persistence
 
 La persistence d'audit utilise la migration :
@@ -119,13 +127,11 @@ Les relations 1:N couvrent les décisions, `RiskAssessment` et `ExecutionIntent`
 
 ## Référence de travail
 
-HEAD GitHub intégré vérifié le 27 septembre 2026 :
+HEAD GitHub intégré vérifié le 28 septembre 2026 :
 
 ```text
-5fdd9a32bce45deda30c652b6b6f8c59e4996559
-fix: refresh paper marks before trading starts
+282267b1f491bb07b2644f6b9c5dca01c539697f
+refactor: recalibrate strategic LLM prompts
 ```
 
-Ce HEAD inclut notamment l'inspecteur LLM en lecture seule (`7846d89`) et le refresh initial des marks PAPER avant démarrage des cycles (`5fdd9a3`).
-
-Les chiffres de validation `698 passed, 2 warnings`, migration PostgreSQL réelle réussie, frontend `39 passed` et lint/typecheck/build réussis correspondent à la validation historique du Batch 19.13 ; ils ne doivent pas être interprétés comme une exécution du présent recalibrage de prompts.
+Le présent patch net/cost-aware est construit au-dessus de ce HEAD et n'est pas intégré à GitHub tant qu'il n'a pas été appliqué, validé localement et poussé par l'opérateur.

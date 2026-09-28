@@ -9,11 +9,11 @@ Référence GitHub intégrée vérifiée au lancement du présent recalibrage :
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 5fdd9a32bce45deda30c652b6b6f8c59e4996559
-Commit     : fix: refresh paper marks before trading starts
+HEAD       : 282267b1f491bb07b2644f6b9c5dca01c539697f
+Commit     : refactor: recalibrate strategic LLM prompts
 ```
 
-Le correctif PAPER PERPETUAL, le cycle multi-décisions / multi-marchés, l'inspecteur LLM et le refresh initial des marks PAPER sont intégrés dans cette base.
+Le correctif PAPER PERPETUAL, le cycle multi-décisions / multi-marchés, l'inspecteur LLM, le refresh initial des marks PAPER et le premier recalibrage des prompts stratégiques sont intégrés dans cette base. Le présent batch ajoute un recalibrage **cost-aware / net-equity-aware** au-dessus de ce HEAD ; il n'est pas intégré à GitHub tant qu'il n'a pas été appliqué et validé localement.
 
 ## 2. Invariants fonctionnels
 
@@ -35,6 +35,8 @@ Le correctif PAPER PERPETUAL, le cycle multi-décisions / multi-marchés, l'insp
 Principe central : **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
 L'objectif expérimental `+4 %/jour` reste une cible de recherche non garantie au niveau projet. Il ne doit pas être injecté dans les instructions stratégiques courantes du LLM ni être utilisé pour forcer de l'activité.
+
+L'objectif économique transmis aux Campaigns courantes est la **progression de l'equity nette après coûts**. Les frais, le spread, le slippage et le funding lorsqu'il est disponible dans les faits fournis font partie du résultat économique. Cet objectif n'introduit aucun seuil de profit, quota de trades, cooldown, durée minimale, score algorithmique ni garantie de rendement.
 
 ## 3. Modèle utilisateur : Session
 
@@ -73,6 +75,8 @@ Kraken catalogue
 
 `paper_executable_markets` est un bootstrap/fallback. `market_discovery` contient la politique dynamique.
 
+Un marché admissible ou techniquement tradable n'est pas, à lui seul, une opportunité économiquement intéressante. La watchlist reste un choix du même Agent et doit servir la comparaison stratégique des meilleures opportunités disponibles, sans score déterministe.
+
 ### Manuel
 
 - `market_discovery = null` ;
@@ -105,7 +109,7 @@ Les positions ouvertes restent gérables en `NORMAL` comme en `MANAGEMENT`. `Cap
 
 En `MANAGEMENT`, aucune discovery destinée à ouvrir de nouvelles positions n'est lancée et Risk refuse toute hausse d'exposition incompatible.
 
-Le contexte `position-management-v1` reste descriptif et reconstructible. Il ne contient aucun `should_sell`, take-profit, timer ou signal algorithmique.
+Le contexte `position-management-v1` reste descriptif et reconstructible. Il ne contient aucun `should_sell`, take-profit, timer ou signal algorithmique. Les formulations de gestion sont directionnellement neutres sur PERPETUAL : réduire un LONG utilise `SELL`, réduire un SHORT utilise `BUY`, et aucune direction n'est privilégiée.
 
 ## 8. Trading Style et contexte multi-timeframes
 
@@ -122,21 +126,27 @@ Le style SCALP actuel est un mode minute/intraday. Il n'est pas assimilé à du 
 
 ## 9. Agressivité stratégique
 
-L'agressivité reste un niveau canonique entier de `1` à `10`. Le mapping historique `aggressiveness-map-v1` reste réservé aux identités expérimentales durables ; les instructions LLM courantes utilisent `aggressiveness-map-v2`.
+L'agressivité reste un niveau canonique entier de `1` à `10`. Le mapping historique `aggressiveness-map-v1` reste réservé aux identités expérimentales durables ; les instructions LLM courantes utilisent désormais `aggressiveness-map-v3`. Le mapping courant précédent `v2` reste un état Git historique et n'est pas réécrit.
 
-Elle peut influencer :
+L'agressivité courante peut influencer :
 
 - la volonté d'agir ;
 - le degré d'initiative ;
-- la fréquence potentielle d'action ;
-- la rotation stratégique ;
-- l'acceptation d'une opportunité moins parfaite mais encore défendable.
+- l'acceptation d'une opportunité moins parfaite mais encore défendable aux niveaux élevés.
 
-Elle ne doit pas imposer une taille d'ordre. Même au niveau `10/10`, la quantité proposée reste proportionnée à la qualité/conviction de la thèse, aux faits fournis, aux coûts, à l'exposition existante et au capital déjà engagé.
+Elle ne doit pas être interprétée comme une obligation d'augmenter le nombre de trades, le turnover, les micro-trades ou la rotation. Même au niveau `10/10`, la quantité proposée reste proportionnée à la qualité/conviction de la thèse, aux faits fournis, aux coûts, à l'exposition existante et au capital déjà engagé.
 
-`HOLD` reste valide à tous les niveaux. La qualité de la thèse prime sur la fréquence des trades ; aucun trade ne doit être généré simplement pour produire de l'activité ou atteindre une cible de rendement.
+`HOLD`, conserver du cash ou conserver une position existante restent des allocations stratégiques valides à tous les niveaux. Une faible conviction ne doit pas être transformée mécaniquement en petite position « pour essayer ».
 
-## 10. Cycle stratégique multi-marchés / multi-décisions
+## 10. Allocation du capital et coût d'opportunité
+
+Dans un univers multi-marchés, l'Agent raisonne sur l'allocation globale du capital entre cash, positions existantes et nouvelles opportunités.
+
+Une rotation n'est pas justifiée simplement parce qu'une autre opportunité est tradable. Réduire ou fermer une position puis ouvrir ou augmenter une autre entraîne plusieurs coûts d'exécution. L'Agent doit donc comparer la position/cash actuels aux alternatives et ne provoquer une rotation que lorsque la justification stratégique reste suffisamment forte après prise en compte des coûts disponibles.
+
+Cette règle reste qualitative et stratégique : aucun seuil chiffré, minimum de profit, durée de détention, cooldown ou score d'opportunité n'est introduit.
+
+## 11. Cycle stratégique multi-marchés / multi-décisions
 
 Le cycle décisionnel utilise un plan stratégique ordonné et borné.
 
@@ -156,7 +166,7 @@ contexte causal du cycle
 
 Le plan peut mélanger `BUY`, `SELL` et `HOLD`. Il ne s'agit pas de plusieurs Agents ni de plusieurs appels stratégiques indépendants servant à contourner les contraintes : l'ordre est fourni par le même plan Agent et l'exécution est ensuite séquentielle.
 
-## 11. Causalité intra-cycle et autorité Risk
+## 12. Causalité intra-cycle et autorité Risk
 
 Pour chaque décision, Risk évalue l'état de portefeuille **courant**, donc après les éventuelles exécutions des décisions précédentes du même cycle.
 
@@ -169,7 +179,7 @@ Conséquences :
 
 Risk conserve la décision finale `ALLOW` / `MODIFY` / `REJECT` pour chaque élément du plan. Aucun output LLM ne devient directement un ordre.
 
-## 12. Contrat quantité/action
+## 13. Contrat quantité/action
 
 Le schéma Structured Outputs et la validation applicative restent alignés :
 
@@ -181,7 +191,9 @@ HOLD -> proposed_quantity = null
 
 Le chemin multi-marchés conserve `market_states` comme univers causal, `management_mode=true` comme restriction de gestion, l'interdiction du short SPOT et le contrôle Risk exclusif du levier, de la marge, de l'exposition, de la liquidation et de `reduce_only`.
 
-## 13. Atomicité PAPER du cycle
+Sur PERPETUAL, le contrat reste symétrique : `BUY` ouvre/augmente LONG ou réduit SHORT ; `SELL` ouvre/augmente SHORT ou réduit LONG. Le présent recalibrage n'ajoute aucun biais LONG/SHORT déterministe.
+
+## 14. Atomicité PAPER du cycle
 
 Le cycle multi-décisions est transactionnel au niveau du ledger PAPER : un checkpoint est pris au début de la trajectoire.
 
@@ -189,7 +201,7 @@ Si une défaillance **technique** survient dans Risk ou Broker après des mutati
 
 `HOLD` et `REJECT` ne sont pas des erreurs techniques et ne provoquent pas de rollback.
 
-## 14. Persistence et compatibilité historique
+## 15. Persistence et compatibilité historique
 
 Migration :
 
@@ -212,7 +224,7 @@ Les anciens cycles/configurations restent lisibles. La compatibilité historique
 
 Le `AGENT_SYSTEM_PROMPT` historique `agent-strategy-v4` reste figé pour préserver les protocoles expérimentaux v1/v2/v3 et leurs replays. Les Sessions/Campaigns actuelles passent par `StrategyInstructionsClient`, dont le contrat protégé courant peut évoluer de manière auditée.
 
-## 15. API, cockpit et analytics
+## 16. API, cockpit et analytics
 
 L'API et le cockpit exposent la trajectoire ordonnée du cycle plutôt qu'un seul triplet Agent/Risk/exécution.
 
@@ -222,13 +234,13 @@ Le frontend ne recalcule ni Risk, ni P&L, ni causalité. Il affiche les faits pe
 
 L'inspecteur LLM intégré permet de visualiser en lecture seule les payloads réellement envoyés à la Responses API, avec rétention bornée et sans exposer les secrets de transport.
 
-## 16. Comptabilité, monitoring et charts
+## 17. Comptabilité, monitoring et charts
 
 Accounting, mark-to-market, equity, exposition, monitors, candles, streaming, markers de fills et overlays restent canoniques côté backend. Le contexte candles sert à informer l'Agent ; il n'est jamais une source parallèle de vérité d'exécution ou de portefeuille.
 
 Les moniteurs PAPER effectuent désormais un premier refresh de marks avant que le runtime soit considéré initialisé. En cas d'échec, la valorisation reste incomplète et Capacity/Risk restent fail-closed.
 
-## 17. Fraîcheur des données
+## 18. Fraîcheur des données
 
 Risk possède un contrôle explicite de fraîcheur :
 
@@ -237,13 +249,26 @@ Risk possède un contrôle explicite de fraîcheur :
 
 La configuration `kraken_stale_after_seconds` est optionnelle et vaut `None` par défaut. Elle qualifie la fraîcheur des données provider lorsqu'elle est configurée. Au HEAD audité, la composition Campaign ne renseigne pas `RiskPolicy.stale_after`, donc le rejet stale existe dans Risk mais n'est pas activé par défaut sur ce chemin. Un futur durcissement SCALP doit d'abord mesurer la latence réelle `MarketState -> LLM -> Risk` avant de fixer un seuil spécifique.
 
-## 18. Compatibilité avec la rotation du capital
+## 19. Constat expérimental motivant le recalibrage cost-aware
 
-La gestion stratégique des positions et la rotation peuvent s'étaler sur plusieurs cycles ou apparaître dans le même plan ordonné lorsque l'Agent le décide et que Risk l'autorise.
+Une session PAPER réelle d'environ 9 heures, partie d'un capital de `100`, a montré un turnover élevé : `1 246` fills sur `395` cycles, avec un P&L brut positif d'environ `+0,727` mais une equity finale d'environ `97,713` et un P&L net d'environ `-2,287` après frais, spread, slippage et funding.
 
-Il n'existe aucune règle déterministe `SELL -> BUY`, aucun take-profit fixe et aucun timer de liquidation.
+Ce run montre qu'une activité importante peut être économiquement défavorable lorsque l'avantage brut est trop faible relativement aux coûts. Il motive le présent recalibrage vers la qualité économique nette et l'allocation du capital. **Il ne démontre pas à lui seul la performance générale ni un biais structurel durable de la stratégie.**
 
-## 19. Hors périmètre actuel
+## 20. Audit du biais SELL / SHORT PERPETUAL
+
+L'audit du contrat courant classe les éléments ainsi :
+
+- **confirmé** : le mapping BUY/SELL PERPETUAL, le planner, la sélection multi-marchés et l'autorité Risk sont directionnellement symétriques ; aucune règle centrale n'impose ou ne favorise explicitement SHORT ;
+- **confirmé** : le mapping d'agressivité courant `v2` poussait davantage l'initiative, la rotation et parfois la fréquence potentielle, ce qui pouvait favoriser le turnover global sans expliquer à lui seul la direction SHORT ;
+- **confirmé** : le texte générique de gestion parlait de « signal automatique de vente », formulation asymétrique pour la réduction d'un SHORT ; elle est neutralisée dans le présent patch ;
+- **obsolète** : la documentation qui présentait le commit `282267b` comme non intégré ;
+- **manquant** : objectif explicite d'equity nette après coûts, coût d'opportunité et comparaison rotation/conservation ;
+- **à décider** : l'existence d'un biais SHORT réellement persistant dans les décisions du modèle. Une seule session ne suffit pas à l'établir ; il faut comparer plusieurs runs et les contextes de marché avant toute règle corrective directionnelle.
+
+Aucun quota LONG/SHORT, contre-biais déterministe ni modification du Risk Engine n'est introduit.
+
+## 21. Hors périmètre actuel
 
 - LIVE ;
 - `ADAPTIVE_AI` tant qu'il n'est pas cadré ;
@@ -251,10 +276,14 @@ Il n'existe aucune règle déterministe `SELL -> BUY`, aucun take-profit fixe et
 - fermeture automatique selon une durée de détention ;
 - take-profit fixe ou trailing stop déterministe ;
 - ranking technique déterministe d'opportunité ;
+- seuil minimum de profit imposé à BUY/SELL ;
+- cooldown stratégique arbitraire ;
+- nombre maximal de trades choisi par une règle de stratégie ;
+- quota LONG/SHORT ;
 - second pipeline/cache OHLC ou second Agent stratégique ;
 - promesse de rendement ;
 - seuil SCALP stale spécifique non mesuré.
 
-## 20. Validation
+## 22. Validation
 
 Les validations historiques des batches intégrés restent consultables dans leur documentation et dans Git. Toute validation du présent recalibrage doit être distinguée explicitement de ces résultats historiques.

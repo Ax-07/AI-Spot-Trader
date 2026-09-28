@@ -3,8 +3,12 @@ from hashlib import sha256
 import pytest
 
 from ai_spot_trader.agent.prompt import (
+    AGENT_SYSTEM_PROMPT,
+    AGGRESSIVENESS_ACTIVITY_GUARDRAIL,
     AGGRESSIVENESS_QUANTITY_GUARDRAIL,
     BASE_AGENT_CONTRACT_VERSION,
+    CAPITAL_ALLOCATION_GUARDRAIL,
+    NET_ECONOMIC_OBJECTIVE_GUARDRAIL,
     PROTECTED_AGENT_CONTRACT,
     SIGNAL_QUALITY_GUARDRAIL,
     compose_agent_instructions,
@@ -57,29 +61,52 @@ def test_strategy_prompt_rejects_secret_like_material_without_echoing_it() -> No
     assert "secret-like" in str(error.value)
 
 
-def test_current_protected_contract_removes_return_target_and_strengthens_hold() -> None:
+def test_current_protected_contract_is_net_equity_cost_aware_without_return_target() -> None:
     assert "+4 % par jour" not in PROTECTED_AGENT_CONTRACT
-    assert AGGRESSIVENESS_QUANTITY_GUARDRAIL in PROTECTED_AGENT_CONTRACT
-    assert SIGNAL_QUALITY_GUARDRAIL in PROTECTED_AGENT_CONTRACT
+    assert "+4 % par jour" in AGENT_SYSTEM_PROMPT
+    for guardrail in (
+        NET_ECONOMIC_OBJECTIVE_GUARDRAIL,
+        CAPITAL_ALLOCATION_GUARDRAIL,
+        AGGRESSIVENESS_ACTIVITY_GUARDRAIL,
+        AGGRESSIVENESS_QUANTITY_GUARDRAIL,
+        SIGNAL_QUALITY_GUARDRAIL,
+    ):
+        assert guardrail in PROTECTED_AGENT_CONTRACT
+    assert "equity nette" in PROTECTED_AGENT_CONTRACT
+    assert "frais" in PROTECTED_AGENT_CONTRACT
+    assert "spread" in PROTECTED_AGENT_CONTRACT
+    assert "slippage" in PROTECTED_AGENT_CONTRACT
+    assert "funding" in PROTECTED_AGENT_CONTRACT
+    assert "Conserver du cash ou une position existante" in PROTECTED_AGENT_CONTRACT
+    assert "plusieurs coûts d'exécution" in PROTECTED_AGENT_CONTRACT
+    assert "micro-trades" in PROTECTED_AGENT_CONTRACT
+    assert "simplement parce qu'elle est tradable" in PROTECTED_AGENT_CONTRACT
+    assert "petite position pour essayer" in PROTECTED_AGENT_CONTRACT
+    assert "HOLD" in PROTECTED_AGENT_CONTRACT
     assert "atteindre une cible de rendement" in PROTECTED_AGENT_CONTRACT
-    assert "La qualité de la thèse prime sur la fréquence des trades" in PROTECTED_AGENT_CONTRACT
     assert "`FUTURE` daté est interdit" in PROTECTED_AGENT_CONTRACT
 
 
-def test_aggressiveness_mapping_covers_1_to_10_without_max_size_bias() -> None:
+def test_aggressiveness_mapping_covers_1_to_10_without_turnover_or_max_size_bias() -> None:
     contexts = tuple(strategic_aggressiveness_context(level) for level in range(1, 11))
 
     assert [context.level for context in contexts] == list(range(1, 11))
     assert {context.mapping_version for context in contexts} == {
         STRATEGIC_AGGRESSIVENESS_MAPPING_VERSION
     }
+    assert STRATEGIC_AGGRESSIVENESS_MAPPING_VERSION == "aggressiveness-map-v3"
     assert contexts[-1].posture == "maximum_experimental"
     assert "highest experimental strategic initiative" in contexts[-1].strategic_instruction
+    assert "less-perfect but still defensible thesis" in contexts[-1].strategic_instruction
     assert "maximum quantity" in contexts[-1].strategic_instruction
+    assert "maximum trade frequency" in contexts[-1].strategic_instruction
+    assert "do not manufacture activity" in contexts[-1].strategic_instruction
 
     all_instructions = "\n".join(context.strategic_instruction for context in contexts)
     assert "largest quantities" not in all_instructions
     assert "very large strategic quantities" not in all_instructions
+    assert "potentially higher action frequency" not in all_instructions
+    assert "rotate capital actively" not in all_instructions
 
     section = compose_aggressiveness_section(aggressiveness_context(10))
     assert f"mapping_version={STRATEGIC_AGGRESSIVENESS_MAPPING_VERSION}" in section

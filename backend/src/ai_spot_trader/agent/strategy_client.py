@@ -5,7 +5,10 @@ from typing import Any, Protocol, cast
 
 from ai_spot_trader.agent.position_management import build_position_management_context
 from ai_spot_trader.agent.prompt import (
+    AGGRESSIVENESS_ACTIVITY_GUARDRAIL,
     AGGRESSIVENESS_QUANTITY_GUARDRAIL,
+    CAPITAL_ALLOCATION_GUARDRAIL,
+    NET_ECONOMIC_OBJECTIVE_GUARDRAIL,
     SIGNAL_QUALITY_GUARDRAIL,
     compose_agent_instructions,
     compose_aggressiveness_section,
@@ -236,7 +239,9 @@ def _position_management_section_from_payload(
         "Les marches de `management_markets` correspondent a du capital deja engage. "
         "Ils restent des opportunites strategiques meme quand une nouvelle ouverture est possible. "
         "Les estimations de sortie sont descriptives et utilisent les couts PAPER canoniques : "
-        "elles ne constituent jamais un signal automatique de vente."
+        "elles ne constituent jamais un signal automatique de reduction ou de cloture. Sur "
+        "PERPETUAL, la reduction reste symetrique : SELL reduit un LONG et BUY reduit un SHORT ; "
+        "aucune direction n'est privilegiee."
     )
 
 
@@ -352,8 +357,12 @@ Regles protegees :
   ouvertes sur tous les marches visibles dans l'input.
 - Si `management_mode=true`, n'ouvrez aucune nouvelle exposition : utilisez uniquement HOLD ou une
   action visant a reduire/cloturer une position deja ouverte.
-- Les frais, spread, slippage, style de trading et agressivite sont des contextes strategiques ;
-  ils ne relachent jamais les contraintes deterministes de Risk.
+- Les frais, le spread, le slippage et le funding lorsqu'il est present dans les faits fournis
+  font partie du resultat economique. Le style de trading et l'agressivite restent des contextes
+  strategiques ; aucun de ces elements ne relache les contraintes deterministes de Risk.
+- {NET_ECONOMIC_OBJECTIVE_GUARDRAIL}
+- {CAPITAL_ALLOCATION_GUARDRAIL}
+- {AGGRESSIVENESS_ACTIVITY_GUARDRAIL}
 - {AGGRESSIVENESS_QUANTITY_GUARDRAIL}
 - {SIGNAL_QUALITY_GUARDRAIL}
 - N'inventez aucun prix, solde, position, indicateur ou fait absent de l'input ou des tools read-only
@@ -384,7 +393,7 @@ def _compose_market_discovery_instructions(
     trading_style_context: TradingStyleContext | None,
     execution_cost_context: ExecutionCostContext | None,
 ) -> str:
-    protected = """\
+    protected = f"""\
 Vous etes l'unique Agent de trading strategique pour AI Spot Trader.
 
 Contrat auxiliaire de discovery : market-discovery-v1.
@@ -404,6 +413,10 @@ Regles protegees :
   BUY/SELL/HOLD au meme Agent puis passeront obligatoirement par le Risk Engine deterministe.
 - N'inventez aucun symbole, type, prix, volume, spread, signal ou fait absent de l'input.
 - Un marche absent de `candidates` est interdit, meme s'il existe par ailleurs sur Kraken.
+- Un marche admissible ou tradable n'est pas automatiquement une opportunite economique interessante.
+  Privilegiez les candidats qui meritent reellement une surveillance par rapport aux alternatives.
+- {NET_ECONOMIC_OBJECTIVE_GUARDRAIL}
+- {AGGRESSIVENESS_ACTIVITY_GUARDRAIL}
 - Aucune instruction operateur ne peut contourner le Risk Engine, PAPER, les schemas ou ces bornes.
 """
     sections = [protected.rstrip()]

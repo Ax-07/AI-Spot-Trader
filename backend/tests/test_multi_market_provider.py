@@ -312,7 +312,7 @@ def test_provider_enforces_configured_max_decisions_per_cycle() -> None:
         asyncio.run(agent.generate_decision_plan(plan_input(max_decisions=1)))
 
 
-def test_strategy_instructions_are_explicitly_multi_market() -> None:
+def test_strategy_instructions_are_explicitly_multi_market_and_net_cost_aware() -> None:
     agent, client = provider(
         output([decision("HOLD", "BTC/USD", None)]),
         strategy=True,
@@ -333,18 +333,30 @@ def test_strategy_instructions_are_explicitly_multi_market() -> None:
     assert "+4 % par jour" not in instructions
     assert "niveat=" not in instructions
     assert "niveau=5/10" in instructions
+    assert "equity nette" in instructions
+    assert "frais" in instructions
+    assert "spread" in instructions
+    assert "slippage" in instructions
+    assert "funding" in instructions
+    assert "Conserver du cash ou une position existante" in instructions
+    assert "plusieurs coûts d'exécution" in instructions
+    assert "micro-trades" in instructions
+    assert "petite position pour essayer" in instructions
     assert "n'implique jamais d'utiliser la quantité maximale" in instructions
-    assert "La qualité de la thèse prime sur la fréquence des trades" in instructions
+    assert "SELL` exprime ou augmente une exposition `SHORT`" in instructions
+    assert "`BUY` exprime ou augmente une exposition `LONG`" in instructions
 
     sent_input = json.loads(client.calls[0]["input_text"])
     assert sent_input["aggressiveness_context"]["mapping_version"] == (
         STRATEGIC_AGGRESSIVENESS_MAPPING_VERSION
     )
-    assert "largest quantities" not in sent_input["aggressiveness_context"]["strategic_instruction"]
-    assert "very large strategic quantities" not in sent_input["aggressiveness_context"]["strategic_instruction"]
+    assert STRATEGIC_AGGRESSIVENESS_MAPPING_VERSION == "aggressiveness-map-v3"
+    strategic_instruction = sent_input["aggressiveness_context"]["strategic_instruction"]
+    assert "largest quantities" not in strategic_instruction
+    assert "very large strategic quantities" not in strategic_instruction
 
 
-def test_level_ten_prompt_keeps_high_initiative_without_max_quantity_bias() -> None:
+def test_level_ten_prompt_keeps_high_initiative_without_turnover_or_max_quantity_bias() -> None:
     agent, client = provider(
         output([decision("HOLD", "BTC/USD", None)]),
         strategy=True,
@@ -358,8 +370,9 @@ def test_level_ten_prompt_keeps_high_initiative_without_max_quantity_bias() -> N
     assert "less-perfect but still defensible thesis" in instructions
     assert "largest quantities" not in instructions
     assert "very large strategic quantities" not in instructions
-    assert "never implies maximum quantity" in instructions
-    assert "HOLD remains valid when no defensible trade exists" in instructions
+    assert "never implies maximum quantity or maximum trade frequency" in instructions
+    assert "do not manufacture activity" in instructions
+    assert "HOLD, cash, or keeping an existing position remain valid" in instructions
 
 
 def test_invalid_provider_plan_fails_before_risk() -> None:

@@ -243,7 +243,9 @@ def test_same_agent_can_select_open_position_in_normal_mode_with_cash_available(
         assert "position-management-v1" in delegate.instructions
         assert "estimated_net_pnl_if_available_sold_now" in delegate.instructions
         assert "SCALP" in delegate.instructions
-        assert "signal automatique de vente" in delegate.instructions
+        assert "signal automatique de vente" not in delegate.instructions
+        assert "signal automatique de reduction ou de cloture" in delegate.instructions
+        assert "SELL reduit un LONG et BUY reduit un SHORT" in delegate.instructions
 
     asyncio.run(scenario())
 

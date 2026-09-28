@@ -11,13 +11,14 @@ Les Sessions PAPER canoniques autorisent `SPOT` et `PERPETUAL` linéaire. `FUTUR
 ## Référence courante
 
 ```text
-HEAD GitHub intégré : 5fdd9a32bce45deda30c652b6b6f8c59e4996559
-Commit              : fix: refresh paper marks before trading starts
+HEAD GitHub intégré : 282267b1f491bb07b2644f6b9c5dca01c539697f
+Commit              : refactor: recalibrate strategic LLM prompts
 Batch 19.13         : intégré depuis 29316d7 ; durcissement LLM intégré dans aa404e4
 Correctif PERPETUAL : intégré dans b4f1e50
 Inspecteur LLM      : intégré dans 7846d89
 Valorisation PAPER  : correctif de refresh initial intégré dans 5fdd9a3
-Recalibrage prompts : patch proposé au-dessus de 5fdd9a3, non intégré à GitHub
+Recalibrage prompts : ADR-276 intégré dans 282267b
+Recalibrage net/cost: ADR-277 proposé au-dessus de 282267b, non intégré à GitHub
 ```
 
 ## Décisions historiques toujours actives
@@ -35,7 +36,8 @@ Recalibrage prompts : patch proposé au-dessus de 5fdd9a3, non intégré à GitH
 - ADR-273 : Sessions PAPER SPOT + PERPETUAL, FUTURE daté interdit ;
 - ADR-274 : inspection en lecture seule du payload OpenAI réel à la frontière `OpenAIResponsesClient` ;
 - ADR-275 : refresh initial des marks PAPER avant ouverture des cycles ;
-- ADR-276 : recalibrage du prompt stratégique sans cible de rendement injectée ni biais de quantité maximale.
+- ADR-276 : recalibrage du prompt stratégique sans cible de rendement injectée ni biais de quantité maximale ;
+- ADR-277 : recalibrage cost-aware vers l'equity nette, allocation du capital et agressivité sans turnover obligatoire.
 
 ## ADR-240 — Session est une façade UX, pas un nouvel agrégat persistant
 
@@ -115,30 +117,50 @@ Les tool loops sont représentées par plusieurs records ordonnés. La corrélat
 
 ## ADR-275 — Les marks PAPER sont rafraîchis avant le premier cycle
 
-**ADOPTÉ ET INTÉGRÉ AU HEAD `5fdd9a32bce45deda30c652b6b6f8c59e4996559`.**
+**ADOPTÉ ET INTÉGRÉ AU COMMIT `5fdd9a32bce45deda30c652b6b6f8c59e4996559`.**
 
 Les moniteurs SPOT et PERPETUAL terminent un premier `refresh_once()` avant de rendre le runtime initialisé. Une erreur de refresh ne fabrique aucune valorisation : le portefeuille reste incomplet et Capacity/Risk conservent leur comportement fail-closed.
 
 ## ADR-276 — L'agressivité ne détermine pas une quantité maximale
 
-**PROPOSÉ DANS LE PRÉSENT BATCH — NON INTÉGRÉ.**
+**ADOPTÉ ET INTÉGRÉ AU COMMIT `282267b1f491bb07b2644f6b9c5dca01c539697f`.**
 
 Les instructions stratégiques canoniques des Sessions/Campaigns ne contiennent plus la cible expérimentale `+4 %/jour`. Cette cible demeure documentée au niveau projet et reste explicitement non garantie.
 
-Le mapping durable `aggressiveness-map-v1` est conservé à l'identique pour les manifests/replays. Un mapping LLM courant `aggressiveness-map-v2` conserve une progression réelle de posture : sélectivité aux niveaux bas, initiative/volonté d'agir/rotation potentielle plus élevées aux niveaux hauts. En revanche, les formulations `very large strategic quantities` et `largest quantities` sont supprimées. Le niveau 10 reste `maximum_experimental` mais signifie **initiative stratégique maximale**, pas taille d'ordre maximale.
-
-Le contrat protégé courant fixe les invariants suivants :
-
-- agressivité élevée, y compris 10/10, != quantité maximale ;
-- sizing proportionné à la thèse, aux faits fournis, aux coûts et au capital déjà exposé ;
-- aucun trade pour produire de l'activité ou atteindre une cible de rendement ;
-- qualité de la thèse > fréquence ;
-- `HOLD` reste toujours valide si la thèse n'est pas suffisamment défendable ;
-- Risk garde l'autorité finale et ses contrôles ne sont jamais relâchés par l'agressivité.
-
-La section d'agressivité est désormais rendue par un helper partagé, ce qui corrige `niveat=` en `niveau=` sans créer de seconde implémentation parallèle.
+Le mapping durable `aggressiveness-map-v1` est conservé à l'identique pour les manifests/replays. Le mapping LLM courant intégré `aggressiveness-map-v2` supprime les formulations de quantité maximale et conserve une progression de posture. Le niveau 10 signifie initiative stratégique maximale, pas taille d'ordre maximale.
 
 Le `AGENT_SYSTEM_PROMPT` historique `agent-strategy-v4` reste figé pour les protocoles v1/v2/v3 et leurs replays ; le recalibrage porte sur les instructions courantes composées par `StrategyInstructionsClient`.
+
+## ADR-277 — L'Agent optimise la qualité économique nette, pas le turnover
+
+**PROPOSÉ DANS LE PRÉSENT BATCH AU-DESSUS DE `282267b` — NON INTÉGRÉ À GITHUB.**
+
+Motivation expérimentale : une session PAPER réelle d'environ 9 h, partie de `100`, a produit environ `+0,727` de P&L brut mais `-2,287` net, avec une equity finale d'environ `97,713`, `1 246` fills et des coûts importants. Cette observation montre qu'un turnover élevé peut annuler un avantage brut faible ; elle ne prouve pas la performance générale de la stratégie.
+
+Décision :
+
+- rendre explicite l'objectif de progression de l'equity **nette après coûts** ;
+- considérer frais, spread, slippage et funding lorsqu'il est disponible dans les faits fournis ;
+- raisonner en allocation et coût d'opportunité entre cash, positions existantes et nouvelles opportunités ;
+- considérer `HOLD`, cash et conservation d'une position comme des allocations valides ;
+- rappeler qu'une rotation cumule plusieurs coûts d'exécution ;
+- interdire l'interprétation « faible conviction -> petite position pour essayer » ;
+- faire évoluer le mapping LLM courant vers `aggressiveness-map-v3`, où l'agressivité augmente l'initiative sur les opportunités convaincantes mais n'impose ni turnover, ni micro-trades, ni fréquence minimale ;
+- ne créer aucun seuil de profit, cooldown, durée minimale, quota de trades, score algorithmique ou garantie de rendement ;
+- ne modifier ni Risk, ni Broker, ni planner, ni `AGENT_SYSTEM_PROMPT`, ni `aggressiveness-map-v1` historique.
+
+### Audit SELL / SHORT PERPETUAL associé
+
+Classification :
+
+- **confirmé** : le mapping BUY/SELL PERPETUAL, le planner, la sélection multi-marchés et Risk sont directionnellement symétriques ; aucune cause centrale ne favorise explicitement SHORT ;
+- **confirmé** : `aggressiveness-map-v2` augmentait explicitement rotation/fréquence potentielle aux niveaux élevés, facteur plausible de turnover global mais pas de biais SHORT démontré ;
+- **confirmé** : le texte générique de gestion utilisait « signal automatique de vente », asymétrique pour la réduction d'un SHORT ; le patch neutralise la formulation et rappelle `SELL` réduit LONG / `BUY` réduit SHORT ;
+- **obsolète** : les références documentaires disant que `282267b` n'était pas intégré ;
+- **manquant** : objectif net-equity, coûts de rotation et coût d'opportunité explicites ;
+- **à décider** : existence d'un biais SHORT persistant du modèle sur plusieurs sessions comparables.
+
+Aucun quota LONG/SHORT ni contre-biais déterministe n'est introduit.
 
 ## SCALP — audit de fraîcheur associé
 
@@ -146,17 +168,27 @@ Aucun changement de politique dans ce batch. `RiskEngine` / `SequentialCycleRisk
 
 Un durcissement SCALP éventuel doit être traité séparément après mesure de la latence `MarketState -> LLM -> Risk`, afin de choisir un seuil fondé sur la distribution réelle des latences.
 
-## Changelog — 2026-09-27 — Recalibrage prompts proposé
+## Changelog — 2026-09-28 — Recalibrage net/cost-aware proposé
 
-- base GitHub vérifiée : `5fdd9a32bce45deda30c652b6b6f8c59e4996559` ;
+- base GitHub vérifiée : `282267b1f491bb07b2644f6b9c5dca01c539697f` ;
+- dérive documentaire `5fdd9a3` -> `282267b` corrigée dans le patch ;
+- objectif courant : equity nette après coûts, pas activité brute ;
+- allocation cash / positions / nouvelles opportunités explicitée ;
+- coûts de rotation explicités sans seuil algorithmique ;
+- `aggressiveness-map-v3` courant, mapping v1 historique intact ;
+- formulation de management PERPETUAL rendue directionnellement neutre ;
+- aucune modification Risk/Broker/planner ;
+- constat du run 9 h documenté comme observation expérimentale, non comme vérité générale.
+
+## Changelog — 2026-09-27 — Recalibrage prompts intégré
+
+- commit `282267b1f491bb07b2644f6b9c5dca01c539697f` (`refactor: recalibrate strategic LLM prompts`) ;
 - suppression de `+4 %/jour` des contrats stratégiques courants ;
-- mapping agressivité 1–10 recalibré sans biais de quantité maximale ;
+- mapping agressivité courant `v2` sans biais de quantité maximale ;
 - garde-fou explicite « 10/10 != max quantity » ;
 - qualité de thèse > fréquence ; `HOLD` conservé ;
 - `niveat=` corrigé via renderer partagé ;
-- règles SPOT/PERPETUAL/Risk/multi-décisions inchangées ;
-- aucune modification frontend ;
-- politique SCALP stale inchangée.
+- règles SPOT/PERPETUAL/Risk/multi-décisions inchangées.
 
 ## Changelog — 2026-09-27 — Correctif valorisation PAPER intégré
 

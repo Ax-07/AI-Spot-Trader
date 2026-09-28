@@ -12,8 +12,8 @@ from ai_spot_trader.domain.models import (
 
 # Historical mapping used by paper-experiment-v1/v2/v3 manifests and replays.
 AGGRESSIVENESS_MAPPING_VERSION = "aggressiveness-map-v1"
-# Current LLM-facing mapping used by StrategyInstructionsClient / prompt composition.
-STRATEGIC_AGGRESSIVENESS_MAPPING_VERSION = "aggressiveness-map-v2"
+# Current cost-aware LLM-facing mapping used by StrategyInstructionsClient / prompt composition.
+STRATEGIC_AGGRESSIVENESS_MAPPING_VERSION = "aggressiveness-map-v3"
 TRADING_STYLE_MAPPING_VERSION = "trading-style-map-v1"
 EXPERIMENT_PROTOCOL_VERSION = "paper-experiment-v1"
 MODEL_EXPERIMENT_PROTOCOL_VERSION = "paper-experiment-v2"
@@ -89,60 +89,68 @@ _AGGRESSIVENESS_PROFILES: tuple[tuple[str, str], ...] = (
     ),
 )
 
-# Current LLM-facing v2 wording. High initiative is deliberately decoupled from maximum sizing.
+# Current LLM-facing v3 wording. High initiative is conditional on net strategic quality and is
+# deliberately decoupled from maximum sizing, turnover, and trade frequency.
 _STRATEGIC_AGGRESSIVENESS_PROFILES: tuple[tuple[str, str], ...] = (
     (
         "capital_preservation",
-        "Prefer HOLD unless the supplied facts make a trade unusually compelling. When acting, "
-        "keep sizing conservative and proportionate to thesis quality, costs, and existing exposure.",
+        "Prefer HOLD or cash unless the supplied facts make a trade unusually compelling after "
+        "costs. When acting, keep sizing conservative and proportionate to thesis quality and "
+        "existing exposure.",
     ),
     (
         "very_conservative",
-        "Require strong evidence before trading. Prefer HOLD when the thesis is marginal or mixed, "
-        "and keep sizing conservative and proportionate to the supplied facts.",
+        "Require strong evidence before trading. Prefer HOLD or cash when the thesis is marginal or "
+        "mixed, and keep sizing conservative and proportionate to the supplied facts and costs.",
     ),
     (
         "conservative",
-        "Trade selectively on clear evidence. Use HOLD readily when conviction is limited, and keep "
-        "sizing proportionate to thesis quality, costs, and existing exposure.",
+        "Trade selectively on clear evidence. Use HOLD readily when conviction is limited, compare "
+        "the opportunity with the current allocation, and keep sizing thesis-proportionate.",
     ),
     (
         "measured",
         "Favor selective trades with measured initiative. Do not force activity when the evidence is "
-        "inconclusive; size only in proportion to the supported thesis.",
+        "inconclusive; act only when the opportunity merits its execution costs and size in "
+        "proportion to the supported thesis.",
     ),
     (
         "balanced",
-        "Balance opportunity and restraint. Trade when the supplied facts support a clear thesis and "
-        "otherwise HOLD; keep sizing proportionate to conviction and portfolio context.",
+        "Balance opportunity and restraint. Trade when the supplied facts support a clear thesis that "
+        "is preferable to cash or the current position after costs; otherwise HOLD. Keep sizing "
+        "proportionate to conviction and portfolio context.",
     ),
     (
         "active",
-        "Be moderately more willing to act on a supported thesis and rotate capital when justified. "
-        "Sizing may scale with conviction, but never with aggressiveness alone.",
+        "Be moderately more willing to act when a supported opportunity is economically preferable "
+        "to the current allocation after supplied costs. Do not increase trade count for its own sake; "
+        "sizing remains thesis-proportionate.",
     ),
     (
         "assertive",
-        "Act assertively when the supplied facts support a coherent thesis. Take more initiative in "
-        "capital rotation while preserving HOLD for weak evidence and thesis-proportionate sizing.",
+        "Act assertively on coherent opportunities and compare them against cash and existing "
+        "positions. Rotate capital only when the strategic case is stronger after supplied costs; "
+        "preserve HOLD for weak evidence.",
     ),
     (
         "aggressive",
-        "Be willing to act on a broader set of defensible opportunities and take more initiative in "
-        "capital rotation. Do not trade merely to increase activity; sizing remains thesis-proportionate.",
+        "Take strong initiative on convincing opportunities, including reallocating capital when the "
+        "new thesis clearly deserves it after supplied costs. Do not interpret aggressiveness as a "
+        "need for higher turnover or micro-trades; sizing remains thesis-proportionate.",
     ),
     (
         "very_aggressive",
-        "Favor action when the supplied facts support a plausible and coherent opportunity, with high "
-        "initiative and potentially higher action frequency. HOLD remains valid, and aggressiveness "
-        "alone never justifies larger sizing.",
+        "Favor decisive action on convincing, defensible opportunities and accept somewhat broader "
+        "evidence than lower levels. Existing positions and cash remain valid when alternatives do not "
+        "justify the extra execution costs; aggressiveness alone never justifies larger sizing.",
     ),
     (
         "maximum_experimental",
-        "Use the highest experimental strategic initiative: act decisively on supported opportunities, "
-        "accept a less-perfect but still defensible thesis, and rotate capital actively when justified. "
-        "HOLD remains valid when no defensible trade exists. This level never implies maximum quantity; "
-        "sizing must remain proportionate to thesis quality, supplied facts, costs, and existing exposure.",
+        "Use the highest experimental strategic initiative when a defensible opportunity convincingly "
+        "improves the allocation. Accept a less-perfect but still defensible thesis, but do not "
+        "manufacture activity: HOLD, cash, or keeping an existing position remain valid when rotation "
+        "is not justified after supplied costs. This level never implies maximum quantity or maximum "
+        "trade frequency.",
     ),
 )
 
@@ -213,7 +221,7 @@ _TRADING_STYLE_PROFILES: dict[TradingStyle, dict[str, object]] = {
 
 
 def trading_style_context(style: TradingStyle) -> TradingStyleContext:
-    """Return the deterministic versioned strategic context for one trading style."""
+    """Return the deterministic versioned strategic context for one configured trading style."""
 
     if not isinstance(style, TradingStyle):
         raise ValueError("trading style must be a TradingStyle value")
