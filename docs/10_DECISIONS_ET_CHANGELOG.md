@@ -11,14 +11,11 @@ Les Sessions PAPER canoniques autorisent `SPOT` et `PERPETUAL` linéaire. `FUTUR
 ## Référence courante
 
 ```text
-Dernier commit fonctionnel intégré : 463850d8281faebe86a6ee733d58781c349015d0
-Commit              : refactor: make strategic agent cost aware
-Batch 19.13         : intégré depuis 29316d7 ; durcissement LLM intégré dans aa404e4
-Correctif PERPETUAL : intégré dans b4f1e50
-Inspecteur LLM      : intégré dans 7846d89
-Valorisation PAPER  : correctif de refresh initial intégré dans 5fdd9a3
-Recalibrage prompts : ADR-276 intégré dans 282267b
-Recalibrage net/cost: ADR-277 intégré dans 463850d
+HEAD GitHub audité     : b46f463c474e25a38da7ddcaebf588753922031b
+HEAD                   : feat: add session economic history
+Recalibrage net/cost   : ADR-277 intégré dans 463850d
+Historique économique  : ADR-278 intégré dans b46f463c
+Doctrine reasoning     : ADR-279 proposée dans le présent patch local
 ```
 
 ## Décisions historiques toujours actives
@@ -38,7 +35,8 @@ Recalibrage net/cost: ADR-277 intégré dans 463850d
 - ADR-275 : refresh initial des marks PAPER avant ouverture des cycles ;
 - ADR-276 : recalibrage du prompt stratégique sans cible de rendement injectée ni biais de quantité maximale ;
 - ADR-277 : recalibrage cost-aware vers l'equity nette, allocation du capital et agressivité sans turnover obligatoire ;
-- ADR-278 : historique économique Session/run comme projection en lecture seule, sans second ledger ni seconde comptabilité.
+- ADR-278 : historique économique Session/run comme projection en lecture seule, sans second ledger ni seconde comptabilité ;
+- ADR-279 : doctrine qualitative de raisonnement trading pour les prompts stratégiques courants, sans règles mécaniques.
 
 ## ADR-240 — Session est une façade UX, pas un nouvel agrégat persistant
 
@@ -166,9 +164,7 @@ Aucun quota LONG/SHORT ni contre-biais déterministe n'est introduit.
 
 ## ADR-278 — L'historique économique est une projection, pas une seconde comptabilité
 
-**ADOPTÉ DANS LE BATCH 25.**
-
-Base GitHub auditée avant intégration : `59f92938bf5159004783ae004fe99c808cb2c8c2`.
+**ADOPTÉ ET INTÉGRÉ AU COMMIT `b46f463c474e25a38da7ddcaebf588753922031b`.**
 
 Le cockpit doit pouvoir expliquer un run de plusieurs heures sans reconstruire manuellement des centaines de cycles. La solution retenue réutilise exclusivement les faits persistés et les analytics canoniques :
 
@@ -183,16 +179,52 @@ Le cockpit doit pouvoir expliquer un run de plusieurs heures sans reconstruire m
 
 La Session reste une façade : le cockpit associe Session -> Campaign -> têtes de lineage PAPER existantes, puis sélectionne explicitement le run économique à afficher. Aucune table Session, aucun ledger et aucune migration SQL ne sont ajoutés.
 
+## ADR-279 — Les prompts courants reçoivent une Trading Reasoning Doctrine qualitative
+
+**PROPOSÉ DANS LE PRÉSENT PATCH LOCAL SUR LA BASE `b46f463c`.**
+
+La doctrine `trading-reasoning-doctrine-v1` est une section canonique concise qui guide la façon dont le LLM construit une thèse à partir des faits disponibles. Elle couvre régime/structure, cohérence multi-timeframe, momentum/volatilité, qualité breakout/pullback lorsque les données le permettent, comparaison cash/positions/opportunités, coûts et invalidation de la thèse.
+
+Décision :
+
+- centraliser le texte dans `TRADING_REASONING_DOCTRINE` ;
+- l'injecter une seule fois dans le chemin singleton Campaign courant et une seule fois dans `strategic-multi-market-plan-v1` ;
+- ne pas l'injecter dans `market-discovery-v1`, qui construit une watchlist et ne produit pas la décision finale `BUY`/`SELL`/`HOLD` ;
+- laisser `AGENT_SYSTEM_PROMPT` `agent-strategy-v4` strictement inchangé ;
+- conserver `aggressiveness-map-v1` historique et `aggressiveness-map-v3` courant ;
+- conserver le recalibrage net/cost-aware ;
+- ne créer aucun seuil RSI/MACD, règle BUY/SELL mécanique, score, stop, take-profit, timer, quota de trades ou quota LONG/SHORT ;
+- ne modifier ni Risk, ni Broker, ni planner.
+
+L'invalidation d'une thèse est explicitement un concept de raisonnement stratégique et non un ordre automatique de sortie. `HOLD` ou conserver du cash restent des décisions valides lorsque les faits ne soutiennent pas une thèse suffisamment convaincante après coûts.
+
 ## SCALP — audit de fraîcheur associé
 
 Aucun changement de politique dans ce batch. `RiskEngine` / `SequentialCycleRiskEngine` possèdent déjà les rejets `MARKET_FRESHNESS_UNAVAILABLE` et `MARKET_DATA_STALE`. `kraken_stale_after_seconds` est toujours optionnel et vaut `None` par défaut. Au HEAD audité, `campaign_composition.py` ne renseigne pas `RiskPolicy.stale_after`, donc le rejet stale Risk n'est pas activé par défaut dans les Campaigns courantes.
 
 Un durcissement SCALP éventuel doit être traité séparément après mesure de la latence `MarketState -> LLM -> Risk`, afin de choisir un seuil fondé sur la distribution réelle des latences.
 
+## Changelog — 2026-09-28 — Trading Reasoning Doctrine v1 (patch local)
+
+- HEAD GitHub resynchronisé : `b46f463c474e25a38da7ddcaebf588753922031b` ;
+- doctrine qualitative centralisée dans `prompt.py` ;
+- injection singleton courant + plan multi-marchés ;
+- discovery laissée volontairement sans doctrine finale ;
+- `AGENT_SYSTEM_PROMPT` historique et mappings d'agressivité inchangés ;
+- SPOT/PERPETUAL, HOLD, net-cost-aware et autorité Risk préservés ;
+- aucun signal mécanique, scoring, quota ou changement Risk/Broker/planner ;
+- compilation Python des quatre fichiers runtime/tests modifiés : succès ;
+- harness local de composition des prompts : PASS ;
+- `test_trading_reasoning_doctrine.py` dans le harness isolé : `3/3` passés ;
+- validation locale utilisateur : suite ciblée `44/44` passée ;
+- premier `pytest -q` complet : un seul échec dans `test_trading_style.py`, dû à une attente exacte de composition non mise à jour pour la nouvelle section canonique ;
+- correctif : ajout de `TRADING_REASONING_DOCTRINE` à cette attente et contrôle d'unicité, sans modification runtime ;
+- rerun complet restant à effectuer localement après extraction du ZIP correctif.
+
 ## Changelog — 2026-09-28 — Batch 25 historique économique Session/run
 
-- base GitHub vérifiée : `59f92938bf5159004783ae004fe99c808cb2c8c2` ;
-- dernier commit fonctionnel intégré inchangé : `463850d8281faebe86a6ee733d58781c349015d0` ;
+- base GitHub vérifiée avant intégration : `59f92938bf5159004783ae004fe99c808cb2c8c2` ;
+- intégration GitHub constatée au HEAD `b46f463c474e25a38da7ddcaebf588753922031b` ;
 - projection économique en lecture seule ajoutée au-dessus d'analytics + audit existants ;
 - nouveaux endpoints `GET /api/v1/economic-history` et `/api/v1/economic-history/export` ;
 - distinction explicite `trade_count` / `fill_count` / décisions ;
@@ -201,18 +233,7 @@ Un durcissement SCALP éventuel doit être traité séparément après mesure de
 - écran Historique orienté Session/run avec filtres action/marché/type et export JSON ;
 - aucun changement Agent, prompt, `aggressiveness-map-v3`, Risk, Broker, cadence ou coûts ;
 - aucune migration SQL ;
-- validations de préparation : compilation Python, parsing TS/TSX, harness projection et `git diff --check` ;
-- validation locale finale : backend ciblé `11/11`, suite backend complète à `100 %`, frontend `39/39`, `pnpm lint` passé et `pnpm typecheck` passé ;
-- deux warnings de dépréciation Starlette/AnyIO et les warnings Node `MODULE_TYPELESS_PACKAGE_JSON` restent non bloquants et hors périmètre.
-
-## Changelog — 2026-09-28 — Correctif Batch 25 validé
-
-- validation locale initiale : échec unique backend sur désérialisation stricte `PortfolioState` ;
-- correction : relecture des payloads durables via `model_validate_json(json.dumps(...))` pour `PortfolioState` et `Fill` ;
-- quatre erreurs lint introduites dans `history-panel.tsx` corrigées sans changer le comportement métier ;
-- erreur lint préexistante de `llm-audit-panel.tsx` corrigée en lecture seule pour permettre la validation `pnpm lint` globale ;
-- `pnpm test` initial : `39/39` passés ; `pnpm typecheck` initial : passé ;
-- rerun après correctif : tests backend ciblés `11/11` passés, suite backend complète passée à `100 %`, frontend `pnpm test` `39/39`, `pnpm lint` passé, `pnpm typecheck` passé.
+- validation locale finale documentée : backend ciblé `11/11`, suite backend complète à `100 %`, frontend `39/39`, `pnpm lint` passé et `pnpm typecheck` passé.
 
 ## Changelog — 2026-09-28 — Recalibrage net/cost-aware intégré
 

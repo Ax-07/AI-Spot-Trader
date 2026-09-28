@@ -10,6 +10,7 @@ from ai_spot_trader.agent.prompt import (
     CAPITAL_ALLOCATION_GUARDRAIL,
     NET_ECONOMIC_OBJECTIVE_GUARDRAIL,
     SIGNAL_QUALITY_GUARDRAIL,
+    TRADING_REASONING_DOCTRINE,
     compose_agent_instructions,
     compose_aggressiveness_section,
     compose_trading_context_sections,
@@ -299,14 +300,20 @@ def _compose_strategy_context_sections(
     context: AggressivenessContext,
     trading_style_context: TradingStyleContext | None,
     execution_cost_context: ExecutionCostContext | None,
+    include_trading_reasoning_doctrine: bool,
 ) -> list[str]:
-    sections = [
-        (
-            "STRATEGIE OPERATEUR EDITABLE (subordonnee au contrat protege) :\n"
-            f"{strategy_prompt}"
-        ),
-        compose_aggressiveness_section(context),
-    ]
+    sections: list[str] = []
+    if include_trading_reasoning_doctrine:
+        sections.append(TRADING_REASONING_DOCTRINE.rstrip())
+    sections.extend(
+        [
+            (
+                "STRATEGIE OPERATEUR EDITABLE (subordonnee au contrat protege) :\n"
+                f"{strategy_prompt}"
+            ),
+            compose_aggressiveness_section(context),
+        ]
+    )
     sections.extend(
         compose_trading_context_sections(
             trading_style_context=trading_style_context,
@@ -381,6 +388,7 @@ Renvoyez uniquement les champs structures requis par le schema du CycleDecisionP
             context=context,
             trading_style_context=trading_style_context,
             execution_cost_context=execution_cost_context,
+            include_trading_reasoning_doctrine=True,
         )
     )
     return "\n\n".join(sections)
@@ -426,6 +434,7 @@ Regles protegees :
             context=context,
             trading_style_context=trading_style_context,
             execution_cost_context=execution_cost_context,
+            include_trading_reasoning_doctrine=False,
         )
     )
     return "\n\n".join(sections)

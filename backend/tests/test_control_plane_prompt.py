@@ -3,6 +3,7 @@ from hashlib import sha256
 import pytest
 
 from ai_spot_trader.agent.prompt import (
+    AGENT_PROMPT_VERSION,
     AGENT_SYSTEM_PROMPT,
     AGGRESSIVENESS_ACTIVITY_GUARDRAIL,
     AGGRESSIVENESS_QUANTITY_GUARDRAIL,
@@ -11,6 +12,8 @@ from ai_spot_trader.agent.prompt import (
     NET_ECONOMIC_OBJECTIVE_GUARDRAIL,
     PROTECTED_AGENT_CONTRACT,
     SIGNAL_QUALITY_GUARDRAIL,
+    TRADING_REASONING_DOCTRINE,
+    TRADING_REASONING_DOCTRINE_VERSION,
     compose_agent_instructions,
     compose_aggressiveness_section,
     normalize_strategy_prompt,
@@ -85,6 +88,60 @@ def test_current_protected_contract_is_net_equity_cost_aware_without_return_targ
     assert "HOLD" in PROTECTED_AGENT_CONTRACT
     assert "atteindre une cible de rendement" in PROTECTED_AGENT_CONTRACT
     assert "`FUTURE` daté est interdit" in PROTECTED_AGENT_CONTRACT
+
+
+def test_trading_reasoning_doctrine_is_current_only_qualitative_and_non_mechanical() -> None:
+    composition = compose_agent_instructions(
+        strategy_prompt="Cherche une thèse nette et défendable.",
+        aggressiveness_context=aggressiveness_context(5),
+    )
+
+    assert TRADING_REASONING_DOCTRINE_VERSION == "trading-reasoning-doctrine-v1"
+    assert composition.instructions.count(TRADING_REASONING_DOCTRINE.rstrip()) == 1
+    assert TRADING_REASONING_DOCTRINE not in AGENT_SYSTEM_PROMPT
+    assert AGENT_PROMPT_VERSION == "agent-strategy-v4"
+
+    doctrine = TRADING_REASONING_DOCTRINE
+    for expected in (
+        "régime",
+        "structure du marché",
+        "horizons disponibles",
+        "tendance",
+        "range",
+        "breakout",
+        "pullback",
+        "mouvement déjà trop étendu",
+        "momentum",
+        "volatilité",
+        "signal isolé",
+        "positions déjà ouvertes",
+        "risque de retournement",
+        "coûts d'exécution",
+        "coût d'opportunité",
+        "l'invalideraient",
+        "`HOLD`",
+        "conserver le cash",
+    ):
+        assert expected in doctrine
+
+    for forbidden in (
+        "RSI <",
+        "RSI >",
+        "MACD cross",
+        "profit >",
+        "stop après",
+        "durée >",
+        "N trades minimum",
+        "score technique déterministe",
+        "=> BUY",
+        "=> SELL",
+    ):
+        assert forbidden not in doctrine
+
+    assert "ne constitue jamais un stop-loss" in doctrine
+    assert "take-profit" in doctrine
+    assert "timer" in doctrine
+    assert "ne suffit jamais à lui seul" in doctrine
 
 
 def test_aggressiveness_mapping_covers_1_to_10_without_turnover_or_max_size_bias() -> None:

@@ -18,6 +18,7 @@ AGENT_PROMPT_VERSION = "agent-strategy-v4"
 # Batch 18.9A separates the immutable application contract from operator strategy text.
 BASE_AGENT_CONTRACT_VERSION = "agent-contract-v1"
 STRATEGY_PROMPT_DIGEST_VERSION = "strategy-prompt-sha256-v1"
+TRADING_REASONING_DOCTRINE_VERSION = "trading-reasoning-doctrine-v1"
 
 _STRATEGY_SECRET_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b"),
@@ -62,6 +63,29 @@ SIGNAL_QUALITY_GUARDRAIL = (
     "Une faible conviction ne doit pas être transformée mécaniquement en petite position pour "
     "essayer. La qualité nette attendue de la décision prime sur la fréquence des trades."
 )
+
+TRADING_REASONING_DOCTRINE = f"""\
+DOCTRINE DE RAISONNEMENT TRADING CANONIQUE : {TRADING_REASONING_DOCTRINE_VERSION}.
+
+Avant de proposer `BUY`, `SELL` ou `HOLD`, construisez une thèse à partir des faits réellement
+fournis. Interprétez d'abord le régime et la structure du marché ainsi que leur cohérence entre les
+horizons disponibles. Lorsque les données le permettent, distinguez tendance, range, breakout,
+pullback et mouvement déjà trop étendu ; examinez direction, momentum et volatilité sans inventer
+un fait absent de l'input.
+
+Un indicateur, pattern ou signal isolé ne suffit jamais à lui seul pour justifier un trade.
+Recherchez une convergence de faits compatible avec une thèse stratégique défendable. Comparez
+toute nouvelle opportunité au cash disponible et aux positions déjà ouvertes : potentiel restant,
+risque de retournement, coûts d'exécution et coût d'opportunité de déplacer le capital.
+
+Identifiez les faits qui soutiennent la thèse ainsi que ceux qui l'invalideraient. Cette
+invalidation fait partie du raisonnement stratégique ; elle ne constitue jamais un stop-loss,
+take-profit, timer ou ordre automatique de clôture.
+
+Ne forcez jamais une décision à partir d'un indicateur, d'un pattern, d'une cible d'activité ou
+d'une cible de rendement. Lorsque les faits ne permettent pas une thèse suffisamment convaincante
+après coûts, `HOLD` ou conserver le cash est une décision valide.
+"""
 
 PROTECTED_AGENT_CONTRACT = f"""\
 Vous êtes l'unique agent de trading stratégique pour AI Spot Trader.
@@ -304,6 +328,7 @@ def compose_agent_instructions(
     )
     sections = [
         PROTECTED_AGENT_CONTRACT.rstrip(),
+        TRADING_REASONING_DOCTRINE.rstrip(),
         strategy_section,
         compose_aggressiveness_section(aggressiveness_context),
     ]

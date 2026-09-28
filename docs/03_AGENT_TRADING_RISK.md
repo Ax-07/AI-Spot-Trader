@@ -84,6 +84,27 @@ La section `CONTEXTE D'AGRESSIVITE CANONIQUE` est composée par un helper partag
 
 Le `AGENT_SYSTEM_PROMPT` `agent-strategy-v4` reste volontairement figé pour préserver l'identité des protocoles expérimentaux historiques v1/v2/v3 et leurs replays. Il ne constitue pas le contrat injecté par les Sessions/Campaigns actuelles via `StrategyInstructionsClient`.
 
+## 4 bis. Trading Reasoning Doctrine v1
+
+Les instructions stratégiques courantes portent une section canonique versionnée `trading-reasoning-doctrine-v1`. Elle guide **la méthode de raisonnement du LLM** sans ajouter de stratégie algorithmique parallèle :
+
+- construire une thèse à partir des seuls faits fournis avant de proposer `BUY`, `SELL` ou `HOLD` ;
+- interpréter régime, structure et cohérence entre horizons disponibles ;
+- lorsque les données le permettent, distinguer tendance, range, breakout, pullback et mouvement déjà trop étendu, en examinant direction, momentum et volatilité ;
+- ne jamais traiter un indicateur, pattern ou signal isolé comme une justification suffisante ;
+- comparer toute nouvelle opportunité avec le cash et les positions ouvertes, en tenant compte du potentiel restant, du risque de retournement, des coûts et du coût d'opportunité ;
+- identifier les faits qui soutiennent la thèse et ceux qui l'invalideraient ; cette invalidation reste un élément de raisonnement, jamais un stop, take-profit, timer ou ordre automatique ;
+- conserver `HOLD` ou le cash lorsque les faits ne soutiennent pas une thèse suffisamment convaincante après coûts.
+
+La doctrine n'ajoute aucun seuil RSI/MACD, score technique, quota de trades, règle de profit, stop-loss/take-profit mécanique ou obligation d'activité. Elle n'invente aucun indicateur absent des inputs.
+
+Composition retenue :
+
+- chemin singleton Campaign courant : doctrine présente une seule fois via `compose_agent_instructions()` ;
+- plan stratégique multi-marchés : doctrine présente une seule fois via `StrategyInstructionsClient` ;
+- `market-discovery-v1` : doctrine non injectée, car cette phase construit uniquement une watchlist et ne constitue pas la décision `BUY`/`SELL`/`HOLD` ; ses garde-fous cost-aware existants restent inchangés ;
+- `AGENT_SYSTEM_PROMPT` historique `agent-strategy-v4` : strictement inchangé pour préserver les replays/manifests.
+
 ## 5. Allocation du capital et coût d'opportunité
 
 Le même Agent doit raisonner sur l'allocation globale entre :

@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from ai_spot_trader.agent.prompt import (
     PROTECTED_AGENT_CONTRACT,
+    TRADING_REASONING_DOCTRINE,
     compose_agent_instructions,
     compose_aggressiveness_section,
 )
@@ -239,12 +240,14 @@ def test_prompt_composition_adds_canonical_style_and_cost_sections_only_when_con
     expected_legacy = "\n\n".join(
         (
             PROTECTED_AGENT_CONTRACT.rstrip(),
+            TRADING_REASONING_DOCTRINE.rstrip(),
             "STRATEGIE OPERATEUR EDITABLE (subordonnee au contrat protege) :\n"
             "Cherche une opportunite defendable.",
             compose_aggressiveness_section(aggression),
         )
     )
     assert legacy.instructions == expected_legacy
+    assert legacy.instructions.count(TRADING_REASONING_DOCTRINE.rstrip()) == 1
     assert f"mapping_version={STRATEGIC_AGGRESSIVENESS_MAPPING_VERSION}" in legacy.instructions
     assert "CONTEXTE DE STYLE DE TRADING CANONIQUE" not in legacy.instructions
     assert "CONTEXTE DE COUTS D'EXECUTION PAPER CANONIQUE" not in legacy.instructions
@@ -256,6 +259,7 @@ def test_prompt_composition_adds_canonical_style_and_cost_sections_only_when_con
         execution_cost_context=_costs(),
     )
     assert styled.instructions.startswith(expected_legacy + "\n\n")
+    assert styled.instructions.count(TRADING_REASONING_DOCTRINE.rstrip()) == 1
     assert "style=SCALP" in styled.instructions
     assert "preferred_timeframes=1m,5m,15m,30m" in styled.instructions
     assert "fee_rate=0.0026" in styled.instructions
