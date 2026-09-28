@@ -4,16 +4,16 @@
 
 AI Spot Trader est une application expérimentale de trading **PAPER** pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est uniquement un cockpit de contrôle et de visualisation.
 
-Référence GitHub intégrée vérifiée au lancement du présent recalibrage :
+Référence GitHub intégrée vérifiée après le recalibrage net/cost-aware :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 282267b1f491bb07b2644f6b9c5dca01c539697f
-Commit     : refactor: recalibrate strategic LLM prompts
+HEAD       : 463850d8281faebe86a6ee733d58781c349015d0
+Commit     : refactor: make strategic agent cost aware
 ```
 
-Le correctif PAPER PERPETUAL, le cycle multi-décisions / multi-marchés, l'inspecteur LLM, le refresh initial des marks PAPER et le premier recalibrage des prompts stratégiques sont intégrés dans cette base. Le présent batch ajoute un recalibrage **cost-aware / net-equity-aware** au-dessus de ce HEAD ; il n'est pas intégré à GitHub tant qu'il n'a pas été appliqué et validé localement.
+Le correctif PAPER PERPETUAL, le cycle multi-décisions / multi-marchés, l'inspecteur LLM, le refresh initial des marks PAPER, le premier recalibrage des prompts stratégiques et le recalibrage **cost-aware / net-equity-aware** sont intégrés dans cette base.
 
 ## 2. Invariants fonctionnels
 
@@ -253,7 +253,7 @@ La configuration `kraken_stale_after_seconds` est optionnelle et vaut `None` par
 
 Une session PAPER réelle d'environ 9 heures, partie d'un capital de `100`, a montré un turnover élevé : `1 246` fills sur `395` cycles, avec un P&L brut positif d'environ `+0,727` mais une equity finale d'environ `97,713` et un P&L net d'environ `-2,287` après frais, spread, slippage et funding.
 
-Ce run montre qu'une activité importante peut être économiquement défavorable lorsque l'avantage brut est trop faible relativement aux coûts. Il motive le présent recalibrage vers la qualité économique nette et l'allocation du capital. **Il ne démontre pas à lui seul la performance générale ni un biais structurel durable de la stratégie.**
+Ce run montre qu'une activité importante peut être économiquement défavorable lorsque l'avantage brut est trop faible relativement aux coûts. Il motive le recalibrage vers la qualité économique nette et l'allocation du capital. **Il ne démontre pas à lui seul la performance générale ni un biais structurel durable de la stratégie.**
 
 ## 20. Audit du biais SELL / SHORT PERPETUAL
 
@@ -261,9 +261,8 @@ L'audit du contrat courant classe les éléments ainsi :
 
 - **confirmé** : le mapping BUY/SELL PERPETUAL, le planner, la sélection multi-marchés et l'autorité Risk sont directionnellement symétriques ; aucune règle centrale n'impose ou ne favorise explicitement SHORT ;
 - **confirmé** : le mapping d'agressivité courant `v2` poussait davantage l'initiative, la rotation et parfois la fréquence potentielle, ce qui pouvait favoriser le turnover global sans expliquer à lui seul la direction SHORT ;
-- **confirmé** : le texte générique de gestion parlait de « signal automatique de vente », formulation asymétrique pour la réduction d'un SHORT ; elle est neutralisée dans le présent patch ;
-- **obsolète** : la documentation qui présentait le commit `282267b` comme non intégré ;
-- **manquant** : objectif explicite d'equity nette après coûts, coût d'opportunité et comparaison rotation/conservation ;
+- **confirmé** : le texte générique de gestion parlait de « signal automatique de vente », formulation asymétrique pour la réduction d'un SHORT ; elle est neutralisée dans le recalibrage intégré ;
+- **corrigé** : objectif explicite d'equity nette après coûts, coût d'opportunité et comparaison rotation/conservation ;
 - **à décider** : l'existence d'un biais SHORT réellement persistant dans les décisions du modèle. Une seule session ne suffit pas à l'établir ; il faut comparer plusieurs runs et les contextes de marché avant toute règle corrective directionnelle.
 
 Aucun quota LONG/SHORT, contre-biais déterministe ni modification du Risk Engine n'est introduit.
@@ -286,4 +285,10 @@ Aucun quota LONG/SHORT, contre-biais déterministe ni modification du Risk Engin
 
 ## 22. Validation
 
-Les validations historiques des batches intégrés restent consultables dans leur documentation et dans Git. Toute validation du présent recalibrage doit être distinguée explicitement de ces résultats historiques.
+Validation locale du recalibrage intégré dans `463850d`, réalisée le 28 septembre 2026 :
+
+- tests ciblés `test_control_plane_prompt.py`, `test_multi_market_provider.py`, `test_trading_style.py` et `test_position_management_rotation.py` : `47/47` passés ;
+- suite backend complète `pytest -q` : `100 %` passée, sans échec ;
+- deux avertissements de dépréciation Starlette/AnyIO restent présents et sont hors périmètre.
+
+Les validations historiques des batches précédents restent consultables dans leur documentation et dans Git.

@@ -15,9 +15,10 @@ Les durcissements suivants sont également intégrés :
 aa404e46c1f05269ac2279507aa746b3af7a965d  fix: harden multi-market LLM plan contract
 b4f1e50f22164c7d019d11d930485733c01c6711  fix: restore paper perpetual session support
 282267b1f491bb07b2644f6b9c5dca01c539697f  refactor: recalibrate strategic LLM prompts
+463850d8281faebe86a6ee733d58781c349015d0  refactor: make strategic agent cost aware
 ```
 
-Le présent recalibrage cost-aware est un patch proposé au-dessus de `282267b` tant qu'il n'a pas été appliqué et validé localement.
+Le recalibrage cost-aware est intégré à GitHub `main` dans `463850d` après validation locale.
 
 ## 2. Objectif
 
@@ -135,9 +136,9 @@ Le cycle multi-décisions ne change pas :
 
 Les Sessions PAPER canoniques peuvent utiliser `SPOT` et `PERPETUAL` linéaire. Les contrôles dérivés existants restent déterministes et conservent l'autorité finale : marge isolée, levier configuré et plafonné, plafonds de notionnel/exposition, buffer de liquidation et `reduce_only`. `FUTURE` daté reste interdit.
 
-## 11. Validation historique du Batch 19.13
+## 11. Validation
 
-Résultats locaux fournis lors de l'intégration du Batch 19.13 :
+Résultats locaux fournis lors de l'intégration initiale du Batch 19.13 :
 
 ```text
 pytest ciblé : 51 passed
@@ -145,7 +146,7 @@ pytest complet : 698 passed, 2 warnings
 alembic upgrade head : succès PostgreSQL réel
 ```
 
-Frontend :
+Frontend historique :
 
 ```text
 pnpm test      : 39 passed
@@ -154,7 +155,15 @@ pnpm typecheck : succès
 pnpm build     : succès
 ```
 
-Ces nombres décrivent leurs validations historiques et ne valent pas validation du présent patch.
+Validation locale du recalibrage net/cost-aware intégré dans `463850d`, réalisée le 28 septembre 2026 :
+
+```text
+pytest ciblé : 47/47 passed
+pytest complet : 100 % passed, 0 failure
+warnings : 2 dépréciations Starlette/AnyIO hors périmètre
+```
+
+Les nombres ci-dessus correspondent à leurs validations respectives et ne doivent pas être fusionnés en un total unique.
 
 ## 12. Durcissement du contrat LLM
 
@@ -196,7 +205,7 @@ SELL -> ouvre/augmente SHORT, ou réduit LONG
 
 Levier, marge, `reduce_only`, exposition et liquidation restent du ressort exclusif du Risk Engine déterministe.
 
-## 14. Recalibrage cost-aware proposé après observation PAPER
+## 14. Recalibrage cost-aware intégré après observation PAPER
 
 Une session PAPER réelle d'environ 9 h a montré :
 
@@ -232,7 +241,7 @@ Aucun seuil de profit, cooldown, durée minimale, quota de trades ou score algor
 
 Le mapping expérimental historique `aggressiveness-map-v1` reste inchangé pour les manifests/replays.
 
-Le mapping LLM courant passe de `aggressiveness-map-v2` à `aggressiveness-map-v3` afin de versionner explicitement le nouveau comportement cost-aware. Le niveau 10 reste `maximum_experimental`, mais n'implique ni quantité maximale, ni fréquence maximale, ni rotation obligatoire.
+Le mapping LLM courant est passé de `aggressiveness-map-v2` à `aggressiveness-map-v3` dans `463850d` afin de versionner explicitement le nouveau comportement cost-aware. Le niveau 10 reste `maximum_experimental`, mais n'implique ni quantité maximale, ni fréquence maximale, ni rotation obligatoire.
 
 `AGENT_SYSTEM_PROMPT` `agent-strategy-v4` reste inchangé.
 
@@ -242,9 +251,8 @@ Classification du présent audit :
 
 - **confirmé** : pas de biais directionnel explicite dans le planner, le mapping BUY/SELL PERPETUAL, la sélection multi-marchés ou Risk ;
 - **confirmé** : `aggressiveness-map-v2` pouvait pousser le turnover global via davantage de rotation/fréquence potentielle ;
-- **confirmé** : le texte générique de gestion « signal automatique de vente » était directionnellement asymétrique ; il est remplacé par « réduction/clôture » et une formulation BUY/SELL symétrique ;
-- **obsolète** : la documentation présentant `282267b` comme non intégré ;
-- **manquant** : objectif net-equity et coût d'opportunité explicites ;
+- **confirmé** : le texte générique de gestion « signal automatique de vente » était directionnellement asymétrique ; il a été remplacé par « réduction/clôture » et une formulation BUY/SELL symétrique ;
+- **corrigé** : objectif net-equity et coût d'opportunité explicites ;
 - **à décider** : existence d'un biais SHORT persistant sur plusieurs runs comparables.
 
 Aucun quota LONG/SHORT ou contre-biais artificiel n'est introduit.

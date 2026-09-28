@@ -130,8 +130,8 @@ Les relations 1:N couvrent les décisions, `RiskAssessment` et `ExecutionIntent`
 HEAD GitHub intégré vérifié le 28 septembre 2026 :
 
 ```text
-282267b1f491bb07b2644f6b9c5dca01c539697f
-refactor: recalibrate strategic LLM prompts
+463850d8281faebe86a6ee733d58781c349015d0
+refactor: make strategic agent cost aware
 ```
 
-Le présent patch net/cost-aware est construit au-dessus de ce HEAD et n'est pas intégré à GitHub tant qu'il n'a pas été appliqué, validé localement et poussé par l'opérateur.
+Le recalibrage net/cost-aware est intégré à GitHub `main` dans `463850d`. Les prompts Campaign courants utilisent donc l'objectif économique net après coûts et `aggressiveness-map-v3`, tandis que les identités historiques restent inchangées.

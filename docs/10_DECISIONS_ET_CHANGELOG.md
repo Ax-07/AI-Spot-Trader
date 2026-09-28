@@ -11,14 +11,14 @@ Les Sessions PAPER canoniques autorisent `SPOT` et `PERPETUAL` linéaire. `FUTUR
 ## Référence courante
 
 ```text
-HEAD GitHub intégré : 282267b1f491bb07b2644f6b9c5dca01c539697f
-Commit              : refactor: recalibrate strategic LLM prompts
+HEAD GitHub intégré : 463850d8281faebe86a6ee733d58781c349015d0
+Commit              : refactor: make strategic agent cost aware
 Batch 19.13         : intégré depuis 29316d7 ; durcissement LLM intégré dans aa404e4
 Correctif PERPETUAL : intégré dans b4f1e50
 Inspecteur LLM      : intégré dans 7846d89
 Valorisation PAPER  : correctif de refresh initial intégré dans 5fdd9a3
 Recalibrage prompts : ADR-276 intégré dans 282267b
-Recalibrage net/cost: ADR-277 proposé au-dessus de 282267b, non intégré à GitHub
+Recalibrage net/cost: ADR-277 intégré dans 463850d
 ```
 
 ## Décisions historiques toujours actives
@@ -127,13 +127,13 @@ Les moniteurs SPOT et PERPETUAL terminent un premier `refresh_once()` avant de r
 
 Les instructions stratégiques canoniques des Sessions/Campaigns ne contiennent plus la cible expérimentale `+4 %/jour`. Cette cible demeure documentée au niveau projet et reste explicitement non garantie.
 
-Le mapping durable `aggressiveness-map-v1` est conservé à l'identique pour les manifests/replays. Le mapping LLM courant intégré `aggressiveness-map-v2` supprime les formulations de quantité maximale et conserve une progression de posture. Le niveau 10 signifie initiative stratégique maximale, pas taille d'ordre maximale.
+À ce commit, le mapping LLM courant `aggressiveness-map-v2` supprimait les formulations de quantité maximale et conservait une progression de posture. Il est ensuite supersédé pour les Campaigns courantes par `aggressiveness-map-v3` via ADR-277. Le mapping durable `aggressiveness-map-v1` reste conservé à l'identique pour les manifests/replays.
 
 Le `AGENT_SYSTEM_PROMPT` historique `agent-strategy-v4` reste figé pour les protocoles v1/v2/v3 et leurs replays ; le recalibrage porte sur les instructions courantes composées par `StrategyInstructionsClient`.
 
 ## ADR-277 — L'Agent optimise la qualité économique nette, pas le turnover
 
-**PROPOSÉ DANS LE PRÉSENT BATCH AU-DESSUS DE `282267b` — NON INTÉGRÉ À GITHUB.**
+**ADOPTÉ ET INTÉGRÉ AU COMMIT `463850d8281faebe86a6ee733d58781c349015d0`.**
 
 Motivation expérimentale : une session PAPER réelle d'environ 9 h, partie de `100`, a produit environ `+0,727` de P&L brut mais `-2,287` net, avec une equity finale d'environ `97,713`, `1 246` fills et des coûts importants. Cette observation montre qu'un turnover élevé peut annuler un avantage brut faible ; elle ne prouve pas la performance générale de la stratégie.
 
@@ -149,15 +149,16 @@ Décision :
 - ne créer aucun seuil de profit, cooldown, durée minimale, quota de trades, score algorithmique ou garantie de rendement ;
 - ne modifier ni Risk, ni Broker, ni planner, ni `AGENT_SYSTEM_PROMPT`, ni `aggressiveness-map-v1` historique.
 
+Validation locale du commit : tests ciblés `47/47` passés ; suite backend complète `pytest -q` passée à `100 %` sans échec. Deux avertissements de dépréciation Starlette/AnyIO restent hors périmètre.
+
 ### Audit SELL / SHORT PERPETUAL associé
 
 Classification :
 
 - **confirmé** : le mapping BUY/SELL PERPETUAL, le planner, la sélection multi-marchés et Risk sont directionnellement symétriques ; aucune cause centrale ne favorise explicitement SHORT ;
 - **confirmé** : `aggressiveness-map-v2` augmentait explicitement rotation/fréquence potentielle aux niveaux élevés, facteur plausible de turnover global mais pas de biais SHORT démontré ;
-- **confirmé** : le texte générique de gestion utilisait « signal automatique de vente », asymétrique pour la réduction d'un SHORT ; le patch neutralise la formulation et rappelle `SELL` réduit LONG / `BUY` réduit SHORT ;
-- **obsolète** : les références documentaires disant que `282267b` n'était pas intégré ;
-- **manquant** : objectif net-equity, coûts de rotation et coût d'opportunité explicites ;
+- **confirmé** : le texte générique de gestion utilisait « signal automatique de vente », asymétrique pour la réduction d'un SHORT ; le recalibrage neutralise la formulation et rappelle `SELL` réduit LONG / `BUY` réduit SHORT ;
+- **corrigé** : objectif net-equity, coûts de rotation et coût d'opportunité explicites ;
 - **à décider** : existence d'un biais SHORT persistant du modèle sur plusieurs sessions comparables.
 
 Aucun quota LONG/SHORT ni contre-biais déterministe n'est introduit.
@@ -168,23 +169,24 @@ Aucun changement de politique dans ce batch. `RiskEngine` / `SequentialCycleRisk
 
 Un durcissement SCALP éventuel doit être traité séparément après mesure de la latence `MarketState -> LLM -> Risk`, afin de choisir un seuil fondé sur la distribution réelle des latences.
 
-## Changelog — 2026-09-28 — Recalibrage net/cost-aware proposé
+## Changelog — 2026-09-28 — Recalibrage net/cost-aware intégré
 
-- base GitHub vérifiée : `282267b1f491bb07b2644f6b9c5dca01c539697f` ;
-- dérive documentaire `5fdd9a3` -> `282267b` corrigée dans le patch ;
+- commit `463850d8281faebe86a6ee733d58781c349015d0` (`refactor: make strategic agent cost aware`) ;
+- base précédente : `282267b1f491bb07b2644f6b9c5dca01c539697f` ;
 - objectif courant : equity nette après coûts, pas activité brute ;
 - allocation cash / positions / nouvelles opportunités explicitée ;
 - coûts de rotation explicités sans seuil algorithmique ;
 - `aggressiveness-map-v3` courant, mapping v1 historique intact ;
 - formulation de management PERPETUAL rendue directionnellement neutre ;
 - aucune modification Risk/Broker/planner ;
-- constat du run 9 h documenté comme observation expérimentale, non comme vérité générale.
+- constat du run 9 h documenté comme observation expérimentale, non comme vérité générale ;
+- validation locale : tests ciblés `47/47`, suite backend complète `pytest -q` à `100 %` sans échec.
 
 ## Changelog — 2026-09-27 — Recalibrage prompts intégré
 
 - commit `282267b1f491bb07b2644f6b9c5dca01c539697f` (`refactor: recalibrate strategic LLM prompts`) ;
 - suppression de `+4 %/jour` des contrats stratégiques courants ;
-- mapping agressivité courant `v2` sans biais de quantité maximale ;
+- mapping agressivité courant `v2` sans biais de quantité maximale à cette étape ;
 - garde-fou explicite « 10/10 != max quantity » ;
 - qualité de thèse > fréquence ; `HOLD` conservé ;
 - `niveat=` corrigé via renderer partagé ;

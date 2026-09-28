@@ -1,70 +1,73 @@
-﻿# 00 â€” Ã‰tat actuel
+# 00 — État actuel
 
-## RÃ©fÃ©rence GitHub vÃ©rifiÃ©e
+## Référence GitHub vérifiée
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 282267b1f491bb07b2644f6b9c5dca01c539697f
-Commit     : refactor: recalibrate strategic LLM prompts
-VÃ©rifiÃ©    : 2026-09-28
+HEAD       : 463850d8281faebe86a6ee733d58781c349015d0
+Commit     : refactor: make strategic agent cost aware
+Vérifié    : 2026-09-28
 ```
 
-La dÃ©rive documentaire prÃ©cÃ©dente est corrigÃ©e dans ce patch : `282267b` est bien **intÃ©grÃ©** Ã  GitHub `main`. Le prÃ©sent recalibrage net/cost-aware est un patch proposÃ© **au-dessus de `282267b`** et n'est pas intÃ©grÃ© Ã  GitHub tant que l'opÃ©rateur ne l'a pas appliquÃ©, validÃ© et poussÃ©.
+Le recalibrage stratégique net/cost-aware est **intégré** à GitHub `main` dans `463850d`.
 
-## Ã‰tat fonctionnel Ã  prÃ©server
+## État fonctionnel à préserver
 
-- un seul Agent IA stratÃ©gique ;
+- un seul Agent IA stratégique ;
 - PAPER uniquement ;
-- SPOT + PERPETUAL linÃ©aire ; FUTURE datÃ© interdit ;
+- SPOT + PERPETUAL linéaire ; FUTURE daté interdit ;
 - BUY / SELL / HOLD ; SPOT sans short ; PERPETUAL LONG/SHORT ;
-- plan multi-marchÃ©s / multi-dÃ©cisions ordonnÃ© ;
-- Risk Engine dÃ©terministe = autoritÃ© finale ;
+- plan multi-marchés / multi-décisions ordonné ;
+- Risk Engine déterministe = autorité finale ;
 - aucune sortie LLM -> ordre direct ;
-- dÃ©cisions sÃ©quentielles et causales ;
-- `HOLD` journalisÃ© ; `management_mode` conservÃ© ;
-- historique expÃ©rimental/replays prÃ©servÃ© ;
-- `AGENT_SYSTEM_PROMPT` historique `agent-strategy-v4` et `aggressiveness-map-v1` inchangÃ©s.
+- décisions séquentielles et causales ;
+- `HOLD` journalisé ; `management_mode` conservé ;
+- historique expérimental/replays préservé ;
+- `AGENT_SYSTEM_PROMPT` historique `agent-strategy-v4` et `aggressiveness-map-v1` inchangés.
 
-## Recalibrage stratÃ©gique proposÃ©
+## Recalibrage stratégique intégré
 
-Le prompt Campaign courant est rendu explicitement orientÃ© vers la **progression de l'equity nette aprÃ¨s coÃ»ts** plutÃ´t que vers l'activitÃ© brute. Frais, spread, slippage et funding lorsqu'il est disponible dans les faits fournis font partie du rÃ©sultat Ã©conomique.
+Les prompts Campaign courants sont explicitement orientés vers la **progression de l'equity nette après coûts** plutôt que vers l'activité brute. Frais, spread, slippage et funding lorsqu'il est disponible dans les faits fournis font partie du résultat économique.
 
-L'Agent doit raisonner en allocation et coÃ»t d'opportunitÃ© entre cash, positions existantes et nouvelles opportunitÃ©s. `HOLD`, conserver du cash et conserver une position sont des allocations valides. Une rotation doit Ãªtre justifiÃ©e face aux coÃ»ts cumulÃ©s des rÃ©ductions/clÃ´tures et nouvelles ouvertures ; aucune rÃ¨gle dÃ©terministe de profit, cooldown, durÃ©e minimale, quota de trades ou score d'opportunitÃ© n'est ajoutÃ©e.
+L'Agent raisonne en allocation et coût d'opportunité entre cash, positions existantes et nouvelles opportunités. `HOLD`, conserver du cash et conserver une position sont des allocations valides. Une rotation doit être justifiée face aux coûts cumulés des réductions/clôtures et nouvelles ouvertures ; aucune règle déterministe de profit, cooldown, durée minimale, quota de trades ou score d'opportunité n'est ajoutée.
 
-Le mapping LLM courant devient `aggressiveness-map-v3` : davantage d'initiative aux niveaux Ã©levÃ©s lorsque l'opportunitÃ© est convaincante, mais aucune obligation de turnover, micro-trades, frÃ©quence minimale ou taille maximale.
+Le mapping LLM courant est `aggressiveness-map-v3` : davantage d'initiative aux niveaux élevés lorsque l'opportunité est convaincante, mais aucune obligation de turnover, micro-trades, fréquence minimale ou taille maximale.
 
-## Constat PAPER motivant le patch
+## Constat PAPER motivant le recalibrage
 
-Une session rÃ©elle d'environ 9 h a montrÃ© un turnover Ã©levÃ© (`1 246` fills / `395` cycles), un P&L brut positif (~`+0,727`) mais un P&L net nÃ©gatif (~`-2,287`) aprÃ¨s coÃ»ts, pour une equity finale ~`97,713` depuis `100`.
+Une session réelle d'environ 9 h a montré un turnover élevé (`1 246` fills / `395` cycles), un P&L brut positif (~`+0,727`) mais un P&L net négatif (~`-2,287`) après coûts, pour une equity finale ~`97,713` depuis `100`.
 
-Ce run motive le recalibrage cost-aware. **Il ne prouve pas la performance gÃ©nÃ©rale de la stratÃ©gie.**
+Ce run motive le recalibrage cost-aware. **Il ne prouve pas la performance générale de la stratégie.**
 
 ## Audit SELL / SHORT PERPETUAL
 
-- **confirmÃ©** : BUY/SELL PERPETUAL, planner, sÃ©lection multi-marchÃ©s et Risk sont directionnellement symÃ©triques ; aucune cause centrale n'impose SHORT ;
-- **confirmÃ©** : le mapping d'agressivitÃ© `v2` pouvait pousser le turnover global ;
-- **confirmÃ©** : la formulation gÃ©nÃ©rique Â« signal automatique de vente Â» Ã©tait asymÃ©trique pour la rÃ©duction d'un SHORT ; le patch la neutralise ;
-- **obsolÃ¨te** : rÃ©fÃ©rence documentaire Ã  `5fdd9a3` comme HEAD courant et statut Â« non intÃ©grÃ© Â» de `282267b` ;
-- **manquant avant ce patch** : objectif net-equity, coÃ»t d'opportunitÃ© et coÃ»ts de rotation explicites ;
-- **Ã  dÃ©cider** : existence d'un biais SHORT persistant du modÃ¨le sur plusieurs runs comparables.
+- **confirmé** : BUY/SELL PERPETUAL, planner, sélection multi-marchés et Risk sont directionnellement symétriques ; aucune cause centrale n'impose SHORT ;
+- **confirmé** : le mapping d'agressivité `v2` pouvait pousser le turnover global ;
+- **confirmé** : la formulation générique « signal automatique de vente » était asymétrique pour la réduction d'un SHORT ; elle a été neutralisée ;
+- **corrigé** : objectif net-equity, coût d'opportunité et coûts de rotation sont désormais explicites dans les instructions courantes ;
+- **à décider** : existence d'un biais SHORT persistant du modèle sur plusieurs runs comparables.
 
-Aucun quota LONG/SHORT ni modification du Risk Engine n'est introduit.
+Aucun quota LONG/SHORT ni modification du Risk Engine n'a été introduit.
 
-## Fichiers principaux du patch
+## Validation du commit `463850d`
+
+Validation locale réalisée le 28 septembre 2026 :
+
+- tests ciblés du recalibrage stratégique : `47/47` passés ;
+- suite backend complète `pytest -q` : `100 %` passée, sans échec ;
+- deux avertissements de dépréciation Starlette/AnyIO restent présents et sont hors périmètre de ce batch.
+
+## Fichiers principaux concernés
 
 - `backend/src/ai_spot_trader/agent/prompt.py`
 - `backend/src/ai_spot_trader/agent/strategy_client.py`
 - `backend/src/ai_spot_trader/domain/experiments.py`
 - `backend/tests/test_control_plane_prompt.py`
 - `backend/tests/test_multi_market_provider.py`
-- `docs/00_ETAT_ACTUEL.md`
+- `backend/tests/test_position_management_rotation.py`
+- `README.md`
 - `docs/01_PROJECT_MASTER.md`
 - `docs/03_AGENT_TRADING_RISK.md`
 - `docs/10_DECISIONS_ET_CHANGELOG.md`
 - `docs/24_BATCH_19_13_CYCLE_STRATEGIQUE_MULTI_MARCHES.md`
-
-## Validation
-
-Les rÃ©sultats du prÃ©sent patch doivent Ãªtre distinguÃ©s des validations historiques. Aucun rÃ©sultat de test n'est dÃ©clarÃ© ici avant exÃ©cution rÃ©elle.
-
