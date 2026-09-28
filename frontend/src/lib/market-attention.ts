@@ -36,6 +36,21 @@ export type MarketActivitySnapshot = {
   error_type: string | null;
 };
 
+export type ActivityStatusCounts = {
+  AVAILABLE: number;
+  PARTIAL: number;
+  STALE: number;
+  ERROR: number;
+};
+
+export type ActivityStateCounts = Record<MarketActivityState, number>;
+
+export type SubthresholdActivitySnapshot = {
+  market: AttentionMarket;
+  peak_volume_ratio: string;
+  peak_timeframe: AttentionTimeframe;
+};
+
 export type PublicAttentionSource = {
   title: string;
   url: string;
@@ -94,6 +109,9 @@ export type MarketAttentionOverview = {
   scanned_market_count: number;
   candidate_market_count: number;
   web_search_count: number;
+  activity_status_counts: ActivityStatusCounts;
+  activity_state_counts: ActivityStateCounts;
+  subthreshold_activity: SubthresholdActivitySnapshot[];
   shortlist: MarketAttentionSnapshot[];
   error_type: string | null;
 };
@@ -128,6 +146,27 @@ export function formatSignedPercent(value: string | null | undefined): string {
   if (!Number.isFinite(parsed)) return "—";
   const percent = parsed * 100;
   return `${percent > 0 ? "+" : ""}${percent.toFixed(2)} %`;
+}
+
+export function marketAttentionStatusMessage(overview: MarketAttentionOverview): string {
+  if (overview.status === "NOT_CONFIGURED") return "Radar non configuré.";
+  if (overview.status === "ERROR") return "Radar en erreur — consulter le diagnostic backend.";
+  if (overview.status === "STALE") return "Radar opérationnel mais données d’activité périmées.";
+  if (overview.status === "PARTIAL") {
+    return overview.candidate_market_count > 0
+      ? "Radar partiellement disponible — certains enrichissements ou marchés sont dégradés."
+      : "Radar partiellement disponible — aucune activité inhabituelle confirmée sur les données exploitables.";
+  }
+  if (overview.candidate_market_count === 0) {
+    const degradedCount =
+      overview.activity_status_counts.PARTIAL
+      + overview.activity_status_counts.STALE
+      + overview.activity_status_counts.ERROR;
+    return degradedCount > 0
+      ? "Radar opérationnel — aucun événement inhabituel détecté sur les marchés disponibles."
+      : "Radar opérationnel — aucun événement inhabituel détecté.";
+  }
+  return `Radar opérationnel — ${overview.candidate_market_count} candidat${overview.candidate_market_count > 1 ? "s" : ""} d’attention.`;
 }
 
 export async function fetchMarketAttention(signal?: AbortSignal): Promise<MarketAttentionOverview> {

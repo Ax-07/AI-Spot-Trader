@@ -12,6 +12,7 @@ import {
   fetchMarketAttention,
   formatSignedPercent,
   formatVolumeRatio,
+  marketAttentionStatusMessage,
   type MarketAttentionOverview,
   type MarketAttentionSnapshot,
   type RadarStatus,
@@ -140,6 +141,15 @@ function Fact({ label, value }: { label: string; value: string }) {
   );
 }
 
+function CountLine({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex items-center justify-between gap-3 font-mono text-[11px] tabular-nums">
+      <span className="text-muted-foreground">{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
 export function MarketAttentionDock() {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<MarketAttentionOverview | null>(null);
@@ -182,7 +192,7 @@ export function MarketAttentionDock() {
     <>
       <Button type="button" onClick={toggleOpen} className="fixed bottom-5 right-5 z-50 shadow-xl" aria-expanded={open}>
         <Radar className="size-4" /> Radar marché
-        {data ? <Badge tone={statusTone(data.status)}>{data.status}</Badge> : null}
+        {data ? <span className="ml-1"><Badge tone={statusTone(data.status)}>{data.status}</Badge></span> : null}
       </Button>
 
       {open ? (
@@ -196,8 +206,8 @@ export function MarketAttentionDock() {
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <CardTitle className="flex items-center gap-2"><Radar className="size-4" /> Market Attention</CardTitle>
-                  <Badge tone="info">INFORMATIF — N’INFLUENCE PAS LE TRADING</Badge>
-                  {data ? <Badge tone={statusTone(data.status)}>{data.status}</Badge> : null}
+                  <span className="inline-flex"><Badge tone="info">INFORMATIF — N’INFLUENCE PAS LE TRADING</Badge></span>
+                  {data ? <span className="inline-flex"><Badge tone={statusTone(data.status)}>État · {data.status}</Badge></span> : null}
                 </div>
                 <CardDescription className="mt-1">Volume relatif Kraken + attention publique sourcée. Aucun BUY/SELL/HOLD, aucun signal de direction.</CardDescription>
               </div>
@@ -215,11 +225,58 @@ export function MarketAttentionDock() {
               <div className="space-y-4">
                 <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
                   <Fact label="Catalogue" value={String(data.catalogue_market_count)} />
-                  <Fact label="Activité en cache" value={String(data.cached_activity_market_count)} />
+                  <Fact label="Marchés frais" value={String(data.cached_activity_market_count)} />
                   <Fact label="Scannés refresh" value={String(data.scanned_market_count)} />
                   <Fact label="Candidats" value={String(data.candidate_market_count)} />
                   <Fact label="Recherches web" value={String(data.web_search_count)} />
                 </div>
+
+                <div className="rounded-lg border bg-muted/10 px-3 py-2 text-xs font-medium">
+                  {marketAttentionStatusMessage(data)}
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="rounded-lg border p-3">
+                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Données</p>
+                    <div className="grid grid-cols-2 gap-x-5 gap-y-1.5">
+                      <CountLine label="AVAILABLE" value={data.activity_status_counts.AVAILABLE} />
+                      <CountLine label="PARTIAL" value={data.activity_status_counts.PARTIAL} />
+                      <CountLine label="STALE" value={data.activity_status_counts.STALE} />
+                      <CountLine label="ERROR" value={data.activity_status_counts.ERROR} />
+                    </div>
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Activité</p>
+                    <div className="grid grid-cols-2 gap-x-5 gap-y-1.5">
+                      <CountLine label="NORMAL" value={data.activity_state_counts.NORMAL} />
+                      <CountLine label="ELEVATED" value={data.activity_state_counts.ELEVATED} />
+                      <CountLine label="ACCELERATING" value={data.activity_state_counts.ACCELERATING} />
+                      <CountLine label="VERY_HIGH" value={data.activity_state_counts.VERY_HIGH} />
+                      <CountLine label="UNKNOWN" value={data.activity_state_counts.UNKNOWN} />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border p-3">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <p className="text-xs font-semibold">Plus fortes activités sous seuil</p>
+                    <p className="text-[10px] text-muted-foreground">Diagnostic uniquement · aucun appel web</p>
+                  </div>
+                  {data.subthreshold_activity.length ? (
+                    <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                      {data.subthreshold_activity.map((item) => (
+                        <div key={`${item.market.market_type}:${item.market.symbol}`} className="flex items-center justify-between gap-3 rounded-md bg-muted/15 px-2.5 py-2 text-xs">
+                          <div className="min-w-0">
+                            <span className="truncate font-semibold">{item.market.symbol}</span>
+                            <span className="ml-1.5 text-[10px] text-muted-foreground">{item.market.market_type}</span>
+                          </div>
+                          <span className="shrink-0 font-mono font-semibold tabular-nums">{formatVolumeRatio(item.peak_volume_ratio)} · {item.peak_timeframe}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <p className="mt-2 text-xs text-muted-foreground">Aucun marché `AVAILABLE / NORMAL` avec ratio exploitable dans le cache frais.</p>}
+                </div>
+
                 {displayed.length ? (
                   <div className="space-y-2">
                     {displayed.map((item) => {

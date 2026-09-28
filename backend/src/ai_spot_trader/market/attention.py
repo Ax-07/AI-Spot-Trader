@@ -70,6 +70,7 @@ class MarketAttentionPolicy(AttentionModel):
     scan_limit: int = Field(default=120, ge=10, le=500)
     scan_concurrency: int = Field(default=8, ge=1, le=32)
     candidate_limit: int = Field(default=20, ge=1, le=30)
+    diagnostic_market_limit: int = Field(default=10, ge=1, le=30)
     max_web_searches_per_refresh: int = Field(default=8, ge=0, le=30)
     candle_limit: int = Field(default=720, ge=160, le=1000)
     baseline_periods: int = Field(default=6, ge=3, le=20)
@@ -116,6 +117,27 @@ class MarketActivitySnapshot(AttentionModel):
 
     def horizon(self, timeframe: CandleTimeframe) -> ActivityHorizonSnapshot | None:
         return next((item for item in self.horizons if item.timeframe is timeframe), None)
+
+
+class ActivityStatusCounts(AttentionModel):
+    AVAILABLE: int = Field(default=0, ge=0)
+    PARTIAL: int = Field(default=0, ge=0)
+    STALE: int = Field(default=0, ge=0)
+    ERROR: int = Field(default=0, ge=0)
+
+
+class ActivityStateCounts(AttentionModel):
+    UNKNOWN: int = Field(default=0, ge=0)
+    NORMAL: int = Field(default=0, ge=0)
+    ELEVATED: int = Field(default=0, ge=0)
+    ACCELERATING: int = Field(default=0, ge=0)
+    VERY_HIGH: int = Field(default=0, ge=0)
+
+
+class SubthresholdActivitySnapshot(AttentionModel):
+    market: ExecutableMarket
+    peak_volume_ratio: Decimal
+    peak_timeframe: CandleTimeframe
 
 
 class PublicAttentionMetric(AttentionModel):
@@ -199,6 +221,9 @@ class MarketAttentionOverview(AttentionModel):
     scanned_market_count: int = Field(default=0, ge=0)
     candidate_market_count: int = Field(default=0, ge=0)
     web_search_count: int = Field(default=0, ge=0)
+    activity_status_counts: ActivityStatusCounts = Field(default_factory=ActivityStatusCounts)
+    activity_state_counts: ActivityStateCounts = Field(default_factory=ActivityStateCounts)
+    subthreshold_activity: tuple[SubthresholdActivitySnapshot, ...] = ()
     shortlist: tuple[MarketAttentionSnapshot, ...] = ()
     error_type: str | None = None
 
@@ -456,7 +481,11 @@ class MarketAttentionRadar:
                 scan_batch = self._next_scan_batch(catalogue)
                 scanned_count = len(scan_batch)
                 await self._scan_activity(scan_batch, now=now)
-                candidates = self._candidates(now)
+                fresh_activities = self._fresh_activities(now)
+                status_counts = _activity_status_counts(fresh_activities)
+                state_counts = _activity_state_counts(fresh_activities)
+                subthreshold_activity = self._subthreshold_activity(fresh_activities)
+                candidates = self._candidates_from(fresh_activities)
                 public_by_asset, web_search_count = await self._public_attention(
                     candidates,
                     now=now,
@@ -488,6 +517,7 @@ class MarketAttentionRadar:
                 shortlist = tuple(sorted(combined, key=_attention_sort_key, reverse=True))
                 status = _overview_status(
                     shortlist,
+                    fresh_activities=fresh_activities,
                     researcher_configured=self._researcher is not None,
                 )
                 overview = MarketAttentionOverview(
@@ -495,24 +525,31 @@ class MarketAttentionRadar:
                     status=status,
                     informative_only=True,
                     catalogue_market_count=len(catalogue),
-                    cached_activity_market_count=len(self._fresh_activities(now)),
+                    cached_activity_market_count=len(fresh_activities),
                     scanned_market_count=scanned_count,
                     candidate_market_count=len(shortlist),
                     web_search_count=web_search_count,
+                    activity_status_counts=status_counts,
+                    activity_state_counts=state_counts,
+                    subthreshold_activity=subthreshold_activity,
                     shortlist=shortlist,
                 )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                fresh_activities = self._fresh_activities(now)
                 overview = MarketAttentionOverview(
                     observed_at=now,
                     status=RadarStatus.ERROR,
                     informative_only=True,
                     catalogue_market_count=len(self._catalogue),
-                    cached_activity_market_count=len(self._fresh_activities(now)),
+                    cached_activity_market_count=len(fresh_activities),
                     scanned_market_count=scanned_count,
                     candidate_market_count=0,
                     web_search_count=web_search_count,
+                    activity_status_counts=_activity_status_counts(fresh_activities),
+                    activity_state_counts=_activity_state_counts(fresh_activities),
+                    subthreshold_activity=self._subthreshold_activity(fresh_activities),
                     error_type=type(exc).__name__,
                 )
             self._latest = overview
@@ -629,6 +666,12 @@ class MarketAttentionRadar:
         )
 
     def _candidates(self, now: datetime) -> tuple[MarketActivitySnapshot, ...]:
+        return self._candidates_from(self._fresh_activities(now))
+
+    def _candidates_from(
+        self,
+        activities: tuple[MarketActivitySnapshot, ...],
+    ) -> tuple[MarketActivitySnapshot, ...]:
         unusual_states = {
             MarketActivityState.ELEVATED,
             MarketActivityState.ACCELERATING,
@@ -636,13 +679,40 @@ class MarketAttentionRadar:
         }
         eligible = tuple(
             snapshot
-            for snapshot in self._fresh_activities(now)
+            for snapshot in activities
             if snapshot.status is RadarStatus.AVAILABLE
             and snapshot.activity_state in unusual_states
         )
         return tuple(
             sorted(eligible, key=_activity_sort_key, reverse=True)[: self._policy.candidate_limit]
         )
+
+    def _subthreshold_activity(
+        self,
+        activities: tuple[MarketActivitySnapshot, ...],
+    ) -> tuple[SubthresholdActivitySnapshot, ...]:
+        diagnostics: list[tuple[tuple[Decimal, Decimal, Decimal], SubthresholdActivitySnapshot]] = []
+        for snapshot in activities:
+            if (
+                snapshot.status is not RadarStatus.AVAILABLE
+                or snapshot.activity_state is not MarketActivityState.NORMAL
+            ):
+                continue
+            best = _best_ratio_horizon(snapshot)
+            if best is None:
+                continue
+            diagnostics.append(
+                (
+                    _activity_sort_key(snapshot),
+                    SubthresholdActivitySnapshot(
+                        market=snapshot.market,
+                        peak_volume_ratio=best.volume_ratio,  # type: ignore[arg-type]
+                        peak_timeframe=best.timeframe,
+                    ),
+                )
+            )
+        diagnostics.sort(key=lambda item: item[0], reverse=True)
+        return tuple(item for _key, item in diagnostics[: self._policy.diagnostic_market_limit])
 
     async def _public_attention(
         self,
@@ -787,6 +857,49 @@ def _activity_sort_key(snapshot: MarketActivitySnapshot) -> tuple[Decimal, Decim
     )
 
 
+def _best_ratio_horizon(snapshot: MarketActivitySnapshot) -> ActivityHorizonSnapshot | None:
+    eligible = tuple(
+        item
+        for item in snapshot.horizons
+        if item.complete and item.volume_ratio is not None
+    )
+    if not eligible:
+        return None
+    return max(
+        eligible,
+        key=lambda item: (
+            item.volume_ratio or Decimal(0),
+            item.volume_acceleration or Decimal(0),
+            abs(item.price_return) if item.price_return is not None else Decimal(0),
+        ),
+    )
+
+
+def _activity_status_counts(
+    activities: tuple[MarketActivitySnapshot, ...],
+) -> ActivityStatusCounts:
+    return ActivityStatusCounts(
+        AVAILABLE=sum(item.status is RadarStatus.AVAILABLE for item in activities),
+        PARTIAL=sum(item.status is RadarStatus.PARTIAL for item in activities),
+        STALE=sum(item.status is RadarStatus.STALE for item in activities),
+        ERROR=sum(item.status is RadarStatus.ERROR for item in activities),
+    )
+
+
+def _activity_state_counts(
+    activities: tuple[MarketActivitySnapshot, ...],
+) -> ActivityStateCounts:
+    return ActivityStateCounts(
+        UNKNOWN=sum(item.activity_state is MarketActivityState.UNKNOWN for item in activities),
+        NORMAL=sum(item.activity_state is MarketActivityState.NORMAL for item in activities),
+        ELEVATED=sum(item.activity_state is MarketActivityState.ELEVATED for item in activities),
+        ACCELERATING=sum(
+            item.activity_state is MarketActivityState.ACCELERATING for item in activities
+        ),
+        VERY_HIGH=sum(item.activity_state is MarketActivityState.VERY_HIGH for item in activities),
+    )
+
+
 def _attention_sort_key(
     snapshot: MarketAttentionSnapshot,
 ) -> tuple[int, int, int, Decimal, Decimal]:
@@ -809,10 +922,23 @@ def _attention_sort_key(
 def _overview_status(
     shortlist: tuple[MarketAttentionSnapshot, ...],
     *,
+    fresh_activities: tuple[MarketActivitySnapshot, ...],
     researcher_configured: bool,
 ) -> RadarStatus:
-    if not shortlist:
+    if not fresh_activities:
         return RadarStatus.PARTIAL
+
+    activity_statuses = {item.status for item in fresh_activities}
+    available_count = sum(item.status is RadarStatus.AVAILABLE for item in fresh_activities)
+    if available_count == 0:
+        if activity_statuses == {RadarStatus.STALE}:
+            return RadarStatus.STALE
+        if activity_statuses == {RadarStatus.ERROR}:
+            return RadarStatus.ERROR
+        return RadarStatus.PARTIAL
+
+    if not shortlist:
+        return RadarStatus.AVAILABLE
     if not researcher_configured:
         return RadarStatus.PARTIAL
     statuses = {item.public_attention.research_status for item in shortlist}
