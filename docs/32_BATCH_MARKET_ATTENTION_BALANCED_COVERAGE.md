@@ -2,7 +2,9 @@
 
 Date : 2026-09-28
 
-## 1. Statut et base auditée
+## 1. Statut, base auditée et intégration
+
+Base auditée avant implémentation :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
@@ -11,9 +13,16 @@ HEAD       : 1850ff8783d0d29a5dd6628bdf1e9bb11a08ca63
 Commit     : feat: add robust market attention liquidity context
 ```
 
-Batch 30 et Batch 31 sont intégrés dans cette base.
+Batch 30 et Batch 31 étaient intégrés dans cette base.
 
-Le Batch 32 décrit ici un **patch proposé/local**. Il ne devient intégré qu'après validation, commit et push explicites par l'opérateur.
+Batch 32 validé puis intégré :
+
+```text
+HEAD       : 5a2d07b3fc5208475c1a136690da6648797efde9
+Commit     : feat: balance market attention spot perpetual coverage
+```
+
+Le Batch 32 est **intégré à GitHub `main`**.
 
 Le fichier local `trades_9h_analysis.json` est hors périmètre et ne fait pas partie de la livraison.
 
@@ -255,21 +264,36 @@ Résultat : `9 passed, 0 failed`.
 
 Le repository complet, son environnement Python et `pnpm` ne sont pas présents dans l'environnement ChatGPT ; la suite complète reste donc à exécuter localement.
 
-## 14. Validation locale requise
+## 14. Validation locale exécutée
 
-```powershell
-cd backend
-pytest -q
+Validation utilisateur avant commit/push :
 
-cd ..\frontend
-pnpm test
-pnpm lint
-pnpm typecheck
-pnpm build
-
-cd ..
-git diff --check
-git status --short
+```text
+backend pytest -q      : suite complète passée à 100 %, 0 échec
+frontend pnpm test     : 46/46 passés
+frontend pnpm lint     : passé
+frontend pnpm typecheck: passé
+Next.js production build: passé
+git diff --check       : passé
 ```
 
-Le fichier `trades_9h_analysis.json` doit rester non suivi et hors commit.
+Les avertissements observés restent non bloquants :
+
+- dépréciations Starlette/AnyIO côté Python ;
+- `MODULE_TYPELESS_PACKAGE_JSON` côté Node ;
+- avertissements LF -> CRLF sous Windows.
+
+Intégration :
+
+```text
+Commit : 5a2d07b3fc5208475c1a136690da6648797efde9
+Push   : 1850ff8..5a2d07b  main -> main
+```
+
+Après le push, `git status --short` ne montre plus que :
+
+```text
+?? trades_9h_analysis.json
+```
+
+Ce fichier reste non suivi et hors périmètre.

@@ -5,11 +5,11 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 1850ff8783d0d29a5dd6628bdf1e9bb11a08ca63
-Commit     : feat: add robust market attention liquidity context
+HEAD       : 5a2d07b3fc5208475c1a136690da6648797efde9
+Commit     : feat: balance market attention spot perpetual coverage
 ```
 
-État vérifié le 28/09/2026 avant préparation du Batch 32.
+État vérifié le 28/09/2026 après intégration du Batch 32.
 
 ## État des batches Market Attention
 
@@ -17,7 +17,7 @@ Commit     : feat: add robust market attention liquidity context
 - Batch 29 — observabilité : intégré ;
 - Batch 30 — robustesse activité : intégré ;
 - Batch 31 — notionnel USD SPOT et régimes de liquidité : intégré dans `1850ff8` ;
-- Batch 32 — couverture équilibrée SPOT/PERPETUAL : **patch proposé/local, non intégré à GitHub**.
+- Batch 32 — couverture équilibrée SPOT/PERPETUAL : intégré dans `5a2d07b`.
 
 ## État intégré confirmé
 
@@ -34,9 +34,9 @@ Le pipeline intégré conserve :
 - notionnel PERPETUAL à `null` tant que l'unité économique de `Candle.volume` n'est pas reliée canoniquement aux métadonnées du contrat ;
 - régimes `MICRO / LOW / MEDIUM / HIGH / VERY_HIGH / UNKNOWN`, descriptifs et non filtrants.
 
-## Batch 32 proposé
+## Batch 32 intégré
 
-Le patch local remplace le curseur global du Radar par une rotation déterministe stratifiée :
+Le Batch 32 remplace le curseur global du Radar par une rotation déterministe stratifiée :
 
 - curseur SPOT indépendant ;
 - curseur PERPETUAL indépendant ;
@@ -47,29 +47,28 @@ Le patch local remplace le curseur global du Radar par une rotation déterminist
 
 Le Batch 32 ne modifie ni la stratégie, ni les prompts Agent, ni le Risk Engine, ni le sizing, ni PAPER/LIVE.
 
-## Working tree utilisateur connu
+## Validation locale et intégration
 
-Avant préparation du batch, le working tree utilisateur était propre sauf :
+Validation utilisateur exécutée avant intégration :
+
+- backend `pytest -q` : suite complète passée à `100 %`, sans échec ;
+- frontend `pnpm test` : `46/46` tests passés ;
+- frontend `pnpm lint` : passé ;
+- frontend `pnpm typecheck` : passé ;
+- build Next.js de production : passé ;
+- `git diff --check` : passé, avec uniquement des avertissements LF -> CRLF non bloquants.
+
+Intégration GitHub :
+
+```text
+Commit : 5a2d07b3fc5208475c1a136690da6648797efde9
+Push   : 1850ff8..5a2d07b  main -> main
+```
+
+Après le push, le working tree utilisateur connu contient uniquement :
 
 ```text
 ?? trades_9h_analysis.json
 ```
 
-Ce fichier est hors périmètre. Il ne doit être ni modifié, ni supprimé, ni versionné, ni inclus dans le ZIP Batch 32.
-
-## Validation locale après extraction du Batch 32
-
-```powershell
-cd backend
-pytest -q
-
-cd ..\frontend
-pnpm test
-pnpm lint
-pnpm typecheck
-pnpm build
-
-cd ..
-git diff --check
-git status --short
-```
+Ce fichier reste hors périmètre et non versionné.

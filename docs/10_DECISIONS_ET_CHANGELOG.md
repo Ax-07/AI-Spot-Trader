@@ -13,12 +13,12 @@ Market Attention Radar v1 reste **strictement observationnel** : sa shortlist ne
 ## Référence courante
 
 ```text
-HEAD GitHub audité     : 354e8cf083b2c45233c45e019bdaa7f4bf6b1d96
-HEAD                   : feat: improve market attention observability
+HEAD GitHub audité     : 5a2d07b3fc5208475c1a136690da6648797efde9
+HEAD                   : feat: balance market attention spot perpetual coverage
 Recalibrage net/cost   : ADR-277 intégré dans 463850d
 Historique économique  : ADR-278 intégré dans b46f463c
 Doctrine reasoning     : ADR-279 intégrée dans d011faa
-Market Attention Radar : ADR-280 à ADR-284 intégrés ; Batch 29 observabilité intégré
+Market Attention Radar : ADR-280 à ADR-286 intégrés ; Batch 32 couverture équilibrée intégré
 ```
 
 ## Décisions historiques toujours actives
@@ -40,7 +40,7 @@ Market Attention Radar : ADR-280 à ADR-284 intégrés ; Batch 29 observabilité
 - ADR-277 : recalibrage cost-aware vers l'equity nette, allocation du capital et agressivité sans turnover obligatoire ;
 - ADR-278 : historique économique Session/run comme projection en lecture seule, sans second ledger ni seconde comptabilité ;
 - ADR-279 : doctrine qualitative de raisonnement trading pour les prompts stratégiques courants, sans règles mécaniques ;
-- ADR-280 à ADR-284 : Market Attention Radar v1, intégrés ; observabilité opérationnelle renforcée au Batch 29.
+- ADR-280 à ADR-286 : Market Attention Radar v1, observabilité, couverture équilibrée et audit du notionnel PERPETUAL, intégrés.
 
 ## ADR-240 — Session est une façade UX, pas un nouvel agrégat persistant
 
@@ -404,11 +404,11 @@ Revalidation ChatGPT du correctif : `py_compile` succès, harness Radar PASS ave
 - notionnel SPOT/USD Batch 31, SPOT non USD `null`, régimes de liquidité et seuils d'activité inchangés ;
 - `candidate_limit=20` et `max_web_searches_per_refresh=8` inchangés ;
 - aucune influence Radar sur Agent, Market Discovery, Risk Engine, Broker, sizing ou ordres ;
-- Batch 32 reste patch proposé/local tant qu'il n'est pas explicitement validé puis poussé.
+- Batch 32 validé localement puis intégré au commit `5a2d07b3fc5208475c1a136690da6648797efde9`.
 
 ## ADR-285 — Le scan Market Attention est stratifié par type de marché
 
-**PROPOSÉ DANS LE BATCH 32, NON INTÉGRÉ TANT QUE LE PATCH N'EST PAS POUSSÉ.**
+**ADOPTÉ ET INTÉGRÉ AU COMMIT `5a2d07b3fc5208475c1a136690da6648797efde9`.**
 
 Le Radar conserve une rotation déterministe indépendante des résultats d'activité. `SPOT` et `PERPETUAL` disposent chacun d'un curseur propre. `scan_limit` est réparti proportionnellement aux populations disponibles, avec au moins une place par famille lorsque la capacité le permet et redistribution déterministe du reliquat.
 
@@ -416,7 +416,7 @@ Cette décision évite qu'un tri groupé par `MarketType` monopolise un refresh 
 
 ## ADR-286 — Le notionnel PERPETUAL reste indisponible sans unité de volume canonique
 
-**CONFIRMÉ PAR L'AUDIT DU BATCH 32.**
+**ADOPTÉ ET INTÉGRÉ AU COMMIT `5a2d07b3fc5208475c1a136690da6648797efde9`.**
 
 Les candles Futures `trade` alimentent `Candle.volume`, mais le contrat canonique ne transporte ni unité de volume ni `contract_size`, et le Radar travaille sur `ExecutableMarket`. Une formule économique USD n'est donc pas démontrable avec les données actuellement transportées.
 

@@ -3,12 +3,12 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub audité        : 1850ff8783d0d29a5dd6628bdf1e9bb11a08ca63
+HEAD GitHub audité        : 5a2d07b3fc5208475c1a136690da6648797efde9
 Batch 28 Radar v1         : intégré
 Batch 29 Observabilité    : intégré
 Batch 30 Robustesse       : intégré
 Batch 31 Liquidité USD    : intégré
-Batch 32 Couverture       : patch proposé/local, non intégré
+Batch 32 Couverture       : intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -61,9 +61,9 @@ Intégré au HEAD `1850ff8`.
 
 ## Batch 32 — Couverture équilibrée SPOT/PERPETUAL
 
-**État : patch proposé/local, à valider puis intégrer explicitement.**
+**État : intégré au commit `5a2d07b3fc5208475c1a136690da6648797efde9`.**
 
-Objectifs :
+Apports intégrés :
 
 - remplacer la rotation globale séquentielle par une rotation stratifiée par `MarketType` ;
 - garder un curseur indépendant par famille ;
