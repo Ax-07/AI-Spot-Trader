@@ -3,12 +3,14 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub audité        : 5a2d07b3fc5208475c1a136690da6648797efde9
+HEAD GitHub réel          : 78607ce6ab9f2b9459de2b1e1a7127509475283a
+HEAD fonctionnel Batch 32 : 5a2d07b3fc5208475c1a136690da6648797efde9
 Batch 28 Radar v1         : intégré
 Batch 29 Observabilité    : intégré
 Batch 30 Robustesse       : intégré
 Batch 31 Liquidité USD    : intégré
 Batch 32 Couverture       : intégré
+Batch 33 Runtime hardening: patch proposé/local, non intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -51,7 +53,7 @@ Intégré. Les gaps SPOT sans trade peuvent être interprétés comme zéro-volu
 
 ### Batch 31 — Liquidité USD
 
-Intégré au HEAD `1850ff8`.
+Intégré au commit `1850ff8`.
 
 - SPOT directement coté USD : estimation notionnelle `volume_base × close_5m` exposée comme `SPOT_BASE_VOLUME_X_5M_CLOSE_ESTIMATE` ;
 - SPOT non USD : notionnel `null` ;
@@ -59,30 +61,51 @@ Intégré au HEAD `1850ff8`.
 - régimes descriptifs : `MICRO / LOW / MEDIUM / HIGH / VERY_HIGH / UNKNOWN` ;
 - faible liquidité jamais utilisée comme filtre d'éligibilité.
 
-## Batch 32 — Couverture équilibrée SPOT/PERPETUAL
+### Batch 32 — Couverture équilibrée SPOT/PERPETUAL
 
 **État : intégré au commit `5a2d07b3fc5208475c1a136690da6648797efde9`.**
 
 Apports intégrés :
 
-- remplacer la rotation globale séquentielle par une rotation stratifiée par `MarketType` ;
-- garder un curseur indépendant par famille ;
-- allouer `scan_limit` proportionnellement aux populations avec représentation minimale et redistribution ;
-- garantir l'absence de starvation ;
-- afficher la répartition du scan courant et de la couverture fraîche ;
-- conserver les seuils, budgets web et règles de shortlist ;
-- ne produire aucun faux notionnel USD PERPETUAL.
+- rotation stratifiée par `MarketType` ;
+- curseur indépendant par famille ;
+- allocation proportionnelle de `scan_limit` avec représentation minimale et redistribution ;
+- absence de starvation ;
+- diagnostics de scan courant et couverture fraîche ;
+- aucune normalisation notionnelle PERPETUAL inventée.
 
-Le Batch 32 ne change pas :
-
-- `candidate_limit = 20` ;
-- `max_web_searches_per_refresh = 8` ;
-- seuils `1.40 / 1.75 / 2.50` et accélérations associées ;
-- logique Agent/Risk/Broker/Market Discovery ;
-- stratégie, sizing ou prompts Agent ;
-- mode PAPER/LIVE.
+Le Batch 32 conserve `candidate_limit = 20`, `max_web_searches_per_refresh = 8`, les seuils d'activité existants, les prompts Agent, Risk, Broker, Market Discovery et PAPER/LIVE.
 
 Voir `docs/32_BATCH_MARKET_ATTENTION_BALANCED_COVERAGE.md`.
+
+## Batch 33 — Market Attention Runtime Hardening
+
+**État : patch proposé/local, à valider puis intégrer explicitement.**
+
+Objectifs :
+
+- réutiliser un cache canonique `KrakenPairRegistry` dans `KrakenCandleProvider` afin de supprimer la rafale `AssetPairs` par marché SPOT ;
+- synchroniser les chargements/refreshs concurrents et ne rafraîchir le registry qu'au chargement initial ou après symbole absent ;
+- distinguer sans fuite les erreurs transport/HTTP, throttling explicitement déclaré, erreur API Kraken et payload structurel invalide ;
+- exiger que ratio et accélération satisfassent les seuils `VERY_HIGH / ACCELERATING` sur le même horizon ;
+- conserver exactement les seuils `1.40 / 1.75 + 0.25 / 2.50 + 0.50` ;
+- aligner `public_attention_v1` sur les contraintes Pydantic de longueur ;
+- encapsuler les échecs de validation canonique web en diagnostic auxiliaire borné ;
+- réduire les sources web exposées uniquement lorsqu'un lien fiable avec les éléments structurés ou les citations provider est démontrable.
+
+Invariants explicitement inchangés :
+
+- rotation Batch 32 et `scan_limit = 120` ;
+- `candidate_limit = 20` ;
+- `max_web_searches_per_refresh = 8` ;
+- recherche web uniquement après génération des candidats ;
+- faible liquidité non filtrante ;
+- notionnels Batch 31 inchangés ;
+- PERPETUAL notionnel `null` / liquidité `UNKNOWN` ;
+- aucune donnée Radar vers Agent, Market Discovery, Risk Engine ou Broker ;
+- aucun BUY/SELL/HOLD produit par le Radar.
+
+Voir `docs/33_BATCH_MARKET_ATTENTION_RUNTIME_HARDENING.md`.
 
 ## Périmètres ultérieurs possibles
 

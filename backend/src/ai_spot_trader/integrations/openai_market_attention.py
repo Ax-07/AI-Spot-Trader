@@ -7,7 +7,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from ai_spot_trader.domain.enums import LLMModel
 from ai_spot_trader.market.attention import (
@@ -32,17 +32,32 @@ PUBLIC_ATTENTION_SCHEMA: dict[str, Any] = {
             "type": "string",
             "enum": ["RISING", "STABLE", "FALLING", "UNKNOWN"],
         },
-        "confidence_context": {"type": "string"},
+        "confidence_context": {"type": "string", "minLength": 1, "maxLength": 2000},
         "quantitative_metrics": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string"},
-                    "value": {"type": "string"},
-                    "unit": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                    "window": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                    "source_url": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "name": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "value": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "unit": {
+                        "anyOf": [
+                            {"type": "string", "maxLength": 64},
+                            {"type": "null"},
+                        ]
+                    },
+                    "window": {
+                        "anyOf": [
+                            {"type": "string", "maxLength": 64},
+                            {"type": "null"},
+                        ]
+                    },
+                    "source_url": {
+                        "anyOf": [
+                            {"type": "string", "maxLength": 2048},
+                            {"type": "null"},
+                        ]
+                    },
                     "published_at": {
                         "anyOf": [{"type": "string"}, {"type": "null"}]
                     },
@@ -56,8 +71,13 @@ PUBLIC_ATTENTION_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "text": {"type": "string"},
-                    "source_url": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "text": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "source_url": {
+                        "anyOf": [
+                            {"type": "string", "maxLength": 2048},
+                            {"type": "null"},
+                        ]
+                    },
                 },
                 "required": ["text", "source_url"],
                 "additionalProperties": False,
@@ -68,8 +88,17 @@ PUBLIC_ATTENTION_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "description": {"type": "string"},
-                    "source_url": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "description": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2000,
+                    },
+                    "source_url": {
+                        "anyOf": [
+                            {"type": "string", "maxLength": 2048},
+                            {"type": "null"},
+                        ]
+                    },
                 },
                 "required": ["description", "source_url"],
                 "additionalProperties": False,
@@ -80,8 +109,8 @@ PUBLIC_ATTENTION_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "title": {"type": "string"},
-                    "url": {"type": "string"},
+                    "title": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "url": {"type": "string", "minLength": 1, "maxLength": 2048},
                     "published_at": {
                         "anyOf": [{"type": "string"}, {"type": "null"}]
                     },
@@ -194,11 +223,13 @@ class OpenAIWebAttentionResearcher:
         response = await self._responses(request)
         payload = _extract_structured_payload(response)
         provider_sources = _extract_provider_sources(response)
+        provider_citations = _extract_provider_citations(response)
         return _snapshot_from_payload(
             payload,
             asset=clean_asset,
             observed_at=observed_at,
             provider_sources=provider_sources,
+            provider_citations=provider_citations,
         )
 
     async def aclose(self) -> None:
@@ -302,17 +333,44 @@ def _extract_provider_sources(response: dict[str, Any]) -> dict[str, str]:
     return sources
 
 
+def _extract_provider_citations(response: dict[str, Any]) -> set[str]:
+    citations: set[str] = set()
+    output = response.get("output")
+    if not isinstance(output, list):
+        return citations
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        for part in item.get("content", []):
+            if not isinstance(part, dict):
+                continue
+            for annotation in part.get("annotations", []):
+                url = _source_url(annotation)
+                if url is not None:
+                    citations.add(url)
+    return citations
+
+
+def _source_url(raw: object) -> str | None:
+    if not isinstance(raw, dict):
+        return None
+    candidate = raw.get("url_citation") if isinstance(raw.get("url_citation"), dict) else raw
+    if not isinstance(candidate, dict):
+        return None
+    return _http_url(candidate.get("url"))
+
+
 def _add_source(sources: dict[str, str], raw: object) -> None:
     if not isinstance(raw, dict):
         return
     candidate = raw.get("url_citation") if isinstance(raw.get("url_citation"), dict) else raw
     if not isinstance(candidate, dict):
         return
-    url = candidate.get("url")
-    title = candidate.get("title")
-    if not isinstance(url, str) or not url.startswith(("https://", "http://")):
+    url = _http_url(candidate.get("url"))
+    if url is None:
         return
-    clean_title = title.strip() if isinstance(title, str) and title.strip() else _domain(url)
+    title = candidate.get("title")
+    clean_title = _provider_title(title, fallback=_domain(url))
     sources.setdefault(url, clean_title)
 
 
@@ -322,10 +380,15 @@ def _snapshot_from_payload(
     asset: str,
     observed_at: datetime,
     provider_sources: dict[str, str],
+    provider_citations: set[str] | None = None,
 ) -> PublicAttentionSnapshot:
     try:
-        direction = PublicAttentionDirection(str(payload["attention_direction"]))
-        confidence_context = str(payload["confidence_context"]).strip()
+        raw_direction = payload["attention_direction"]
+        raw_confidence_context = payload["confidence_context"]
+        if not isinstance(raw_direction, str) or not isinstance(raw_confidence_context, str):
+            raise ValueError("public attention direction/context must be strings")
+        direction = PublicAttentionDirection(raw_direction)
+        confidence_context = raw_confidence_context.strip()
     except (KeyError, ValueError) as exc:
         raise PublicAttentionResearchError(
             "Structured public attention contract is invalid"
@@ -345,77 +408,105 @@ def _snapshot_from_payload(
             _optional_datetime(raw.get("published_at")),
         )
 
-    # Trust only URLs surfaced by the Responses web-search metadata. Structured output may
-    # describe them, but cannot create a canonical source URL on its own.
-    accepted_urls = set(provider_sources)
-    sources: list[PublicAttentionSource] = []
-    for url in sorted(accepted_urls):
-        title, published_at = structured_sources.get(
-            url,
-            (provider_sources.get(url) or _domain(url), None),
-        )
-        sources.append(
-            PublicAttentionSource(
-                title=title,
-                url=url,
-                source_domain=_domain(url),
-                observed_at=observed_at,
-                published_at=published_at,
-            )
-        )
+    # Canonical URLs always come from Responses provider metadata. Structured output can
+    # reference/enrich such URLs, but it cannot create a trusted source on its own.
+    provider_urls = set(provider_sources)
+    direct_references: set[str] = set()
 
-    metrics: list[PublicAttentionMetric] = []
-    for raw in _list_of_dicts(payload.get("quantitative_metrics")):
-        source_url = _accepted_source_url(raw.get("source_url"), accepted_urls)
-        name = _text(raw.get("name"))
-        value = _text(raw.get("value"))
-        if not name or not value:
-            continue
-        metrics.append(
-            PublicAttentionMetric(
-                name=name,
-                value=value,
-                unit=_text(raw.get("unit")),
-                window=_text(raw.get("window")),
-                source_url=source_url,
-                observed_at=observed_at,
-                published_at=_optional_datetime(raw.get("published_at")),
+    try:
+        metrics: list[PublicAttentionMetric] = []
+        for raw in _list_of_dicts(payload.get("quantitative_metrics")):
+            source_url = _accepted_source_url(raw.get("source_url"), provider_urls)
+            if source_url is not None:
+                direct_references.add(source_url)
+            name = _text(raw.get("name"))
+            value = _text(raw.get("value"))
+            if not name or not value:
+                continue
+            metrics.append(
+                PublicAttentionMetric(
+                    name=name,
+                    value=value,
+                    unit=_text(raw.get("unit")),
+                    window=_text(raw.get("window")),
+                    source_url=source_url,
+                    observed_at=observed_at,
+                    published_at=_optional_datetime(raw.get("published_at")),
+                )
             )
-        )
 
-    observations = tuple(
-        PublicAttentionObservation(
-            text=text,
-            source_url=_accepted_source_url(raw.get("source_url"), accepted_urls),
+        observations_list: list[PublicAttentionObservation] = []
+        for raw in _list_of_dicts(payload.get("qualitative_observations")):
+            text = _text(raw.get("text"))
+            if not text:
+                continue
+            source_url = _accepted_source_url(raw.get("source_url"), provider_urls)
+            if source_url is not None:
+                direct_references.add(source_url)
+            observations_list.append(
+                PublicAttentionObservation(text=text, source_url=source_url)
+            )
+
+        catalysts_list: list[PublicAttentionCatalyst] = []
+        for raw in _list_of_dicts(payload.get("possible_catalysts")):
+            description = _text(raw.get("description"))
+            if not description:
+                continue
+            source_url = _accepted_source_url(raw.get("source_url"), provider_urls)
+            if source_url is not None:
+                direct_references.add(source_url)
+            catalysts_list.append(
+                PublicAttentionCatalyst(description=description, source_url=source_url)
+            )
+
+        citation_urls = (provider_citations or set()) & provider_urls
+        structured_provider_urls = set(structured_sources) & provider_urls
+        exposed_urls = direct_references | citation_urls
+        if not exposed_urls:
+            exposed_urls = structured_provider_urls
+        if not exposed_urls:
+            # No reliable linkage exists. Preserve provider metadata rather than applying
+            # a relevance heuristic that could hide the only verifiable citations.
+            exposed_urls = provider_urls
+
+        sources: list[PublicAttentionSource] = []
+        for url in sorted(exposed_urls):
+            title, published_at = structured_sources.get(
+                url,
+                (provider_sources.get(url) or _domain(url), None),
+            )
+            sources.append(
+                PublicAttentionSource(
+                    title=title,
+                    url=url,
+                    source_domain=_domain(url),
+                    observed_at=observed_at,
+                    published_at=published_at,
+                )
+            )
+
+        status = RadarStatus.AVAILABLE if sources else RadarStatus.PARTIAL
+        if not sources:
+            confidence_context = _append_context(
+                confidence_context,
+                " No provider citation/source URL was returned; public attention is partial.",
+                max_length=2000,
+            )
+        return PublicAttentionSnapshot(
+            asset=asset,
+            observed_at=observed_at,
+            research_status=status,
+            attention_direction=direction,
+            quantitative_metrics=tuple(metrics),
+            qualitative_observations=tuple(observations_list),
+            possible_catalysts=tuple(catalysts_list),
+            sources=tuple(sources),
+            confidence_context=confidence_context,
         )
-        for raw in _list_of_dicts(payload.get("qualitative_observations"))
-        if (text := _text(raw.get("text")))
-    )
-    catalysts = tuple(
-        PublicAttentionCatalyst(
-            description=description,
-            source_url=_accepted_source_url(raw.get("source_url"), accepted_urls),
-        )
-        for raw in _list_of_dicts(payload.get("possible_catalysts"))
-        if (description := _text(raw.get("description")))
-    )
-    status = RadarStatus.AVAILABLE if sources else RadarStatus.PARTIAL
-    if not sources:
-        confidence_context = (
-            confidence_context
-            + " No provider citation/source URL was returned; public attention is partial."
-        )
-    return PublicAttentionSnapshot(
-        asset=asset,
-        observed_at=observed_at,
-        research_status=status,
-        attention_direction=direction,
-        quantitative_metrics=tuple(metrics),
-        qualitative_observations=observations,
-        possible_catalysts=catalysts,
-        sources=tuple(sources),
-        confidence_context=confidence_context,
-    )
+    except ValidationError as exc:
+        raise PublicAttentionResearchError(
+            "Structured public attention data failed canonical validation"
+        ) from exc
 
 
 def _list_of_dicts(value: object) -> tuple[dict[str, Any], ...]:
@@ -435,7 +526,7 @@ def _http_url(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     value = value.strip()
-    if not value.startswith(("https://", "http://")):
+    if not value.startswith(("https://", "http://")) or len(value) > 2048:
         return None
     return value
 
@@ -445,6 +536,21 @@ def _text(value: object) -> str | None:
         return None
     value = value.strip()
     return value or None
+
+
+def _provider_title(value: object, *, fallback: str) -> str:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned and len(cleaned) <= 1000:
+            return cleaned
+    return fallback
+
+
+def _append_context(value: str, suffix: str, *, max_length: int) -> str:
+    room = max_length - len(suffix)
+    if room <= 0:
+        return suffix[:max_length]
+    return value[:room].rstrip() + suffix
 
 
 def _optional_datetime(value: object) -> datetime | None:

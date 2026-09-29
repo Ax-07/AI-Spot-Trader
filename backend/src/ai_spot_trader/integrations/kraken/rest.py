@@ -6,7 +6,16 @@ from typing import Any
 
 import httpx
 
-from ai_spot_trader.integrations.kraken.errors import KrakenConnectionError, KrakenPayloadError
+from ai_spot_trader.integrations.kraken.errors import (
+    KrakenAPIError,
+    KrakenConnectionError,
+    KrakenHTTPError,
+    KrakenNetworkError,
+    KrakenPayloadError,
+    KrakenRateLimitError,
+    KrakenServerError,
+    KrakenTimeoutError,
+)
 from ai_spot_trader.integrations.kraken.models import KrakenOhlcCandle, KrakenOhlcvCandle
 from ai_spot_trader.integrations.kraken.symbols import (
     KrakenPairRegistry,
@@ -40,12 +49,13 @@ class KrakenPublicRestClient:
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise KrakenConnectionError("Kraken AssetPairs request failed") from exc
+            _raise_transport_error(exc, operation="AssetPairs")
 
         try:
             payload = json.loads(response.text)
         except json.JSONDecodeError as exc:
             raise KrakenPayloadError("Kraken AssetPairs returned invalid JSON") from exc
+        _raise_for_api_errors(payload, operation="AssetPairs")
         return parse_asset_pairs_payload(payload)
 
     async def fetch_ohlc_history(
@@ -114,15 +124,70 @@ class KrakenPublicRestClient:
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise KrakenConnectionError("Kraken OHLC request failed") from exc
+            _raise_transport_error(exc, operation="OHLC")
         try:
-            return json.loads(response.text)
+            payload = json.loads(response.text)
         except json.JSONDecodeError as exc:
             raise KrakenPayloadError("Kraken OHLC returned invalid JSON") from exc
+        _raise_for_api_errors(payload, operation="OHLC")
+        return payload
 
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+
+def _raise_transport_error(exc: httpx.HTTPError, *, operation: str) -> None:
+    """Normalize public Kraken transport failures without surfacing response bodies or URLs."""
+
+    if isinstance(exc, httpx.TimeoutException):
+        raise KrakenTimeoutError(f"Kraken {operation} request timed out") from exc
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        if status_code == 408:
+            raise KrakenTimeoutError(
+                f"Kraken {operation} returned HTTP 408",
+                status_code=status_code,
+            ) from exc
+        if status_code == 429:
+            raise KrakenRateLimitError(
+                f"Kraken {operation} rate limited request",
+                status_code=status_code,
+            ) from exc
+        if status_code >= 500:
+            raise KrakenServerError(
+                f"Kraken {operation} returned a server error",
+                status_code=status_code,
+            ) from exc
+        raise KrakenHTTPError(
+            f"Kraken {operation} returned an HTTP error",
+            status_code=status_code,
+        ) from exc
+    if isinstance(exc, httpx.RequestError):
+        raise KrakenNetworkError(f"Kraken {operation} network request failed") from exc
+    raise KrakenConnectionError(f"Kraken {operation} request failed") from exc
+
+
+def _raise_for_api_errors(payload: object, *, operation: str) -> None:
+    """Classify provider-declared API errors while keeping raw provider details private."""
+
+    if not isinstance(payload, Mapping):
+        return
+    errors = payload.get("error")
+    if not isinstance(errors, list) or not errors:
+        return
+    normalized = tuple(
+        item.strip().lower()
+        for item in errors
+        if isinstance(item, str) and item.strip()
+    )
+    explicit_throttling = any(
+        "rate limit" in item or "throttled" in item or "too many requests" in item
+        for item in normalized
+    )
+    if explicit_throttling:
+        raise KrakenRateLimitError(f"Kraken {operation} rate limited request")
+    raise KrakenAPIError(f"Kraken {operation} returned an API error")
 
 
 def _parse_ohlc_payload(

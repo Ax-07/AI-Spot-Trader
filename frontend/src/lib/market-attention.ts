@@ -59,6 +59,12 @@ export type ActivityStateCounts = Record<MarketActivityState, number>;
 export type ActivityDataQualityCounts = Record<ActivityDataQuality, number>;
 export type ActivityErrorCounts = {
   KrakenConnectionError: number;
+  KrakenNetworkError: number;
+  KrakenTimeoutError: number;
+  KrakenHTTPError: number;
+  KrakenServerError: number;
+  KrakenRateLimitError: number;
+  KrakenAPIError: number;
   KrakenPayloadError: number;
   UnknownKrakenSymbolError: number;
   CandleValidationError: number;
@@ -156,6 +162,12 @@ export function activityErrorEntries(
 ): Array<[keyof ActivityErrorCounts, number]> {
   const order: Array<keyof ActivityErrorCounts> = [
     "KrakenConnectionError",
+    "KrakenNetworkError",
+    "KrakenTimeoutError",
+    "KrakenHTTPError",
+    "KrakenServerError",
+    "KrakenRateLimitError",
+    "KrakenAPIError",
     "KrakenPayloadError",
     "UnknownKrakenSymbolError",
     "CandleValidationError",

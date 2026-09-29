@@ -44,6 +44,20 @@ const item = {
   attention_level: "HIGH",
 };
 
+const emptyActivityErrors = () => ({
+  KrakenConnectionError: 0,
+  KrakenNetworkError: 0,
+  KrakenTimeoutError: 0,
+  KrakenHTTPError: 0,
+  KrakenServerError: 0,
+  KrakenRateLimitError: 0,
+  KrakenAPIError: 0,
+  KrakenPayloadError: 0,
+  UnknownKrakenSymbolError: 0,
+  CandleValidationError: 0,
+  Other: 0,
+});
+
 const overview = (status, candidateCount = 0) => ({
   protocol_version: "market-attention-radar-v1",
   observed_at: "2026-09-28T12:00:00Z",
@@ -59,7 +73,7 @@ const overview = (status, candidateCount = 0) => ({
   activity_status_counts: { AVAILABLE: 80, PARTIAL: 0, STALE: 0, ERROR: 0 },
   activity_state_counts: { UNKNOWN: 10, NORMAL: 70, ELEVATED: 0, ACCELERATING: 0, VERY_HIGH: 0 },
   activity_data_quality_counts: { COMPLETE: 70, NO_TRADE_GAPS: 10, INSUFFICIENT_HISTORY: 0, DISCONTINUOUS_HISTORY: 0, TECHNICAL_ERROR: 0 },
-  activity_error_counts: { KrakenConnectionError: 0, KrakenPayloadError: 0, UnknownKrakenSymbolError: 0, CandleValidationError: 0, Other: 0 },
+  activity_error_counts: emptyActivityErrors(),
   activity_market_type_status_counts: {
     SPOT: { AVAILABLE: 50, PARTIAL: 0, STALE: 0, ERROR: 0 },
     PERPETUAL: { AVAILABLE: 30, PARTIAL: 0, STALE: 0, ERROR: 0 },
@@ -116,15 +130,18 @@ test("preserves diagnostic counters, balanced scan mapping and subthreshold payl
 
 test("returns only non-zero bounded error categories in deterministic order", () => {
   const counts = {
-    KrakenConnectionError: 8,
-    KrakenPayloadError: 0,
-    UnknownKrakenSymbolError: 2,
-    CandleValidationError: 0,
+    ...emptyActivityErrors(),
+    KrakenNetworkError: 8,
+    KrakenRateLimitError: 3,
+    KrakenAPIError: 2,
+    UnknownKrakenSymbolError: 1,
     Other: 1,
   };
   assert.deepEqual(activityErrorEntries(counts), [
-    ["KrakenConnectionError", 8],
-    ["UnknownKrakenSymbolError", 2],
+    ["KrakenNetworkError", 8],
+    ["KrakenRateLimitError", 3],
+    ["KrakenAPIError", 2],
+    ["UnknownKrakenSymbolError", 1],
     ["Other", 1],
   ]);
 });

@@ -7,8 +7,11 @@ from decimal import Decimal
 from ai_spot_trader.domain.enums import MarketType
 from ai_spot_trader.domain.models import ExecutableMarket
 from ai_spot_trader.integrations.kraken.errors import (
+    KrakenAPIError,
     KrakenConnectionError,
+    KrakenNetworkError,
     KrakenPayloadError,
+    KrakenRateLimitError,
     UnknownKrakenSymbolError,
 )
 from ai_spot_trader.market.attention import (
@@ -264,6 +267,12 @@ def test_radar_exposes_bounded_error_types_and_market_type_status_counts() -> No
         }
         assert overview.activity_error_counts.model_dump() == {
             "KrakenConnectionError": 1,
+            "KrakenNetworkError": 0,
+            "KrakenTimeoutError": 0,
+            "KrakenHTTPError": 0,
+            "KrakenServerError": 0,
+            "KrakenRateLimitError": 0,
+            "KrakenAPIError": 0,
             "KrakenPayloadError": 1,
             "UnknownKrakenSymbolError": 1,
             "CandleValidationError": 1,
@@ -284,3 +293,62 @@ def test_activity_thresholds_are_unchanged() -> None:
     assert _activity_state((Decimal("1.40"),), ()) is MarketActivityState.ELEVATED
     assert _activity_state((Decimal("1.75"),), (Decimal("0.25"),)) is MarketActivityState.ACCELERATING
     assert _activity_state((Decimal("2.50"),), (Decimal("0.50"),)) is MarketActivityState.VERY_HIGH
+
+
+def test_very_high_requires_ratio_and_acceleration_on_same_horizon() -> None:
+    assert _activity_state(
+        (Decimal("5.079"), Decimal("2.294"), Decimal("1.060"), Decimal("1.728")),
+        (Decimal("0.114"), Decimal("-1.084"), Decimal("2.441"), Decimal("-7.944")),
+    ) is MarketActivityState.ELEVATED
+    assert _activity_state(
+        (Decimal("2.50"), Decimal("1.00")),
+        (Decimal("0.50"), Decimal("9.00")),
+    ) is MarketActivityState.VERY_HIGH
+
+
+def test_accelerating_requires_ratio_and_acceleration_on_same_horizon() -> None:
+    assert _activity_state(
+        (Decimal("1.898"), Decimal("1.699"), Decimal("0.228"), Decimal("0.351")),
+        (Decimal("-3.960"), Decimal("-3.906"), Decimal("0.772"), Decimal("-1.597")),
+    ) is MarketActivityState.ELEVATED
+    assert _activity_state(
+        (Decimal("1.75"), Decimal("1.00")),
+        (Decimal("0.25"), Decimal("9.00")),
+    ) is MarketActivityState.ACCELERATING
+
+
+def test_incomplete_horizon_placeholders_cannot_fabricate_activity_state() -> None:
+    assert _activity_state(
+        (None, Decimal("1.39")),
+        (Decimal("99"), Decimal("0.10")),
+    ) is MarketActivityState.NORMAL
+
+
+def test_radar_counts_specific_kraken_runtime_diagnostics() -> None:
+    async def scenario() -> None:
+        markets = (
+            _market("NET/USD"),
+            _market("RATE/USD"),
+            _market("API/USD"),
+        )
+        radar = MarketAttentionRadar(
+            candle_service=CandleService(
+                {
+                    (MarketType.SPOT, "NET/USD"): KrakenNetworkError("network"),
+                    (MarketType.SPOT, "RATE/USD"): KrakenRateLimitError("rate"),
+                    (MarketType.SPOT, "API/USD"): KrakenAPIError("api"),
+                }
+            ),  # type: ignore[arg-type]
+            catalogue=Catalogue(markets),
+            researcher=None,
+            policy=_policy(),
+        )
+        overview = await radar.refresh_once(observed_at=NOW)
+        assert overview.activity_error_counts.KrakenNetworkError == 1
+        assert overview.activity_error_counts.KrakenRateLimitError == 1
+        assert overview.activity_error_counts.KrakenAPIError == 1
+        assert overview.activity_error_counts.KrakenPayloadError == 0
+        assert overview.activity_error_counts.Other == 0
+        await radar.aclose()
+
+    asyncio.run(scenario())

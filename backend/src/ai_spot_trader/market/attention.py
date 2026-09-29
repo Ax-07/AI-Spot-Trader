@@ -171,6 +171,12 @@ class ActivityDataQualityCounts(AttentionModel):
 
 class ActivityErrorCounts(AttentionModel):
     KrakenConnectionError: int = Field(default=0, ge=0)
+    KrakenNetworkError: int = Field(default=0, ge=0)
+    KrakenTimeoutError: int = Field(default=0, ge=0)
+    KrakenHTTPError: int = Field(default=0, ge=0)
+    KrakenServerError: int = Field(default=0, ge=0)
+    KrakenRateLimitError: int = Field(default=0, ge=0)
+    KrakenAPIError: int = Field(default=0, ge=0)
     KrakenPayloadError: int = Field(default=0, ge=0)
     UnknownKrakenSymbolError: int = Field(default=0, ge=0)
     CandleValidationError: int = Field(default=0, ge=0)
@@ -387,14 +393,12 @@ class MarketActivityAnalyzer:
             for timeframe in self.HORIZONS
         )
         complete_ratios = [
-            item.volume_ratio
+            item.volume_ratio if item.complete else None
             for item in horizons
-            if item.complete and item.volume_ratio is not None
         ]
         complete_accelerations = [
-            item.volume_acceleration
+            item.volume_acceleration if item.complete else None
             for item in horizons
-            if item.complete and item.volume_acceleration is not None
         ]
         activity_state = _activity_state(complete_ratios, complete_accelerations)
         if not all(item.complete for item in horizons):
@@ -1135,17 +1139,34 @@ def _activity_state(
     ratios: Iterable[Decimal | None],
     accelerations: Iterable[Decimal | None],
 ) -> MarketActivityState:
-    usable_ratios = [value for value in ratios if value is not None]
-    usable_accelerations = [value for value in accelerations if value is not None]
-    if not usable_ratios:
+    ratio_values = tuple(ratios)
+    acceleration_values = tuple(accelerations)
+    if not any(value is not None for value in ratio_values):
         return MarketActivityState.UNKNOWN
-    peak = max(usable_ratios)
-    acceleration = max(usable_accelerations, default=Decimal(0))
-    if peak >= Decimal("2.50") and acceleration >= Decimal("0.50"):
+
+    pairs = tuple(
+        (
+            ratio,
+            acceleration_values[index] if index < len(acceleration_values) else None,
+        )
+        for index, ratio in enumerate(ratio_values)
+        if ratio is not None
+    )
+    if any(
+        ratio >= Decimal("2.50")
+        and acceleration is not None
+        and acceleration >= Decimal("0.50")
+        for ratio, acceleration in pairs
+    ):
         return MarketActivityState.VERY_HIGH
-    if peak >= Decimal("1.75") and acceleration >= Decimal("0.25"):
+    if any(
+        ratio >= Decimal("1.75")
+        and acceleration is not None
+        and acceleration >= Decimal("0.25")
+        for ratio, acceleration in pairs
+    ):
         return MarketActivityState.ACCELERATING
-    if peak >= Decimal("1.40"):
+    if any(ratio >= Decimal("1.40") for ratio, _acceleration in pairs):
         return MarketActivityState.ELEVATED
     return MarketActivityState.NORMAL
 
@@ -1313,6 +1334,12 @@ def _activity_error_counts(
 ) -> ActivityErrorCounts:
     known = {
         "KrakenConnectionError",
+        "KrakenNetworkError",
+        "KrakenTimeoutError",
+        "KrakenHTTPError",
+        "KrakenServerError",
+        "KrakenRateLimitError",
+        "KrakenAPIError",
         "KrakenPayloadError",
         "UnknownKrakenSymbolError",
         "CandleValidationError",
@@ -1328,6 +1355,12 @@ def _activity_error_counts(
             other += 1
     return ActivityErrorCounts(
         KrakenConnectionError=raw["KrakenConnectionError"],
+        KrakenNetworkError=raw["KrakenNetworkError"],
+        KrakenTimeoutError=raw["KrakenTimeoutError"],
+        KrakenHTTPError=raw["KrakenHTTPError"],
+        KrakenServerError=raw["KrakenServerError"],
+        KrakenRateLimitError=raw["KrakenRateLimitError"],
+        KrakenAPIError=raw["KrakenAPIError"],
         KrakenPayloadError=raw["KrakenPayloadError"],
         UnknownKrakenSymbolError=raw["UnknownKrakenSymbolError"],
         CandleValidationError=raw["CandleValidationError"],

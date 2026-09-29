@@ -23,7 +23,7 @@ class KrakenNetworkError(KrakenTransientError):
 
 
 class KrakenRateLimitError(KrakenTransientError):
-    """Retryable Kraken HTTP 429 response."""
+    """Retryable Kraken rate-limit/throttling response."""
 
 
 class KrakenServerError(KrakenTransientError):
@@ -36,6 +36,10 @@ class KrakenHTTPError(KrakenConnectionError):
 
 class KrakenPayloadError(KrakenMarketDataError):
     """Kraken returned a payload that cannot be safely normalized."""
+
+
+class KrakenAPIError(KrakenPayloadError):
+    """Kraken returned a valid public-API envelope containing a provider error."""
 
 
 class UnknownKrakenSymbolError(KrakenMarketDataError):

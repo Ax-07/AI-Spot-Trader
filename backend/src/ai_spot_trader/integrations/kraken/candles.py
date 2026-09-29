@@ -19,6 +19,7 @@ from ai_spot_trader.integrations.kraken.derivatives import (
 )
 from ai_spot_trader.integrations.kraken.errors import (
     KrakenConnectionError,
+    KrakenMarketDataError,
     KrakenPayloadError,
     UnknownKrakenSymbolError,
 )
@@ -26,11 +27,13 @@ from ai_spot_trader.integrations.kraken.rest import (
     KRAKEN_SPOT_OHLC_MAX_ROWS,
     KrakenPublicRestClient,
 )
+from ai_spot_trader.integrations.kraken.symbols import KrakenPairRegistry
 from ai_spot_trader.integrations.kraken.websocket import KrakenOhlcWebSocketClient
 from ai_spot_trader.market.candles import Candle, CandleKey, floor_time
 
 KRAKEN_FUTURES_WS_URL = "wss://futures.kraken.com/ws/v1"
 KRAKEN_FUTURES_HISTORY_TARGET_ROWS = 1000
+KRAKEN_SPOT_REGISTRY_FAILURE_COOLDOWN_SECONDS = 2.0
 
 
 class FuturesWebSocketConnection(Protocol):
@@ -82,6 +85,9 @@ class KrakenCandleProvider:
         )
         self._futures_ws_url = futures_ws_url
         self._ws_receive_timeout_seconds = ws_receive_timeout_seconds
+        self._spot_pair_cache: KrakenPairRegistry | None = None
+        self._spot_pair_cache_lock = asyncio.Lock()
+        self._spot_pair_failure: tuple[float, KrakenMarketDataError] | None = None
         self._instrument_cache: dict[str, DerivativeInstrument] | None = None
         self._instrument_cache_lock = asyncio.Lock()
 
@@ -120,8 +126,7 @@ class KrakenCandleProvider:
         limit: int,
         before: datetime,
     ) -> tuple[Candle, ...]:
-        registry = await self._spot_rest.fetch_pair_registry()
-        symbol = registry.normalize(key.symbol)
+        symbol = await self._spot_symbol(key.symbol)
         provider_limit = min(limit, KRAKEN_SPOT_OHLC_MAX_ROWS)
         since = before - (key.timeframe.duration * (provider_limit + 2))
         rows = await self._spot_rest.fetch_ohlcv_history(
@@ -147,6 +152,49 @@ class KrakenCandleProvider:
             for row in rows
         )
         return candles[-provider_limit:]
+
+    async def _spot_symbol(self, canonical_symbol: str) -> str:
+        registry = self._spot_pair_cache
+        if registry is None:
+            registry = await self._refresh_spot_pair_cache(observed_cache=None)
+            return registry.normalize(canonical_symbol)
+
+        try:
+            return registry.normalize(canonical_symbol)
+        except UnknownKrakenSymbolError:
+            registry = await self._refresh_spot_pair_cache(observed_cache=registry)
+            return registry.normalize(canonical_symbol)
+
+    async def _refresh_spot_pair_cache(
+        self,
+        *,
+        observed_cache: KrakenPairRegistry | None,
+    ) -> KrakenPairRegistry:
+        async with self._spot_pair_cache_lock:
+            current = self._spot_pair_cache
+            if current is not None and current is not observed_cache:
+                return current
+
+            loop = asyncio.get_running_loop()
+            failure = self._spot_pair_failure
+            if failure is not None and loop.time() < failure[0]:
+                # A short fail-fast window prevents one provider-side AssetPairs failure
+                # from becoming one identical request per waiting SPOT market. It is not
+                # a catalogue TTL: the next call retries after this bounded cooldown.
+                raise failure[1]
+
+            try:
+                refreshed = await self._spot_rest.fetch_pair_registry()
+            except KrakenMarketDataError as exc:
+                self._spot_pair_failure = (
+                    loop.time() + KRAKEN_SPOT_REGISTRY_FAILURE_COOLDOWN_SECONDS,
+                    exc,
+                )
+                raise
+
+            self._spot_pair_cache = refreshed
+            self._spot_pair_failure = None
+            return refreshed
 
     async def _perpetual_history(
         self,
