@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -20,11 +21,95 @@ from ai_spot_trader.market.attention import (
     RadarStatus,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class PublicAttentionResearchError(RuntimeError):
     """Raised by the auxiliary web-research adapter; callers must fail soft."""
 
 
+class PublicAttentionTransportError(PublicAttentionResearchError):
+    """OpenAI web research failed at the network/transport boundary."""
+
+
+class PublicAttentionHTTPError(PublicAttentionResearchError):
+    """OpenAI web research returned a non-transient HTTP contract error."""
+
+    def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class PublicAttentionSchemaError(PublicAttentionHTTPError):
+    """OpenAI rejected the Responses request/schema contract with HTTP 400."""
+
+
+# Batch 34 used contract-oriented names while Batch 34.1 initially exposed the
+# more general HTTP name. Keep those names as aliases rather than forcing tests
+# or callers to change during a local, non-integrated batch transition.
+PublicAttentionBadRequestError = PublicAttentionSchemaError
+PublicAttentionRequestError = PublicAttentionSchemaError
+PublicAttentionContractError = PublicAttentionSchemaError
+PublicAttentionResponseError = PublicAttentionHTTPError
+
+
+class PublicAttentionRateLimitError(PublicAttentionTransportError):
+    """OpenAI web research remained rate-limited after bounded retries."""
+
+    def __init__(self, message: str, *, status_code: int = 429) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class PublicAttentionServerError(PublicAttentionTransportError):
+    """OpenAI web research returned a retryable 5xx response."""
+
+    def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class PublicAttentionIncompleteError(PublicAttentionResearchError):
+    """OpenAI Responses finished with the explicit ``incomplete`` status."""
+
+    def __init__(
+        self,
+        message: str = "OpenAI web research response is incomplete",
+        *,
+        reason: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason = (
+            _bounded_token(reason, max_length=80, fallback="unknown")
+            if reason is not None
+            else None
+        )
+
+
+class PublicAttentionValidationError(PublicAttentionResearchError):
+    """Canonical Pydantic validation failed with bounded value-free diagnostics."""
+
+    def __init__(
+        self,
+        *,
+        validation_path: str,
+        validation_code: str,
+        validation_error_count: int,
+    ) -> None:
+        path = _bounded_token(validation_path, max_length=160, fallback="unknown")
+        code = _bounded_token(validation_code, max_length=80, fallback="unknown")
+        count = min(max(int(validation_error_count), 1), 8)
+        super().__init__(
+            "Structured public attention data failed canonical validation "
+            f"path={path} code={code} errors={count}"
+        )
+        self.validation_path = path
+        self.validation_code = code
+        self.validation_error_count = count
+
+
+# Keep the wire schema inside the Structured Outputs subset accepted by Responses.
+# Canonical length constraints remain enforced by the Pydantic domain models below.
 PUBLIC_ATTENTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -32,32 +117,17 @@ PUBLIC_ATTENTION_SCHEMA: dict[str, Any] = {
             "type": "string",
             "enum": ["RISING", "STABLE", "FALLING", "UNKNOWN"],
         },
-        "confidence_context": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "confidence_context": {"type": "string"},
         "quantitative_metrics": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "minLength": 1, "maxLength": 128},
-                    "value": {"type": "string", "minLength": 1, "maxLength": 256},
-                    "unit": {
-                        "anyOf": [
-                            {"type": "string", "maxLength": 64},
-                            {"type": "null"},
-                        ]
-                    },
-                    "window": {
-                        "anyOf": [
-                            {"type": "string", "maxLength": 64},
-                            {"type": "null"},
-                        ]
-                    },
-                    "source_url": {
-                        "anyOf": [
-                            {"type": "string", "maxLength": 2048},
-                            {"type": "null"},
-                        ]
-                    },
+                    "name": {"type": "string"},
+                    "value": {"type": "string"},
+                    "unit": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "window": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "source_url": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                     "published_at": {
                         "anyOf": [{"type": "string"}, {"type": "null"}]
                     },
@@ -71,13 +141,8 @@ PUBLIC_ATTENTION_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "text": {"type": "string", "minLength": 1, "maxLength": 2000},
-                    "source_url": {
-                        "anyOf": [
-                            {"type": "string", "maxLength": 2048},
-                            {"type": "null"},
-                        ]
-                    },
+                    "text": {"type": "string"},
+                    "source_url": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["text", "source_url"],
                 "additionalProperties": False,
@@ -88,17 +153,8 @@ PUBLIC_ATTENTION_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "description": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 2000,
-                    },
-                    "source_url": {
-                        "anyOf": [
-                            {"type": "string", "maxLength": 2048},
-                            {"type": "null"},
-                        ]
-                    },
+                    "description": {"type": "string"},
+                    "source_url": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["description", "source_url"],
                 "additionalProperties": False,
@@ -109,8 +165,8 @@ PUBLIC_ATTENTION_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "title": {"type": "string", "minLength": 1, "maxLength": 1000},
-                    "url": {"type": "string", "minLength": 1, "maxLength": 2048},
+                    "title": {"type": "string"},
+                    "url": {"type": "string"},
                     "published_at": {
                         "anyOf": [{"type": "string"}, {"type": "null"}]
                     },
@@ -246,7 +302,6 @@ class OpenAIWebAttentionResearcher:
         if client is None:
             client = httpx.AsyncClient(timeout=self._timeout_seconds)
             self._http_client = client
-        last_error: Exception | None = None
         for attempt in range(self._max_attempts):
             try:
                 response = await client.post(
@@ -256,21 +311,38 @@ class OpenAIWebAttentionResearcher:
                     timeout=self._timeout_seconds,
                 )
             except (httpx.TimeoutException, httpx.TransportError) as exc:
-                last_error = exc
                 if attempt + 1 < self._max_attempts:
                     await asyncio.sleep(0.25 * (attempt + 1))
                     continue
-                raise PublicAttentionResearchError("OpenAI web research transport failed") from exc
-            if response.status_code == 429 or response.status_code >= 500:
-                last_error = PublicAttentionResearchError(
-                    f"OpenAI web research transient HTTP {response.status_code}"
+                raise PublicAttentionTransportError(
+                    "OpenAI web research transport failed"
+                ) from exc
+
+            if response.status_code == 429:
+                if attempt + 1 < self._max_attempts:
+                    await asyncio.sleep(0.25 * (attempt + 1))
+                    continue
+                raise PublicAttentionRateLimitError(
+                    "OpenAI web research remained rate limited",
+                    status_code=response.status_code,
                 )
+            if response.status_code >= 500:
                 if attempt + 1 < self._max_attempts:
                     await asyncio.sleep(0.25 * (attempt + 1))
                     continue
+                raise PublicAttentionServerError(
+                    "OpenAI web research returned a server error",
+                    status_code=response.status_code,
+                )
+            if response.status_code == 400:
+                raise PublicAttentionSchemaError(
+                    "OpenAI web research rejected the request/schema contract",
+                    status_code=response.status_code,
+                )
             if response.status_code >= 400:
-                raise PublicAttentionResearchError(
-                    f"OpenAI web research returned HTTP {response.status_code}"
+                raise PublicAttentionHTTPError(
+                    "OpenAI web research returned an HTTP contract error",
+                    status_code=response.status_code,
                 )
             try:
                 payload = response.json()
@@ -281,11 +353,17 @@ class OpenAIWebAttentionResearcher:
             if not isinstance(payload, dict):
                 raise PublicAttentionResearchError("OpenAI web research response must be an object")
             return payload
-        raise PublicAttentionResearchError("OpenAI web research failed") from last_error
+        raise PublicAttentionResearchError("OpenAI web research failed")
 
 
 def _extract_structured_payload(response: dict[str, Any]) -> dict[str, Any]:
-    if response.get("status") != "completed":
+    status = response.get("status")
+    if status == "incomplete":
+        details = response.get("incomplete_details")
+        raw_reason = details.get("reason") if isinstance(details, dict) else None
+        reason = raw_reason if isinstance(raw_reason, str) else None
+        raise PublicAttentionIncompleteError(reason=reason)
+    if status != "completed":
         raise PublicAttentionResearchError("OpenAI web research did not complete")
     texts: list[str] = []
     for item in response.get("output", []):
@@ -382,21 +460,19 @@ def _snapshot_from_payload(
     provider_sources: dict[str, str],
     provider_citations: set[str] | None = None,
 ) -> PublicAttentionSnapshot:
+    raw_direction = payload.get("attention_direction")
+    raw_confidence_context = payload.get("confidence_context")
+    if not isinstance(raw_direction, str):
+        _raise_manual_validation(path="attention_direction", code="string_type")
     try:
-        raw_direction = payload["attention_direction"]
-        raw_confidence_context = payload["confidence_context"]
-        if not isinstance(raw_direction, str) or not isinstance(raw_confidence_context, str):
-            raise ValueError("public attention direction/context must be strings")
         direction = PublicAttentionDirection(raw_direction)
-        confidence_context = raw_confidence_context.strip()
-    except (KeyError, ValueError) as exc:
-        raise PublicAttentionResearchError(
-            "Structured public attention contract is invalid"
-        ) from exc
+    except ValueError:
+        _raise_manual_validation(path="attention_direction", code="enum")
+    if not isinstance(raw_confidence_context, str):
+        _raise_manual_validation(path="confidence_context", code="string_type")
+    confidence_context = raw_confidence_context.strip()
     if not confidence_context:
-        raise PublicAttentionResearchError(
-            "Structured public attention confidence_context is empty"
-        )
+        _raise_manual_validation(path="confidence_context", code="string_too_short")
 
     structured_sources: dict[str, tuple[str, datetime | None]] = {}
     for raw in _list_of_dicts(payload.get("sources")):
@@ -413,85 +489,93 @@ def _snapshot_from_payload(
     provider_urls = set(provider_sources)
     direct_references: set[str] = set()
 
+    metrics: list[PublicAttentionMetric] = []
+    for index, raw in enumerate(_list_of_dicts(payload.get("quantitative_metrics"))):
+        source_url = _accepted_source_url(raw.get("source_url"), provider_urls)
+        if source_url is not None:
+            direct_references.add(source_url)
+        name = _text(raw.get("name"))
+        value = _text(raw.get("value"))
+        if not name or not value:
+            continue
+        try:
+            metric = PublicAttentionMetric(
+                name=name,
+                value=value,
+                unit=_text(raw.get("unit")),
+                window=_text(raw.get("window")),
+                source_url=source_url,
+                observed_at=observed_at,
+                published_at=_optional_datetime(raw.get("published_at")),
+            )
+        except ValidationError as exc:
+            _raise_pydantic_validation(exc, prefix=f"quantitative_metrics[{index}]")
+        metrics.append(metric)
+
+    observations_list: list[PublicAttentionObservation] = []
+    for index, raw in enumerate(_list_of_dicts(payload.get("qualitative_observations"))):
+        text = _text(raw.get("text"))
+        if not text:
+            continue
+        source_url = _accepted_source_url(raw.get("source_url"), provider_urls)
+        if source_url is not None:
+            direct_references.add(source_url)
+        try:
+            observation = PublicAttentionObservation(text=text, source_url=source_url)
+        except ValidationError as exc:
+            _raise_pydantic_validation(exc, prefix=f"qualitative_observations[{index}]")
+        observations_list.append(observation)
+
+    catalysts_list: list[PublicAttentionCatalyst] = []
+    for index, raw in enumerate(_list_of_dicts(payload.get("possible_catalysts"))):
+        description = _text(raw.get("description"))
+        if not description:
+            continue
+        source_url = _accepted_source_url(raw.get("source_url"), provider_urls)
+        if source_url is not None:
+            direct_references.add(source_url)
+        try:
+            catalyst = PublicAttentionCatalyst(description=description, source_url=source_url)
+        except ValidationError as exc:
+            _raise_pydantic_validation(exc, prefix=f"possible_catalysts[{index}]")
+        catalysts_list.append(catalyst)
+
+    citation_urls = (provider_citations or set()) & provider_urls
+    structured_provider_urls = set(structured_sources) & provider_urls
+    exposed_urls = direct_references | citation_urls
+    if not exposed_urls:
+        exposed_urls = structured_provider_urls
+    if not exposed_urls:
+        # No reliable linkage exists. Preserve provider metadata rather than applying
+        # a relevance heuristic that could hide the only verifiable citations.
+        exposed_urls = provider_urls
+
+    sources: list[PublicAttentionSource] = []
+    for index, url in enumerate(sorted(exposed_urls)):
+        title, published_at = structured_sources.get(
+            url,
+            (provider_sources.get(url) or _domain(url), None),
+        )
+        try:
+            source = PublicAttentionSource(
+                title=title,
+                url=url,
+                source_domain=_domain(url),
+                observed_at=observed_at,
+                published_at=published_at,
+            )
+        except ValidationError as exc:
+            _raise_pydantic_validation(exc, prefix=f"sources[{index}]")
+        sources.append(source)
+
+    status = RadarStatus.AVAILABLE if sources else RadarStatus.PARTIAL
+    if not sources:
+        confidence_context = _append_context(
+            confidence_context,
+            " No provider citation/source URL was returned; public attention is partial.",
+            max_length=2000,
+        )
     try:
-        metrics: list[PublicAttentionMetric] = []
-        for raw in _list_of_dicts(payload.get("quantitative_metrics")):
-            source_url = _accepted_source_url(raw.get("source_url"), provider_urls)
-            if source_url is not None:
-                direct_references.add(source_url)
-            name = _text(raw.get("name"))
-            value = _text(raw.get("value"))
-            if not name or not value:
-                continue
-            metrics.append(
-                PublicAttentionMetric(
-                    name=name,
-                    value=value,
-                    unit=_text(raw.get("unit")),
-                    window=_text(raw.get("window")),
-                    source_url=source_url,
-                    observed_at=observed_at,
-                    published_at=_optional_datetime(raw.get("published_at")),
-                )
-            )
-
-        observations_list: list[PublicAttentionObservation] = []
-        for raw in _list_of_dicts(payload.get("qualitative_observations")):
-            text = _text(raw.get("text"))
-            if not text:
-                continue
-            source_url = _accepted_source_url(raw.get("source_url"), provider_urls)
-            if source_url is not None:
-                direct_references.add(source_url)
-            observations_list.append(
-                PublicAttentionObservation(text=text, source_url=source_url)
-            )
-
-        catalysts_list: list[PublicAttentionCatalyst] = []
-        for raw in _list_of_dicts(payload.get("possible_catalysts")):
-            description = _text(raw.get("description"))
-            if not description:
-                continue
-            source_url = _accepted_source_url(raw.get("source_url"), provider_urls)
-            if source_url is not None:
-                direct_references.add(source_url)
-            catalysts_list.append(
-                PublicAttentionCatalyst(description=description, source_url=source_url)
-            )
-
-        citation_urls = (provider_citations or set()) & provider_urls
-        structured_provider_urls = set(structured_sources) & provider_urls
-        exposed_urls = direct_references | citation_urls
-        if not exposed_urls:
-            exposed_urls = structured_provider_urls
-        if not exposed_urls:
-            # No reliable linkage exists. Preserve provider metadata rather than applying
-            # a relevance heuristic that could hide the only verifiable citations.
-            exposed_urls = provider_urls
-
-        sources: list[PublicAttentionSource] = []
-        for url in sorted(exposed_urls):
-            title, published_at = structured_sources.get(
-                url,
-                (provider_sources.get(url) or _domain(url), None),
-            )
-            sources.append(
-                PublicAttentionSource(
-                    title=title,
-                    url=url,
-                    source_domain=_domain(url),
-                    observed_at=observed_at,
-                    published_at=published_at,
-                )
-            )
-
-        status = RadarStatus.AVAILABLE if sources else RadarStatus.PARTIAL
-        if not sources:
-            confidence_context = _append_context(
-                confidence_context,
-                " No provider citation/source URL was returned; public attention is partial.",
-                max_length=2000,
-            )
         return PublicAttentionSnapshot(
             asset=asset,
             observed_at=observed_at,
@@ -504,9 +588,63 @@ def _snapshot_from_payload(
             confidence_context=confidence_context,
         )
     except ValidationError as exc:
-        raise PublicAttentionResearchError(
-            "Structured public attention data failed canonical validation"
-        ) from exc
+        _raise_pydantic_validation(exc, prefix="snapshot")
+
+
+def _raise_manual_validation(*, path: str, code: str) -> None:
+    error = PublicAttentionValidationError(
+        validation_path=path,
+        validation_code=code,
+        validation_error_count=1,
+    )
+    _log_validation_error(error)
+    raise error from None
+
+
+def _raise_pydantic_validation(exc: ValidationError, *, prefix: str) -> None:
+    errors = exc.errors(include_url=False, include_context=False, include_input=False)
+    first = errors[0] if errors else {}
+    location = _validation_location(first.get("loc"))
+    path = prefix if not location else f"{prefix}.{location}"
+    code = first.get("type") if isinstance(first.get("type"), str) else "unknown"
+    error = PublicAttentionValidationError(
+        validation_path=path,
+        validation_code=code,
+        validation_error_count=len(errors) or 1,
+    )
+    _log_validation_error(error)
+    raise error from None
+
+
+def _log_validation_error(exc: PublicAttentionValidationError) -> None:
+    logger.warning(
+        "Public attention canonical validation failed path=%s code=%s errors=%d",
+        exc.validation_path,
+        exc.validation_code,
+        exc.validation_error_count,
+    )
+
+
+def _validation_location(value: object) -> str:
+    if not isinstance(value, tuple):
+        return ""
+    parts: list[str] = []
+    for item in value:
+        if isinstance(item, int):
+            if parts:
+                parts[-1] = f"{parts[-1]}[{item}]"
+            else:
+                parts.append(f"[{item}]")
+        elif isinstance(item, str):
+            parts.append(_bounded_token(item, max_length=64, fallback="field"))
+    return ".".join(parts)
+
+
+def _bounded_token(value: str, *, max_length: int, fallback: str) -> str:
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.[]"
+    cleaned = "".join(character if character in allowed else "_" for character in value)
+    cleaned = cleaned.strip("._")
+    return (cleaned or fallback)[:max_length]
 
 
 def _list_of_dicts(value: object) -> tuple[dict[str, Any], ...]:

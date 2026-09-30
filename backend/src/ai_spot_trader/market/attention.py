@@ -18,6 +18,21 @@ from ai_spot_trader.domain.symbols import parse_canonical_symbol
 from ai_spot_trader.market.candles import Candle, CandleKey, CandleStreamService, CandleTimeframe
 
 
+_KRAKEN_PAYLOAD_STAGES = frozenset(
+    {
+        "ASSET_PAIRS_PAYLOAD",
+        "ASSET_PAIRS_ENTRY",
+        "ASSET_PAIRS_SYMBOL",
+        "OHLC_RESULT",
+        "OHLC_SERIES",
+        "OHLC_PAIR_KEY",
+        "OHLC_ROW",
+        "OHLC_TIMESTAMP",
+        "OHLC_NUMERIC",
+    }
+)
+
+
 class RadarStatus(StrEnum):
     AVAILABLE = "AVAILABLE"
     PARTIAL = "PARTIAL"
@@ -183,6 +198,18 @@ class ActivityErrorCounts(AttentionModel):
     Other: int = Field(default=0, ge=0)
 
 
+class ActivityPayloadStageCounts(AttentionModel):
+    ASSET_PAIRS_PAYLOAD: int = Field(default=0, ge=0)
+    ASSET_PAIRS_ENTRY: int = Field(default=0, ge=0)
+    ASSET_PAIRS_SYMBOL: int = Field(default=0, ge=0)
+    OHLC_RESULT: int = Field(default=0, ge=0)
+    OHLC_SERIES: int = Field(default=0, ge=0)
+    OHLC_PAIR_KEY: int = Field(default=0, ge=0)
+    OHLC_ROW: int = Field(default=0, ge=0)
+    OHLC_TIMESTAMP: int = Field(default=0, ge=0)
+    OHLC_NUMERIC: int = Field(default=0, ge=0)
+
+
 class ActivityMarketTypeStatusCounts(AttentionModel):
     SPOT: ActivityStatusCounts = Field(default_factory=ActivityStatusCounts)
     PERPETUAL: ActivityStatusCounts = Field(default_factory=ActivityStatusCounts)
@@ -249,7 +276,6 @@ class PublicAttentionSource(AttentionModel):
             _require_aware(self.published_at, "source published_at")
         return self
 
-
 class PublicAttentionSnapshot(AttentionModel):
     asset: str = Field(min_length=1, max_length=64)
     observed_at: datetime
@@ -297,6 +323,9 @@ class MarketAttentionOverview(AttentionModel):
         default_factory=ActivityDataQualityCounts
     )
     activity_error_counts: ActivityErrorCounts = Field(default_factory=ActivityErrorCounts)
+    activity_payload_stage_counts: ActivityPayloadStageCounts = Field(
+        default_factory=ActivityPayloadStageCounts
+    )
     activity_market_type_status_counts: ActivityMarketTypeStatusCounts = Field(
         default_factory=ActivityMarketTypeStatusCounts
     )
@@ -392,13 +421,9 @@ class MarketActivityAnalyzer:
             )
             for timeframe in self.HORIZONS
         )
-        complete_ratios = [
-            item.volume_ratio if item.complete else None
-            for item in horizons
-        ]
+        complete_ratios = [item.volume_ratio if item.complete else None for item in horizons]
         complete_accelerations = [
-            item.volume_acceleration if item.complete else None
-            for item in horizons
+            item.volume_acceleration if item.complete else None for item in horizons
         ]
         activity_state = _activity_state(complete_ratios, complete_accelerations)
         if not all(item.complete for item in horizons):
@@ -649,6 +674,7 @@ class MarketAttentionRadar:
             MarketType.PERPETUAL: 0,
         }
         self._activity_cache: dict[ExecutableMarket, MarketActivitySnapshot] = {}
+        self._activity_payload_stages: dict[ExecutableMarket, str] = {}
         self._public_cache: dict[str, PublicAttentionSnapshot] = {}
         self._history: deque[MarketAttentionOverview] = deque(maxlen=self._policy.history_limit)
         self._latest: MarketAttentionOverview | None = None
@@ -697,6 +723,9 @@ class MarketAttentionRadar:
                 state_counts = _activity_state_counts(fresh_activities)
                 data_quality_counts = _activity_data_quality_counts(fresh_activities)
                 error_counts = _activity_error_counts(fresh_activities)
+                payload_stage_counts = _activity_payload_stage_counts(
+                    fresh_activities, self._activity_payload_stages
+                )
                 market_type_status_counts = _activity_market_type_status_counts(fresh_activities)
                 liquidity_counts = _liquidity_regime_counts(fresh_activities)
                 subthreshold_activity = self._subthreshold_activity(fresh_activities)
@@ -750,6 +779,7 @@ class MarketAttentionRadar:
                     activity_state_counts=state_counts,
                     activity_data_quality_counts=data_quality_counts,
                     activity_error_counts=error_counts,
+                    activity_payload_stage_counts=payload_stage_counts,
                     activity_market_type_status_counts=market_type_status_counts,
                     liquidity_regime_counts=liquidity_counts,
                     subthreshold_activity=subthreshold_activity,
@@ -777,6 +807,9 @@ class MarketAttentionRadar:
                     activity_state_counts=_activity_state_counts(fresh_activities),
                     activity_data_quality_counts=_activity_data_quality_counts(fresh_activities),
                     activity_error_counts=_activity_error_counts(fresh_activities),
+                    activity_payload_stage_counts=_activity_payload_stage_counts(
+                        fresh_activities, self._activity_payload_stages
+                    ),
                     activity_market_type_status_counts=_activity_market_type_status_counts(
                         fresh_activities
                     ),
@@ -883,6 +916,7 @@ class MarketAttentionRadar:
                     market_type=market.market_type,
                     timeframe=CandleTimeframe.M5,
                 )
+                payload_stage: str | None = None
                 try:
                     candles = await self._candles.history(
                         key,
@@ -899,6 +933,7 @@ class MarketAttentionRadar:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
+                    payload_stage = _safe_payload_stage(exc)
                     snapshot = MarketActivitySnapshot(
                         market=market,
                         observed_at=now,
@@ -912,6 +947,10 @@ class MarketAttentionRadar:
                         data_quality=ActivityDataQuality.TECHNICAL_ERROR,
                         error_type=type(exc).__name__,
                     )
+                if payload_stage is None:
+                    self._activity_payload_stages.pop(market, None)
+                else:
+                    self._activity_payload_stages[market] = payload_stage
                 self._activity_cache[market] = snapshot
 
         if markets:
@@ -1365,6 +1404,45 @@ def _activity_error_counts(
         UnknownKrakenSymbolError=raw["UnknownKrakenSymbolError"],
         CandleValidationError=raw["CandleValidationError"],
         Other=other,
+    )
+
+
+def _safe_payload_stage(exc: Exception) -> str | None:
+    if type(exc).__name__ != "KrakenPayloadError":
+        return None
+    stage = getattr(exc, "stage", None)
+    if isinstance(stage, StrEnum):
+        stage = stage.value
+    if not isinstance(stage, str):
+        return None
+    normalized = stage.strip().upper()
+    return normalized if normalized in _KRAKEN_PAYLOAD_STAGES else None
+
+
+def _activity_payload_stage_counts(
+    activities: tuple[MarketActivitySnapshot, ...],
+    stage_by_market: dict[ExecutableMarket, str],
+) -> ActivityPayloadStageCounts:
+    raw = {stage: 0 for stage in _KRAKEN_PAYLOAD_STAGES}
+    for item in activities:
+        if (
+            item.status is not RadarStatus.ERROR
+            or item.error_type != "KrakenPayloadError"
+        ):
+            continue
+        stage = stage_by_market.get(item.market)
+        if stage in raw:
+            raw[stage] += 1  # type: ignore[index]
+    return ActivityPayloadStageCounts(
+        ASSET_PAIRS_PAYLOAD=raw["ASSET_PAIRS_PAYLOAD"],
+        ASSET_PAIRS_ENTRY=raw["ASSET_PAIRS_ENTRY"],
+        ASSET_PAIRS_SYMBOL=raw["ASSET_PAIRS_SYMBOL"],
+        OHLC_RESULT=raw["OHLC_RESULT"],
+        OHLC_SERIES=raw["OHLC_SERIES"],
+        OHLC_PAIR_KEY=raw["OHLC_PAIR_KEY"],
+        OHLC_ROW=raw["OHLC_ROW"],
+        OHLC_TIMESTAMP=raw["OHLC_TIMESTAMP"],
+        OHLC_NUMERIC=raw["OHLC_NUMERIC"],
     )
 
 

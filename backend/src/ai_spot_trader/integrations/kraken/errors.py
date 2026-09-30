@@ -1,3 +1,20 @@
+from enum import StrEnum
+
+
+class KrakenPayloadStage(StrEnum):
+    """Bounded, payload-free stage identifier safe for aggregate diagnostics."""
+
+    ASSET_PAIRS_PAYLOAD = "ASSET_PAIRS_PAYLOAD"
+    ASSET_PAIRS_ENTRY = "ASSET_PAIRS_ENTRY"
+    ASSET_PAIRS_SYMBOL = "ASSET_PAIRS_SYMBOL"
+    OHLC_RESULT = "OHLC_RESULT"
+    OHLC_SERIES = "OHLC_SERIES"
+    OHLC_PAIR_KEY = "OHLC_PAIR_KEY"
+    OHLC_ROW = "OHLC_ROW"
+    OHLC_TIMESTAMP = "OHLC_TIMESTAMP"
+    OHLC_NUMERIC = "OHLC_NUMERIC"
+
+
 class KrakenMarketDataError(RuntimeError):
     """Base error raised by the public Kraken market-data integration."""
 
@@ -36,6 +53,21 @@ class KrakenHTTPError(KrakenConnectionError):
 
 class KrakenPayloadError(KrakenMarketDataError):
     """Kraken returned a payload that cannot be safely normalized."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: KrakenPayloadStage | None = None,
+    ) -> None:
+        super().__init__(message)
+        if stage is None:
+            self.stage: KrakenPayloadStage | None = None
+        else:
+            try:
+                self.stage = stage if isinstance(stage, KrakenPayloadStage) else KrakenPayloadStage(stage)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("invalid Kraken payload diagnostic stage") from exc
 
 
 class KrakenAPIError(KrakenPayloadError):

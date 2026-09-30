@@ -1,12 +1,24 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import UTC, datetime
 
+import httpx
 import pytest
+from pydantic import SecretStr
 
+from ai_spot_trader.domain.enums import LLMModel
 from ai_spot_trader.integrations.openai_market_attention import (
     PUBLIC_ATTENTION_SCHEMA,
+    OpenAIWebAttentionResearcher,
+    PublicAttentionContractError,
+    PublicAttentionIncompleteError,
+    PublicAttentionRateLimitError,
     PublicAttentionResearchError,
+    PublicAttentionServerError,
+    PublicAttentionTransportError,
+    PublicAttentionValidationError,
     _snapshot_from_payload,
 )
 from ai_spot_trader.market.attention import RadarStatus
@@ -44,29 +56,26 @@ def _payload(*, source_url: str | None = USED) -> dict[str, object]:
     }
 
 
-def test_structured_output_schema_matches_canonical_string_limits() -> None:
-    props = PUBLIC_ATTENTION_SCHEMA["properties"]
-    assert props["confidence_context"] == {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 2000,
+def _schema_keywords(value: object) -> set[str]:
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for key, child in value.items():
+            found.add(key)
+            found.update(_schema_keywords(child))
+    elif isinstance(value, list):
+        for child in value:
+            found.update(_schema_keywords(child))
+    return found
+
+
+def test_structured_output_schema_uses_supported_wire_subset() -> None:
+    keywords = _schema_keywords(PUBLIC_ATTENTION_SCHEMA)
+    assert "minLength" not in keywords
+    assert "maxLength" not in keywords
+    assert PUBLIC_ATTENTION_SCHEMA["additionalProperties"] is False
+    assert PUBLIC_ATTENTION_SCHEMA["properties"]["confidence_context"] == {
+        "type": "string"
     }
-
-    metric = props["quantitative_metrics"]["items"]["properties"]
-    assert metric["name"]["minLength"] == 1
-    assert metric["name"]["maxLength"] == 128
-    assert metric["value"]["maxLength"] == 256
-    assert metric["unit"]["anyOf"][0]["maxLength"] == 64
-    assert metric["window"]["anyOf"][0]["maxLength"] == 64
-    assert metric["source_url"]["anyOf"][0]["maxLength"] == 2048
-
-    observation = props["qualitative_observations"]["items"]["properties"]
-    catalyst = props["possible_catalysts"]["items"]["properties"]
-    source = props["sources"]["items"]["properties"]
-    assert observation["text"]["maxLength"] == 2000
-    assert catalyst["description"]["maxLength"] == 2000
-    assert source["title"]["maxLength"] == 1000
-    assert source["url"]["maxLength"] == 2048
 
 
 def test_payload_at_canonical_maximum_lengths_is_accepted() -> None:
@@ -147,11 +156,11 @@ def test_absence_of_provider_source_stays_partial_without_false_available() -> N
     assert len(snapshot.confidence_context) <= 2000
 
 
-def test_canonical_validation_failure_is_wrapped_as_research_error() -> None:
+def test_canonical_validation_failure_is_wrapped_as_validation_error() -> None:
     payload = _payload()
     payload["quantitative_metrics"][0]["name"] = "x" * 129  # type: ignore[index]
 
-    with pytest.raises(PublicAttentionResearchError, match="canonical validation"):
+    with pytest.raises(PublicAttentionValidationError, match="canonical validation"):
         _snapshot_from_payload(
             payload,
             asset="QNT",
@@ -159,3 +168,132 @@ def test_canonical_validation_failure_is_wrapped_as_research_error() -> None:
             provider_sources={USED: "Used"},
             provider_citations={USED},
         )
+
+
+def test_request_keeps_web_search_store_include_and_strict_schema() -> None:
+    async def scenario() -> None:
+        captured: dict[str, object] = {}
+        structured = _payload()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.content))
+            return httpx.Response(
+                200,
+                json={
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "web_search_call",
+                            "action": {
+                                "type": "search",
+                                "sources": [{"url": USED, "title": "Used"}],
+                            },
+                        },
+                        {
+                            "type": "message",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": json.dumps(structured),
+                                    "annotations": [
+                                        {"type": "url_citation", "url": USED, "title": "Used"}
+                                    ],
+                                }
+                            ],
+                        },
+                    ],
+                },
+                request=request,
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            researcher = OpenAIWebAttentionResearcher(
+                api_key=SecretStr("test-key"),
+                model=LLMModel.LUNA,
+                http_client=http_client,
+            )
+            snapshot = await researcher.research(
+                asset="QNT",
+                symbols=("QNT/USD",),
+                observed_at=NOW,
+            )
+
+        assert captured["store"] is False
+        assert captured["tools"] == [{"type": "web_search"}]
+        assert captured["include"] == ["web_search_call.action.sources"]
+        assert captured["text"]["format"]["strict"] is True  # type: ignore[index]
+        assert captured["text"]["format"]["schema"] == PUBLIC_ATTENTION_SCHEMA  # type: ignore[index]
+        assert snapshot.research_status is RadarStatus.AVAILABLE
+
+    asyncio.run(scenario())
+
+
+def test_http_400_contract_429_and_5xx_are_distinct_and_sanitized() -> None:
+    async def classify(status_code: int) -> Exception:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                status_code,
+                text='{"error":{"message":"secret provider detail"}}',
+                request=request,
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            researcher = OpenAIWebAttentionResearcher(
+                api_key=SecretStr("test-key"),
+                model=LLMModel.LUNA,
+                http_client=http_client,
+                max_attempts=1,
+            )
+            try:
+                await researcher.research(asset="QNT", symbols=("QNT/USD",), observed_at=NOW)
+            except Exception as exc:  # noqa: BLE001 - test captures exact public type below
+                return exc
+        raise AssertionError("expected request to fail")
+
+    contract = asyncio.run(classify(400))
+    rate = asyncio.run(classify(429))
+    server = asyncio.run(classify(503))
+
+    assert isinstance(contract, PublicAttentionContractError)
+    assert isinstance(rate, PublicAttentionRateLimitError)
+    assert isinstance(server, PublicAttentionServerError)
+    for exc in (contract, rate, server):
+        assert isinstance(exc, PublicAttentionResearchError)
+        assert "secret provider detail" not in str(exc)
+
+
+def test_transport_and_incomplete_response_are_distinct() -> None:
+    async def transport_scenario() -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("private transport detail", request=request)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            researcher = OpenAIWebAttentionResearcher(
+                api_key=SecretStr("test-key"),
+                model=LLMModel.LUNA,
+                http_client=http_client,
+                max_attempts=1,
+            )
+            with pytest.raises(PublicAttentionTransportError) as exc_info:
+                await researcher.research(asset="QNT", symbols=("QNT/USD",), observed_at=NOW)
+            assert "private transport detail" not in str(exc_info.value)
+
+    async def incomplete_scenario() -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"status": "incomplete", "output": []},
+                request=request,
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            researcher = OpenAIWebAttentionResearcher(
+                api_key=SecretStr("test-key"),
+                model=LLMModel.LUNA,
+                http_client=http_client,
+            )
+            with pytest.raises(PublicAttentionIncompleteError):
+                await researcher.research(asset="QNT", symbols=("QNT/USD",), observed_at=NOW)
+
+    asyncio.run(transport_scenario())
+    asyncio.run(incomplete_scenario())

@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -12,6 +13,7 @@ from ai_spot_trader.integrations.kraken.errors import (
     KrakenHTTPError,
     KrakenNetworkError,
     KrakenPayloadError,
+    KrakenPayloadStage,
     KrakenRateLimitError,
     KrakenServerError,
     KrakenTimeoutError,
@@ -19,6 +21,7 @@ from ai_spot_trader.integrations.kraken.errors import (
 from ai_spot_trader.integrations.kraken.models import KrakenOhlcCandle, KrakenOhlcvCandle
 from ai_spot_trader.integrations.kraken.symbols import (
     KrakenPairRegistry,
+    kraken_pair_key_matches,
     parse_asset_pairs_payload,
 )
 
@@ -26,6 +29,11 @@ KRAKEN_OHLC_INTERVALS_MINUTES = frozenset(
     {1, 5, 15, 30, 60, 240, 1440, 10080, 21600}
 )
 KRAKEN_SPOT_OHLC_MAX_ROWS = 720
+# Kraken documents a 720-entry OHLC limit, but a live request reproduced on
+# 2026-09-29 returned 721 rows for the same bounded window. Keep the provider
+# history limit at 720 while allowing exactly one runtime overflow row.
+KRAKEN_SPOT_OHLC_MAX_RESPONSE_ROWS = KRAKEN_SPOT_OHLC_MAX_ROWS + 1
+_LOGGER = logging.getLogger(__name__)
 
 
 class KrakenPublicRestClient:
@@ -54,9 +62,16 @@ class KrakenPublicRestClient:
         try:
             payload = json.loads(response.text)
         except json.JSONDecodeError as exc:
-            raise KrakenPayloadError("Kraken AssetPairs returned invalid JSON") from exc
-        _raise_for_api_errors(payload, operation="AssetPairs")
-        return parse_asset_pairs_payload(payload)
+            raise KrakenPayloadError(
+                "Kraken AssetPairs returned invalid JSON",
+                stage=KrakenPayloadStage.ASSET_PAIRS_PAYLOAD,
+            ) from exc
+        try:
+            _raise_for_api_errors(payload, operation="AssetPairs")
+            return parse_asset_pairs_payload(payload)
+        except KrakenPayloadError as exc:
+            _log_payload_error(operation="AssetPairs", exc=exc)
+            raise
 
     async def fetch_ohlc_history(
         self,
@@ -74,11 +89,15 @@ class KrakenPublicRestClient:
         payload = await self._fetch_ohlc_payload(
             symbol, interval_minutes=interval_minutes, since=since
         )
-        return _parse_ohlc_payload(
-            payload,
-            interval_minutes=interval_minutes,
-            expected_symbol=symbol,
-        )
+        try:
+            return _parse_ohlc_payload(
+                payload,
+                interval_minutes=interval_minutes,
+                expected_symbol=symbol,
+            )
+        except KrakenPayloadError as exc:
+            _log_payload_error(operation="OHLC", exc=exc)
+            raise
 
     async def fetch_ohlcv_history(
         self,
@@ -98,12 +117,16 @@ class KrakenPublicRestClient:
             symbol, interval_minutes=interval_minutes, since=since
         )
         received_at = datetime.now(UTC)
-        return _parse_ohlcv_payload(
-            payload,
-            interval_minutes=interval_minutes,
-            expected_symbol=symbol,
-            received_at=received_at,
-        )
+        try:
+            return _parse_ohlcv_payload(
+                payload,
+                interval_minutes=interval_minutes,
+                expected_symbol=symbol,
+                received_at=received_at,
+            )
+        except KrakenPayloadError as exc:
+            _log_payload_error(operation="OHLC", exc=exc)
+            raise
 
     async def _fetch_ohlc_payload(
         self,
@@ -128,13 +151,21 @@ class KrakenPublicRestClient:
         try:
             payload = json.loads(response.text)
         except json.JSONDecodeError as exc:
-            raise KrakenPayloadError("Kraken OHLC returned invalid JSON") from exc
+            raise KrakenPayloadError(
+                "Kraken OHLC returned invalid JSON",
+                stage=KrakenPayloadStage.OHLC_RESULT,
+            ) from exc
         _raise_for_api_errors(payload, operation="OHLC")
         return payload
 
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+
+def _log_payload_error(*, operation: str, exc: KrakenPayloadError) -> None:
+    stage = exc.stage.value if isinstance(exc.stage, KrakenPayloadStage) else "UNCLASSIFIED"
+    _LOGGER.warning("Kraken payload validation failed operation=%s stage=%s", operation, stage)
 
 
 def _raise_transport_error(exc: httpx.HTTPError, *, operation: str) -> None:
@@ -196,31 +227,9 @@ def _parse_ohlc_payload(
     interval_minutes: int,
     expected_symbol: str,
 ) -> tuple[KrakenOhlcCandle, ...]:
-    if not isinstance(payload, Mapping):
-        raise KrakenPayloadError("Kraken OHLC payload must be an object")
-
-    errors = payload.get("error")
-    if not isinstance(errors, list):
-        raise KrakenPayloadError("Kraken OHLC payload has an invalid error field")
-    if errors:
-        raise KrakenPayloadError("Kraken OHLC returned an API error")
-
-    result = payload.get("result")
-    if not isinstance(result, Mapping):
-        raise KrakenPayloadError("Kraken OHLC payload has no result object")
-
-    series = [(key, value) for key, value in result.items() if key != "last"]
-    if len(series) != 1:
-        raise KrakenPayloadError("Kraken OHLC payload must contain exactly one pair series")
-
-    raw_symbol, raw_rows = series[0]
-    normalized_expected = expected_symbol.strip().upper()
-    if not isinstance(raw_symbol, str) or raw_symbol.strip().upper() != normalized_expected:
-        raise KrakenPayloadError("Kraken OHLC pair did not match the requested market")
-    if not isinstance(raw_rows, list):
-        raise KrakenPayloadError("Kraken OHLC pair series must be an array")
-    if not raw_rows:
-        raise KrakenPayloadError("Kraken OHLC pair series cannot be empty")
+    result = _ohlc_result(payload)
+    raw_symbol, raw_rows = _ohlc_series(result, expected_symbol=expected_symbol)
+    del raw_symbol
 
     interval = timedelta(minutes=interval_minutes)
     committed_rows = raw_rows[:-1]
@@ -229,18 +238,17 @@ def _parse_ohlc_payload(
 
     for raw_row in committed_rows:
         if not isinstance(raw_row, list) or len(raw_row) < 5:
-            raise KrakenPayloadError("Kraken OHLC contains an invalid candle entry")
+            raise KrakenPayloadError(
+                "Kraken OHLC contains an invalid candle entry",
+                stage=KrakenPayloadStage.OHLC_ROW,
+            )
 
-        raw_timestamp = raw_row[0]
-        if isinstance(raw_timestamp, bool) or not isinstance(raw_timestamp, int):
-            raise KrakenPayloadError("Kraken OHLC candle timestamp is invalid")
-        try:
-            started_at = datetime.fromtimestamp(raw_timestamp, tz=UTC)
-        except (OverflowError, OSError, ValueError) as exc:
-            raise KrakenPayloadError("Kraken OHLC candle timestamp is invalid") from exc
-
+        started_at = _ohlc_timestamp(raw_row[0])
         if previous_started_at is not None and started_at <= previous_started_at:
-            raise KrakenPayloadError("Kraken OHLC candles are not strictly chronological")
+            raise KrakenPayloadError(
+                "Kraken OHLC candles are not strictly chronological",
+                stage=KrakenPayloadStage.OHLC_ROW,
+            )
         previous_started_at = started_at
         candles.append(
             KrakenOhlcCandle(
@@ -266,33 +274,13 @@ def _parse_ohlcv_payload(
         raise ValueError("Kraken OHLC received_at must be timezone-aware")
     received_at = received_at.astimezone(UTC)
 
-    if not isinstance(payload, Mapping):
-        raise KrakenPayloadError("Kraken OHLC payload must be an object")
-
-    errors = payload.get("error")
-    if not isinstance(errors, list):
-        raise KrakenPayloadError("Kraken OHLC payload has an invalid error field")
-    if errors:
-        raise KrakenPayloadError("Kraken OHLC returned an API error")
-
-    result = payload.get("result")
-    if not isinstance(result, Mapping):
-        raise KrakenPayloadError("Kraken OHLC payload has no result object")
-
-    series = [(key, value) for key, value in result.items() if key != "last"]
-    if len(series) != 1:
-        raise KrakenPayloadError("Kraken OHLC payload must contain exactly one pair series")
-
-    raw_symbol, raw_rows = series[0]
-    normalized_expected = expected_symbol.strip().upper()
-    if not isinstance(raw_symbol, str) or raw_symbol.strip().upper() != normalized_expected:
-        raise KrakenPayloadError("Kraken OHLC pair did not match the requested market")
-    if not isinstance(raw_rows, list):
-        raise KrakenPayloadError("Kraken OHLC pair series must be an array")
-    if not raw_rows:
-        raise KrakenPayloadError("Kraken OHLC pair series cannot be empty")
-    if len(raw_rows) > KRAKEN_SPOT_OHLC_MAX_ROWS:
-        raise KrakenPayloadError("Kraken OHLC returned more rows than its documented bound")
+    result = _ohlc_result(payload)
+    _raw_symbol, raw_rows = _ohlc_series(result, expected_symbol=expected_symbol)
+    if len(raw_rows) > KRAKEN_SPOT_OHLC_MAX_RESPONSE_ROWS:
+        raise KrakenPayloadError(
+            "Kraken OHLC returned more rows than the bounded response allowance",
+            stage=KrakenPayloadStage.OHLC_SERIES,
+        )
 
     interval = timedelta(minutes=interval_minutes)
     candles: list[KrakenOhlcvCandle] = []
@@ -300,18 +288,17 @@ def _parse_ohlcv_payload(
 
     for index, raw_row in enumerate(raw_rows):
         if not isinstance(raw_row, list) or len(raw_row) < 7:
-            raise KrakenPayloadError("Kraken OHLC contains an invalid candle entry")
+            raise KrakenPayloadError(
+                "Kraken OHLC contains an invalid candle entry",
+                stage=KrakenPayloadStage.OHLC_ROW,
+            )
 
-        raw_timestamp = raw_row[0]
-        if isinstance(raw_timestamp, bool) or not isinstance(raw_timestamp, int):
-            raise KrakenPayloadError("Kraken OHLC candle timestamp is invalid")
-        try:
-            started_at = datetime.fromtimestamp(raw_timestamp, tz=UTC)
-        except (OverflowError, OSError, ValueError) as exc:
-            raise KrakenPayloadError("Kraken OHLC candle timestamp is invalid") from exc
-
+        started_at = _ohlc_timestamp(raw_row[0])
         if previous_started_at is not None and started_at <= previous_started_at:
-            raise KrakenPayloadError("Kraken OHLC candles are not strictly chronological")
+            raise KrakenPayloadError(
+                "Kraken OHLC candles are not strictly chronological",
+                stage=KrakenPayloadStage.OHLC_ROW,
+            )
         previous_started_at = started_at
 
         closed_at = started_at + interval
@@ -319,7 +306,10 @@ def _parse_ohlcv_payload(
         is_final = not is_trailing and closed_at <= received_at
         updated_at = closed_at if is_final else received_at
         if started_at > received_at:
-            raise KrakenPayloadError("Kraken OHLC contains a future candle")
+            raise KrakenPayloadError(
+                "Kraken OHLC contains a future candle",
+                stage=KrakenPayloadStage.OHLC_ROW,
+            )
 
         open_price = _positive_decimal(raw_row[1], label="open")
         high_price = _positive_decimal(raw_row[2], label="high")
@@ -329,7 +319,10 @@ def _parse_ohlcv_payload(
         if low_price > min(open_price, close_price) or high_price < max(
             open_price, close_price
         ):
-            raise KrakenPayloadError("Kraken OHLC price bounds are inconsistent")
+            raise KrakenPayloadError(
+                "Kraken OHLC price bounds are inconsistent",
+                stage=KrakenPayloadStage.OHLC_ROW,
+            )
 
         candles.append(
             KrakenOhlcvCandle(
@@ -348,27 +341,121 @@ def _parse_ohlcv_payload(
     return tuple(candles)
 
 
+def _ohlc_result(payload: object) -> Mapping[Any, Any]:
+    if not isinstance(payload, Mapping):
+        raise KrakenPayloadError(
+            "Kraken OHLC payload must be an object",
+            stage=KrakenPayloadStage.OHLC_RESULT,
+        )
+
+    errors = payload.get("error")
+    if not isinstance(errors, list):
+        raise KrakenPayloadError(
+            "Kraken OHLC payload has an invalid error field",
+            stage=KrakenPayloadStage.OHLC_RESULT,
+        )
+    if errors:
+        raise KrakenPayloadError(
+            "Kraken OHLC returned an API error",
+            stage=KrakenPayloadStage.OHLC_RESULT,
+        )
+
+    result = payload.get("result")
+    if not isinstance(result, Mapping):
+        raise KrakenPayloadError(
+            "Kraken OHLC payload has no result object",
+            stage=KrakenPayloadStage.OHLC_RESULT,
+        )
+    return result
+
+
+def _ohlc_series(
+    result: Mapping[Any, Any],
+    *,
+    expected_symbol: str,
+) -> tuple[str, list[Any]]:
+    series = [(key, value) for key, value in result.items() if key != "last"]
+    if len(series) != 1:
+        raise KrakenPayloadError(
+            "Kraken OHLC payload must contain exactly one pair series",
+            stage=KrakenPayloadStage.OHLC_SERIES,
+        )
+
+    raw_symbol, raw_rows = series[0]
+    if not isinstance(raw_symbol, str):
+        raise KrakenPayloadError(
+            "Kraken OHLC pair key is invalid",
+            stage=KrakenPayloadStage.OHLC_PAIR_KEY,
+        )
+    if not kraken_pair_key_matches(raw_symbol, expected_symbol):
+        raise KrakenPayloadError(
+            "Kraken OHLC pair did not match the requested market",
+            stage=KrakenPayloadStage.OHLC_PAIR_KEY,
+        )
+    if not isinstance(raw_rows, list):
+        raise KrakenPayloadError(
+            "Kraken OHLC pair series must be an array",
+            stage=KrakenPayloadStage.OHLC_SERIES,
+        )
+    if not raw_rows:
+        raise KrakenPayloadError(
+            "Kraken OHLC pair series cannot be empty",
+            stage=KrakenPayloadStage.OHLC_SERIES,
+        )
+    return raw_symbol, raw_rows
+
+
+def _ohlc_timestamp(value: Any) -> datetime:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise KrakenPayloadError(
+            "Kraken OHLC candle timestamp is invalid",
+            stage=KrakenPayloadStage.OHLC_TIMESTAMP,
+        )
+    try:
+        return datetime.fromtimestamp(value, tz=UTC)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise KrakenPayloadError(
+            "Kraken OHLC candle timestamp is invalid",
+            stage=KrakenPayloadStage.OHLC_TIMESTAMP,
+        ) from exc
+
+
 def _positive_decimal(value: Any, *, label: str = "close") -> Decimal:
     number = _decimal(value, label=label)
     if number <= 0:
-        raise KrakenPayloadError(f"Kraken OHLC {label} price must be positive")
+        raise KrakenPayloadError(
+            f"Kraken OHLC {label} price must be positive",
+            stage=KrakenPayloadStage.OHLC_NUMERIC,
+        )
     return number
 
 
 def _non_negative_decimal(value: Any, *, label: str) -> Decimal:
     number = _decimal(value, label=label)
     if number < 0:
-        raise KrakenPayloadError(f"Kraken OHLC {label} must be non-negative")
+        raise KrakenPayloadError(
+            f"Kraken OHLC {label} must be non-negative",
+            stage=KrakenPayloadStage.OHLC_NUMERIC,
+        )
     return number
 
 
 def _decimal(value: Any, *, label: str) -> Decimal:
     if isinstance(value, bool) or value is None:
-        raise KrakenPayloadError(f"Kraken OHLC {label} is invalid")
+        raise KrakenPayloadError(
+            f"Kraken OHLC {label} is invalid",
+            stage=KrakenPayloadStage.OHLC_NUMERIC,
+        )
     try:
         number = value if isinstance(value, Decimal) else Decimal(str(value))
     except (InvalidOperation, ValueError, TypeError) as exc:
-        raise KrakenPayloadError(f"Kraken OHLC {label} is invalid") from exc
+        raise KrakenPayloadError(
+            f"Kraken OHLC {label} is invalid",
+            stage=KrakenPayloadStage.OHLC_NUMERIC,
+        ) from exc
     if not number.is_finite():
-        raise KrakenPayloadError(f"Kraken OHLC {label} must be finite")
+        raise KrakenPayloadError(
+            f"Kraken OHLC {label} must be finite",
+            stage=KrakenPayloadStage.OHLC_NUMERIC,
+        )
     return number

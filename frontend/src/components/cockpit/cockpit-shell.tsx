@@ -35,7 +35,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useAnalytics } from "@/hooks/use-analytics";
 import { useCockpit } from "@/hooks/use-cockpit";
 import { useControlPlane, type ControlPlaneController } from "@/hooks/use-control-plane";
-import { formatDecimal, formatFailure, formatTimestamp } from "@/lib/api/format";
+import {
+  formatDecimal,
+  formatFailure,
+  formatTimestamp,
+  resolveCockpitFailurePresentation,
+} from "@/lib/api/format";
 import type { SessionResponse } from "@/lib/api/types";
 import { sessionStatusLabel } from "@/lib/session-config";
 import { cn } from "@/lib/utils";
@@ -144,6 +149,9 @@ function HomePanel({ control, onNavigate }: { control: ControlPlaneController; o
   const portfolio = cockpit.resources.portfolio.kind === "ready" ? cockpit.resources.portfolio.data : null;
   const latestCycle = cockpit.resources.latestCycle.kind === "ready" ? cockpit.resources.latestCycle.data : null;
   const latestError = cockpit.resources.latestError.kind === "ready" ? cockpit.resources.latestError.data : null;
+  const failurePresentation = resolveCockpitFailurePresentation(latestCycle, latestError);
+  const activeCycleFailure = failurePresentation.activeCycleFailure;
+  const historicalError = failurePresentation.historicalError;
   const summary = analytics.state.kind === "ready" ? analytics.state.data.summary : null;
   const latestExplanation = latestCycle?.explainability ?? null;
   const latestDecision = latestExplanation?.agent ?? null;
@@ -156,6 +164,7 @@ function HomePanel({ control, onNavigate }: { control: ControlPlaneController; o
   const referenceSession = currentSession ?? control.sessions[0] ?? null;
   const config = referenceSession?.configuration ?? null;
   const busy = control.busyAction !== null;
+  const hasActiveCockpitError = activeCycleFailure !== null || control.feedback?.tone === "error";
 
   async function refreshAll() {
     if (refreshingAll) return;
@@ -313,15 +322,15 @@ function HomePanel({ control, onNavigate }: { control: ControlPlaneController; o
           </CardContent>
         </Card>
         <Card>
-          <CardHeader><CardTitle className="flex items-center gap-2"><AlertTriangle className="size-4" /> À surveiller</CardTitle><CardDescription>Les erreurs backend restent visibles et ne sont jamais contournées.</CardDescription></CardHeader>
-          <CardContent>
-            {latestCycle?.failure || latestError || control.feedback?.tone === "error" ? (
+          <CardHeader><CardTitle className="flex items-center gap-2"><AlertTriangle className="size-4" /> À surveiller</CardTitle><CardDescription>État courant et dernière erreur historique sont affichés séparément.</CardDescription></CardHeader>
+          <CardContent className="space-y-3">
+            {hasActiveCockpitError ? (
               <div className="space-y-2">
-                {latestCycle?.failure ? <div className="rounded-lg border border-destructive/30 bg-destructive-subtle p-3 text-xs text-destructive-subtle-foreground"><strong>Dernier cycle :</strong> {formatFailure(latestCycle.failure)}</div> : null}
-                {latestError ? <div className="rounded-lg border border-destructive/30 bg-destructive-subtle p-3 text-xs text-destructive-subtle-foreground"><strong>Erreur persistée :</strong> {formatFailure(latestError.failure)}</div> : null}
+                {activeCycleFailure ? <div className="rounded-lg border border-destructive/30 bg-destructive-subtle p-3 text-xs text-destructive-subtle-foreground"><strong>Dernier cycle en échec :</strong> {formatFailure(activeCycleFailure)}<p className="mt-1 opacity-80">{formatTimestamp(latestCycle?.recorded_at ?? null)}</p></div> : null}
                 {control.feedback?.tone === "error" ? <div className="rounded-lg border border-destructive/30 bg-destructive-subtle p-3 text-xs text-destructive-subtle-foreground">{control.feedback.message}</div> : null}
               </div>
-            ) : <div className="rounded-xl border border-success/30 bg-success-subtle p-4 text-sm text-success-foreground"><div className="flex items-center gap-2 font-semibold"><ShieldCheck className="size-4" /> État normal</div><p className="mt-1 text-xs">Aucun échec de cycle récent ni refus technique visible.</p></div>}
+            ) : <div className="rounded-xl border border-success/30 bg-success-subtle p-4 text-sm text-success-foreground"><div className="flex items-center gap-2 font-semibold"><ShieldCheck className="size-4" /> État courant normal</div><p className="mt-1 text-xs">Le dernier cycle chargé n’est pas en échec et aucune erreur d’action cockpit n’est active.</p></div>}
+            {historicalError ? <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground"><strong className="text-foreground">Dernière erreur historique :</strong> {formatFailure(historicalError.failure)}<p className="mt-1">{formatTimestamp(historicalError.recorded_at)} · {latestCycle?.status === "COMPLETED" ? "Un cycle plus récent a réussi." : "Un cycle plus récent a été persisté."}</p></div> : null}
           </CardContent>
         </Card>
       </section>

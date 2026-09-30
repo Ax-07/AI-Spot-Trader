@@ -1,4 +1,10 @@
-import type { JsonObject, JsonValue } from "@/lib/api/types";
+import type {
+  CycleDetailResponse,
+  CycleFailure,
+  JsonObject,
+  JsonValue,
+  LatestErrorResponse,
+} from "@/lib/api/types";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("fr-FR", { dateStyle: "short", timeStyle: "medium" });
 const numberFormatter = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 10 });
@@ -23,6 +29,8 @@ export function shortUuid(value: string | null | undefined): string {
 }
 
 const FAILURE_LABELS: Record<string, string> = {
+  TimeoutError: "Délai maximal du stage dépassé",
+  LLMTimeoutError: "Timeout du fournisseur IA",
   LLMRateLimitError: "Limite temporaire du fournisseur IA",
   LLMQuotaError: "Quota / limite de dépenses du fournisseur IA",
   LLMProviderLimitError: "Autre limite du fournisseur IA",
@@ -35,8 +43,41 @@ const FAILURE_LABELS: Record<string, string> = {
 
 export function formatFailure(failure: { stage: string; error_type: string; timed_out: boolean } | null | undefined): string {
   if (!failure) return "Aucune";
-  const label = failure.timed_out ? "Timeout du fournisseur IA" : (FAILURE_LABELS[failure.error_type] ?? failure.error_type);
+  const label = FAILURE_LABELS[failure.error_type] ?? failure.error_type;
   return `${failure.stage} · ${label}`;
+}
+
+export type CockpitFailurePresentation = {
+  activeCycleFailure: CycleFailure | null;
+  historicalError: LatestErrorResponse | null;
+};
+
+export function resolveCockpitFailurePresentation(
+  latestCycle: Pick<CycleDetailResponse, "cycle_id" | "status" | "recorded_at" | "failure"> | null,
+  latestError: LatestErrorResponse | null,
+): CockpitFailurePresentation {
+  if (!latestCycle) {
+    return { activeCycleFailure: null, historicalError: null };
+  }
+
+  const activeCycleFailure = latestCycle.status === "FAILED" ? latestCycle.failure : null;
+  if (!latestError) {
+    return { activeCycleFailure, historicalError: null };
+  }
+
+  const errorMatchesActiveCycle = activeCycleFailure !== null && latestError.cycle_id === latestCycle.cycle_id;
+  if (errorMatchesActiveCycle) {
+    return { activeCycleFailure, historicalError: null };
+  }
+
+  const latestCycleTime = Date.parse(latestCycle.recorded_at);
+  const latestErrorTime = Date.parse(latestError.recorded_at);
+  const errorIsOlder = Number.isFinite(latestCycleTime) && Number.isFinite(latestErrorTime) && latestErrorTime < latestCycleTime;
+
+  return {
+    activeCycleFailure,
+    historicalError: errorIsOlder ? latestError : null,
+  };
 }
 
 function formatContextValue(value: JsonValue): string {

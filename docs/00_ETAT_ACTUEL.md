@@ -5,61 +5,44 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD réel  : 78607ce6ab9f2b9459de2b1e1a7127509475283a
-Commit     : docs: finalize batch 32 integration status
-HEAD fonctionnel Batch 32 : 5a2d07b3fc5208475c1a136690da6648797efde9
+HEAD réel  : 4a516fde33853fe84d18bd8c4780753c0db58214
+Commit     : fix: harden market attention runtime
 ```
 
-État revérifié le 29/09/2026 au démarrage du Batch 33. Le commit `78607ce` est documentaire uniquement ; il finalise dans la documentation l'intégration fonctionnelle du Batch 32.
+État revérifié le 29/09/2026 au démarrage du Batch 35. Le précédent HEAD documenté `78607ce6ab9f2b9459de2b1e1a7127509475283a` est obsolète ; GitHub `main` contient désormais le hardening Market Attention du Batch 33.
 
-## État des batches Market Attention
+## État local distinct de GitHub
 
-- Batch 28 — Radar v1 : intégré ;
-- Batch 29 — observabilité : intégré ;
-- Batch 30 — robustesse activité : intégré ;
-- Batch 31 — notionnel USD SPOT et régimes de liquidité : intégré ;
-- Batch 32 — couverture équilibrée SPOT/PERPETUAL : intégré dans `5a2d07b` ;
-- Batch 33 — runtime hardening : **patch proposé/local, non intégré à GitHub**.
+La discussion courante confirme des correctifs Batch 34 / 34.1 / 34.2 présents localement mais non intégrés à GitHub. Ils constituent l'état courant utilisateur et ne doivent pas être écrasés par un patch construit depuis `main`.
 
-## État intégré confirmé
+Le Batch 35 livré ici est lui aussi un **patch proposé/local non intégré**.
 
-Le Radar reste strictement informatif et n'alimente ni l'Agent, ni Market Discovery, ni le Risk Engine, ni le Broker/order flow.
+## Runtime confirmé avant Batch 35
 
-Le pipeline intégré conserve :
-
-- `CandleStreamService` comme source canonique de candles ;
-- rotation déterministe Batch 32 avec curseurs SPOT/PERPETUAL indépendants ;
-- `scan_limit = 120` ;
-- `candidate_limit = 20` ;
-- `max_web_searches_per_refresh = 8` ;
-- seuils d'activité `1.40 / 1.75 + 0.25 / 2.50 + 0.50` ;
-- notionnel SPOT directement coté USD via `SPOT_BASE_VOLUME_X_5M_CLOSE_ESTIMATE` ;
-- notionnel SPOT non USD à `null` ;
-- notionnel PERPETUAL à `null` et liquidité `UNKNOWN` tant que l'unité économique du volume n'est pas reliée canoniquement au contrat ;
-- faible liquidité descriptive et jamais utilisée comme exclusion.
-
-## Batch 33 proposé
-
-Le patch Batch 33 durcit uniquement le runtime Market Attention :
-
-- cache lazy et verrouillé du `KrakenPairRegistry` dans `KrakenCandleProvider`, avec refresh contrôlé sur symbole absent ;
-- suppression du chargement `AssetPairs` par historique SPOT ;
-- distinction sécurisée entre erreurs réseau/HTTP, throttling explicite, erreur API Kraken et payload structurel invalide ;
-- classification `VERY_HIGH / ACCELERATING` fondée sur ratio + accélération du **même horizon** ;
-- Structured Output web aligné sur les limites Pydantic canoniques ;
-- `ValidationError` Pydantic auxiliaires encapsulées en erreur de recherche bornée ;
-- réduction des sources publiques exposées lorsque leur usage est démontrable par références structurées/citations provider, avec repli conservateur sinon.
-
-Aucun seuil, budget, prompt Agent, calcul de liquidité, notionnel PERPETUAL, sizing, mode PAPER/LIVE ou chemin d'ordre n'est modifié.
-
-## Working tree utilisateur connu avant Batch 33
+La dernière erreur persistée connue est :
 
 ```text
-?? trades_9h_analysis.json
+2026-09-28T12:16:02.248841Z · AGENT · TimeoutError · timed_out=true
 ```
 
-Ce fichier reste strictement hors périmètre : il ne doit être ni modifié, ni supprimé, ni versionné, ni inclus dans le ZIP Batch 33.
+Un cycle plus récent a ensuite réussi :
 
-## Validation du patch
+```text
+2026-09-28T14:22:57.386534Z · COMPLETED · failure=null
+```
 
-Voir `docs/33_BATCH_MARKET_ATTENTION_RUNTIME_HARDENING.md` pour la liste exacte des tests exécutés dans l'environnement ChatGPT et les validations complètes restant à exécuter localement avant intégration.
+Le runtime courant renvoie également `engine.last_cycle_failure = null`. L'erreur AGENT est donc un fait historique d'audit, pas une panne actuelle démontrée.
+
+## Batch 35 — UX des erreurs historiques
+
+Le correctif est frontend-only :
+
+- le dernier cycle `FAILED` reste une alerte active ;
+- `latestError` n'est plus présenté comme alerte active lorsqu'un cycle plus récent existe ;
+- une erreur dépassée par un cycle plus récent est affichée séparément comme `Dernière erreur historique` avec horodatage ;
+- une erreur identique au dernier cycle en échec n'est pas dupliquée ;
+- `LLMTimeoutError` reste un timeout fournisseur IA, tandis qu'un `TimeoutError` global de stage est libellé comme dépassement du délai du stage.
+
+Aucun changement backend, Agent, Risk Engine, Broker, PAPER, Kraken, Market Attention, sizing, prompt ou timeout n'est introduit.
+
+Voir `docs/35_BATCH_COCKPIT_HISTORICAL_ERRORS_UX.md` pour l'audit, les fichiers et les validations du batch.
