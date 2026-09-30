@@ -1058,7 +1058,7 @@ export function ControlPlanePanel() {
                     Ces champs configurent le Risk backend ; aucun calcul Risk n’est reproduit ici.
                   </p>
                   <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Max order notional">
+                    <Field label="Montant max par ordre">
                       <input
                         className={inputClass}
                         inputMode="decimal"
@@ -1148,7 +1148,7 @@ export function ControlPlanePanel() {
                       />
                     </Field>
                     <Field
-                      label="Position notional max"
+                      label="Valeur max d’une position"
                       hint={hasPerpetual ? "Requis par le backend pour PERPETUAL." : "Peut rester vide sans PERPETUAL."}
                     >
                       <input

@@ -13,13 +13,29 @@ Market Attention Radar v1 reste **strictement observationnel** : sa shortlist ne
 ## Référence courante
 
 ```text
-HEAD GitHub audité     : 5a2d07b3fc5208475c1a136690da6648797efde9
-HEAD                   : feat: balance market attention spot perpetual coverage
+HEAD GitHub audité     : 58b59ba0cab25e9011d26014c51005aac1365af2
+HEAD                   : fix: recover market attention runtime and clarify historical errors
 Recalibrage net/cost   : ADR-277 intégré dans 463850d
 Historique économique  : ADR-278 intégré dans b46f463c
 Doctrine reasoning     : ADR-279 intégrée dans d011faa
-Market Attention Radar : ADR-280 à ADR-286 intégrés ; Batch 32 couverture équilibrée intégré
+Market Attention Radar : ADR-280 à ADR-286 + Batches 33/34/34.1/34.2 intégrés
+UX erreurs historiques : Batch 35 intégré dans 58b59ba
+Batch 36               : patch terminologie UX proposé/local non intégré
 ```
+
+## Changelog — 2026-09-30 — Batch 36 simplification UX « notionnel » (patch proposé)
+
+- base GitHub auditée : `58b59ba0cab25e9011d26014c51005aac1365af2` (`fix: recover market attention runtime and clarify historical errors`) ;
+- Batches 34 / 34.1 / 34.2 / 35 confirmés intégrés dans cette base ;
+- changement limité aux libellés frontend et à la documentation de reprise ;
+- limites d’ordre affichées comme `Montant max par ordre` ;
+- valeurs de positions affichées comme `Valeur de la position` et limites PERPETUAL comme `Valeur max d’une position` ;
+- Radar reformulé autour de la `valeur échangée estimée en USD` et de la `Méthode d’estimation USD` ;
+- Historique reformulé en `Montant de l’ordre` / `montant échangé` ;
+- identifiants techniques `notional`, API, persistence, Risk, analytics et calculs inchangés ;
+- aucun changement Agent, prompt, Broker, PAPER, Kraken, Market Discovery, Market Attention, pricing, frais, spread, slippage, sizing ou exposition ;
+- aucun test backend requis si le périmètre reste frontend/documentation uniquement ;
+- statut : patch proposé/local non intégré, à valider puis commit/push par l’utilisateur.
 
 ## Décisions historiques toujours actives
 

@@ -506,10 +506,10 @@ export function SimpleConfigurator({
             <section className="space-y-4 border-t pt-6">
               <div><h3 className="flex items-center gap-2 font-semibold"><ShieldCheck className="size-4" /> Risk personnalisé</h3><p className="text-xs text-muted-foreground">Ces champs sont appliqués directement lorsque le profil « Personnalisé » est sélectionné.</p></div>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                <Field label="Max notional / ordre"><input className={inputClass} value={customMaxOrder} onChange={(e) => setCustomMaxOrder(e.target.value)} /></Field>
+                <Field label="Montant max par ordre"><input className={inputClass} value={customMaxOrder} onChange={(e) => setCustomMaxOrder(e.target.value)} /></Field>
                 <Field label="Levier PAPER"><input className={inputClass} value={customLeverage} onChange={(e) => setCustomLeverage(e.target.value)} disabled={marketType !== "PERPETUAL"} /></Field>
                 <Field label="Levier Risk max"><input className={inputClass} value={customMaxLeverage} onChange={(e) => setCustomMaxLeverage(e.target.value)} disabled={marketType !== "PERPETUAL"} /></Field>
-                <Field label="Notional position dérivée max"><input className={inputClass} value={customPositionNotional} onChange={(e) => setCustomPositionNotional(e.target.value)} disabled={marketType !== "PERPETUAL"} /></Field>
+                <Field label="Valeur max d’une position"><input className={inputClass} value={customPositionNotional} onChange={(e) => setCustomPositionNotional(e.target.value)} disabled={marketType !== "PERPETUAL"} /></Field>
                 <Field label="Exposition dérivée totale max"><input className={inputClass} value={customTotalExposure} onChange={(e) => setCustomTotalExposure(e.target.value)} disabled={marketType !== "PERPETUAL"} /></Field>
                 <Field label="Buffer liquidation"><input className={inputClass} value={customLiquidationBuffer} onChange={(e) => setCustomLiquidationBuffer(e.target.value)} /></Field>
               </div>

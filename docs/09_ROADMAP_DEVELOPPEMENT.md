@@ -3,16 +3,17 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub réel          : 4a516fde33853fe84d18bd8c4780753c0db58214
-Commit                    : fix: harden market attention runtime
+HEAD GitHub réel          : 58b59ba0cab25e9011d26014c51005aac1365af2
+Commit                    : fix: recover market attention runtime and clarify historical errors
 Batch 28 Radar v1         : intégré
 Batch 29 Observabilité    : intégré
 Batch 30 Robustesse       : intégré
 Batch 31 Liquidité USD    : intégré
 Batch 32 Couverture       : intégré
 Batch 33 Runtime hardening: intégré
-Batch 34 / 34.1           : local utilisateur, runtime SPOT encore en erreur
-Batch 34.2                : cause runtime 721 lignes OHLC démontrée, correctif final à valider
+Batch 34 / 34.1 / 34.2    : intégrés dans 58b59ba
+Batch 35 UX erreurs hist. : intégré dans 58b59ba
+Batch 36 terminologie UX  : patch proposé/local non intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -53,40 +54,41 @@ Intégrés : Radar v1, observabilité, robustesse activité, notionnel USD SPOT/
 
 Le runtime utilise notamment un `KrakenPairRegistry` partagé/lazy et verrouillé, une politique anti-stampede/cooldown, une classification transport/API/payload et les corrections de cohérence d'activité/public attention prévues par le batch.
 
-### Batch 34 / 34.1 — Diagnostic SPOT
+### Batches 34 / 34.1 — Diagnostic SPOT
 
-**État : local utilisateur.**
+**État : intégrés dans `58b59ba0cab25e9011d26014c51005aac1365af2`.**
 
-Les validations locales passent à 100 %, mais le refresh réel du 29/09/2026 conserve `100/100` SPOT en `ERROR`, tous classés `KrakenPayloadError`, alors que PERPETUAL reste sans erreur technique. Batch 34.1 attache un stage borné à l'exception mais ne l'agrège pas dans l'overview.
+Les diagnostics de payload/stage et le durcissement du chemin Kraken sont désormais dans `main`. Ils restent des mécanismes d’observabilité bornés et ne modifient ni Agent, ni Market Discovery, ni Risk, ni Broker.
 
-### Batch 34.2 — Cause SPOT et diagnostic borné
+### Batch 34.2 — Cause SPOT et récupération runtime
 
-**État : cause runtime finale démontrée ; correctif `721` local à valider.**
+**État : intégré dans `58b59ba0cab25e9011d26014c51005aac1365af2`.**
 
-Cause runtime finale confirmée le 29/09/2026 : le client Kraken réel peut renvoyer `721` lignes OHLC pour la fenêtre utilisée par le Radar, alors que le parseur rejetait toute réponse `> 720`. Le diagnostic `activity_payload_stage_counts` a isolé `OHLC_SERIES = 100`, puis une reproduction `httpx + _parse_ohlcv_payload` a confirmé `ROW_COUNT: 721` et le même stage.
+La cause runtime démontrée était la possibilité d’une réponse Kraken OHLC de `721` lignes pour la fenêtre Radar alors que le parseur rejetait toute réponse `> 720`. Le correctif intégré conserve la profondeur demandée à `720`, accepte le cas borné `721` et maintient le fail-closed au-delà.
 
-Le correctif conserve la profondeur provider demandée à `720` et autorise uniquement `721` lignes de réponse ; `722+` reste fail-closed.
-
-Objectifs réalisés :
-
-- exposer `activity_payload_stage_counts` avec uniquement les stages allowlistés ;
-- ne jamais exposer payload/body/URL privée/provider key/symbole brut via ce diagnostic ;
-- traiter les clés `AssetPairs.result` comme des aliases REST possibles au lieu d'exiger un `/` dans chaque clé ;
-- dériver le symbole canonique depuis `wsname`, puis une clé déjà affichable, puis `base/quote` avec mapping legacy exact ;
-- préserver les aliases `XBT/BTC`, `XDG/DOGE`, les identifiants REST internes et les noms display ;
-- conserver un échec strict si une entrée ne permet aucune identité de paire sûre ;
-- conserver la validation OHLC stricte tout en classifiant ses erreurs par stage ;
-- ne modifier ni Public Attention, ni Agent, ni Market Discovery, ni Risk, ni Broker, ni ordre, ni PAPER/LIVE.
-
-Validation locale attendue après extraction : tests ciblés, `pytest -q`, `git diff --check`, puis refresh Radar et vérification des compteurs SPOT/stages.
+Le même commit intègre les corrections d’aliases REST/symboles et les diagnostics nécessaires à l’isolation de cette cause, sans changement stratégique.
 
 Voir `docs/34_2_BATCH_MARKET_ATTENTION_SPOT_ROOT_CAUSE.md`.
+
+## UX cockpit — Batches 35 / 36
+
+### Batch 35 — erreurs historiques
+
+**État : intégré dans `58b59ba0cab25e9011d26014c51005aac1365af2`.**
+
+Le cockpit distingue une erreur historique dépassée d’une panne courante et évite la duplication d’une même erreur sur le dernier cycle en échec.
+
+### Batch 36 — terminologie financière
+
+**État : patch proposé/local non intégré.**
+
+Le batch remplace uniquement les libellés UX ambigus autour de `notional/notionnel` par `montant`, `valeur de la position` ou `valeur échangée estimée en USD` selon le contexte. Les identifiants techniques, calculs, API et comportements de trading restent inchangés.
 
 ## Périmètres ultérieurs possibles
 
 À décider seulement sur besoin démontré :
 
-- après validation du correctif `721`, confirmer par refresh que les SPOT quittent `ERROR` et que `OHLC_SERIES` retombe à zéro ;
+- surveiller le chemin SPOT Kraken et ses compteurs de stage seulement si une nouvelle régression runtime est observée ;
 - diagnostiquer ACE/AAVE/2Z Public Attention seulement à partir d'un échec de validation borné et reproductible ;
 - persistance PostgreSQL durable des snapshots Radar ;
 - normalisation USD multi-quote/FX canonique ;

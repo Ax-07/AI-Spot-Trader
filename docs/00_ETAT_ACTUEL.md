@@ -5,44 +5,33 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD réel  : 4a516fde33853fe84d18bd8c4780753c0db58214
-Commit     : fix: harden market attention runtime
+HEAD réel  : 58b59ba0cab25e9011d26014c51005aac1365af2
+Commit     : fix: recover market attention runtime and clarify historical errors
 ```
 
-État revérifié le 29/09/2026 au démarrage du Batch 35. Le précédent HEAD documenté `78607ce6ab9f2b9459de2b1e1a7127509475283a` est obsolète ; GitHub `main` contient désormais le hardening Market Attention du Batch 33.
+État revérifié le 30/09/2026 au démarrage du Batch 36. Le HEAD documenté précédent `4a516fde33853fe84d18bd8c4780753c0db58214` est obsolète.
 
-## État local distinct de GitHub
+## État intégré confirmé
 
-La discussion courante confirme des correctifs Batch 34 / 34.1 / 34.2 présents localement mais non intégrés à GitHub. Ils constituent l'état courant utilisateur et ne doivent pas être écrasés par un patch construit depuis `main`.
+Le commit `58b59ba0cab25e9011d26014c51005aac1365af2` intègre désormais les Batches 34 / 34.1 / 34.2 / 35 :
 
-Le Batch 35 livré ici est lui aussi un **patch proposé/local non intégré**.
+- récupération du runtime Market Attention et diagnostics bornés associés ;
+- correction de la cause SPOT Kraken liée aux réponses OHLC de `721` lignes ;
+- clarification cockpit entre erreur courante et erreur historique dépassée.
 
-## Runtime confirmé avant Batch 35
+Ces éléments ne doivent plus être décrits comme des correctifs locaux non intégrés.
 
-La dernière erreur persistée connue est :
+## Batch 36 — simplification UX du terme financier « notionnel »
 
-```text
-2026-09-28T12:16:02.248841Z · AGENT · TimeoutError · timed_out=true
-```
+**État : patch proposé/local non intégré.**
 
-Un cycle plus récent a ensuite réussi :
+Le Batch 36 est frontend/documentation uniquement :
 
-```text
-2026-09-28T14:22:57.386534Z · COMPLETED · failure=null
-```
+- les libellés visibles utilisent désormais `Montant max par ordre`, `Valeur de la position`, `Valeur max d’une position` ou `valeur échangée estimée en USD` selon le contexte ;
+- l’Historique utilise `Montant de l’ordre` / `montant échangé` pour ses libellés économiques visibles ;
+- les identifiants techniques (`risk_max_order_notional`, `position.notional`, `current_notional_usd`, etc.) restent inchangés ;
+- aucun comportement Agent, Risk Engine, Broker, PAPER, Kraken, Market Discovery, Market Attention, pricing, coûts, sizing, exposition, API ou persistence n’est modifié.
 
-Le runtime courant renvoie également `engine.last_cycle_failure = null`. L'erreur AGENT est donc un fait historique d'audit, pas une panne actuelle démontrée.
+Aucun `git status` local utilisateur n’a été fourni au démarrage de ce batch ; le patch est donc construit strictement depuis le HEAD GitHub ci-dessus et doit être appliqué sans écraser d’éventuelles modifications locales plus récentes.
 
-## Batch 35 — UX des erreurs historiques
-
-Le correctif est frontend-only :
-
-- le dernier cycle `FAILED` reste une alerte active ;
-- `latestError` n'est plus présenté comme alerte active lorsqu'un cycle plus récent existe ;
-- une erreur dépassée par un cycle plus récent est affichée séparément comme `Dernière erreur historique` avec horodatage ;
-- une erreur identique au dernier cycle en échec n'est pas dupliquée ;
-- `LLMTimeoutError` reste un timeout fournisseur IA, tandis qu'un `TimeoutError` global de stage est libellé comme dépassement du délai du stage.
-
-Aucun changement backend, Agent, Risk Engine, Broker, PAPER, Kraken, Market Attention, sizing, prompt ou timeout n'est introduit.
-
-Voir `docs/35_BATCH_COCKPIT_HISTORICAL_ERRORS_UX.md` pour l'audit, les fichiers et les validations du batch.
+Voir `docs/36_BATCH_UX_TERMINOLOGIE_FINANCIERE.md` pour l’audit et les validations du batch.

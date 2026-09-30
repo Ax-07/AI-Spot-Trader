@@ -104,7 +104,7 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
             <Fact label="Vol. 5m" value={formatVolumeRatio(h5?.volume_ratio)} />
             <Fact label="Vol. 15m" value={formatVolumeRatio(h15?.volume_ratio)} />
             <Fact label="Vol. 1h" value={formatVolumeRatio(h1?.volume_ratio)} />
-            <Fact label="Méthode notionnel" value={h5?.notional_method ?? "indisponible"} />
+            <Fact label="Méthode d’estimation USD" value={h5?.notional_method ?? "indisponible"} />
           </div>
 
           <div className="grid gap-3 lg:grid-cols-2">
@@ -227,7 +227,7 @@ export function MarketAttentionDock() {
                   <span className="inline-flex"><Badge tone="info">INFORMATIF — N’INFLUENCE PAS LE TRADING</Badge></span>
                   {data ? <span className="inline-flex"><Badge tone={statusTone(data.status)}>État · {data.status}</Badge></span> : null}
                 </div>
-                <CardDescription className="mt-1">Volume relatif Kraken + contexte notionnel USD lorsque la conversion est fiable + attention publique sourcée. Aucun BUY/SELL/HOLD, aucun signal de direction.</CardDescription>
+                <CardDescription className="mt-1">Volume relatif Kraken + valeur échangée estimée en USD lorsque l’estimation est fiable + attention publique sourcée. Aucun BUY/SELL/HOLD, aucun signal de direction.</CardDescription>
               </div>
               <div className="flex gap-1">
                 <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading} aria-label="Actualiser le radar">

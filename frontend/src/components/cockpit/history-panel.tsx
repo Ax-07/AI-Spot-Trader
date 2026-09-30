@@ -257,7 +257,7 @@ function OperationsTable({ operations }: { operations: EconomicOperationResponse
             <th className="px-3 py-2 font-medium">Effet économique</th>
             <th className="px-3 py-2 text-right font-medium">Quantité</th>
             <th className="px-3 py-2 text-right font-medium">Prix</th>
-            <th className="px-3 py-2 text-right font-medium">Notional</th>
+            <th className="px-3 py-2 text-right font-medium">Montant de l’ordre</th>
             <th className="px-3 py-2 text-right font-medium">Coûts</th>
             <th className="px-3 py-2 text-right font-medium">P&L réalisé</th>
             <th className="px-3 py-2 font-medium">Position avant → après</th>
@@ -466,7 +466,7 @@ export function HistoryPanel() {
             <MetricCard label="P&L net" value={formatDecimal(summary.net_pnl)} detail={`Brut ${formatDecimal(summary.gross_pnl)}`} />
             <MetricCard label="P&L réalisé" value={formatDecimal(summary.realized_pnl)} detail={`Latent ${formatDecimal(summary.unrealized_pnl)}`} />
             <MetricCard label="Coûts totaux" value={formatDecimal(summary.total_costs)} detail={`Exécution ${formatDecimal(summary.execution_costs)} · funding ${formatDecimal(summary.funding_pnl)}`} />
-            <MetricCard label="Turnover" value={percent(summary.turnover_fraction)} detail={`Notional ${formatDecimal(summary.total_notional)} / equity initiale`} />
+            <MetricCard label="Turnover" value={percent(summary.turnover_fraction)} detail={`Montant échangé ${formatDecimal(summary.total_notional)} / equity initiale`} />
             <MetricCard label="Cadence réelle" value={summary.fills_per_hour === null ? "—" : `${formatDecimal(summary.fills_per_hour)} fills/h`} detail={`${summary.trade_count} trade(s) · ${summary.fill_count} fill(s)`} />
           </section>
 
@@ -480,7 +480,7 @@ export function HistoryPanel() {
                 <MetricCard label="Frais" value={formatDecimal(summary.fees)} detail="Fills PAPER" />
                 <MetricCard label="Spread" value={formatDecimal(summary.spread_cost)} detail="Coût d’exécution" />
                 <MetricCard label="Slippage" value={formatDecimal(summary.slippage_cost)} detail="Coût d’exécution" />
-                <MetricCard label="Coûts / notional" value={percent(summary.costs_to_notional_fraction)} detail="Coûts totaux / notional échangé" />
+                <MetricCard label="Coûts / montant échangé" value={percent(summary.costs_to_notional_fraction)} detail="Coûts totaux / montant échangé" />
                 <MetricCard label="Coûts / equity" value={percent(summary.costs_to_initial_equity_fraction)} detail="Coûts totaux / equity initiale" />
                 <MetricCard label="Changements de marché" value={String(summary.market_switch_count)} detail={summary.market_switches_per_hour === null ? "cadence indisponible" : `${formatDecimal(summary.market_switches_per_hour)} / h`} />
               </CardContent>

@@ -118,7 +118,7 @@ function PositionContext({ market, cockpit }: { market: CockpitMarket; cockpit: 
       <Fact label="Prix moyen" value={formatDecimal(position.average_entry_price)} />
       <Fact label="Mark backend" value={formatDecimal(position.mark_price)} detail={formatTimestamp(position.mark_observed_at)} />
       <Fact label="P&L latent" value={signedDecimal(position.unrealized_pnl)} valueClassName={pnlClass(position.unrealized_pnl)} />
-      <Fact label="Notional" value={formatDecimal(position.notional)} />
+      <Fact label="Valeur de la position" value={formatDecimal(position.notional)} />
       <Fact label="Levier" value={`${formatDecimal(position.leverage)}×`} />
       <Fact label="Marge" value={formatDecimal(position.margin_used)} />
       <Fact label="Liquidation" value={position.liquidation_price ? formatDecimal(position.liquidation_price) : "—"} />
