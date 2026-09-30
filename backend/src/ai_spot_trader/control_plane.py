@@ -3,14 +3,23 @@ from __future__ import annotations
 import hashlib
 import json
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ai_spot_trader.agent.prompt import BASE_AGENT_CONTRACT_VERSION
-from ai_spot_trader.domain.enums import LLMModel, MarginMode, MarketType, TradingStyle
-from ai_spot_trader.domain.experiments import TRADING_STYLE_MAPPING_VERSION
+from ai_spot_trader.domain.enums import (
+    LLMModel,
+    MarginMode,
+    MarketType,
+    TradingCadenceMode,
+    TradingStyle,
+)
+from ai_spot_trader.domain.experiments import (
+    TRADING_STYLE_MAPPING_VERSION,
+    trading_style_context,
+)
 from ai_spot_trader.domain.models import ExecutableMarket
 from ai_spot_trader.domain.planning import (
     DEFAULT_MAX_DECISIONS_PER_CYCLE,
@@ -24,6 +33,7 @@ CAMPAIGN_EXPERIMENT_PROTOCOL_VERSION = "paper-experiment-v4"
 
 PositiveDecimal = Annotated[Decimal, Field(gt=0)]
 NonNegativeDecimal = Annotated[Decimal, Field(ge=0)]
+StrategicDecisionTimeframe = Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
 
 
 def _canonical_digest(payload: object) -> str:
@@ -40,6 +50,26 @@ class ControlPlaneModel(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
+class StrategicSchedule(ControlPlaneModel):
+    """Optional strategic-loop trigger persisted inside one immutable Campaign snapshot."""
+
+    mode: TradingCadenceMode
+    decision_timeframe: StrategicDecisionTimeframe | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+
+    @model_validator(mode="after")
+    def validate_schedule(self) -> "StrategicSchedule":
+        if self.mode is TradingCadenceMode.CANDLE_CLOSE:
+            if self.decision_timeframe is None:
+                raise ValueError("CANDLE_CLOSE requires decision_timeframe")
+            return self
+        if self.decision_timeframe is not None:
+            raise ValueError("INTERVAL cannot define decision_timeframe")
+        return self
+
+
 class CampaignConfiguration(ControlPlaneModel):
     """Whitelisted operator configuration persisted without process secrets."""
 
@@ -47,6 +77,12 @@ class CampaignConfiguration(ControlPlaneModel):
     llm_model: LLMModel
     aggressiveness: int = Field(ge=1, le=10)
     trading_cadence_seconds: float = Field(gt=0)
+    # Optional for exact digest-compatible loading of Campaigns created before Batch 37.
+    # Absence means the historical post-cycle INTERVAL behavior.
+    strategic_schedule: StrategicSchedule | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     # Optional for digest-compatible loading of Campaigns created before Batch 19.13.
     # New Session payloads persist this field explicitly; legacy payloads keep their exact digest.
     max_decisions_per_cycle: int | None = Field(
@@ -166,6 +202,8 @@ class CampaignConfiguration(ControlPlaneModel):
             and self.trading_style_mapping_version != TRADING_STYLE_MAPPING_VERSION
         ):
             raise ValueError("unsupported trading style mapping version")
+        if self.strategic_schedule is not None:
+            self._validate_strategic_schedule()
         if self.paper_spread_bps + self.paper_slippage_bps >= Decimal(10_000):
             raise ValueError("combined paper spread and slippage must be below 10000 bps")
 
@@ -222,9 +260,36 @@ class CampaignConfiguration(ControlPlaneModel):
             raise ValueError("PERPETUAL campaigns require risk_max_total_derivative_exposure")
         return self
 
+    def _validate_strategic_schedule(self) -> None:
+        schedule = self.strategic_schedule
+        assert schedule is not None
+        if schedule.mode is TradingCadenceMode.INTERVAL:
+            return
+        if self.trading_style is None:
+            raise ValueError("CANDLE_CLOSE requires an explicit trading_style")
+        style_context = trading_style_context(self.trading_style)
+        if schedule.decision_timeframe not in style_context.preferred_timeframes:
+            allowed = ", ".join(style_context.preferred_timeframes)
+            raise ValueError(
+                "decision_timeframe must belong to the configured trading style "
+                f"({allowed})"
+            )
+
     @property
     def effective_max_decisions_per_cycle(self) -> int:
         return self.max_decisions_per_cycle or DEFAULT_MAX_DECISIONS_PER_CYCLE
+
+    @property
+    def effective_trading_cadence_mode(self) -> TradingCadenceMode:
+        if self.strategic_schedule is None:
+            return TradingCadenceMode.INTERVAL
+        return self.strategic_schedule.mode
+
+    @property
+    def decision_timeframe(self) -> StrategicDecisionTimeframe | None:
+        if self.strategic_schedule is None:
+            return None
+        return self.strategic_schedule.decision_timeframe
 
     def canonical_payload(self) -> dict[str, object]:
         payload = self.model_dump(mode="json")
@@ -264,5 +329,7 @@ __all__ = [
     "CONTROL_PLANE_CONFIGURATION_VERSION",
     "CampaignConfiguration",
     "MarketDiscoveryPolicy",
+    "StrategicDecisionTimeframe",
+    "StrategicSchedule",
     "campaign_identity_digest",
 ]

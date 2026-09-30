@@ -462,6 +462,13 @@ export type ChatHistoryResponse = {
 
 export type LlmModel = "gpt-5.6-luna" | "gpt-5.6-sol";
 export type TradingStyle = "SCALP" | "SWING";
+export type TradingCadenceMode = "INTERVAL" | "CANDLE_CLOSE";
+export type StrategicDecisionTimeframe = "1m" | "5m" | "15m" | "30m" | "1h" | "4h" | "1d";
+
+export type StrategicSchedule = {
+  mode: TradingCadenceMode;
+  decision_timeframe?: StrategicDecisionTimeframe | null;
+};
 
 export type StrategyResponse = {
   strategy_id: string;
@@ -514,6 +521,7 @@ export type CampaignConfiguration = {
   llm_model: LlmModel;
   aggressiveness: number;
   trading_cadence_seconds: number;
+  strategic_schedule?: StrategicSchedule | null;
   max_decisions_per_cycle?: number | null;
   trading_style?: TradingStyle | null;
   trading_style_mapping_version?: "trading-style-map-v1" | null;

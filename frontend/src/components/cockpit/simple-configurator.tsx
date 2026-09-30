@@ -18,13 +18,21 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ControlPlaneController } from "@/hooks/use-control-plane";
-import type { ExecutableMarketType, LlmModel, SessionResponse, TradingStyle } from "@/lib/api/types";
+import type {
+  ExecutableMarketType,
+  LlmModel,
+  SessionResponse,
+  StrategicDecisionTimeframe,
+  TradingCadenceMode,
+  TradingStyle,
+} from "@/lib/api/types";
 import {
   DEFAULT_MARKET_DISCOVERY_POLICY,
   MAX_DECISIONS_PER_CYCLE_HARD_LIMIT,
   TRADING_STYLE_MAPPING_VERSION,
   TRADING_STYLE_UI_METADATA,
   buildSessionCampaignConfiguration,
+  decisionTimeframeLabel,
   inferSessionRiskProfile,
   initialSessionStyleValues,
   tradingStyleRecommendations,
@@ -51,6 +59,14 @@ const PROFILE_COPY: Record<Exclude<SessionRiskProfile, "custom">, { label: strin
     label: "Agressif",
     detail: "Ordre max 20 % du capital, levier PERPETUAL 3× et enveloppe d’exposition plus large.",
   },
+};
+
+type CadenceUnit = "seconds" | "minutes" | "hours";
+
+const CADENCE_UNIT_SECONDS: Record<CadenceUnit, number> = {
+  seconds: 1,
+  minutes: 60,
+  hours: 3600,
 };
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
@@ -96,6 +112,18 @@ function numberString(value: number | null): string {
   return value !== null && Number.isFinite(value) ? String(value) : "";
 }
 
+function preferredCadenceUnit(seconds: number): CadenceUnit {
+  if (seconds >= 3600 && seconds % 3600 === 0) return "hours";
+  if (seconds >= 60 && seconds % 60 === 0) return "minutes";
+  return "seconds";
+}
+
+function cadenceValue(seconds: string, unit: CadenceUnit): string {
+  const parsed = Number(seconds);
+  if (!Number.isFinite(parsed)) return "";
+  return String(parsed / CADENCE_UNIT_SECONDS[unit]);
+}
+
 export function SimpleConfigurator({
   control,
   session = null,
@@ -128,6 +156,12 @@ export function SimpleConfigurator({
   const [model, setModel] = useState<LlmModel>(config?.llm_model ?? "gpt-5.6-luna");
   const [aggressiveness, setAggressiveness] = useState(config?.aggressiveness ?? 5);
   const [tradingStyle, setTradingStyle] = useState<TradingStyle | null>(initialStyle.tradingStyle);
+  const [strategicScheduleMode, setStrategicScheduleMode] = useState<TradingCadenceMode | null>(
+    initialStyle.strategicScheduleMode,
+  );
+  const [decisionTimeframe, setDecisionTimeframe] = useState<StrategicDecisionTimeframe | null>(
+    initialStyle.decisionTimeframe,
+  );
   const [prompt, setPrompt] = useState(
     session?.instructions ??
       "Cherche des opportunités cohérentes avec le contexte de marché. Privilégie la qualité du signal à la fréquence des trades et utilise HOLD quand l'opportunité n'est pas assez claire.",
@@ -138,6 +172,9 @@ export function SimpleConfigurator({
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const [cadence, setCadence] = useState(numberString(initialStyle.tradingCadenceSeconds));
+  const [cadenceUnit, setCadenceUnit] = useState<CadenceUnit>(
+    preferredCadenceUnit(initialStyle.tradingCadenceSeconds),
+  );
   const [maxDecisionsPerCycle, setMaxDecisionsPerCycle] = useState(
     numberString(initialStyle.maxDecisionsPerCycle),
   );
@@ -196,6 +233,7 @@ export function SimpleConfigurator({
   const styleMappingVersion = tradingStyle
     ? config?.trading_style_mapping_version ?? TRADING_STYLE_MAPPING_VERSION
     : null;
+  const effectiveScheduleMode = strategicScheduleMode ?? "INTERVAL";
 
   const configurationResult = useMemo(() => {
     try {
@@ -212,6 +250,8 @@ export function SimpleConfigurator({
         model,
         aggressiveness,
         tradingStyle,
+        strategicScheduleMode,
+        decisionTimeframe,
         riskProfile,
         cadence,
         maxDecisionsPerCycle,
@@ -263,6 +303,7 @@ export function SimpleConfigurator({
     customMaxOrder,
     customPositionNotional,
     customTotalExposure,
+    decisionTimeframe,
     feeRate,
     marketSelectionMode,
     marketTimeout,
@@ -279,6 +320,7 @@ export function SimpleConfigurator({
     riskProfile,
     slippageBps,
     spreadBps,
+    strategicScheduleMode,
     tradingStyle,
     watchlistLimit,
     watchlistRefresh,
@@ -291,8 +333,33 @@ export function SimpleConfigurator({
   function applyRecommendedStyleValues() {
     if (!tradingStyle) return;
     const recommendations = tradingStyleRecommendations(tradingStyle);
+    setStrategicScheduleMode(recommendations.strategicScheduleMode);
+    setDecisionTimeframe(recommendations.decisionTimeframe);
     setCadence(numberString(recommendations.tradingCadenceSeconds));
+    setCadenceUnit(preferredCadenceUnit(recommendations.tradingCadenceSeconds));
     setWatchlistRefresh(numberString(recommendations.watchlistRefreshSeconds));
+  }
+
+  function chooseCandleCloseMode() {
+    if (!tradingStyle) {
+      setValidationError("Choisis d’abord Scalping ou Swing pour définir les bougies compatibles.");
+      return;
+    }
+    setValidationError(null);
+    setStrategicScheduleMode("CANDLE_CLOSE");
+    const metadata = TRADING_STYLE_UI_METADATA[tradingStyle];
+    if (!decisionTimeframe || !(metadata.timeframes as readonly StrategicDecisionTimeframe[]).includes(decisionTimeframe)) {
+      setDecisionTimeframe(metadata.recommendedDecisionTimeframe);
+    }
+  }
+
+  function updateCadenceFromFriendlyValue(value: string) {
+    if (!value.trim()) {
+      setCadence("");
+      return;
+    }
+    const parsed = Number(value);
+    setCadence(Number.isFinite(parsed) ? String(parsed * CADENCE_UNIT_SECONDS[cadenceUnit]) : value);
   }
 
   async function submit(startNow: boolean) {
@@ -346,7 +413,7 @@ export function SimpleConfigurator({
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Sparkles className="size-4" /> Configuration simple</CardTitle>
-          <CardDescription>Nom, capital, marché, sélection, IA, style de trading, agressivité, Risk et instructions opérateur.</CardDescription>
+          <CardDescription>Nom, capital, marché, sélection, IA, style de trading, cadence stratégique, agressivité, Risk et instructions opérateur.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <Field label="Nom de la Session">
@@ -416,9 +483,9 @@ export function SimpleConfigurator({
               <div className="flex flex-col gap-3 rounded-xl border bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="text-xs leading-relaxed text-muted-foreground">
                   <span className="font-medium text-foreground">Sélection actuelle : {styleMetadata.label}</span>
-                  <span className="block">Timeframes stratégiques : {styleMetadata.timeframes.join(" · ")}</span>
+                  <span className="block">Timeframes analysées : {styleMetadata.timeframes.join(" · ")}</span>
                   <span className="block">
-                    Valeurs conseillées à la création : cadence {styleMetadata.recommendedTradingCadenceSeconds} s · watchlist {styleMetadata.recommendedWatchlistRefreshSeconds} s.
+                    Réglage conseillé : clôture {styleMetadata.recommendedDecisionTimeframe} · refresh watchlist {styleMetadata.recommendedWatchlistRefreshSeconds} s.
                   </span>
                 </div>
                 <Button variant="outline" onClick={applyRecommendedStyleValues}>
@@ -426,6 +493,88 @@ export function SimpleConfigurator({
                 </Button>
               </div>
             ) : null}
+          </div>
+
+          <div className="space-y-3 border-t pt-5">
+            <div>
+              <p className="text-sm font-medium">Déclenchement des décisions IA</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                Ce réglage cadence le cycle stratégique. Il ne ralentit ni le suivi des prix/P&amp;L, ni le mark-to-market.
+              </p>
+            </div>
+            {strategicScheduleMode === null ? (
+              <div className="rounded-lg border border-warning/35 bg-warning-subtle p-3 text-sm text-warning-foreground">
+                Session historique : comportement conservé à l’identique, avec intervalle fixe après la fin de chaque cycle. Le nouveau champ reste absent tant que tu ne changes pas explicitement ce réglage.
+              </div>
+            ) : null}
+            <div className="grid gap-2 md:grid-cols-2">
+              <ChoiceCard
+                active={effectiveScheduleMode === "CANDLE_CLOSE"}
+                title="À la clôture d’une bougie"
+                detail="Aligne le cycle sur la grille de la timeframe choisie, sans dérive liée à la durée du précédent appel IA."
+                onClick={chooseCandleCloseMode}
+              />
+              <ChoiceCard
+                active={effectiveScheduleMode === "INTERVAL"}
+                title="À intervalle fixe"
+                detail="Mode compatible avec l’historique : l’attente commence après la fin du cycle précédent."
+                onClick={() => setStrategicScheduleMode("INTERVAL")}
+              />
+            </div>
+
+            {effectiveScheduleMode === "CANDLE_CLOSE" ? (
+              <div className="grid gap-4 rounded-xl border bg-muted/20 p-4 md:grid-cols-2">
+                <Field label="Bougie de décision" hint="Le moteur attend la clôture réelle et la finalisation de la candle canonique ; il n’invente jamais une clôture.">
+                  <select
+                    className={inputClass}
+                    value={decisionTimeframe ?? ""}
+                    onChange={(event) => setDecisionTimeframe(event.target.value as StrategicDecisionTimeframe)}
+                  >
+                    <option value="" disabled>Choisir une timeframe</option>
+                    {(styleMetadata?.timeframes ?? []).map((timeframe) => (
+                      <option key={timeframe} value={timeframe}>{decisionTimeframeLabel(timeframe)}</option>
+                    ))}
+                  </select>
+                </Field>
+                <div className="rounded-lg border bg-background p-3 text-sm">
+                  <p className="font-medium">Fréquence effective</p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {decisionTimeframe
+                      ? `Un cycle stratégique après chaque clôture ${decisionTimeframe}, dès que la bougie est finalisée.`
+                      : "Choisis une bougie de décision compatible avec le style."}
+                  </p>
+                  {styleMetadata ? <p className="mt-2 text-xs text-muted-foreground">Contexte Agent : {styleMetadata.timeframes.join(" · ")}.</p> : null}
+                </div>
+              </div>
+            ) : (
+              <div className="grid gap-4 rounded-xl border bg-muted/20 p-4 md:grid-cols-2">
+                <Field label="Intervalle IA">
+                  <div className="grid grid-cols-[1fr_auto] gap-2">
+                    <input
+                      className={inputClass}
+                      value={cadenceValue(cadence, cadenceUnit)}
+                      onChange={(event) => updateCadenceFromFriendlyValue(event.target.value)}
+                      inputMode="decimal"
+                    />
+                    <select className={inputClass} value={cadenceUnit} onChange={(event) => setCadenceUnit(event.target.value as CadenceUnit)}>
+                      <option value="seconds">secondes</option>
+                      <option value="minutes">minutes</option>
+                      <option value="hours">heures</option>
+                    </select>
+                  </div>
+                </Field>
+                <div className="rounded-lg border bg-background p-3 text-xs leading-relaxed text-muted-foreground">
+                  Ce mode conserve la logique historique : cycle terminé → attente de l’intervalle → cycle suivant. La durée du cycle s’ajoute donc à l’intervalle.
+                </div>
+              </div>
+            )}
+
+            <div className="rounded-xl border bg-muted/20 p-4 text-xs leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">Transparence des appels IA.</span>
+              <span className="block mt-1">Le monitoring prix/P&amp;L continue séparément sans appel stratégique.</span>
+              <span className="block">Si Market Discovery doit rafraîchir la watchlist, le même Agent peut effectuer un appel supplémentaire dans ce cycle.</span>
+              <span className="block">Market Attention reste indépendant, informatif et sans influence sur le trading.</span>
+            </div>
           </div>
 
           <Field label={`Agressivité · ${aggressiveness}/10`} hint="Ce paramètre contextualise l’Agent ; le Risk Engine déterministe garde l’autorité finale.">
@@ -463,7 +612,7 @@ export function SimpleConfigurator({
             <section className="space-y-4">
               <div>
                 <h3 className="font-semibold">Style stratégique effectif</h3>
-                <p className="text-xs text-muted-foreground">Lecture seule du mapping stratégique ; les timeframes ne sont pas configurables indépendamment du style.</p>
+                <p className="text-xs text-muted-foreground">Lecture seule du mapping stratégique ; les timeframes analysées ne sont pas configurables indépendamment du style.</p>
               </div>
               {styleMetadata ? (
                 <div className="grid gap-3 rounded-xl border bg-muted/20 p-4 md:grid-cols-3">
@@ -481,7 +630,14 @@ export function SimpleConfigurator({
             <section className="space-y-4 border-t pt-6">
               <div><h3 className="font-semibold">Runtime & coûts PAPER</h3><p className="text-xs text-muted-foreground">Valeurs effectivement persistées dans la prochaine version de configuration.</p></div>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-                <Field label="Cadence stratégique (s)"><input className={inputClass} value={cadence} onChange={(e) => setCadence(e.target.value)} /></Field>
+                <Field
+                  label="Intervalle IA technique (s)"
+                  hint={effectiveScheduleMode === "INTERVAL"
+                    ? "Utilisé par le mode Intervalle fixe."
+                    : "Conservé dans le snapshot pour compatibilité ; le scheduler CANDLE_CLOSE utilise la bougie de décision."}
+                >
+                  <input className={inputClass} value={cadence} onChange={(e) => setCadence(e.target.value)} />
+                </Field>
                 <Field
                   label="Décisions max / cycle"
                   hint={
@@ -524,10 +680,10 @@ export function SimpleConfigurator({
 
             {marketSelectionMode === "AUTOMATIC_AI" ? (
               <section className="space-y-4 border-t pt-6">
-                <div><h3 className="flex items-center gap-2 font-semibold"><Waves className="size-4" /> Market Discovery</h3><p className="text-xs text-muted-foreground">Valeurs effectives persistées ; le style ne les modifie que via l’action explicite « Réappliquer les valeurs conseillées ».</p></div>
+                <div><h3 className="flex items-center gap-2 font-semibold"><Waves className="size-4" /> Market Discovery</h3><p className="text-xs text-muted-foreground">Cadence distincte du cycle stratégique. Le refresh dû est évalué lorsqu’un cycle stratégique passe par Discovery ; ce batch ne crée pas de scheduler Discovery séparé.</p></div>
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                   <Field label="Catalog refresh (s)"><input className={inputClass} value={catalogRefresh} onChange={(e) => setCatalogRefresh(e.target.value)} /></Field>
-                  <Field label="Watchlist refresh (s)"><input className={inputClass} value={watchlistRefresh} onChange={(e) => setWatchlistRefresh(e.target.value)} /></Field>
+                  <Field label="Watchlist refresh (s, évalué au cycle)"><input className={inputClass} value={watchlistRefresh} onChange={(e) => setWatchlistRefresh(e.target.value)} /></Field>
                   <Field label="Refresh timeout (s)"><input className={inputClass} value={refreshTimeout} onChange={(e) => setRefreshTimeout(e.target.value)} /></Field>
                   <Field label="Candidate probe limit"><input className={inputClass} value={candidateProbeLimit} onChange={(e) => setCandidateProbeLimit(e.target.value)} /></Field>
                   <Field label="Candidate limit"><input className={inputClass} value={candidateLimit} onChange={(e) => setCandidateLimit(e.target.value)} /></Field>

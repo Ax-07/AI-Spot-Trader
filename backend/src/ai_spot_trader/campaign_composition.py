@@ -19,7 +19,7 @@ from ai_spot_trader.control_plane import CampaignConfiguration
 from ai_spot_trader.core.clock import SystemClock
 from ai_spot_trader.core.config import PaperRuntimeConfigurationError, Settings
 from ai_spot_trader.core.runtime import AppRuntime
-from ai_spot_trader.domain.enums import MarketType
+from ai_spot_trader.domain.enums import MarketType, TradingCadenceMode
 from ai_spot_trader.domain.experiments import aggressiveness_context, trading_style_context
 from ai_spot_trader.domain.models import (
     AssetBalance,
@@ -38,7 +38,7 @@ from ai_spot_trader.integrations.kraken.market_data import (
 )
 from ai_spot_trader.integrations.kraken.research import KrakenMarketResearchBackend
 from ai_spot_trader.integrations.kraken.resilience import RetryingKrakenDerivativesRestSource
-from ai_spot_trader.market.candles import CandleStreamService
+from ai_spot_trader.market.candles import CandleStreamService, CandleTimeframe
 from ai_spot_trader.market.discovery import MarketDiscoveryCoordinator
 from ai_spot_trader.market.execution import RoutedExecutableMarketDataSource
 from ai_spot_trader.market.research import MarketResearchService
@@ -65,6 +65,11 @@ from ai_spot_trader.risk.policy import RiskPolicy
 from ai_spot_trader.risk.sequential import SequentialCycleRiskEngine
 from ai_spot_trader.tools.market_research import build_market_research_tool_registry
 from ai_spot_trader.tools.read_only import ReadOnlyToolRegistry
+from ai_spot_trader.trading.cadence import (
+    CandleCloseReadinessGate,
+    CandleCloseSchedule,
+    ScheduledTradingEngine,
+)
 from ai_spot_trader.trading.discovery_runner import DynamicMarketTradingCycleRunner
 from ai_spot_trader.trading.engine import TradingCycleRunner, TradingCycleTimeouts, TradingEngine
 from ai_spot_trader.trading.multi_market import MultiMarketTradingCycleRunner
@@ -430,9 +435,29 @@ def build_campaign_runtime(
         audit_writer=run_bound_writer,
         portfolio=portfolio,
     )
-    trading_engine = TradingEngine(
+
+    cadence_mode = config.effective_trading_cadence_mode
+    candle_schedule: CandleCloseSchedule | None = None
+    readiness_gate: CandleCloseReadinessGate | None = None
+    if cadence_mode is TradingCadenceMode.CANDLE_CLOSE:
+        decision_timeframe = config.decision_timeframe
+        assert decision_timeframe is not None
+        timeframe = CandleTimeframe(decision_timeframe)
+        candle_schedule = CandleCloseSchedule(timeframe=timeframe)
+        readiness_gate = CandleCloseReadinessGate(
+            candle_service,
+            markets=config.paper_executable_markets,
+            timeframe=timeframe,
+            clock=clock,
+        )
+
+    trading_engine = ScheduledTradingEngine(
         runner=cast(TradingCycleRunner, audited_runner),
         cadence_seconds=config.trading_cadence_seconds,
+        cadence_mode=cadence_mode,
+        candle_schedule=candle_schedule,
+        readiness_gate=readiness_gate,
+        clock=clock,
     )
 
     resources: list[RuntimeMarketDataSource] = [

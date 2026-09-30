@@ -191,11 +191,19 @@ class AppRuntime:
             return self.engine_snapshot()
 
     async def run_engine_cycle_once(self) -> EngineRuntimeSnapshot:
-        """Run exactly one canonical cycle while excluding conflicting lifecycle commands."""
+        """Run one canonical cycle, including opt-in manual runs while a scheduler waits.
+
+        Generic engines keep the historical conflict behavior while RUNNING. A scheduling engine
+        may explicitly expose ``allows_manual_cycle_while_running = True``; its canonical runner
+        remains responsible for serializing the manual cycle against any automatic cycle.
+        """
 
         async with self._engine_command_lock:
             engine = self._require_single_cycle_engine()
-            if engine.is_running:
+            manual_while_running = bool(
+                getattr(engine, "allows_manual_cycle_while_running", False)
+            )
+            if engine.is_running and not manual_while_running:
                 raise TradingEngineAlreadyRunningError(
                     "cannot run one cycle while the autonomous engine is running"
                 )

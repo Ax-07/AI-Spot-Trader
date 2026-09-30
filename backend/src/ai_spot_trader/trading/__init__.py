@@ -11,8 +11,16 @@ from ai_spot_trader.trading.engine import (
     TradingEngine,
     TradingEngineAlreadyRunningError,
 )
+from ai_spot_trader.trading.cadence import (
+    CandleCloseReadinessGate,
+    CandleCloseSchedule,
+    ScheduledTradingEngine,
+)
 
 __all__ = [
+    "CandleCloseReadinessGate",
+    "CandleCloseSchedule",
+    "ScheduledTradingEngine",
     "TradingCycleFailure",
     "TradingCycleInvariantError",
     "TradingCycleResult",

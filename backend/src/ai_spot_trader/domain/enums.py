@@ -131,6 +131,13 @@ class TradingStyle(StrEnum):
     SWING = "SWING"
 
 
+class TradingCadenceMode(StrEnum):
+    """How the autonomous strategic loop decides when a new cycle may start."""
+
+    INTERVAL = "INTERVAL"
+    CANDLE_CLOSE = "CANDLE_CLOSE"
+
+
 class ExperimentVariable(StrEnum):
     """Single controlled variable intentionally changed inside an experiment group."""
 

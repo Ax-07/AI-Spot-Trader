@@ -5,33 +5,30 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD réel  : 58b59ba0cab25e9011d26014c51005aac1365af2
-Commit     : fix: recover market attention runtime and clarify historical errors
+HEAD réel  : 9fc6a4a15f1c44c8ff7b43a342ab8d74bbedb892
+Commit     : ux: simplify financial terminology
 ```
 
-État revérifié le 30/09/2026 au démarrage du Batch 36. Le HEAD documenté précédent `4a516fde33853fe84d18bd8c4780753c0db58214` est obsolète.
+État revérifié le 30/09/2026 au démarrage du Batch 37. Le Batch 36 est **intégré** dans ce HEAD. Les références documentaires précédentes à `58b59ba...` et au Batch 36 « local/non intégré » sont obsolètes.
 
-## État intégré confirmé
-
-Le commit `58b59ba0cab25e9011d26014c51005aac1365af2` intègre désormais les Batches 34 / 34.1 / 34.2 / 35 :
-
-- récupération du runtime Market Attention et diagnostics bornés associés ;
-- correction de la cause SPOT Kraken liée aux réponses OHLC de `721` lignes ;
-- clarification cockpit entre erreur courante et erreur historique dépassée.
-
-Ces éléments ne doivent plus être décrits comme des correctifs locaux non intégrés.
-
-## Batch 36 — simplification UX du terme financier « notionnel »
+## Batch 37 — cadence stratégique IA synchronisée aux bougies
 
 **État : patch proposé/local non intégré.**
 
-Le Batch 36 est frontend/documentation uniquement :
+Le patch ajoute un scheduling stratégique unique avec deux modes :
 
-- les libellés visibles utilisent désormais `Montant max par ordre`, `Valeur de la position`, `Valeur max d’une position` ou `valeur échangée estimée en USD` selon le contexte ;
-- l’Historique utilise `Montant de l’ordre` / `montant échangé` pour ses libellés économiques visibles ;
-- les identifiants techniques (`risk_max_order_notional`, `position.notional`, `current_notional_usd`, etc.) restent inchangés ;
-- aucun comportement Agent, Risk Engine, Broker, PAPER, Kraken, Market Discovery, Market Attention, pricing, coûts, sizing, exposition, API ou persistence n’est modifié.
+- `CANDLE_CLOSE` : cycle autonome aligné sur une clôture de bougie canonique ;
+- `INTERVAL` : comportement historique conservé (`cycle -> attente X secondes -> cycle`).
 
-Aucun `git status` local utilisateur n’a été fourni au démarrage de ce batch ; le patch est donc construit strictement depuis le HEAD GitHub ci-dessus et doit être appliqué sans écraser d’éventuelles modifications locales plus récentes.
+Nouvelles Sessions :
 
-Voir `docs/36_BATCH_UX_TERMINOLOGIE_FINANCIERE.md` pour l’audit et les validations du batch.
+- SCALP : recommandation UX `CANDLE_CLOSE` sur `5m` ;
+- SWING : recommandation UX `CANDLE_CLOSE` sur `4h`.
+
+Les Campaigns historiques sans nouveau champ restent exactement en mode `INTERVAL`; leur payload canonique et leur digest ne sont pas réécrits. Aucune migration DB n'est ajoutée.
+
+Le scheduler réutilise `CandleStreamService` pour vérifier la finalité d'une bougie et ne crée aucun second pipeline OHLC. Le contexte stratégique multi-timeframes reste distinct du timeframe de déclenchement et conserve les garanties `history_as_of(...)` sans look-ahead.
+
+Le monitoring/mark-to-market continue indépendamment. Market Discovery garde sa cadence propre, évaluée lors du passage d'un cycle stratégique par Discovery. Market Attention reste strictement informatif.
+
+Voir `docs/37_BATCH_CADENCE_IA_BOUGIES.md`.

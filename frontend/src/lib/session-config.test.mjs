@@ -8,6 +8,7 @@ import {
   TRADING_STYLE_MAPPING_VERSION,
   TRADING_STYLE_UI_METADATA,
   buildSessionCampaignConfiguration,
+  decisionTimeframeLabel,
   inferSessionRiskProfile,
   initialSessionStyleValues,
   parseSessionMarkets,
@@ -23,6 +24,8 @@ const base = {
   model: "gpt-5.6-luna",
   aggressiveness: 5,
   tradingStyle: "SCALP",
+  strategicScheduleMode: "CANDLE_CLOSE",
+  decisionTimeframe: "5m",
   riskProfile: "balanced",
   cadence: "60",
   maxDecisionsPerCycle: "6",
@@ -62,6 +65,51 @@ test("manual mode disables discovery and constrains Risk to the explicit univers
   assert.equal(configuration.market_discovery, null);
   assert.deepEqual(configuration.risk_allowed_pairs, ["BTC/USD", "ETH/USD"]);
   assert.equal(configuration.paper_executable_markets.length, 2);
+});
+
+test("CANDLE_CLOSE persists the explicit decision timeframe", () => {
+  const configuration = buildSessionCampaignConfiguration(base);
+  assert.deepEqual(configuration.strategic_schedule, {
+    mode: "CANDLE_CLOSE",
+    decision_timeframe: "5m",
+  });
+});
+
+test("INTERVAL persists explicitly without a candle timeframe", () => {
+  const configuration = buildSessionCampaignConfiguration({
+    ...base,
+    strategicScheduleMode: "INTERVAL",
+    decisionTimeframe: null,
+    cadence: "900",
+  });
+  assert.deepEqual(configuration.strategic_schedule, { mode: "INTERVAL" });
+  assert.equal(configuration.trading_cadence_seconds, 900);
+});
+
+test("legacy schedule omission is preserved exactly", () => {
+  const configuration = buildSessionCampaignConfiguration({
+    ...base,
+    strategicScheduleMode: null,
+    decisionTimeframe: null,
+    cadence: "120",
+  });
+  assert.equal("strategic_schedule" in configuration, false);
+  assert.equal(configuration.trading_cadence_seconds, 120);
+});
+
+test("decision timeframe must belong to the selected style", () => {
+  assert.throws(
+    () => buildSessionCampaignConfiguration({ ...base, decisionTimeframe: "4h" }),
+    /timeframes du style/,
+  );
+  assert.throws(
+    () => buildSessionCampaignConfiguration({
+      ...base,
+      tradingStyle: null,
+      decisionTimeframe: "5m",
+    }),
+    /Choisis Scalping ou Swing/,
+  );
 });
 
 test("cycle decision limit is persisted independently from watchlist size", () => {
@@ -115,6 +163,7 @@ test("SWING is persisted without changing aggressiveness, market mode or Risk", 
   const configuration = buildSessionCampaignConfiguration({
     ...base,
     tradingStyle: "SWING",
+    decisionTimeframe: "4h",
     aggressiveness: 9,
     riskProfile: "prudent",
     cadence: "900",
@@ -125,6 +174,10 @@ test("SWING is persisted without changing aggressiveness, market mode or Risk", 
   });
   assert.equal(configuration.trading_style, "SWING");
   assert.equal(configuration.trading_style_mapping_version, TRADING_STYLE_MAPPING_VERSION);
+  assert.deepEqual(configuration.strategic_schedule, {
+    mode: "CANDLE_CLOSE",
+    decision_timeframe: "4h",
+  });
   assert.equal(configuration.aggressiveness, 9);
   assert.equal(configuration.risk_max_order_notional, "50");
   assert.equal(configuration.market_discovery?.protocol_version, "market-discovery-v1");
@@ -134,17 +187,22 @@ test("legacy Session keeps trading style absent when the user did not choose one
   const configuration = buildSessionCampaignConfiguration({
     ...base,
     tradingStyle: null,
+    strategicScheduleMode: null,
+    decisionTimeframe: null,
     cadence: "120",
   });
   assert.equal("trading_style" in configuration, false);
   assert.equal("trading_style_mapping_version" in configuration, false);
+  assert.equal("strategic_schedule" in configuration, false);
   assert.equal(configuration.trading_cadence_seconds, 120);
 });
 
-test("changing style does not rewrite an explicitly customized cadence or watchlist refresh", () => {
+test("changing style does not rewrite an explicitly customized interval or watchlist refresh", () => {
   const scalp = buildSessionCampaignConfiguration({
     ...base,
     tradingStyle: "SCALP",
+    strategicScheduleMode: "INTERVAL",
+    decisionTimeframe: null,
     cadence: "120",
     discovery: {
       ...base.discovery,
@@ -154,6 +212,8 @@ test("changing style does not rewrite an explicitly customized cadence or watchl
   const swing = buildSessionCampaignConfiguration({
     ...base,
     tradingStyle: "SWING",
+    strategicScheduleMode: "INTERVAL",
+    decisionTimeframe: null,
     cadence: "120",
     discovery: {
       ...base.discovery,
@@ -162,6 +222,8 @@ test("changing style does not rewrite an explicitly customized cadence or watchl
   });
   assert.equal(scalp.trading_cadence_seconds, 120);
   assert.equal(swing.trading_cadence_seconds, 120);
+  assert.deepEqual(scalp.strategic_schedule, { mode: "INTERVAL" });
+  assert.deepEqual(swing.strategic_schedule, { mode: "INTERVAL" });
   assert.equal(scalp.market_discovery?.watchlist_refresh_seconds, 720);
   assert.equal(swing.market_discovery?.watchlist_refresh_seconds, 720);
   assert.equal(scalp.aggressiveness, swing.aggressiveness);
@@ -170,29 +232,37 @@ test("changing style does not rewrite an explicitly customized cadence or watchl
 
 test("style recommendations are explicit UX defaults only", () => {
   assert.deepEqual(tradingStyleRecommendations("SCALP"), {
+    strategicScheduleMode: "CANDLE_CLOSE",
+    decisionTimeframe: "5m",
     tradingCadenceSeconds: 60,
     watchlistRefreshSeconds: 300,
   });
   assert.deepEqual(tradingStyleRecommendations("SWING"), {
+    strategicScheduleMode: "CANDLE_CLOSE",
+    decisionTimeframe: "4h",
     tradingCadenceSeconds: 900,
     watchlistRefreshSeconds: 1800,
   });
   assert.deepEqual(TRADING_STYLE_UI_METADATA.SCALP.timeframes, ["1m", "5m", "15m", "30m"]);
   assert.deepEqual(TRADING_STYLE_UI_METADATA.SWING.timeframes, ["1h", "4h", "1d"]);
+  assert.equal(decisionTimeframeLabel("4h"), "4 heures");
 });
 
-test("new Session starts with SCALP UX defaults and six strategic decisions", () => {
+test("new Session starts with SCALP candle-close 5m and six strategic decisions", () => {
   assert.deepEqual(initialSessionStyleValues(null, false), {
     tradingStyle: "SCALP",
+    strategicScheduleMode: "CANDLE_CLOSE",
+    decisionTimeframe: "5m",
     tradingCadenceSeconds: 60,
     watchlistRefreshSeconds: 300,
     maxDecisionsPerCycle: 6,
   });
 });
 
-test("editing reconstructs persisted SCALP values and decision limit instead of reapplying defaults", () => {
+test("editing reconstructs persisted SCALP schedule and values instead of reapplying defaults", () => {
   const configuration = buildSessionCampaignConfiguration({
     ...base,
+    decisionTimeframe: "15m",
     cadence: "120",
     maxDecisionsPerCycle: "9",
     discovery: {
@@ -202,16 +272,20 @@ test("editing reconstructs persisted SCALP values and decision limit instead of 
   });
   assert.deepEqual(initialSessionStyleValues(configuration, true), {
     tradingStyle: "SCALP",
+    strategicScheduleMode: "CANDLE_CLOSE",
+    decisionTimeframe: "15m",
     tradingCadenceSeconds: 120,
     watchlistRefreshSeconds: 720,
     maxDecisionsPerCycle: 9,
   });
 });
 
-test("editing a legacy Session preserves the absent style and decision-limit fields", () => {
+test("editing a legacy Session preserves absent style, schedule and decision-limit fields", () => {
   const configuration = buildSessionCampaignConfiguration({
     ...base,
     tradingStyle: null,
+    strategicScheduleMode: null,
+    decisionTimeframe: null,
     cadence: "120",
     maxDecisionsPerCycle: undefined,
     discovery: {
@@ -220,8 +294,11 @@ test("editing a legacy Session preserves the absent style and decision-limit fie
     },
   });
   assert.equal("max_decisions_per_cycle" in configuration, false);
+  assert.equal("strategic_schedule" in configuration, false);
   assert.deepEqual(initialSessionStyleValues(configuration, true), {
     tradingStyle: null,
+    strategicScheduleMode: null,
+    decisionTimeframe: null,
     tradingCadenceSeconds: 120,
     watchlistRefreshSeconds: 720,
     maxDecisionsPerCycle: null,

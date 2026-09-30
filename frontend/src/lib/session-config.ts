@@ -3,6 +3,8 @@ import type {
   ExecutableMarketType,
   LlmModel,
   MarketDiscoveryPolicy,
+  StrategicDecisionTimeframe,
+  TradingCadenceMode,
   TradingStyle,
 } from "@/lib/api/types";
 
@@ -18,6 +20,7 @@ export const TRADING_STYLE_UI_METADATA = {
     label: "Scalping",
     detail: "Horizon court. Recherche d’opportunités rapides. Les coûts d’exécution ont une importance élevée.",
     timeframes: ["1m", "5m", "15m", "30m"],
+    recommendedDecisionTimeframe: "5m",
     recommendedTradingCadenceSeconds: 60,
     recommendedWatchlistRefreshSeconds: 300,
   },
@@ -25,6 +28,7 @@ export const TRADING_STYLE_UI_METADATA = {
     label: "Swing",
     detail: "Horizon de plusieurs heures à plusieurs jours. Recherche de mouvements plus larges.",
     timeframes: ["1h", "4h", "1d"],
+    recommendedDecisionTimeframe: "4h",
     recommendedTradingCadenceSeconds: 900,
     recommendedWatchlistRefreshSeconds: 1800,
   },
@@ -33,7 +37,8 @@ export const TRADING_STYLE_UI_METADATA = {
   {
     label: string;
     detail: string;
-    timeframes: readonly string[];
+    timeframes: readonly StrategicDecisionTimeframe[];
+    recommendedDecisionTimeframe: StrategicDecisionTimeframe;
     recommendedTradingCadenceSeconds: number;
     recommendedWatchlistRefreshSeconds: number;
   }
@@ -60,6 +65,8 @@ export type SessionConfigurationInput = {
   model: LlmModel;
   aggressiveness: number;
   tradingStyle: TradingStyle | null;
+  strategicScheduleMode: TradingCadenceMode | null;
+  decisionTimeframe: StrategicDecisionTimeframe | null;
   riskProfile: SessionRiskProfile;
   cadence: string;
   maxDecisionsPerCycle?: string;
@@ -82,6 +89,8 @@ export type SessionConfigurationInput = {
 export function tradingStyleRecommendations(style: TradingStyle) {
   const metadata = TRADING_STYLE_UI_METADATA[style];
   return {
+    strategicScheduleMode: "CANDLE_CLOSE" as const,
+    decisionTimeframe: metadata.recommendedDecisionTimeframe,
     tradingCadenceSeconds: metadata.recommendedTradingCadenceSeconds,
     watchlistRefreshSeconds: metadata.recommendedWatchlistRefreshSeconds,
   };
@@ -93,9 +102,14 @@ export function initialSessionStyleValues(
 ) {
   const tradingStyle = configuration?.trading_style ?? (editing ? null : "SCALP");
   const recommendations = tradingStyle ? tradingStyleRecommendations(tradingStyle) : null;
+  const persistedSchedule = configuration?.strategic_schedule ?? null;
 
   return {
     tradingStyle,
+    strategicScheduleMode:
+      persistedSchedule?.mode ?? (editing ? null : recommendations?.strategicScheduleMode ?? "CANDLE_CLOSE"),
+    decisionTimeframe:
+      persistedSchedule?.decision_timeframe ?? (editing ? null : recommendations?.decisionTimeframe ?? null),
     tradingCadenceSeconds:
       configuration?.trading_cadence_seconds ?? recommendations?.tradingCadenceSeconds ?? 30,
     watchlistRefreshSeconds:
@@ -105,6 +119,18 @@ export function initialSessionStyleValues(
     maxDecisionsPerCycle:
       configuration?.max_decisions_per_cycle ?? (editing ? null : DEFAULT_MAX_DECISIONS_PER_CYCLE),
   };
+}
+
+export function decisionTimeframeLabel(timeframe: StrategicDecisionTimeframe): string {
+  return {
+    "1m": "1 minute",
+    "5m": "5 minutes",
+    "15m": "15 minutes",
+    "30m": "30 minutes",
+    "1h": "1 heure",
+    "4h": "4 heures",
+    "1d": "1 jour",
+  }[timeframe];
 }
 
 function roundDecimal(value: number): string {
@@ -250,6 +276,29 @@ function cycleDecisionLimit(value: string | undefined): number | null {
   return parsed;
 }
 
+function buildStrategicSchedule(input: SessionConfigurationInput): Pick<CampaignConfiguration, "strategic_schedule"> | Record<string, never> {
+  if (input.strategicScheduleMode === null) return {};
+  if (input.strategicScheduleMode === "INTERVAL") {
+    return { strategic_schedule: { mode: "INTERVAL" } };
+  }
+  if (input.tradingStyle === null) {
+    throw new Error("Choisis Scalping ou Swing avant d’utiliser le déclenchement à la clôture d’une bougie.");
+  }
+  if (input.decisionTimeframe === null) {
+    throw new Error("Choisis la bougie de décision.");
+  }
+  const allowed = TRADING_STYLE_UI_METADATA[input.tradingStyle].timeframes as readonly StrategicDecisionTimeframe[];
+  if (!allowed.includes(input.decisionTimeframe)) {
+    throw new Error("La bougie de décision doit appartenir aux timeframes du style sélectionné.");
+  }
+  return {
+    strategic_schedule: {
+      mode: "CANDLE_CLOSE",
+      decision_timeframe: input.decisionTimeframe,
+    },
+  };
+}
+
 export function buildSessionCampaignConfiguration(input: SessionConfigurationInput): CampaignConfiguration {
   const capital = positiveNumber(input.capital, "Le capital PAPER");
   const marketPlan = parseSessionMarkets(input.pairs, input.marketType);
@@ -267,7 +316,7 @@ export function buildSessionCampaignConfiguration(input: SessionConfigurationInp
     : profileRisk(input.riskProfile, capital, input.marketType);
 
   if (!risk.maxOrderNotional) throw new Error("Le plafond par ordre est obligatoire.");
-  const cadence = positiveNumber(input.cadence, "La cadence stratégique");
+  const cadence = positiveNumber(input.cadence, "L’intervalle IA historique");
   const maxDecisionsPerCycle = cycleDecisionLimit(input.maxDecisionsPerCycle);
   const marketTimeout = positiveNumber(input.marketTimeout, "Le timeout marché");
   const agentTimeout = positiveNumber(input.agentTimeout, "Le timeout Agent");
@@ -299,11 +348,14 @@ export function buildSessionCampaignConfiguration(input: SessionConfigurationInp
         trading_style_mapping_version: TRADING_STYLE_MAPPING_VERSION,
       };
 
+  const strategicSchedule = buildStrategicSchedule(input);
+
   return {
     configuration_version: "paper-control-plane-config-v1",
     llm_model: input.model,
     aggressiveness: input.aggressiveness,
     trading_cadence_seconds: cadence,
+    ...strategicSchedule,
     ...decisionLimit,
     ...tradingStyle,
     paper_initial_capital: input.capital.trim(),

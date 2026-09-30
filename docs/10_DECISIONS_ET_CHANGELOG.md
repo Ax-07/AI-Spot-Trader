@@ -1,439 +1,129 @@
 # 10 — Décisions et changelog
 
-> Les décisions détaillées antérieures restent dans Git. Ce document conserve les principes actifs, les décisions récentes et les choix nécessaires à la reprise.
+> Les décisions détaillées plus anciennes restent dans Git. Ce document conserve les principes actifs, les décisions structurantes récentes et les éléments nécessaires à la reprise.
 
 ## Principes historiques conservés
 
-Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool directe vers Broker/Kraken, SPOT sans short/levier/marge, PERPETUAL PAPER derrière les contrôles dérivés déterministes, FUTURE daté interdit, audit durable des cycles, no-look-ahead, backend indépendant du frontend, `HOLD` valide, aucun secret versionné et LIVE séparé.
+Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool directe vers Broker/Kraken, SPOT sans short, PERPETUAL derrière les contrôles dérivés déterministes, FUTURE daté interdit, audit durable, no-look-ahead, backend indépendant du frontend, `HOLD` valide, aucun secret versionné et LIVE séparé.
 
-Les Sessions PAPER canoniques autorisent `SPOT` et `PERPETUAL` linéaire. `FUTURE` daté reste interdit.
-
-Market Attention Radar v1 reste **strictement observationnel** : sa shortlist ne constitue ni une watchlist d'exécution ni un input Agent.
+Market Attention Radar reste strictement observationnel et n'est pas un input de l'Agent stratégique.
 
 ## Référence courante
 
 ```text
-HEAD GitHub audité     : 58b59ba0cab25e9011d26014c51005aac1365af2
-HEAD                   : fix: recover market attention runtime and clarify historical errors
-Recalibrage net/cost   : ADR-277 intégré dans 463850d
-Historique économique  : ADR-278 intégré dans b46f463c
-Doctrine reasoning     : ADR-279 intégrée dans d011faa
-Market Attention Radar : ADR-280 à ADR-286 + Batches 33/34/34.1/34.2 intégrés
-UX erreurs historiques : Batch 35 intégré dans 58b59ba
-Batch 36               : patch terminologie UX proposé/local non intégré
+HEAD GitHub audité     : 9fc6a4a15f1c44c8ff7b43a342ab8d74bbedb892
+HEAD                   : ux: simplify financial terminology
+Batch 36               : intégré
+Batch 37               : patch cadence IA/bougies proposé localement
 ```
 
-## Changelog — 2026-09-30 — Batch 36 simplification UX « notionnel » (patch proposé)
+## Changelog — 2026-09-30 — Batch 37 cadence stratégique IA synchronisée aux bougies
 
-- base GitHub auditée : `58b59ba0cab25e9011d26014c51005aac1365af2` (`fix: recover market attention runtime and clarify historical errors`) ;
-- Batches 34 / 34.1 / 34.2 / 35 confirmés intégrés dans cette base ;
-- changement limité aux libellés frontend et à la documentation de reprise ;
-- limites d’ordre affichées comme `Montant max par ordre` ;
-- valeurs de positions affichées comme `Valeur de la position` et limites PERPETUAL comme `Valeur max d’une position` ;
-- Radar reformulé autour de la `valeur échangée estimée en USD` et de la `Méthode d’estimation USD` ;
-- Historique reformulé en `Montant de l’ordre` / `montant échangé` ;
-- identifiants techniques `notional`, API, persistence, Risk, analytics et calculs inchangés ;
-- aucun changement Agent, prompt, Broker, PAPER, Kraken, Market Discovery, Market Attention, pricing, frais, spread, slippage, sizing ou exposition ;
-- aucun test backend requis si le périmètre reste frontend/documentation uniquement ;
-- statut : patch proposé/local non intégré, à valider puis commit/push par l’utilisateur.
+- base GitHub auditée : `9fc6a4a15f1c44c8ff7b43a342ab8d74bbedb892` ;
+- réalignement de la documentation qui décrivait encore le Batch 36 comme local ;
+- extension optionnelle `CampaignConfiguration.strategic_schedule` sans changement de `configuration_version` et sans migration DB ;
+- deux modes : `INTERVAL` et `CANDLE_CLOSE` ;
+- absence de `strategic_schedule` = comportement historique `INTERVAL` et payload/digest ancien inchangé ;
+- `CANDLE_CLOSE` exige un style explicite et un timeframe appartenant au mapping canonique de ce style ;
+- ajout d'un scheduler unique `ScheduledTradingEngine`, sous-classe du moteur existant, sans second moteur stratégique ;
+- alignement UTC sur les frontières canoniques 1m/5m/15m/30m/1h/4h/1d ;
+- recalcul de la prochaine frontière depuis l'horloge après chaque cycle afin d'éviter la dérive et les rafales de rattrapage ;
+- démarrage/restart sur une frontière strictement future, sans replay automatique des décisions manquées ;
+- vérification de finalité via le `CandleStreamService` canonique avant le cycle autonome ;
+- aucune bougie future/incomplète considérée comme clôturée ;
+- `run-cycle` manuel conserve la primitive immédiate ;
+- `stop()` interrompt l'attente ;
+- monitoring/mark-to-market, Market Discovery et Market Attention conservent leurs responsabilités séparées ;
+- UX : nouvelle Session SCALP -> clôture 5m ; SWING -> clôture 4h ;
+- le changement de style seul ne réécrit pas silencieusement une personnalisation ; l'action explicite « Réappliquer les valeurs conseillées » peut appliquer les defaults ;
+- intervalle fixe présenté en unités lisibles, tout en conservant `trading_cadence_seconds` côté contrat ;
+- aucun changement de politique Risk, Broker, pricing PAPER, frais, spread, slippage ou décision stratégique.
 
-## Décisions historiques toujours actives
+## ADR-240 à ADR-247 — Session et lifecycle
 
-- ADR-173 à ADR-239 : immutabilité Strategy/Campaign, Control Plane, accounting, monitoring, discovery, explicabilité, candles/charts et overlays ;
-- ADR-240 à ADR-247 : façade Session, lifecycle, immutabilité et modes de marchés ;
-- ADR-248 à ADR-255 : Trading Style, coûts Agent et contexte stratégique multi-timeframes ;
-- ADR-256 à ADR-258 : UX Session du style et compatibilité legacy ;
-- ADR-259 à ADR-262 : gestion stratégique des positions, `position-management-v1`, plafond Risk par ordre et rotation du capital ;
-- ADR-263 : classification robuste des limites fournisseur OpenAI et fail-closed ;
-- ADR-264 : précision PAPER PERPETUAL et normalisation descendante du quantum ;
-- ADR-265 à ADR-268 : multi-décisions / multi-marchés, Risk séquentiel, atomicité PAPER et audit 1:N ;
-- ADR-269, ADR-270 et ADR-272 : Structured Outputs strict, contrat multi-marchés protégé et diagnostic sécurisé ;
-- ADR-271 : garde-fou SPOT-only intégré par erreur dans `aa404e4`, supersédé ;
-- ADR-273 : Sessions PAPER SPOT + PERPETUAL, FUTURE daté interdit ;
-- ADR-274 : inspection en lecture seule du payload OpenAI réel à la frontière `OpenAIResponsesClient` ;
-- ADR-275 : refresh initial des marks PAPER avant ouverture des cycles ;
-- ADR-276 : recalibrage du prompt stratégique sans cible de rendement injectée ni biais de quantité maximale ;
-- ADR-277 : recalibrage cost-aware vers l'equity nette, allocation du capital et agressivité sans turnover obligatoire ;
-- ADR-278 : historique économique Session/run comme projection en lecture seule, sans second ledger ni seconde comptabilité ;
-- ADR-279 : doctrine qualitative de raisonnement trading pour les prompts stratégiques courants, sans règles mécaniques ;
-- ADR-280 à ADR-286 : Market Attention Radar v1, observabilité, couverture équilibrée et audit du notionnel PERPETUAL, intégrés.
+`Session` reste une façade UX sur Strategy/Revision/Campaign/paper_run. La création est atomique, les modifications sont versionnées, l'archivage est logique et la reprise d'une Campaign déjà exécutée est explicite.
 
-## ADR-240 — Session est une façade UX, pas un nouvel agrégat persistant
+## ADR-248 à ADR-258 — Trading Style, coûts et multi-timeframes
 
-**ADOPTÉ AU BATCH 19.8.** `Session` reste une projection sur Strategy, StrategyRevision, Campaign, paper_run et runtime actif. Aucune table `sessions` n'est créée.
+`SCALP`/`SWING`, `trading-style-map-v1`, `ExecutionCostContext` et `strategic-mtf-v1` enrichissent l'Agent sans modifier Risk. `history_as_of(...)` garantit la causalité des candles. Les defaults UX liés au style ne doivent pas écraser silencieusement une configuration persistée.
 
-## ADR-241 — La création Session est atomique côté backend
+## ADR-259 à ADR-268 — Gestion des positions et cycle multi-décisions
 
-**ADOPTÉ AU BATCH 19.8.** Strategy + StrategyRevision 1 + Campaign sont créées dans une seule transaction.
+Les positions ouvertes restent des alternatives stratégiques. Le plan multi-marchés est ordonné, borné et produit par le même Agent. Risk et Broker suivent cet ordre sur le portefeuille courant. Les erreurs techniques du cycle PAPER conservent l'atomicité prévue et l'audit supporte les relations 1:N.
 
-## ADR-242 à ADR-247 — Versioning, archivage, lifecycle et marchés
+## ADR-269 à ADR-279 — Contrats Agent, coûts et reasoning
 
-**ADOPTÉS AU BATCH 19.8.** Les modifications créent de nouveaux faits immuables ; `Supprimer` archive ; les statuts sont dérivés ; `stop` ferme runtime/run ; `AUTOMATIC_AI` et `MANUAL` restent explicites.
+Les Structured Outputs imposent le contrat BUY/SELL/HOLD. Les Sessions PAPER supportent SPOT et PERPETUAL ; FUTURE reste interdit. L'inspection LLM se fait en lecture seule à la frontière OpenAI. Les marks sont rafraîchis avant le premier cycle. L'agressivité n'impose ni quantité maximale, ni turnover. Le raisonnement courant privilégie l'equity nette après coûts, l'allocation du capital et le coût d'opportunité sans seuil mécanique de profit.
 
-## ADR-248 à ADR-255 — Style, coûts et multi-timeframes
+## ADR-280 à ADR-286 — Market Attention Radar
 
-**ADOPTÉS AUX BATCHES 19.9A/19.9B.** `SCALP`/`SWING`, `trading-style-map-v1`, `ExecutionCostContext` et `strategic-mtf-v1` enrichissent l'Agent sans modifier Risk. `history_as_of(...)` garantit la causalité des candles.
+Market Attention Radar v1, son observabilité, sa robustesse, ses régimes de liquidité et son runtime hardening restent intégrés. Il ne produit aucun ordre, aucun score stratégique et aucune préférence LONG/SHORT.
 
-## ADR-256 à ADR-258 — UX du style
+## ADR-287 — Le scheduling stratégique devient une propriété explicite de Campaign
 
-**ADOPTÉS AU BATCH 19.9C.** Le style est exposé sans couplage silencieux à l'agressivité, aux marchés ou à Risk.
+**ADOPTÉ DANS LE PATCH BATCH 37 — À INTÉGRER.**
 
-## ADR-259 à ADR-262 — Gestion des positions et rotation du capital
+Décision : ajouter un objet optionnel `strategic_schedule` au snapshot `CampaignConfiguration` plutôt qu'un nouveau stockage ou une nouvelle table.
 
-**ADOPTÉS AU BATCH 19.10.** Les positions ouvertes restent des opportunités stratégiques ; `position-management-v1` reste factuel ; `risk_max_order_notional` reste un plafond par ordre ; aucune règle déterministe `après SELL -> BUY` n'est introduite.
+Raisons :
 
-## ADR-263 — Les limites fournisseur OpenAI sont classifiées avant retry
+- la cadence fait partie de l'identité reproductible d'une Campaign ;
+- le stockage Campaign JSON existe déjà ;
+- l'extension optionnelle peut préserver exactement les anciens payloads/digests ;
+- aucune migration DB n'est nécessaire ;
+- `trading_cadence_seconds` reste conservé pour le legacy et les outils existants.
 
-**ADOPTÉ AU BATCH 19.12.** Quota/crédit/usage/spend sont non retryables ; les limitations temporaires restent retryables avec `Retry-After` valide ou backoff borné. Toute erreur LLM reste fail-closed.
+Contrat :
 
-## ADR-264 — Précision PAPER PERPETUAL et quantum provider-derived
+```text
+absent                      -> INTERVAL historique
+{mode: INTERVAL}            -> INTERVAL explicite
+{mode: CANDLE_CLOSE,
+ decision_timeframe: <tf>}   -> clôture canonique
+```
 
-**ADOPTÉ ET INTÉGRÉ HISTORIQUEMENT AU COMMIT `18596ac9d4f6554aa4817a9bdb374ab597c2399f`.** Les validations de précision dérivées restent canoniques.
+Pour `CANDLE_CLOSE`, un style explicite est requis et le timeframe doit appartenir au mapping canonique : SCALP `1m/5m/15m/30m`, SWING `1h/4h/1d`.
 
-## ADR-265 — Un cycle peut porter un plan stratégique ordonné multi-marchés
+## ADR-288 — Un seul moteur gère INTERVAL et CANDLE_CLOSE
 
-**ADOPTÉ ET INTÉGRÉ AU COMMIT `29316d7521accfe46316cb2bc6dfcf7652ba04bf`.** Un seul appel du même Agent stratégique produit un plan ordonné contenant plusieurs décisions sur des marchés distincts. `max_decisions_per_cycle` vaut `6` par défaut, hard limit `20`.
+**ADOPTÉ DANS LE PATCH BATCH 37 — À INTÉGRER.**
 
-## ADR-266 — Risk et Broker suivent l'ordre du plan sur un portefeuille causal
+`ScheduledTradingEngine` étend la boucle autonome existante au lieu de créer un scheduler stratégique parallèle.
 
-**ADOPTÉ ET INTÉGRÉ AU COMMIT `29316d7521accfe46316cb2bc6dfcf7652ba04bf`.** Chaque décision est évaluée après application des éventuelles exécutions précédentes. `HOLD` et `REJECT` n'interrompent pas le plan.
+En `INTERVAL`, il délègue à la boucle historique inchangée.
 
-## ADR-267 — Une défaillance technique rend le cycle PAPER atomique
+En `CANDLE_CLOSE` :
 
-**ADOPTÉ ET INTÉGRÉ AU COMMIT `29316d7521accfe46316cb2bc6dfcf7652ba04bf`.** Une erreur technique Risk ou Broker fait passer le cycle à `FAILED` et restaure le portefeuille au checkpoint initial.
+1. calcul de la prochaine frontière UTC strictement future ;
+2. attente interrompable par `stop()` ;
+3. vérification que la candle cible est explicitement finale dans le service canonique ;
+4. exécution d'un seul cycle stratégique ;
+5. recalcul de la prochaine frontière depuis l'horloge réelle après le cycle.
 
-## ADR-268 — L'audit devient 1:N et les analytics restent économiques
+Ainsi, la durée d'un cycle ne décale pas la grille et une suspension ne provoque pas de rafale de décisions rétrospectives.
 
-**ADOPTÉ ET INTÉGRÉ AU COMMIT `29316d7521accfe46316cb2bc6dfcf7652ba04bf`.** La migration `0007_multi_decision_cycles` conserve plusieurs décisions, évaluations Risk et intentions d'exécution dans leur ordre.
+La méthode manuelle `run_cycle()` n'est pas remplacée. Le moteur schedulé opte explicitement pour son utilisation pendant l'attente autonome ; le runner sérialise les cycles afin qu'un appel manuel ne chevauche jamais un cycle automatique.
 
-## ADR-269 — Le schéma Structured Outputs encode le contrat action/quantité
+## ADR-289 — Le timeframe de décision est un trigger, pas un nouveau contexte stratégique
 
-**ADOPTÉ ET INTÉGRÉ AU COMMIT `aa404e46c1f05269ac2279507aa746b3af7a965d`.** `BUY`/`SELL` imposent une quantité strictement positive et `HOLD` impose `null`.
+**ADOPTÉ DANS LE PATCH BATCH 37 — À INTÉGRER.**
 
-## ADR-270 — Le nouveau chemin reçoit un contrat protégé multi-marchés explicite
+La bougie de décision ne remplace pas `StrategicMultiTimeframeContextService`. Le scheduler réutilise `CandleStreamService` uniquement pour l'alignement/finalité. L'Agent reçoit toujours le contexte multi-timeframes canonique du style avec les garanties de causalité existantes.
 
-**ADOPTÉ ET INTÉGRÉ AU COMMIT `aa404e46c1f05269ac2279507aa746b3af7a965d`.** `StrategyInstructionsClient` injecte `strategic-multi-market-plan-v1`. Le singleton historique reste disponible pour legacy/replay.
+Aucun second cache OHLC, aucun indicateur de direction et aucun ranking technique ne sont introduits.
 
-## ADR-271 — Garde-fou SPOT-only du runtime
+## ADR-290 — Discovery conserve sa cadence et son orchestration actuelles
 
-**INTÉGRÉ PAR ERREUR DANS `aa404e4` — SUPERSEDÉ PAR ADR-273.** La restriction contredisait le support dérivés canonique.
+**ADOPTÉ DANS LE PATCH BATCH 37 — À INTÉGRER.**
 
-## ADR-272 — Les erreurs de plan sont diagnostiquées sans sortie brute
+`watchlist_refresh_seconds` reste distinct de la cadence stratégique. `refresh_if_due()` continue d'être évalué lors du passage du cycle dynamique. Aucun scheduler Discovery séparé n'est créé dans ce batch.
 
-**ADOPTÉ ET INTÉGRÉ AU COMMIT `aa404e46c1f05269ac2279507aa746b3af7a965d`.** Les erreurs de contrat sont catégorisées sans persister la sortie LLM brute ; aucun retry sémantique n'est ajouté.
+Conséquence UX : une clôture 5m signifie « un cycle stratégique peut démarrer après cette clôture », pas « exactement un seul appel fournisseur toutes les cinq minutes ».
 
-## ADR-273 — Les Sessions PAPER supportent SPOT et PERPETUAL ; FUTURE reste interdit
+## Points explicitement non décidés
 
-**ADOPTÉ ET INTÉGRÉ AU COMMIT `b4f1e50f22164c7d019d11d930485733c01c6711`.** Le garde-fou SPOT-only est retiré. Les marchés `SPOT` et `PERPETUAL` linéaires restent soumis au pipeline Agent -> Risk -> Broker PAPER. `FUTURE` daté reste refusé.
-
-## ADR-274 — L'inspection LLM se fait à la frontière canonique OpenAI
-
-**ADOPTÉ ET INTÉGRÉ AU COMMIT `7846d892d2c4b3aea3fb7ca628d5976639eac0c0`.**
-
-`OpenAIResponsesClient` capture en best-effort le dictionnaire exact utilisé comme body JSON de chaque appel Responses API réussi. La trace expose `instructions`, `input`, Structured Output, tools, `parallel_tool_calls`, `store`, output fournisseur et texte final lorsqu'il existe. Les headers HTTP, la clé OpenAI, les chaînes de connexion et secrets ne sont jamais ajoutés au record.
-
-Les tool loops sont représentées par plusieurs records ordonnés. La corrélation cycle/discovery est inférée des inputs canoniques ; le chat ajoute `session_id` via un `ContextVar` asynchrone sans modifier le prompt transmis. La rétention est bornée en mémoire et une exception de l'audit ne peut pas faire échouer le moteur.
-
-## ADR-275 — Les marks PAPER sont rafraîchis avant le premier cycle
-
-**ADOPTÉ ET INTÉGRÉ AU COMMIT `5fdd9a32bce45deda30c652b6b6f8c59e4996559`.**
-
-Les moniteurs SPOT et PERPETUAL terminent un premier `refresh_once()` avant de rendre le runtime initialisé. Une erreur de refresh ne fabrique aucune valorisation : le portefeuille reste incomplet et Capacity/Risk conservent leur comportement fail-closed.
-
-## ADR-276 — L'agressivité ne détermine pas une quantité maximale
-
-**ADOPTÉ ET INTÉGRÉ AU COMMIT `282267b1f491bb07b2644f6b9c5dca01c539697f`.**
-
-Les instructions stratégiques canoniques des Sessions/Campaigns ne contiennent plus la cible expérimentale `+4 %/jour`. Cette cible demeure documentée au niveau projet et reste explicitement non garantie.
-
-À ce commit, le mapping LLM courant `aggressiveness-map-v2` supprimait les formulations de quantité maximale et conservait une progression de posture. Il est ensuite supersédé pour les Campaigns courantes par `aggressiveness-map-v3` via ADR-277. Le mapping durable `aggressiveness-map-v1` reste conservé à l'identique pour les manifests/replays.
-
-Le `AGENT_SYSTEM_PROMPT` historique `agent-strategy-v4` reste figé pour les protocoles v1/v2/v3 et leurs replays ; le recalibrage porte sur les instructions courantes composées par `StrategyInstructionsClient`.
-
-## ADR-277 — L'Agent optimise la qualité économique nette, pas le turnover
-
-**ADOPTÉ ET INTÉGRÉ AU COMMIT `463850d8281faebe86a6ee733d58781c349015d0`.**
-
-Motivation expérimentale : une session PAPER réelle d'environ 9 h, partie de `100`, a produit environ `+0,727` de P&L brut mais `-2,287` net, avec une equity finale d'environ `97,713`, `1 246` fills et des coûts importants. Cette observation montre qu'un turnover élevé peut annuler un avantage brut faible ; elle ne prouve pas la performance générale de la stratégie.
-
-Décision :
-
-- rendre explicite l'objectif de progression de l'equity **nette après coûts** ;
-- considérer frais, spread, slippage et funding lorsqu'il est disponible dans les faits fournis ;
-- raisonner en allocation et coût d'opportunité entre cash, positions existantes et nouvelles opportunités ;
-- considérer `HOLD`, cash et conservation d'une position comme des allocations valides ;
-- rappeler qu'une rotation cumule plusieurs coûts d'exécution ;
-- interdire l'interprétation « faible conviction -> petite position pour essayer » ;
-- faire évoluer le mapping LLM courant vers `aggressiveness-map-v3`, où l'agressivité augmente l'initiative sur les opportunités convaincantes mais n'impose ni turnover, ni micro-trades, ni fréquence minimale ;
-- ne créer aucun seuil de profit, cooldown, durée minimale, quota de trades, score algorithmique ou garantie de rendement ;
-- ne modifier ni Risk, ni Broker, ni planner, ni `AGENT_SYSTEM_PROMPT`, ni `aggressiveness-map-v1` historique.
-
-Validation locale du commit : tests ciblés `47/47` passés ; suite backend complète `pytest -q` passée à `100 %` sans échec. Deux avertissements de dépréciation Starlette/AnyIO restent hors périmètre.
-
-### Audit SELL / SHORT PERPETUAL associé
-
-Classification :
-
-- **confirmé** : le mapping BUY/SELL PERPETUAL, le planner, la sélection multi-marchés et Risk sont directionnellement symétriques ; aucune cause centrale ne favorise explicitement SHORT ;
-- **confirmé** : `aggressiveness-map-v2` augmentait explicitement rotation/fréquence potentielle aux niveaux élevés, facteur plausible de turnover global mais pas de biais SHORT démontré ;
-- **confirmé** : le texte générique de gestion utilisait « signal automatique de vente », asymétrique pour la réduction d'un SHORT ; le recalibrage neutralise la formulation et rappelle `SELL` réduit LONG / `BUY` réduit SHORT ;
-- **corrigé** : objectif net-equity, coûts de rotation et coût d'opportunité explicites ;
-- **à décider** : existence d'un biais SHORT persistant du modèle sur plusieurs sessions comparables.
-
-Aucun quota LONG/SHORT ni contre-biais déterministe n'est introduit.
-
-## ADR-278 — L'historique économique est une projection, pas une seconde comptabilité
-
-**ADOPTÉ ET INTÉGRÉ AU COMMIT `b46f463c474e25a38da7ddcaebf588753922031b`.**
-
-Le cockpit doit pouvoir expliquer un run de plusieurs heures sans reconstruire manuellement des centaines de cycles. La solution retenue réutilise exclusivement les faits persistés et les analytics canoniques :
-
-- `PaperAnalyticsReport` reste source de vérité pour equity, P&L brut/net, drawdown, exposition, frais, spread, slippage et funding ;
-- les opérations économiques sont projetées depuis les fills économiquement engagés et les snapshots de portefeuille avant/après ;
-- les fills d'un cycle `FAILED` restent auditables mais sont exclus de la projection économique, conformément à l'atomicité PAPER ;
-- `Fill.realized_pnl` est réutilisé directement ; aucun P&L réalisé n'est recalculé parallèlement ;
-- le turnover est défini comme `total_notional / initial_equity` ;
-- les coûts totaux sont définis comme `fees + spread + slippage - funding_pnl`, en conservant la convention de signe canonique du funding ;
-- l'effet d'un BUY/SELL PERPETUAL est déduit de la position signée avant/après, afin de distinguer ouverture, augmentation, réduction, clôture et flip LONG/SHORT ;
-- le frontend filtre et affiche les valeurs fournies par le backend, sans recalcul financier.
-
-La Session reste une façade : le cockpit associe Session -> Campaign -> têtes de lineage PAPER existantes, puis sélectionne explicitement le run économique à afficher. Aucune table Session, aucun ledger et aucune migration SQL ne sont ajoutés.
-
-## ADR-279 — Les prompts courants reçoivent une Trading Reasoning Doctrine qualitative
-
-**ADOPTÉ ET INTÉGRÉ AU COMMIT `d011faa98e7e347875186f12cb24b5e7041aa25c`.**
-
-La doctrine `trading-reasoning-doctrine-v1` est une section canonique concise qui guide la façon dont le LLM construit une thèse à partir des faits disponibles. Elle couvre régime/structure, cohérence multi-timeframe, momentum/volatilité, qualité breakout/pullback lorsque les données le permettent, comparaison cash/positions/opportunités, coûts et invalidation de la thèse.
-
-Décision :
-
-- centraliser le texte dans `TRADING_REASONING_DOCTRINE` ;
-- l'injecter une seule fois dans le chemin singleton Campaign courant et une seule fois dans `strategic-multi-market-plan-v1` ;
-- ne pas l'injecter dans `market-discovery-v1`, qui construit une watchlist et ne produit pas la décision finale `BUY`/`SELL`/`HOLD` ;
-- laisser `AGENT_SYSTEM_PROMPT` `agent-strategy-v4` strictement inchangé ;
-- conserver `aggressiveness-map-v1` historique et `aggressiveness-map-v3` courant ;
-- conserver le recalibrage net/cost-aware ;
-- ne créer aucun seuil RSI/MACD, règle BUY/SELL mécanique, score, stop, take-profit, timer, quota de trades ou quota LONG/SHORT ;
-- ne modifier ni Risk, ni Broker, ni planner.
-
-L'invalidation d'une thèse est explicitement un concept de raisonnement stratégique et non un ordre automatique de sortie. `HOLD` ou conserver du cash restent des décisions valides lorsque les faits ne soutiennent pas une thèse suffisamment convaincante après coûts.
-
-## ADR-280 — Market Attention Radar v1 est observationnel et séparé du trading
-
-**ADOPTÉ ET INTÉGRÉ.**
-
-Le Radar possède ses propres modèles, cadence, cache et API read-only. Il ne modifie ni `CycleDecisionPlan`, ni prompts stratégiques, ni Market Discovery, ni Risk, ni Broker. Sa shortlist signifie seulement « marchés présentant une attention/activité inhabituelle à examiner ».
-
-Aucune donnée Radar n'est fournie à l'Agent stratégique dans la v1.
-
-## ADR-281 — L'activité marché réutilise les candles canoniques et privilégie le volume relatif
-
-**ADOPTÉ ET INTÉGRÉ.**
-
-Le Radar réutilise `CandleStreamService` et les volumes déjà présents dans les candles Kraken. Il ne crée aucune seconde pipeline OHLCV.
-
-Les fenêtres retenues pour v1 sont `5m`, `15m`, `1h`, `4h`, calculées à partir des candles `5m` finalisées. Les facts incluent volume courant, précédent comparable, baseline médiane, ratio, changement, accélération, rendement, range, volatilité réalisée, nombre d'observations et fraîcheur.
-
-Le tri d'attention utilise le caractère relatif/inhabituel ; le volume absolu d'un gros actif n'est pas un critère d'intérêt en soi.
-
-## ADR-282 — La recherche publique utilise hosted web_search sans API sociale dédiée
-
-**ADOPTÉ ET INTÉGRÉ.**
-
-La v1 n'introduit aucune API X/Twitter, Reddit, LunarCrush ou Google Trends, aucune clé dédiée et aucun scraper généraliste.
-
-`OpenAIWebAttentionResearcher` est un adaptateur Responses API séparé du client stratégique. Il utilise :
-
-- `tools: [{"type": "web_search"}]` ;
-- Structured Output strict `public_attention_v1` via `text.format` ;
-- `store=false` ;
-- `include=["web_search_call.action.sources"]` ;
-- retry borné ;
-- parsing des citations/sources fournisseur ;
-- rejet comme source canonique d'une URL uniquement inventée dans le JSON structuré si elle n'est pas aussi exposée par les métadonnées de recherche web.
-
-Le prompt auxiliaire interdit explicitement BUY/SELL/HOLD, recommandation, LONG/SHORT, taille et probabilité de hausse/baisse.
-
-## ADR-283 — La recherche web est bornée, cachée, dédupliquée et fail-soft
-
-**ADOPTÉ ET INTÉGRÉ.**
-
-Le scanner tourne indépendamment du cycle stratégique. Le catalogue et les résultats ont des TTL. Le scan Kraken est borné par batch avec rotation ; la shortlist marché est bornée à 30 ; les recherches web sont bornées à 30 et valent 8 par défaut. Un même actif SPOT/PERPETUAL partage une recherche publique afin d'éviter les appels redondants.
-
-Un timeout, 429/5xx ou autre erreur OpenAI dégrade `public_attention` en `ERROR/PARTIAL` mais ne propage aucune exception vers monitoring, cycle stratégique, Risk ou Broker.
-
-## ADR-284 — La v1 historise uniquement les snapshots agrégés en mémoire
-
-**ADOPTÉ ET INTÉGRÉ.**
-
-Aucune migration PostgreSQL n'est ajoutée. Le Radar garde un historique process-local borné d'agrégats et sources. Il ne persiste ni candles dupliquées, ni copies de pages, ni posts Reddit/X, ni résultats de recherche bruts, ni prompts massifs.
-
-Cette solution permet d'observer l'utilité et le coût réel du Radar avant de figer un schéma durable. La contrepartie explicite est la perte de l'historique Radar au redémarrage ; une persistence durable reste **à décider**.
-
-## SCALP — audit de fraîcheur associé
-
-Aucun changement de politique dans ce batch. `RiskEngine` / `SequentialCycleRiskEngine` possèdent déjà les rejets `MARKET_FRESHNESS_UNAVAILABLE` et `MARKET_DATA_STALE`. `kraken_stale_after_seconds` est toujours optionnel et vaut `None` par défaut. Au HEAD audité, `campaign_composition.py` ne renseigne pas `RiskPolicy.stale_after`, donc le rejet stale Risk n'est pas activé par défaut dans les Campaigns courantes.
-
-Un durcissement SCALP éventuel doit être traité séparément après mesure de la latence `MarketState -> LLM -> Risk`, afin de choisir un seuil fondé sur la distribution réelle des latences.
-
-## Changelog — 2026-09-28 — Batch 30 robustesse Market Activity Radar (patch livré)
-
-- base GitHub auditée : `354e8cf083b2c45233c45e019bdaa7f4bf6b1d96` (`feat: improve market attention observability`) ;
-- contrat SPOT Kraken pris en compte explicitement : les intervalles OHLC absents, lorsqu'ils sont encadrés par une fenêtre effectivement couverte, peuvent compter comme volume nul sans candle OHLC synthétique ;
-- historique PERPETUAL du provider canonique basculé de candles `mark` vers candles `trade` avec fenêtre `from/to`, afin que le ratio d'activité repose sur le volume réellement échangé ;
-- diagnostic borné ajouté par type d'erreur et par `SPOT/PERPETUAL`, avec qualité de données `COMPLETE / NO_TRADE_GAPS / INSUFFICIENT_HISTORY / DISCONTINUOUS_HISTORY / TECHNICAL_ERROR` ;
-- vrais échecs fournisseur/transport/mapping restent `ERROR`; données insuffisantes ou discontinuités non justifiées restent `PARTIAL` ;
-- seuils `1.40 / 1.75 / 2.50`, Agent, Market Discovery, Risk, Broker, persistence et budget web inchangés ;
-- diagnostics exclus du chemin candidat et de toute recherche web ;
-- cockpit enrichi de façon compacte avec ventilation marché et catégories d'erreur ;
-- tests isolés exécutés par ChatGPT : backend robustesse activité `8/8`, backend provider PERPETUAL `3/3`, frontend mapping `7/7`, plus compilation Python des fichiers modifiés ;
-- validation locale utilisateur : suite backend complète `pytest -q` passée à `100 %`, frontend `46/46`, `pnpm lint`, `pnpm typecheck`, `pnpm build` et `git diff --check` passés ; seuls restent des avertissements de dépréciation Python, Node `MODULE_TYPELESS_PACKAGE_JSON` et LF -> CRLF non bloquants ;
-- validation fonctionnelle runtime du Radar à poursuivre sur plusieurs rotations pour mesurer la répartition réelle des erreurs et la couverture `AVAILABLE`.
-
-## Changelog — 2026-09-28 — Market Attention Radar v1 (patch proposé)
-
-- resynchronisation GitHub confirmée sur `d011faa98e7e347875186f12cb24b5e7041aa25c` ;
-- correction de la dérive de `docs/00_ETAT_ACTUEL.md` qui mentionnait encore `b46f463c` ;
-- nouveau domaine `market/attention.py` : modèles stricts, calculs 5m/15m/1h/4h, cache/TTL, shortlist d'attention, états dégradés et historique borné ;
-- nouveau catalogue Kraken read-only SPOT + PERPETUAL linéaire ;
-- nouvel adaptateur OpenAI Responses API + hosted `web_search`, Structured Output et sources/citations ;
-- nouveaux endpoints read-only `/api/v1/market-attention` et `/history` ;
-- intégration lifecycle FastAPI indépendante des Campaigns ;
-- nouveau panneau cockpit global `Market Attention`, sources cliquables et badge `INFORMATIF — N’INFLUENCE PAS LE TRADING` ;
-- aucun changement Agent/Risk/Broker/Market Discovery ;
-- aucune migration SQL ;
-- compilation Python runtime : succès ;
-- harness backend isolé : PASS ;
-- test frontend Radar isolé : `3/3` passés ;
-- suites complètes backend/frontend : à exécuter localement.
-
-## Changelog — 2026-09-28 — Trading Reasoning Doctrine v1 intégrée
-
-- commit `d011faa98e7e347875186f12cb24b5e7041aa25c` (`feat: add trading reasoning doctrine`) ;
-- doctrine qualitative centralisée ;
-- injection singleton courant + plan multi-marchés ;
-- discovery laissée volontairement sans doctrine finale ;
-- `AGENT_SYSTEM_PROMPT` historique et mappings d'agressivité préservés ;
-- SPOT/PERPETUAL, HOLD, net-cost-aware et autorité Risk préservés ;
-- aucun signal mécanique, scoring, quota ou changement Risk/Broker/planner.
-
-## Changelog — 2026-09-28 — Correctif Market Attention Radar v1
-
-Validation locale du premier ZIP Radar : frontend `42/42`, typecheck et build passés ; un échec backend de statut insuffisant/stale et une erreur ESLint React dans le dock restaient.
-
-Correctif :
-
-- un snapshot Market Activity n'est `AVAILABLE` que si les quatre horizons `5m/15m/1h/4h` sont complets ;
-- une couverture incomplète reste `PARTIAL` sans fausse statistique ;
-- `STALE` qualifie un snapshot complet dont la donnée la plus récente dépasse le seuil ;
-- le test insuffisant utilise une tranche récente ;
-- le refresh initial du cockpit est déclenché par l'événement d'ouverture et non plus synchroniquement dans `useEffect` ;
-- aucun changement Agent, Risk, Broker, Market Discovery, ordre ou stratégie.
-
-Revalidation ChatGPT du correctif : `py_compile` succès, harness Radar PASS avec distinction `PARTIAL` frais / `STALE` complet, test frontend isolé `3/3` passé. Rerun complet local requis après extraction du ZIP correctif.
-
-## Changelog — 2026-09-28 — Batch 25 historique économique Session/run
-
-- base GitHub avant intégration : `59f92938bf5159004783ae004fe99c808cb2c8c2` ;
-- intégration GitHub : `b46f463c474e25a38da7ddcaebf588753922031b` ;
-- projection économique en lecture seule ajoutée au-dessus d'analytics + audit existants ;
-- nouveaux endpoints `GET /api/v1/economic-history` et `/api/v1/economic-history/export` ;
-- distinction explicite `trade_count` / `fill_count` / décisions ;
-- turnover, coûts/notional, coûts/equity, fills/heure et rotation entre marchés ajoutés ;
-- classification PERPETUAL fondée sur la position avant/après, sans hypothèse `SELL = clôture` ;
-- écran Historique orienté Session/run avec filtres action/marché/type et export JSON ;
-- aucun changement Agent, prompt, `aggressiveness-map-v3`, Risk, Broker, cadence ou coûts ;
-- aucune migration SQL ;
-- validation locale finale documentée : backend ciblé `11/11`, suite backend complète à `100 %`, frontend `39/39`, `pnpm lint` passé et `pnpm typecheck` passé.
-
-## Changelog — 2026-09-28 — Recalibrage net/cost-aware intégré
-
-- commit `463850d8281faebe86a6ee733d58781c349015d0` (`refactor: make strategic agent cost aware`) ;
-- base précédente : `282267b1f491bb07b2644f6b9c5dca01c539697f` ;
-- objectif courant : equity nette après coûts, pas activité brute ;
-- allocation cash / positions / nouvelles opportunités explicitée ;
-- coûts de rotation explicités sans seuil algorithmique ;
-- `aggressiveness-map-v3` courant, mapping v1 historique intact ;
-- formulation de management PERPETUAL rendue directionnellement neutre ;
-- aucune modification Risk/Broker/planner ;
-- constat du run 9 h documenté comme observation expérimentale, non comme vérité générale ;
-- validation locale : tests ciblés `47/47`, suite backend complète `pytest -q` à `100 %` sans échec.
-
-## Changelog — 2026-09-27 — Recalibrage prompts intégré
-
-- commit `282267b1f491bb07b2644f6b9c5dca01c539697f` (`refactor: recalibrate strategic LLM prompts`) ;
-- suppression de `+4 %/jour` des contrats stratégiques courants ;
-- mapping agressivité courant `v2` sans biais de quantité maximale à cette étape ;
-- garde-fou explicite « 10/10 != max quantity » ;
-- qualité de thèse > fréquence ; `HOLD` conservé ;
-- `niveat=` corrigé via renderer partagé ;
-- règles SPOT/PERPETUAL/Risk/multi-décisions inchangées.
-
-## Changelog — 2026-09-27 — Correctif valorisation PAPER intégré
-
-- commit `5fdd9a32bce45deda30c652b6b6f8c59e4996559` (`fix: refresh paper marks before trading starts`) ;
-- premier refresh des marks avant démarrage effectif des cycles ;
-- fail-closed conservé si le refresh échoue.
-
-## Changelog — 2026-09-27 — Inspecteur LLM intégré
-
-- commit `7846d892d2c4b3aea3fb7ca628d5976639eac0c0` (`feat: add read-only LLM request inspector`) ;
-- instrumentation canonique : `OpenAIResponsesClient` ;
-- endpoint lecture seule : `GET /api/v1/llm-audit` ;
-- cockpit : Réglages -> Inspecteur LLM ;
-- rétention bornée et fail-open de l'observabilité.
-
-## Changelog — 2026-09-27 — Correctif PERPETUAL intégré
-
-- commit `b4f1e50f22164c7d019d11d930485733c01c6711` (`fix: restore paper perpetual session support`) ;
-- retrait du garde-fou SPOT-only erroné ;
-- SPOT + PERPETUAL linéaire PAPER restaurés ;
-- FUTURE daté reste interdit.
-
-## Changelog — 2026-09-27 — Durcissement multi-market LLM intégré
-
-- commit `aa404e46c1f05269ac2279507aa746b3af7a965d` (`fix: harden multi-market LLM plan contract`) ;
-- Structured Outputs strict ;
-- contrat protégé `strategic-multi-market-plan-v1` ;
-- diagnostic Agent sécurisé ;
-- aucun retry LLM sémantique.
-
-## Changelog — 2026-09-27 — Batch 19.13 intégré
-
-- commit `29316d7521accfe46316cb2bc6dfcf7652ba04bf` ;
-- plan ordonné multi-marchés, multi-`BUY` / `SELL` / `HOLD` ;
-- Risk séquentiel et causal ;
-- rollback PAPER atomique ;
-- persistence 1:N et migration `0007_multi_decision_cycles` ;
-- analytics basés sur fills/trades réels.
-
-## Changelog — 2026-09-28 — Batch 32 Market Attention Balanced Coverage
-
-- base GitHub auditée : `1850ff8783d0d29a5dd6628bdf1e9bb11a08ca63` (`feat: add robust market attention liquidity context`) ;
-- Batch 30 + Batch 31 confirmés intégrés dans cette base ;
-- remplacement du curseur global Market Attention par des curseurs indépendants `SPOT` / `PERPETUAL` ;
-- allocation de `scan_limit` proportionnelle aux populations, avec représentation minimale de chaque famille disponible et redistribution déterministe ;
-- rotation indépendante des ratios d'activité et sans starvation ;
-- ajout des diagnostics `scanned_market_type_counts` et `fresh_market_type_counts` dans l'overview/cockpit ;
-- libellé cockpit « Qualité structurelle » pour clarifier la distinction avec un `status=PARTIAL` ;
-- audit PERPETUAL : aucune normalisation USD activée, car l'unité de `Candle.volume` n'est pas reliée canoniquement au `contract_size` dans le pipeline Radar ;
-- notionnel SPOT/USD Batch 31, SPOT non USD `null`, régimes de liquidité et seuils d'activité inchangés ;
-- `candidate_limit=20` et `max_web_searches_per_refresh=8` inchangés ;
-- aucune influence Radar sur Agent, Market Discovery, Risk Engine, Broker, sizing ou ordres ;
-- Batch 32 validé localement puis intégré au commit `5a2d07b3fc5208475c1a136690da6648797efde9`.
-
-## ADR-285 — Le scan Market Attention est stratifié par type de marché
-
-**ADOPTÉ ET INTÉGRÉ AU COMMIT `5a2d07b3fc5208475c1a136690da6648797efde9`.**
-
-Le Radar conserve une rotation déterministe indépendante des résultats d'activité. `SPOT` et `PERPETUAL` disposent chacun d'un curseur propre. `scan_limit` est réparti proportionnellement aux populations disponibles, avec au moins une place par famille lorsque la capacité le permet et redistribution déterministe du reliquat.
-
-Cette décision évite qu'un tri groupé par `MarketType` monopolise un refresh et garantit l'absence de starvation sans introduire un quota arbitraire 50/50.
-
-## ADR-286 — Le notionnel PERPETUAL reste indisponible sans unité de volume canonique
-
-**ADOPTÉ ET INTÉGRÉ AU COMMIT `5a2d07b3fc5208475c1a136690da6648797efde9`.**
-
-Les candles Futures `trade` alimentent `Candle.volume`, mais le contrat canonique ne transporte ni unité de volume ni `contract_size`, et le Radar travaille sur `ExecutableMarket`. Une formule économique USD n'est donc pas démontrable avec les données actuellement transportées.
-
-Le Batch 32 conserve explicitement les champs notionnels PERPETUAL à `null` et `liquidity_regime=UNKNOWN`. Aucune multiplication `volume × close` ou conversion contractuelle implicite n'est introduite.
+- cadence accélérée lorsqu'une position est ouverte ;
+- réaction intra-bougie à un événement ;
+- utilisation de Market Attention comme contexte Agent ;
+- seuil de fraîcheur Risk spécifique au SCALP ;
+- LIVE.

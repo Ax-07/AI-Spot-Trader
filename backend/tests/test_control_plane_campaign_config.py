@@ -8,9 +8,17 @@ from pydantic import ValidationError
 from ai_spot_trader.control_plane import (
     CAMPAIGN_EXPERIMENT_PROTOCOL_VERSION,
     CampaignConfiguration,
+    StrategicSchedule,
     campaign_identity_digest,
 )
-from ai_spot_trader.domain.enums import LLMModel, MarginMode, MarketType
+from ai_spot_trader.domain.enums import (
+    LLMModel,
+    MarginMode,
+    MarketType,
+    TradingCadenceMode,
+    TradingStyle,
+)
+from ai_spot_trader.domain.experiments import TRADING_STYLE_MAPPING_VERSION
 from ai_spot_trader.domain.models import ExecutableMarket
 
 
@@ -55,6 +63,13 @@ def _perpetual_config() -> CampaignConfiguration:
     )
 
 
+def _style_fields(style: TradingStyle) -> dict[str, object]:
+    return {
+        "trading_style": style,
+        "trading_style_mapping_version": TRADING_STYLE_MAPPING_VERSION,
+    }
+
+
 def test_spot_configuration_digest_is_canonical_and_secret_free() -> None:
     left = _spot_config(risk_allowed_pairs=("BTC/USD", "ETH/USD"))
     right = _spot_config(risk_allowed_pairs=("ETH/USD", "BTC/USD"))
@@ -65,6 +80,21 @@ def test_spot_configuration_digest_is_canonical_and_secret_free() -> None:
     assert "api_key" not in encoded
     assert "database_url" not in encoded
     assert "password" not in encoded
+
+
+def test_legacy_configuration_omits_schedule_and_keeps_interval_semantics() -> None:
+    config = _spot_config()
+
+    assert config.effective_trading_cadence_mode is TradingCadenceMode.INTERVAL
+    assert config.decision_timeframe is None
+    assert "strategic_schedule" not in config.canonical_payload()
+
+    decoded = CampaignConfiguration.model_validate_json(
+        json.dumps(config.canonical_payload())
+    )
+    assert decoded == config
+    assert decoded.digest == config.digest
+    assert "strategic_schedule" not in decoded.canonical_payload()
 
 
 def test_campaign_configuration_accepts_json_market_type_values() -> None:
@@ -85,6 +115,84 @@ def test_campaign_configuration_json_market_type_adapter_stays_fail_closed() -> 
 
     with pytest.raises(ValidationError):
         CampaignConfiguration.model_validate_json(json.dumps(payload))
+
+
+def test_explicit_interval_schedule_roundtrips_without_decision_timeframe() -> None:
+    config = _spot_config(
+        strategic_schedule=StrategicSchedule(mode=TradingCadenceMode.INTERVAL)
+    )
+
+    assert config.effective_trading_cadence_mode is TradingCadenceMode.INTERVAL
+    assert config.decision_timeframe is None
+    assert config.canonical_payload()["strategic_schedule"] == {"mode": "INTERVAL"}
+
+    decoded = CampaignConfiguration.model_validate_json(
+        json.dumps(config.canonical_payload())
+    )
+    assert decoded == config
+    assert decoded.digest == config.digest
+
+
+@pytest.mark.parametrize(
+    ("style", "timeframe"),
+    [
+        (TradingStyle.SCALP, "1m"),
+        (TradingStyle.SCALP, "5m"),
+        (TradingStyle.SCALP, "15m"),
+        (TradingStyle.SCALP, "30m"),
+        (TradingStyle.SWING, "1h"),
+        (TradingStyle.SWING, "4h"),
+        (TradingStyle.SWING, "1d"),
+    ],
+)
+def test_candle_close_schedule_accepts_only_canonical_style_timeframes(
+    style: TradingStyle,
+    timeframe: str,
+) -> None:
+    config = _spot_config(
+        **_style_fields(style),
+        strategic_schedule={"mode": "CANDLE_CLOSE", "decision_timeframe": timeframe},
+    )
+
+    assert config.effective_trading_cadence_mode is TradingCadenceMode.CANDLE_CLOSE
+    assert config.decision_timeframe == timeframe
+    decoded = CampaignConfiguration.model_validate_json(
+        json.dumps(config.canonical_payload())
+    )
+    assert decoded == config
+    assert decoded.digest == config.digest
+
+
+def test_candle_close_requires_explicit_trading_style() -> None:
+    with pytest.raises(ValidationError, match="requires an explicit trading_style"):
+        _spot_config(
+            strategic_schedule={"mode": "CANDLE_CLOSE", "decision_timeframe": "5m"}
+        )
+
+
+@pytest.mark.parametrize(
+    ("style", "timeframe"),
+    [(TradingStyle.SCALP, "4h"), (TradingStyle.SWING, "5m")],
+)
+def test_candle_close_rejects_timeframe_outside_selected_style(
+    style: TradingStyle,
+    timeframe: str,
+) -> None:
+    with pytest.raises(ValidationError, match="decision_timeframe"):
+        _spot_config(
+            **_style_fields(style),
+            strategic_schedule={"mode": "CANDLE_CLOSE", "decision_timeframe": timeframe},
+        )
+
+
+def test_schedule_model_rejects_missing_or_extraneous_timeframe() -> None:
+    with pytest.raises(ValidationError, match="requires decision_timeframe"):
+        StrategicSchedule(mode=TradingCadenceMode.CANDLE_CLOSE)
+    with pytest.raises(ValidationError, match="cannot define decision_timeframe"):
+        StrategicSchedule(
+            mode=TradingCadenceMode.INTERVAL,
+            decision_timeframe="5m",
+        )
 
 
 def test_perpetual_configuration_captures_all_effective_risk_limits() -> None:
@@ -113,6 +221,11 @@ def test_perpetual_configuration_fails_closed_without_derivative_caps() -> None:
 def test_campaign_configuration_rejects_non_whitelisted_secret_fields() -> None:
     with pytest.raises(ValidationError):
         _spot_config(openai_api_key=None)
+
+
+def test_campaign_configuration_rejects_unknown_schedule_fields() -> None:
+    with pytest.raises(ValidationError):
+        _spot_config(strategic_schedule={"mode": "INTERVAL", "unknown": True})
 
 
 def test_campaign_v4_digest_is_sensitive_to_strategy_and_configuration() -> None:
