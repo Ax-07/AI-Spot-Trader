@@ -5,33 +5,35 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD réel  : 5bff583b47acf2b3a2a112611c40e0046c78cc3e
-Commit     : feat: make market attention radar kraken-only
+HEAD réel  : 2aaff09b01300008e63eaadbca242817bcb4ce28
+Commit     : docs: mark batch 39 as integrated
 ```
 
-État revérifié le 01/10/2026 après intégration du Batch 39. Les Batches 38 et 39 sont **intégrés** dans ce HEAD.
+État revérifié le 01/10/2026 au démarrage du Batch 40. Le commit applicatif principal du Batch 39 reste `5bff583b47acf2b3a2a112611c40e0046c78cc3e` (`feat: make market attention radar kraken-only`) ; `2aaff09` est le HEAD GitHub documentaire qui marque cette intégration.
 
-## Batch 39 — Radar Kraken sans IA/Web
+## Batch 40 — Microstructure Kraken
 
-**État : intégré sur `main`.**
+**État : patch proposé/local, non intégré tant que l'utilisateur ne l'a pas validé puis commit/push.**
 
-Le Batch 39 supprime complètement le chemin auxiliaire OpenAI/Web du Market Attention Radar et conserve uniquement l'analyse déterministe des données Kraken.
-
-Architecture intégrée :
+Le Batch 40 enrichit le Radar déterministe sans remplacer le pipeline OHLCV canonique :
 
 ```text
-Kraken
--> OHLCV 5m canonique finalisé
--> analyse 5m / 15m / 1h / 4h
--> volume / prix / range / volatilité / liquidité
--> caractéristiques déterministes
--> intérêt LOW / MEDIUM / HIGH / VERY_HIGH
--> shortlist diversifiée
--> observabilité read-only
+Kraken SPOT public
+├── CandleStreamService / OHLCV 5m finalisé
+├── REST /public/Trades borné
+└── REST /public/Depth L2 borné
+        ↓
+calculs déterministes
+        ↓
+spread / profondeur / déséquilibre
+intensité des trades / côté fournisseur si connu
+slippage théorique sans ordre
+        ↓
+Market Attention Radar v3
 ```
 
-Le contrat API est `market-attention-radar-v2`. Sont supprimés du contrat courant : Public Attention, recherche Web, cache/TTL/cooldown/budget Web et leurs compteurs. Le cockpit affiche directement les caractéristiques, raisons d'intérêt, régime de liquidité, fraîcheur/qualité des données et erreurs Kraken.
+Le Radar reste `informative_only=True`, sans appel OpenAI, sans recherche Web, sans dépendance Agent/Risk/Broker et sans construction ou envoi d'ordre. La microstructure nouvelle s'applique aux marchés SPOT ; le support PERPETUAL historique du Radar OHLCV n'est pas étendu par ce batch.
 
-Invariants : `informative_only=True`, aucune décision `BUY/SELL/HOLD`, aucun appel LLM/Web depuis le Radar, aucune dépendance vers Agent/Risk/Broker/Discovery, réutilisation du `CandleStreamService`, calculs uniquement sur bougies finalisées et non futures.
+Le contrat API proposé devient `market-attention-radar-v3`. Les données microstructure sont fail-soft : l'OHLCV valide reste disponible lorsqu'un carnet ou des trades sont indisponibles.
 
-Voir `docs/39_BATCH_RADAR_KRAKEN_SANS_IA.md`.
+Voir `docs/40_BATCH_MICROSTRUCTURE_KRAKEN.md`.

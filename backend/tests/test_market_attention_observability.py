@@ -79,7 +79,9 @@ def test_read_only_api_exposes_deterministic_observability_fields_only() -> None
     app.include_router(market_attention_router)
     with TestClient(app) as client:
         payload = client.get("/api/v1/market-attention").json()
-    assert payload["protocol_version"] == "market-attention-radar-v2"
+    assert payload["protocol_version"] == "market-attention-radar-v3"
     assert "activity_error_counts" in payload
     assert "activity_payload_stage_counts" in payload
+    assert "microstructure_status_counts" in payload
+    assert "microstructure_quality_counts" in payload
     assert not any("web" in key or "public_research" in key for key in payload)

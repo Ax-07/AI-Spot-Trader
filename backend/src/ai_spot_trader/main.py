@@ -33,8 +33,11 @@ from ai_spot_trader.core.runtime import (
 )
 from ai_spot_trader.integrations.kraken.attention import KrakenAttentionCatalogue
 from ai_spot_trader.integrations.kraken.candles import KrakenCandleProvider
+from ai_spot_trader.integrations.kraken.microstructure import KrakenSpotMicrostructureProvider
 from ai_spot_trader.market.attention import MarketAttentionPolicy, MarketAttentionRadar
+from ai_spot_trader.market.attention_microstructure import MicrostructureMarketAttentionRadar
 from ai_spot_trader.market.candles import CandleCache, CandleStreamService
+from ai_spot_trader.market.microstructure import MicrostructurePolicy
 from ai_spot_trader.persistence.analytics import (
     PaperAnalyticsReader,
     SqlAlchemyPaperAnalyticsQueryService,
@@ -100,14 +103,19 @@ def create_app(
         )
 
     def build_market_attention(candles: CandleStreamService) -> MarketAttentionRadar:
-        return MarketAttentionRadar(
+        return MicrostructureMarketAttentionRadar(
             candle_service=candles,
             catalogue=KrakenAttentionCatalogue(
                 spot_rest_url=resolved_settings.kraken_rest_url,
                 derivatives_rest_url=resolved_settings.kraken_derivatives_rest_url,
                 timeout_seconds=resolved_settings.kraken_rest_timeout_seconds,
             ),
+            microstructure_provider=KrakenSpotMicrostructureProvider(
+                resolved_settings.kraken_rest_url,
+                timeout_seconds=resolved_settings.kraken_rest_timeout_seconds,
+            ),
             policy=MarketAttentionPolicy(),
+            microstructure_policy=MicrostructurePolicy(),
         )
 
     @asynccontextmanager

@@ -11,71 +11,68 @@ Market Attention Radar reste strictement observationnel et ne prend aucune déci
 ## Référence courante
 
 ```text
-HEAD GitHub audité : 5bff583b47acf2b3a2a112611c40e0046c78cc3e
-Commit              : feat: make market attention radar kraken-only
-Batch 38            : intégré
+HEAD GitHub audité : 2aaff09b01300008e63eaadbca242817bcb4ce28
+Commit              : docs: mark batch 39 as integrated
 Batch 39            : intégré
+Batch 40            : patch proposé/local non intégré
 ```
 
-## Changelog — 2026-10-01 — Batch 39 Radar Kraken sans IA
+## Changelog — 2026-10-01 — Batch 40 Microstructure Kraken
 
-- correction de `docs/00_ETAT_ACTUEL.md`, qui pointait encore vers `c699e7c` et décrivait Batch 38 comme non intégré ;
-- conservation du pipeline canonique `CandleStreamService` / OHLCV 5m ;
-- conservation des horizons 5m / 15m / 1h / 4h et des caractéristiques Batch 38 ;
-- maintien du niveau d'intérêt déterministe `LOW/MEDIUM/HIGH/VERY_HIGH` ;
-- suppression du wiring OpenAI du Market Attention Radar ;
-- suppression du chemin de recherche publique, de son cache, TTL, cooldown et budget ;
-- suppression des décisions et compteurs de recherche Web du contrat API ;
-- passage du contrat Radar à `market-attention-radar-v2` ;
-- cockpit recentré sur intérêt, caractéristiques, raisons, liquidité, fraîcheur, qualité et erreurs Kraken ;
-- conservation de `informative_only=True` ;
-- aucune modification du Risk Engine, Broker, Agent stratégique ou politique d'exécution ;
-- trades Kraken et carnet L2 explicitement reportés au Batch 40.
+- ajout d'un lecteur REST public Kraken SPOT pour `/Depth` et `/Trades` ;
+- ajout d'un analyseur microstructure pur et déterministe ;
+- calcul meilleur bid/ask, mid, spread absolu/bps ;
+- calcul profondeur base/quote et bandes `±5/10/25/50 bps` ;
+- calcul déséquilibre bid/ask ;
+- calcul compte/volume/taille moyenne/médiane/cadence des trades ;
+- comparaison d'une fenêtre récente de 60 s à une baseline précédente de 240 s dans une fenêtre totale de 300 s ;
+- utilisation du côté fournisseur uniquement lorsqu'il est disponible ; aucune heuristique d'agresseur ;
+- slippage théorique pour `100/500/1000/5000` unités de devise cotée ;
+- sous-scan microstructure SPOT rotatif et borné à 24 marchés par refresh par défaut ;
+- cache microstructure fail-soft ;
+- nouveau contrat API `market-attention-radar-v3` ;
+- cockpit enrichi sans transformer le Radar en terminal d'exécution ;
+- aucune modification de l'Agent, du Risk Engine ou du Broker.
 
-## ADR-291 — Préfiltrage déterministe Batch 38
+## ADR-298 — Microstructure comme enrichissement, pas comme second Radar
 
-**INTÉGRÉ dans `2776fc6`.**
+**PROPOSÉ Batch 40.**
 
-Le Radar calcule des faits descriptifs Kraken avant toute éventuelle recherche externe. Les caractéristiques et le niveau d'intérêt ne sont pas des signaux de trading.
+`MicrostructureMarketAttentionRadar` réutilise `MarketAttentionRadar` Batch 39 et enrichit ses snapshots. Le pipeline OHLCV canonique n'est pas dupliqué.
 
-## ADR-292 — Politique Web Batch 38
+## ADR-299 — REST snapshots bornés avant streaming microstructure
 
-**HISTORIQUE — SUPPLANTÉ PAR ADR-295.**
+**PROPOSÉ Batch 40.**
 
-Le Batch 38 avait introduit budget, TTL et cooldown de recherche publique. Batch 39 supprime entièrement ce mécanisme du Radar.
+Le Batch 40 utilise les endpoints publics REST L2/trades avec limites et cache court. Aucun nouveau WebSocket complexe n'est introduit sans besoin mesuré.
 
-## ADR-293 — Isolation du Radar
+## ADR-300 — Unités de slippage explicites
 
-**ACTIF.**
+**PROPOSÉ Batch 40.**
 
-Le module Market Attention ne dépend pas d'Agent, Risk, Broker ou Market Discovery. `informative_only=True` reste un invariant de modèle.
+Les notionnels théoriques sont exprimés dans la devise cotée. Un marché `BTC/USD` utilise donc des USD ; un marché `BTC/EUR` utilise des EUR. Aucune conversion FX implicite n'est autorisée.
 
-## ADR-294 — Modèle auxiliaire Radar
+## ADR-301 — Côté Kraken sans inférence d'agresseur
 
-**CLOS / SANS OBJET.**
+**PROPOSÉ Batch 40.**
 
-La question d'un modèle OpenAI auxiliaire distinct n'a plus lieu d'être puisque le Radar v2 n'utilise plus de LLM.
+Le côté `b/s` fourni par Kraken peut alimenter une description acheteur/vendeur. Si la donnée est absente ou inconnue, les métriques directionnelles correspondantes restent `None`.
 
-## ADR-295 — Market Attention Radar v2 est Kraken-only et déterministe
+## ADR-302 — Microstructure additive et fail-soft
 
-**INTÉGRÉ dans `5bff583`.**
+**PROPOSÉ Batch 40.**
 
-Le Radar répond uniquement à la question : « quels marchés présentent actuellement un comportement suffisamment inhabituel ou intéressant pour mériter l'attention ? ». Il ne recherche plus d'explication narrative ou de news.
+Une indisponibilité du carnet ou des trades ne invalide pas l'OHLCV. Le statut/qualité microstructure est exposé séparément et ne déclenche Agent, Risk ou Broker.
 
-## ADR-296 — Suppression de la couche Public Attention
+## ADR-303 — Contrat API Radar v3
 
-**INTÉGRÉ dans `5bff583`.**
+**PROPOSÉ Batch 40.**
 
-`PublicAttentionResearcher`, `PublicAttentionSnapshot`, `PublicResearchDecision`, l'adaptateur OpenAI dédié et les métriques Web disparaissent du contrat courant. Aucun compteur artificiellement nul n'est conservé.
-
-## ADR-297 — Contrat API Radar v2
-
-**INTÉGRÉ dans `5bff583`.**
-
-Le protocole `market-attention-radar-v2` expose directement l'activité Kraken, les caractéristiques, l'intérêt, les raisons, la liquidité, la qualité/fraîcheur et les diagnostics. Une rupture de contrat explicite est préférée au maintien de champs trompeurs.
+`market-attention-radar-v3` ajoute spread, profondeur, déséquilibre, activité des trades, slippage, qualité/fraîcheur microstructure et diagnostics à la structure v2.
 
 ## Points explicitement non décidés
 
 - utilisation du Radar comme contexte de l'Agent stratégique ;
 - réaction stratégique intra-bougie ;
+- streaming WebSocket L2/trades ;
 - LIVE.

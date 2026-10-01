@@ -4,9 +4,12 @@ import test from "node:test";
 import {
   activityErrorEntries,
   attentionHorizon,
+  formatBps,
+  formatImbalance,
   formatSignedPercent,
   formatVolumeRatio,
   marketAttentionStatusMessage,
+  slippageEstimate,
 } from "./market-attention.ts";
 
 const item = {
@@ -28,6 +31,15 @@ const item = {
     data_quality: "COMPLETE",
     error_type: null,
   },
+  microstructure: {
+    slippage: [
+      { side: "BUY", notional_quote: "1000", slippage_bps: "4.2", insufficient_depth: false },
+      { side: "SELL", notional_quote: "1000", slippage_bps: "5.1", insufficient_depth: false },
+    ],
+  },
+  combined_characteristics: ["TRENDING", "TIGHT_SPREAD"],
+  interest_level: "HIGH",
+  interest_reasons: ["Volume inhabituel"],
 };
 
 const emptyActivityErrors = () => ({
@@ -45,7 +57,7 @@ const emptyActivityErrors = () => ({
 });
 
 const overview = (status, candidateCount = 0) => ({
-  protocol_version: "market-attention-radar-v2",
+  protocol_version: "market-attention-radar-v3",
   observed_at: "2026-10-01T10:00:00Z",
   status,
   informative_only: true,
@@ -65,6 +77,11 @@ const overview = (status, candidateCount = 0) => ({
     PERPETUAL: { AVAILABLE: 30, PARTIAL: 0, STALE: 0, ERROR: 0 },
   },
   liquidity_regime_counts: { UNKNOWN: 80, MICRO: 0, LOW: 0, MEDIUM: 0, HIGH: 0, VERY_HIGH: 0 },
+  microstructure_scanned_market_count: 12,
+  microstructure_cached_market_count: 30,
+  microstructure_status_counts: { AVAILABLE: 25, PARTIAL: 5, STALE: 0, ERROR: 0, NOT_APPLICABLE: 38 },
+  microstructure_quality_counts: { COMPLETE: 25, PARTIAL: 5, STALE: 0, TECHNICAL_ERROR: 0, NOT_APPLICABLE: 38 },
+  microstructure_error_counts: {},
   subthreshold_activity: [],
   shortlist: [],
   error_type: null,
@@ -75,10 +92,17 @@ test("reads requested deterministic horizons without inventing missing ones", ()
   assert.equal(attentionHorizon(item, "1h"), null);
 });
 
-test("formats descriptive ratios without trading semantics", () => {
+test("formats descriptive ratios and microstructure metrics", () => {
   assert.equal(formatVolumeRatio("2.8"), "2.80×");
   assert.equal(formatSignedPercent("0.031"), "+3.10 %");
+  assert.equal(formatBps("4.2"), "4.20 bps");
+  assert.equal(formatImbalance("0.25"), "+25.0 %");
   assert.equal(formatVolumeRatio(null), "—");
+});
+
+test("selects a theoretical slippage scenario without turning it into an order", () => {
+  assert.equal(slippageEstimate(item, "BUY", 1000)?.slippage_bps, "4.2");
+  assert.equal(slippageEstimate(item, "BUY", 500), null);
 });
 
 test("maps an operational empty shortlist to an explicit healthy message", () => {

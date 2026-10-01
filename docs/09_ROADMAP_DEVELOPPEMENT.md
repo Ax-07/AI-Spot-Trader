@@ -3,10 +3,10 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub réel          : 5bff583b47acf2b3a2a112611c40e0046c78cc3e
-Commit                    : feat: make market attention radar kraken-only
-Batch 38                  : intégré
+HEAD GitHub réel          : 2aaff09b01300008e63eaadbca242817bcb4ce28
+Commit                    : docs: mark batch 39 as integrated
 Batch 39                  : intégré
+Batch 40                  : patch proposé/local non intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -21,43 +21,29 @@ AI Spot Trader conserve un seul Agent IA stratégique, Kraken comme exchange ini
 2. cycle stratégique IA : `INTERVAL` ou `CANDLE_CLOSE` ;
 3. Market Discovery : cadence distincte ;
 4. streaming/caches marché : technique et déterministe ;
-5. Market Attention Radar : observation déterministe Kraken.
+5. Market Attention Radar : observation déterministe Kraken, avec cadence microstructure bornée distincte.
 
 ## État intégré jusqu'au Batch 39
 
-Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken, les caractéristiques structurelles et `LOW/MEDIUM/HIGH/VERY_HIGH`, tout en conservant encore une couche Web auxiliaire. Le Batch 39, intégré dans `5bff583`, a supprimé cette couche Web/IA pour rendre le Radar entièrement déterministe et basé sur les données Kraken.
-
-## Batch 39 — Radar 100 % Kraken, zéro IA/Web
-
-**État : intégré sur `main`.**
-
-Architecture courante :
-
-```text
-Kraken
--> OHLCV 5m canonique finalisé
--> analyse 5m / 15m / 1h / 4h
--> caractéristiques déterministes
--> intérêt déterministe
--> shortlist diversifiée
--> observabilité
-```
-
-Décisions intégrées :
-
-- suppression du wiring `OpenAIWebAttentionResearcher` du Radar ;
-- suppression du cache, TTL, cooldown, budget et décisions de recherche publique ;
-- suppression des champs API/UI correspondants ;
-- protocole API `market-attention-radar-v2` ;
-- maintien de `informative_only=True` ;
-- maintien du pipeline OHLC canonique et des calculs sur bougies finalisées ;
-- maintien du ranking et de la diversification par régime de liquidité ;
-- aucune dépendance Radar vers Agent/Risk/Broker/Discovery ;
-- zéro coût token du Radar.
+Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et les caractéristiques structurelles. Le Batch 39, intégré dans `5bff583` puis marqué intégré par `2aaff09`, a supprimé la couche Web/IA du Radar.
 
 ## Batch 40 — microstructure Kraken
 
-Batch dédié, volontairement séparé : trades Kraken, carnet L2, spread, profondeur, déséquilibre bid/ask, intensité des trades et slippage théorique. Ces éléments ne doivent pas être introduits rétroactivement dans le Batch 39.
+**État : patch proposé.**
+
+Objectif : enrichir le Radar avec trades publics SPOT récents et carnet L2 Kraken, puis calculer spread, profondeur, déséquilibre, intensité, pression fournisseur descriptive et slippage théorique, sans ordre et sans IA/Web.
+
+Architecture proposée :
+
+```text
+OHLCV Batch 39
++
+Depth/Trades Kraken SPOT bornés
+=
+Market Attention Radar v3
+```
+
+Invariants : cache court, sous-scan SPOT rotatif, fail-soft, aucune nouvelle clé privée, PERPETUAL historique non étendu, isolation Agent/Risk/Broker et `informative_only=True`.
 
 ## Périmètres ultérieurs possibles
 

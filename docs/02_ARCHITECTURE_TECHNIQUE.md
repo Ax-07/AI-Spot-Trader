@@ -5,9 +5,9 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD GitHub audité : 2776fc68fb0ff8c094148a246d22de844ee868c7
-Batch 38           : intégré
-Batch 39           : patch proposé/local non intégré
+HEAD GitHub audité : 2aaff09b01300008e63eaadbca242817bcb4ce28
+Batch 39           : intégré
+Batch 40           : patch proposé/local non intégré
 ```
 
 ## 2. Architecture générale
@@ -21,59 +21,76 @@ Next.js cockpit
         -> Risk Engine déterministe
         -> Paper Broker / Portfolio
 
-     -> Market Attention Radar v2 (observation uniquement)
-        -> catalogue Kraken
-        -> CandleStreamService partagé / OHLCV 5m canoniques
-        -> bougies finalisées uniquement
-        -> calcul déterministe 5m / 15m / 1h / 4h
-        -> activité / volume / prix / range / volatilité / liquidité
-        -> caractéristiques descriptives
-        -> intérêt LOW / MEDIUM / HIGH / VERY_HIGH
-        -> shortlist diversifiée
+     -> Market Attention Radar v3 (observation uniquement)
+        -> MarketAttentionRadar v2 canonique
+           -> catalogue Kraken
+           -> CandleStreamService partagé / OHLCV 5m canoniques
+        -> couche d'enrichissement microstructure SPOT
+           -> GET /0/public/Depth
+           -> GET /0/public/Trades
+           -> calculs déterministes bornés
+        -> shortlist enrichie
         -> API read-only /api/v1/market-attention
         -> zéro OpenAI / zéro recherche Web
         -> aucun lien vers Agent / Market Discovery / Risk / Broker
 ```
 
-Le frontend n'appartient jamais à la chaîne d'exécution. Fermer ou redémarrer le cockpit n'arrête ni le moteur backend ni les streams déjà ouverts.
+Le frontend n'appartient jamais à la chaîne d'exécution.
 
 ## 3. Données causales et candles
 
-`CandleStreamService` reste la source canonique partagée. Le Radar ne crée aucun second pipeline OHLC. `MarketActivityAnalyzer` ne retient que les candles `5m` correspondant au marché, explicitement finalisées et dont `close_time <= observed_at`.
+`CandleStreamService` reste la source OHLCV canonique partagée. `MarketActivityAnalyzer` ne retient que les candles `5m` finalisées dont `close_time <= observed_at`. Le Batch 40 ne duplique pas ce pipeline.
 
-Les horizons `15m`, `1h` et `4h` sont calculés à partir de cette base 5m. Les gaps restent explicitement qualifiés ; aucune interpolation de prix n'est inventée.
+## 4. Microstructure Kraken SPOT
 
-## 4. Caractéristiques déterministes
+`KrakenSpotMicrostructureProvider` étend le client REST public existant et réutilise la normalisation des erreurs transport/API. Deux endpoints publics sont utilisés :
 
-Le Radar peut produire : `TRENDING`, `VOLUME_ANOMALY`, `VOLATILITY_EXPANSION`, `BREAKOUT_WATCH`, `REVERSAL_WATCH`, `CONSOLIDATING`, `PRICE_VOLUME_DIVERGENCE`.
+- `/0/public/Depth` avec `assetVersion=1` et un nombre borné de niveaux ;
+- `/0/public/Trades` avec `assetVersion=1` et un nombre borné de trades.
 
-Ces caractéristiques et `RadarInterestLevel` sont descriptifs. Ils ne remplacent jamais le jugement de l'Agent stratégique et ne deviennent pas des ordres.
+`MarketMicrostructureAnalyzer` calcule sans I/O : meilleur bid/ask, mid, spread, profondeur base/quote, profondeur par bandes en bps, déséquilibre, cadence récente des trades, baseline, ratio d'activité, statistiques de taille, couverture du côté fournisseur et slippage théorique.
 
-## 5. Isolation de l'Agent
+Les niveaux L2 non ordonnés sont triés et les prix dupliqués agrégés. Les valeurs invalides restent des erreurs de payload ; aucune métrique n'est inventée.
 
-Le Radar n'est pas un deuxième Agent. Il ne possède aucun client LLM, aucune tool loop et aucune recherche Web. L'Agent stratégique reste le seul composant IA chargé de décider `BUY/SELL/HOLD` dans son propre cycle.
+## 5. Côté des trades
 
-## 6. Risk et exécution
+Le marqueur de côté fourni par Kraken est normalisé uniquement pour les valeurs connues `b/s`. Une valeur inconnue reste `None`. Les métriques `buy_volume_base`, `sell_volume_base` et `buy_sell_imbalance` ne sont calculées que lorsque **100 %** des trades de la fenêtre récente possèdent un côté fournisseur connu. Il n'existe aucune inférence d'agresseur par heuristique prix/tick.
 
-Aucun type du Radar n'est accepté directement par Risk ou Broker. Une erreur Radar n'interrompt jamais monitoring, cycle stratégique, Risk ou exécution PAPER.
+## 6. Slippage théorique
 
-## 7. API et cockpit
+Le calcul parcourt les asks pour une acquisition hypothétique et les bids pour une cession hypothétique. Il calcule VWAP, écart absolu/bps, volume base consommé, profondeur quote disponible et `insufficient_depth`.
 
-Endpoints read-only :
+Il n'appelle jamais Broker/Risk/Agent et ne construit aucun ordre. Les notionnels sont exprimés dans la devise cotée du marché.
 
-```text
-GET /api/v1/market-attention
-GET /api/v1/market-attention/history
-```
+## 7. Fail-soft
 
-Le contrat `market-attention-radar-v2` expose l'état, les volumes de scan, les candidats, l'activité, les caractéristiques, l'intérêt et ses raisons, la liquidité, la fraîcheur/qualité, les erreurs et étapes de payload Kraken ainsi que la shortlist.
+La microstructure est additive :
 
-Le cockpit ne présente plus de source publique, recherche IA, budget Web ou cache de recherche.
+- carnet indisponible + trades valides -> `PARTIAL` ;
+- trades indisponibles + carnet valide -> `PARTIAL` ;
+- deux sources indisponibles avec erreur -> `ERROR` microstructure ;
+- cache ancien -> `STALE` ;
+- PERPETUAL -> `NOT_APPLICABLE` pour la nouvelle couche ;
+- OHLCV valide conservé dans tous ces cas.
 
-## 8. Lifecycle
+## 8. Score et shortlist
 
-En composition PAPER, `MarketAttentionRadar` est possédé par le lifespan FastAPI. Il démarre après l'initialisation du runtime et se ferme avant le service candles partagé. Sa seule ressource externe propre est le catalogue Kraken ; aucun client OpenAI n'est construit pour lui.
+Le niveau Batch 39 reste la base. Une hausse forte d'intensité, un déséquilibre L2 ou une pression transactionnelle descriptive peuvent renforcer l'attention. Un spread large, une profondeur faible ou un slippage élevé peuvent réduire le rang d'intérêt d'un signal apparent. Aucune de ces règles n'émet une action stratégique.
 
-## 9. Hors périmètre Batch 39
+La diversification par régime de liquidité du Batch 39 est conservée.
 
-Trades Kraken, carnet L2, spread, profondeur, déséquilibre bid/ask, intensité des trades et slippage théorique sont réservés au Batch 40.
+## 9. Coût et cadence
+
+`MicrostructurePolicy` borne par défaut : 100 niveaux L2, 1 000 trades, 24 marchés SPOT par refresh, concurrence 4, refresh 300 s, TTL 900 s. Le sous-scan SPOT est rotatif. Le Radar n'interroge donc pas chaque endpoint pour chaque marché à chaque seconde.
+
+## 10. API et cockpit
+
+Le contrat `market-attention-radar-v3` ajoute les métriques microstructure et leurs diagnostics. Le cockpit affiche les mesures de manière descriptive et rappelle qu'elles sont informatives.
+
+## 11. Lifecycle
+
+`MicrostructureMarketAttentionRadar` est possédé par le lifespan FastAPI. Il ferme son client microstructure puis la couche Radar v2/catalogue ; le service candles partagé est fermé ensuite par le lifespan.
+
+## 12. Isolation
+
+Aucun module Batch 40 Market Attention n'importe Agent, Risk, Broker, OpenAI ou outil Web. Le Radar reste read-only et `informative_only=True`.

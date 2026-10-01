@@ -10,13 +10,19 @@ import {
   activityErrorEntries,
   attentionHorizon,
   fetchMarketAttention,
+  formatBps,
+  formatImbalance,
+  formatQuoteCompact,
+  formatRate,
   formatSignedPercent,
   formatUsdCompact,
   formatVolumeRatio,
   marketAttentionStatusMessage,
+  slippageEstimate,
   type LiquidityRegime,
   type MarketAttentionOverview,
   type MarketAttentionSnapshot,
+  type MicrostructureCharacteristic,
   type RadarInterestLevel,
   type RadarStatus,
 } from "@/lib/market-attention";
@@ -62,13 +68,33 @@ function shortTime(value: string | null | undefined) {
   }).format(parsed);
 }
 
+const MICRO_LABELS: Record<MicrostructureCharacteristic, string> = {
+  TIGHT_SPREAD: "Spread serré",
+  WIDE_SPREAD: "Spread large",
+  DEEP_LIQUIDITY: "Profondeur confortable",
+  THIN_LIQUIDITY: "Profondeur faible",
+  ORDER_BOOK_IMBALANCE: "Carnet déséquilibré",
+  TRADE_ACTIVITY_SURGE: "Trades en accélération",
+  TRADE_ACTIVITY_FADE: "Trades en ralentissement",
+  BUY_PRESSURE: "Pression côté acheteur",
+  SELL_PRESSURE: "Pression côté vendeur",
+  SLIPPAGE_RISK: "Risque de slippage",
+};
+
+function microLabel(value: string) {
+  return MICRO_LABELS[value as MicrostructureCharacteristic] ?? value.replaceAll("_", " ");
+}
+
 function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot; expanded: boolean; onToggle: () => void }) {
   const activity = item.market_activity;
+  const micro = item.microstructure;
   const h5 = attentionHorizon(item, "5m");
   const h15 = attentionHorizon(item, "15m");
   const h1 = attentionHorizon(item, "1h");
   const h4 = attentionHorizon(item, "4h");
   const priceMove = h15?.price_return ?? h5?.price_return ?? null;
+  const acquisition1k = slippageEstimate(item, "BUY", 1000);
+  const cession1k = slippageEstimate(item, "SELL", 1000);
 
   return (
     <div className="rounded-xl border bg-background/70">
@@ -78,44 +104,96 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
             <span className="font-semibold">{activity.market.symbol}</span>
             <Badge tone="neutral">{activity.market.market_type}</Badge>
             <Badge tone={liquidityTone(activity.liquidity_regime)}>{activity.liquidity_regime}</Badge>
-            <Badge tone={interestTone(activity.interest_level)}>{activity.interest_level}</Badge>
+            <Badge tone={interestTone(item.interest_level)}>{item.interest_level}</Badge>
           </div>
           <p className="mt-1 truncate text-[11px] text-muted-foreground">
-            {activity.characteristics.length ? activity.characteristics.join(" · ") : "Aucune caractéristique forte"}
+            {item.combined_characteristics.length ? item.combined_characteristics.map(microLabel).join(" · ") : "Aucune caractéristique forte"}
           </p>
         </div>
         <Fact label="Activité" value={activity.activity_state.replaceAll("_", " ")} />
         <Fact label="Vol. 5m" value={formatVolumeRatio(h5?.volume_ratio)} />
-        <Fact label="USD 5m" value={formatUsdCompact(h5?.current_notional_usd)} />
-        <Fact label="Δ USD 5m" value={formatUsdCompact(h5?.notional_delta_usd, { signed: true })} />
-        <Fact label="Vol. 15m" value={formatVolumeRatio(h15?.volume_ratio)} />
+        <Fact label="Spread" value={formatBps(micro.spread_bps)} />
+        <Fact label="Prof. L2" value={formatQuoteCompact(micro.total_depth_quote, micro.quote_asset)} />
+        <Fact label="Déséquilibre" value={formatImbalance(micro.book_imbalance)} />
+        <Fact label="Trades" value={formatRate(micro.trade_rate_per_minute)} />
         <Fact label="Prix" value={formatSignedPercent(priceMove)} />
-        <Fact label="Fraîcheur" value={freshness(activity.freshness_seconds)} />
       </button>
 
       {expanded ? (
         <div className="space-y-4 border-t px-3 py-4 text-xs">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <Fact label="Niveau d’intérêt" value={activity.interest_level} />
-            <Fact label="Qualité données" value={activity.data_quality} />
-            <Fact label="Fraîcheur Kraken" value={freshness(activity.freshness_seconds)} />
-            <Fact label="Référence liquidité" value={formatUsdCompact(activity.liquidity_reference_usd)} />
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+            <Fact label="Niveau d’intérêt" value={item.interest_level} />
+            <Fact label="Qualité OHLCV" value={activity.data_quality} />
+            <Fact label="Microstructure" value={`${micro.status} / ${micro.data_quality}`} />
+            <Fact label="Fraîcheur OHLCV" value={freshness(activity.freshness_seconds)} />
+            <Fact label="Fraîcheur micro" value={freshness(micro.freshness_seconds)} />
             <Fact label="Observation" value={shortTime(activity.observed_at)} />
           </div>
 
           <div className="rounded-lg border bg-muted/15 p-3">
             <p className="font-semibold">Pourquoi ce niveau d’intérêt ?</p>
-            {activity.interest_reasons.length ? (
+            {item.interest_reasons.length ? (
               <ul className="mt-2 list-disc space-y-1 pl-4 text-muted-foreground">
-                {activity.interest_reasons.map((reason) => <li key={reason}>{reason}</li>)}
+                {item.interest_reasons.map((reason) => <li key={reason}>{reason}</li>)}
               </ul>
             ) : <p className="mt-1 text-muted-foreground">Aucune raison pondérée supplémentaire.</p>}
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-lg border bg-muted/10 p-3">
+              <p className="font-semibold">Carnet L2</p>
+              <div className="mt-2 space-y-1.5">
+                <Fact label="Meilleur bid" value={micro.best_bid ?? "—"} />
+                <Fact label="Meilleur ask" value={micro.best_ask ?? "—"} />
+                <Fact label="Mid" value={micro.mid_price ?? "—"} />
+                <Fact label="Spread" value={formatBps(micro.spread_bps)} />
+                <Fact label="Profondeur bid" value={formatQuoteCompact(micro.bid_depth_quote, micro.quote_asset)} />
+                <Fact label="Profondeur ask" value={formatQuoteCompact(micro.ask_depth_quote, micro.quote_asset)} />
+                <Fact label="Déséquilibre" value={formatImbalance(micro.book_imbalance)} />
+              </div>
+            </div>
+
+            <div className="rounded-lg border bg-muted/10 p-3">
+              <p className="font-semibold">Trades récents</p>
+              <div className="mt-2 space-y-1.5">
+                <Fact label="Trades reçus" value={micro.trade_count === null ? "—" : String(micro.trade_count)} />
+                <Fact label="Cadence récente" value={formatRate(micro.trade_rate_per_minute)} />
+                <Fact label="Cadence de référence" value={formatRate(micro.baseline_trade_rate_per_minute)} />
+                <Fact label="Ratio activité" value={formatVolumeRatio(micro.trade_activity_ratio)} />
+                <Fact label="Couverture côté Kraken" value={formatSignedPercent(micro.provider_side_coverage)} />
+                <Fact label="Pression transactionnelle" value={formatImbalance(micro.buy_sell_imbalance)} />
+              </div>
+            </div>
+
+            <div className="rounded-lg border bg-muted/10 p-3">
+              <p className="font-semibold">Slippage théorique · 1 000 {micro.quote_asset ?? "devise cotée"}</p>
+              <div className="mt-2 space-y-1.5">
+                <Fact label="Acquisition" value={acquisition1k?.insufficient_depth ? "Profondeur insuffisante" : formatBps(acquisition1k?.slippage_bps)} />
+                <Fact label="Cession" value={cession1k?.insufficient_depth ? "Profondeur insuffisante" : formatBps(cession1k?.slippage_bps)} />
+                <Fact label="VWAP acquisition" value={acquisition1k?.estimated_vwap ?? "—"} />
+                <Fact label="VWAP cession" value={cession1k?.estimated_vwap ?? "—"} />
+              </div>
+              <p className="mt-2 text-[10px] text-muted-foreground">Calcul informatif par parcours du snapshot L2. Aucun ordre n’est construit ni envoyé.</p>
+            </div>
+
+            <div className="rounded-lg border bg-muted/10 p-3">
+              <p className="font-semibold">Profondeur proche du mid</p>
+              <div className="mt-2 space-y-1.5">
+                {micro.depth_bands.length ? micro.depth_bands.map((band) => (
+                  <Fact
+                    key={band.band_bps}
+                    label={`±${band.band_bps} bps`}
+                    value={`${formatQuoteCompact(band.bid_depth_quote, micro.quote_asset)} / ${formatQuoteCompact(band.ask_depth_quote, micro.quote_asset)}`}
+                  />
+                )) : <p className="text-muted-foreground">—</p>}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {[h5, h15, h1, h4].map((horizon, index) => (
               <div key={horizon?.timeframe ?? index} className="rounded-lg border bg-muted/10 p-3">
-                <p className="font-semibold">{horizon?.timeframe ?? "—"}</p>
+                <p className="font-semibold">OHLCV · {horizon?.timeframe ?? "—"}</p>
                 <div className="mt-2 space-y-1.5">
                   <Fact label="Volume relatif" value={formatVolumeRatio(horizon?.volume_ratio)} />
                   <Fact label="Variation prix" value={formatSignedPercent(horizon?.price_return)} />
@@ -127,8 +205,15 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
             ))}
           </div>
 
+          {micro.errors.length ? (
+            <div className="rounded-lg border bg-muted/10 p-3">
+              <p className="font-semibold">Diagnostic microstructure Kraken</p>
+              <p className="mt-1 text-muted-foreground">{micro.errors.join(" · ")}</p>
+            </div>
+          ) : null}
+
           <p className="rounded-lg border bg-muted/10 p-3 text-muted-foreground">
-            Radar déterministe Kraken uniquement. Ces éléments décrivent l’activité observée et ne constituent ni BUY, ni SELL, ni HOLD.
+            Radar déterministe Kraken uniquement. OHLCV, carnet L2 et trades récents décrivent l’activité observée ; ils ne constituent aucune instruction de trading.
           </p>
         </div>
       ) : null}
@@ -202,7 +287,7 @@ export function MarketAttentionDock() {
       {open ? <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setOpen(false)} aria-hidden="true" /> : null}
 
       {open ? (
-        <Card className="fixed bottom-20 right-3 z-50 max-h-[78vh] w-[min(96vw,1120px)] overflow-hidden shadow-2xl sm:right-5">
+        <Card className="fixed bottom-20 right-3 z-50 max-h-[78vh] w-[min(96vw,1180px)] overflow-hidden shadow-2xl sm:right-5">
           <CardHeader className="border-b">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -211,7 +296,7 @@ export function MarketAttentionDock() {
                   <span className="inline-flex"><Badge tone="info">INFORMATIF — N’INFLUENCE PAS LE TRADING</Badge></span>
                   {data ? <span className="inline-flex"><Badge tone={statusTone(data.status)}>État · {data.status}</Badge></span> : null}
                 </div>
-                <CardDescription className="mt-1">Données Kraken + calculs déterministes sur bougies finalisées 5m, analysées en 5m / 15m / 1h / 4h. Aucun appel IA, aucune recherche Web, aucun BUY/SELL/HOLD.</CardDescription>
+                <CardDescription className="mt-1">Données Kraken déterministes : OHLCV finalisé + snapshots SPOT de trades récents et carnet L2. Aucun appel IA, aucune recherche Web, aucune exécution.</CardDescription>
               </div>
               <div className="flex gap-1">
                 <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading} aria-label="Actualiser le radar">
@@ -225,29 +310,20 @@ export function MarketAttentionDock() {
             {error ? <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive-subtle p-3 text-xs text-destructive-subtle-foreground">{error}</div> : null}
             {data ? (
               <div className="space-y-4">
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
                   <Fact label="Catalogue" value={String(data.catalogue_market_count)} />
-                  <Fact label="Marchés frais" value={String(data.cached_activity_market_count)} />
-                  <Fact label="Scannés refresh" value={String(data.scanned_market_count)} />
+                  <Fact label="Marchés frais OHLCV" value={String(data.cached_activity_market_count)} />
+                  <Fact label="Scannés OHLCV" value={String(data.scanned_market_count)} />
+                  <Fact label="Scannés micro" value={String(data.microstructure_scanned_market_count)} />
+                  <Fact label="Cache micro" value={String(data.microstructure_cached_market_count)} />
                   <Fact label="Candidats" value={String(data.candidate_market_count)} />
-                </div>
-
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <div className="rounded-lg border bg-muted/10 px-3 py-2">
-                    <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Scan du refresh</p>
-                    <p className="mt-1 font-mono text-xs font-semibold tabular-nums">SPOT {data.scanned_market_type_counts.SPOT} · PERPETUAL {data.scanned_market_type_counts.PERPETUAL}</p>
-                  </div>
-                  <div className="rounded-lg border bg-muted/10 px-3 py-2">
-                    <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Couverture fraîche</p>
-                    <p className="mt-1 font-mono text-xs font-semibold tabular-nums">SPOT {data.fresh_market_type_counts.SPOT} · PERPETUAL {data.fresh_market_type_counts.PERPETUAL}</p>
-                  </div>
                 </div>
 
                 <div className="rounded-lg border bg-muted/10 px-3 py-2 text-xs font-medium">{marketAttentionStatusMessage(data)}</div>
 
-                <div className="grid gap-3 lg:grid-cols-3">
+                <div className="grid gap-3 lg:grid-cols-4">
                   <div className="rounded-lg border p-3">
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Données</p>
+                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">OHLCV</p>
                     <div className="grid grid-cols-2 gap-x-5 gap-y-1.5">
                       <CountLine label="AVAILABLE" value={data.activity_status_counts.AVAILABLE} />
                       <CountLine label="PARTIAL" value={data.activity_status_counts.PARTIAL} />
@@ -256,7 +332,17 @@ export function MarketAttentionDock() {
                     </div>
                   </div>
                   <div className="rounded-lg border p-3">
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Activité</p>
+                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Microstructure SPOT</p>
+                    <div className="grid grid-cols-2 gap-x-5 gap-y-1.5">
+                      <CountLine label="AVAILABLE" value={data.microstructure_status_counts.AVAILABLE} />
+                      <CountLine label="PARTIAL" value={data.microstructure_status_counts.PARTIAL} />
+                      <CountLine label="STALE" value={data.microstructure_status_counts.STALE} />
+                      <CountLine label="ERROR" value={data.microstructure_status_counts.ERROR} />
+                      <CountLine label="N/A" value={data.microstructure_status_counts.NOT_APPLICABLE} />
+                    </div>
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Activité OHLCV</p>
                     <div className="grid grid-cols-2 gap-x-5 gap-y-1.5">
                       <CountLine label="NORMAL" value={data.activity_state_counts.NORMAL} />
                       <CountLine label="ELEVATED" value={data.activity_state_counts.ELEVATED} />
@@ -266,47 +352,18 @@ export function MarketAttentionDock() {
                     </div>
                   </div>
                   <div className="rounded-lg border p-3">
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Liquidité USD</p>
-                    <div className="grid grid-cols-2 gap-x-5 gap-y-1.5">
-                      <CountLine label="MICRO" value={data.liquidity_regime_counts.MICRO} />
-                      <CountLine label="LOW" value={data.liquidity_regime_counts.LOW} />
-                      <CountLine label="MEDIUM" value={data.liquidity_regime_counts.MEDIUM} />
-                      <CountLine label="HIGH" value={data.liquidity_regime_counts.HIGH} />
-                      <CountLine label="VERY_HIGH" value={data.liquidity_regime_counts.VERY_HIGH} />
-                      <CountLine label="UNKNOWN" value={data.liquidity_regime_counts.UNKNOWN} />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid gap-3 lg:grid-cols-3">
-                  <div className="rounded-lg border p-3">
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Qualité structurelle</p>
-                    <div className="grid grid-cols-2 gap-x-5 gap-y-1.5">
-                      <CountLine label="COMPLETE" value={data.activity_data_quality_counts.COMPLETE} />
-                      <CountLine label="NO_TRADE_GAPS" value={data.activity_data_quality_counts.NO_TRADE_GAPS} />
-                      <CountLine label="INSUFFICIENT" value={data.activity_data_quality_counts.INSUFFICIENT_HISTORY} />
-                      <CountLine label="DISCONTINUOUS" value={data.activity_data_quality_counts.DISCONTINUOUS_HISTORY} />
-                      <CountLine label="TECHNICAL_ERROR" value={data.activity_data_quality_counts.TECHNICAL_ERROR} />
-                    </div>
-                  </div>
-                  <div className="rounded-lg border p-3">
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Par marché</p>
-                    <div className="space-y-2 font-mono text-[11px] tabular-nums">
-                      <div><span className="font-semibold">SPOT</span><p className="mt-0.5 text-muted-foreground">A {data.activity_market_type_status_counts.SPOT.AVAILABLE} · P {data.activity_market_type_status_counts.SPOT.PARTIAL} · S {data.activity_market_type_status_counts.SPOT.STALE} · E {data.activity_market_type_status_counts.SPOT.ERROR}</p></div>
-                      <div><span className="font-semibold">PERPETUAL</span><p className="mt-0.5 text-muted-foreground">A {data.activity_market_type_status_counts.PERPETUAL.AVAILABLE} · P {data.activity_market_type_status_counts.PERPETUAL.PARTIAL} · S {data.activity_market_type_status_counts.PERPETUAL.STALE} · E {data.activity_market_type_status_counts.PERPETUAL.ERROR}</p></div>
-                    </div>
-                  </div>
-                  <div className="rounded-lg border p-3">
                     <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Erreurs Kraken</p>
                     {activityErrorEntries(data.activity_error_counts).length ? (
                       <div className="space-y-1.5">{activityErrorEntries(data.activity_error_counts).map(([name, count]) => <CountLine key={name} label={name} value={count} />)}</div>
-                    ) : <p className="text-[11px] text-muted-foreground">Aucune erreur technique dans le cache frais.</p>}
+                    ) : Object.keys(data.microstructure_error_counts).length ? (
+                      <div className="space-y-1.5">{Object.entries(data.microstructure_error_counts).map(([name, count]) => <CountLine key={name} label={name} value={count} />)}</div>
+                    ) : <p className="text-[11px] text-muted-foreground">Aucune erreur technique dans les caches frais.</p>}
                   </div>
                 </div>
 
                 <div className="rounded-lg border p-3">
                   <div className="flex items-baseline justify-between gap-3">
-                    <p className="text-xs font-semibold">Plus fortes activités sous seuil</p>
+                    <p className="text-xs font-semibold">Plus fortes activités OHLCV sous seuil</p>
                     <p className="text-[10px] text-muted-foreground">Diagnostic déterministe uniquement</p>
                   </div>
                   {data.subthreshold_activity.length ? (
@@ -333,7 +390,7 @@ export function MarketAttentionDock() {
                     {loading ? "Construction du premier snapshot du radar…" : data.status === "NOT_CONFIGURED" ? "Radar non configuré." : "Aucun candidat d’attention disponible pour le moment."}
                   </div>
                 )}
-                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · classement déterministe avec diversification descriptive par régime de liquidité. Les montants USD sont affichés uniquement lorsqu’une normalisation fiable est disponible ; sinon « — ».</p>
+                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · classement déterministe enrichi par la microstructure SPOT. Les montants L2 sont exprimés dans la devise cotée du marché ; aucun taux de change n’est inventé.</p>
               </div>
             ) : <p className="text-sm text-muted-foreground">{loading ? "Chargement du radar…" : "Aucun snapshot chargé."}</p>}
           </CardContent>
