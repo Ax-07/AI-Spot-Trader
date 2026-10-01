@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, Radar, RefreshCw, X } from "lucide-react";
+import { Radar, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -9,7 +9,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import {
   activityErrorEntries,
   attentionHorizon,
-  citedPublicSources,
   fetchMarketAttention,
   formatSignedPercent,
   formatUsdCompact,
@@ -18,6 +17,7 @@ import {
   type LiquidityRegime,
   type MarketAttentionOverview,
   type MarketAttentionSnapshot,
+  type RadarInterestLevel,
   type RadarStatus,
 } from "@/lib/market-attention";
 
@@ -28,7 +28,8 @@ function statusTone(status: RadarStatus) {
   return "neutral" as const;
 }
 
-function attentionTone(level: MarketAttentionSnapshot["attention_level"]) {
+function interestTone(level: RadarInterestLevel) {
+  if (level === "VERY_HIGH") return "danger" as const;
   if (level === "HIGH") return "warning" as const;
   if (level === "MEDIUM") return "info" as const;
   return "neutral" as const;
@@ -62,88 +63,73 @@ function shortTime(value: string | null | undefined) {
 }
 
 function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot; expanded: boolean; onToggle: () => void }) {
+  const activity = item.market_activity;
   const h5 = attentionHorizon(item, "5m");
   const h15 = attentionHorizon(item, "15m");
   const h1 = attentionHorizon(item, "1h");
-  const sources = citedPublicSources(item);
+  const h4 = attentionHorizon(item, "4h");
   const priceMove = h15?.price_return ?? h5?.price_return ?? null;
-  const catalyst = item.public_attention.possible_catalysts[0]?.description ?? item.public_attention.qualitative_observations[0]?.text ?? null;
 
   return (
     <div className="rounded-xl border bg-background/70">
-      <button type="button" onClick={onToggle} className="grid w-full gap-3 p-3 text-left md:grid-cols-[minmax(170px,1.2fr)_repeat(7,minmax(74px,0.7fr))] md:items-center">
+      <button type="button" onClick={onToggle} className="grid w-full gap-3 p-3 text-left md:grid-cols-[minmax(190px,1.3fr)_repeat(7,minmax(74px,0.7fr))] md:items-center">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-semibold">{item.market_activity.market.symbol}</span>
-            <Badge tone="neutral">{item.market_activity.market.market_type}</Badge>
-            <Badge tone={liquidityTone(item.market_activity.liquidity_regime)}>{item.market_activity.liquidity_regime}</Badge>
-            <Badge tone={attentionTone(item.attention_level)}>{item.attention_level}</Badge>
+            <span className="font-semibold">{activity.market.symbol}</span>
+            <Badge tone="neutral">{activity.market.market_type}</Badge>
+            <Badge tone={liquidityTone(activity.liquidity_regime)}>{activity.liquidity_regime}</Badge>
+            <Badge tone={interestTone(activity.interest_level)}>{activity.interest_level}</Badge>
           </div>
-          <p className="mt-1 truncate text-[11px] text-muted-foreground">{item.cross_state.replaceAll("_", " ")}</p>
+          <p className="mt-1 truncate text-[11px] text-muted-foreground">
+            {activity.characteristics.length ? activity.characteristics.join(" · ") : "Aucune caractéristique forte"}
+          </p>
         </div>
-        <Fact label="Marché" value={item.market_activity.activity_state.replaceAll("_", " ")} />
+        <Fact label="Activité" value={activity.activity_state.replaceAll("_", " ")} />
         <Fact label="Vol. 5m" value={formatVolumeRatio(h5?.volume_ratio)} />
         <Fact label="USD 5m" value={formatUsdCompact(h5?.current_notional_usd)} />
         <Fact label="Δ USD 5m" value={formatUsdCompact(h5?.notional_delta_usd, { signed: true })} />
         <Fact label="Vol. 15m" value={formatVolumeRatio(h15?.volume_ratio)} />
         <Fact label="Prix" value={formatSignedPercent(priceMove)} />
-        <Fact label="Sources" value={String(sources.length)} />
+        <Fact label="Fraîcheur" value={freshness(activity.freshness_seconds)} />
       </button>
 
       {expanded ? (
         <div className="space-y-4 border-t px-3 py-4 text-xs">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <Fact label="Fraîcheur marché" value={freshness(item.market_activity.freshness_seconds)} />
-            <Fact label="Référence liquidité" value={formatUsdCompact(item.market_activity.liquidity_reference_usd)} />
-            <Fact label="Baseline USD 5m" value={formatUsdCompact(h5?.baseline_notional_usd)} />
-            <Fact label="Dernière recherche" value={shortTime(item.public_attention.observed_at)} />
-            <Fact label="Recherche web" value={item.public_attention.research_status} />
+            <Fact label="Niveau d’intérêt" value={activity.interest_level} />
+            <Fact label="Qualité données" value={activity.data_quality} />
+            <Fact label="Fraîcheur Kraken" value={freshness(activity.freshness_seconds)} />
+            <Fact label="Référence liquidité" value={formatUsdCompact(activity.liquidity_reference_usd)} />
+            <Fact label="Observation" value={shortTime(activity.observed_at)} />
+          </div>
+
+          <div className="rounded-lg border bg-muted/15 p-3">
+            <p className="font-semibold">Pourquoi ce niveau d’intérêt ?</p>
+            {activity.interest_reasons.length ? (
+              <ul className="mt-2 list-disc space-y-1 pl-4 text-muted-foreground">
+                {activity.interest_reasons.map((reason) => <li key={reason}>{reason}</li>)}
+              </ul>
+            ) : <p className="mt-1 text-muted-foreground">Aucune raison pondérée supplémentaire.</p>}
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Fact label="Vol. 5m" value={formatVolumeRatio(h5?.volume_ratio)} />
-            <Fact label="Vol. 15m" value={formatVolumeRatio(h15?.volume_ratio)} />
-            <Fact label="Vol. 1h" value={formatVolumeRatio(h1?.volume_ratio)} />
-            <Fact label="Méthode d’estimation USD" value={h5?.notional_method ?? "indisponible"} />
-          </div>
-
-          <div className="grid gap-3 lg:grid-cols-2">
-            <div className="rounded-lg border bg-muted/15 p-3">
-              <p className="font-semibold">Contexte / catalyseur</p>
-              <p className="mt-1 leading-relaxed text-muted-foreground">{catalyst ?? "Aucun catalyseur public fiable n’a été structuré."}</p>
-              <p className="mt-2 border-t pt-2 leading-relaxed text-muted-foreground">{item.public_attention.confidence_context}</p>
-            </div>
-            <div className="rounded-lg border bg-muted/15 p-3">
-              <p className="font-semibold">Métriques publiques observées</p>
-              {item.public_attention.quantitative_metrics.length ? (
+            {[h5, h15, h1, h4].map((horizon, index) => (
+              <div key={horizon?.timeframe ?? index} className="rounded-lg border bg-muted/10 p-3">
+                <p className="font-semibold">{horizon?.timeframe ?? "—"}</p>
                 <div className="mt-2 space-y-1.5">
-                  {item.public_attention.quantitative_metrics.slice(0, 6).map((metric, index) => (
-                    <div key={`${metric.name}-${index}`} className="flex flex-wrap items-baseline justify-between gap-2">
-                      <span className="text-muted-foreground">{metric.name}{metric.window ? ` · ${metric.window}` : ""}</span>
-                      <strong>{metric.value}{metric.unit ? ` ${metric.unit}` : ""}</strong>
-                    </div>
-                  ))}
+                  <Fact label="Volume relatif" value={formatVolumeRatio(horizon?.volume_ratio)} />
+                  <Fact label="Variation prix" value={formatSignedPercent(horizon?.price_return)} />
+                  <Fact label="Expansion range" value={formatVolumeRatio(horizon?.range_expansion_ratio)} />
+                  <Fact label="Expansion volatilité" value={formatVolumeRatio(horizon?.volatility_expansion_ratio)} />
+                  <Fact label="Distance breakout" value={formatSignedPercent(horizon?.breakout_distance)} />
                 </div>
-              ) : <p className="mt-1 text-muted-foreground">Aucun chiffre public fiable disponible ; le qualitatif n’est pas transformé en faux score.</p>}
-            </div>
+              </div>
+            ))}
           </div>
 
-          <div>
-            <p className="font-semibold">Sources publiques</p>
-            {sources.length ? (
-              <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                {sources.map((source) => (
-                  <a key={source.url} href={source.url} target="_blank" rel="noreferrer noopener" className="flex min-w-0 items-start gap-2 rounded-lg border p-2 hover:bg-muted/30">
-                    <ExternalLink className="mt-0.5 size-3.5 shrink-0" />
-                    <span className="min-w-0">
-                      <span className="block truncate font-medium">{source.title}</span>
-                      <span className="block truncate text-[10px] text-muted-foreground">{source.source_domain} · {shortTime(source.published_at ?? source.observed_at)}</span>
-                    </span>
-                  </a>
-                ))}
-              </div>
-            ) : <p className="mt-1 text-muted-foreground">Aucune citation publique exploitable retournée.</p>}
-          </div>
+          <p className="rounded-lg border bg-muted/10 p-3 text-muted-foreground">
+            Radar déterministe Kraken uniquement. Ces éléments décrivent l’activité observée et ne constituent ni BUY, ni SELL, ni HOLD.
+          </p>
         </div>
       ) : null}
     </div>
@@ -213,9 +199,7 @@ export function MarketAttentionDock() {
         {data ? <span className="ml-1"><Badge tone={statusTone(data.status)}>{data.status}</Badge></span> : null}
       </Button>
 
-      {open ? (
-        <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setOpen(false)} aria-hidden="true" />
-      ) : null}
+      {open ? <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setOpen(false)} aria-hidden="true" /> : null}
 
       {open ? (
         <Card className="fixed bottom-20 right-3 z-50 max-h-[78vh] w-[min(96vw,1120px)] overflow-hidden shadow-2xl sm:right-5">
@@ -227,7 +211,7 @@ export function MarketAttentionDock() {
                   <span className="inline-flex"><Badge tone="info">INFORMATIF — N’INFLUENCE PAS LE TRADING</Badge></span>
                   {data ? <span className="inline-flex"><Badge tone={statusTone(data.status)}>État · {data.status}</Badge></span> : null}
                 </div>
-                <CardDescription className="mt-1">Volume relatif Kraken + valeur échangée estimée en USD lorsque l’estimation est fiable + attention publique sourcée. Aucun BUY/SELL/HOLD, aucun signal de direction.</CardDescription>
+                <CardDescription className="mt-1">Données Kraken + calculs déterministes sur bougies finalisées 5m, analysées en 5m / 15m / 1h / 4h. Aucun appel IA, aucune recherche Web, aucun BUY/SELL/HOLD.</CardDescription>
               </div>
               <div className="flex gap-1">
                 <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading} aria-label="Actualiser le radar">
@@ -241,12 +225,11 @@ export function MarketAttentionDock() {
             {error ? <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive-subtle p-3 text-xs text-destructive-subtle-foreground">{error}</div> : null}
             {data ? (
               <div className="space-y-4">
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                   <Fact label="Catalogue" value={String(data.catalogue_market_count)} />
                   <Fact label="Marchés frais" value={String(data.cached_activity_market_count)} />
                   <Fact label="Scannés refresh" value={String(data.scanned_market_count)} />
                   <Fact label="Candidats" value={String(data.candidate_market_count)} />
-                  <Fact label="Recherches web" value={String(data.web_search_count)} />
                 </div>
 
                 <div className="grid gap-2 sm:grid-cols-2">
@@ -260,9 +243,7 @@ export function MarketAttentionDock() {
                   </div>
                 </div>
 
-                <div className="rounded-lg border bg-muted/10 px-3 py-2 text-xs font-medium">
-                  {marketAttentionStatusMessage(data)}
-                </div>
+                <div className="rounded-lg border bg-muted/10 px-3 py-2 text-xs font-medium">{marketAttentionStatusMessage(data)}</div>
 
                 <div className="grid gap-3 lg:grid-cols-3">
                   <div className="rounded-lg border p-3">
@@ -307,29 +288,18 @@ export function MarketAttentionDock() {
                       <CountLine label="DISCONTINUOUS" value={data.activity_data_quality_counts.DISCONTINUOUS_HISTORY} />
                       <CountLine label="TECHNICAL_ERROR" value={data.activity_data_quality_counts.TECHNICAL_ERROR} />
                     </div>
-                    <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">La qualité décrit la cohérence OHLC/trades ; un marché peut rester PARTIAL si un horizon ne produit pas encore une métrique exploitable.</p>
                   </div>
                   <div className="rounded-lg border p-3">
                     <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Par marché</p>
                     <div className="space-y-2 font-mono text-[11px] tabular-nums">
-                      <div>
-                        <span className="font-semibold">SPOT</span>
-                        <p className="mt-0.5 text-muted-foreground">A {data.activity_market_type_status_counts.SPOT.AVAILABLE} · P {data.activity_market_type_status_counts.SPOT.PARTIAL} · S {data.activity_market_type_status_counts.SPOT.STALE} · E {data.activity_market_type_status_counts.SPOT.ERROR}</p>
-                      </div>
-                      <div>
-                        <span className="font-semibold">PERPETUAL</span>
-                        <p className="mt-0.5 text-muted-foreground">A {data.activity_market_type_status_counts.PERPETUAL.AVAILABLE} · P {data.activity_market_type_status_counts.PERPETUAL.PARTIAL} · S {data.activity_market_type_status_counts.PERPETUAL.STALE} · E {data.activity_market_type_status_counts.PERPETUAL.ERROR}</p>
-                      </div>
+                      <div><span className="font-semibold">SPOT</span><p className="mt-0.5 text-muted-foreground">A {data.activity_market_type_status_counts.SPOT.AVAILABLE} · P {data.activity_market_type_status_counts.SPOT.PARTIAL} · S {data.activity_market_type_status_counts.SPOT.STALE} · E {data.activity_market_type_status_counts.SPOT.ERROR}</p></div>
+                      <div><span className="font-semibold">PERPETUAL</span><p className="mt-0.5 text-muted-foreground">A {data.activity_market_type_status_counts.PERPETUAL.AVAILABLE} · P {data.activity_market_type_status_counts.PERPETUAL.PARTIAL} · S {data.activity_market_type_status_counts.PERPETUAL.STALE} · E {data.activity_market_type_status_counts.PERPETUAL.ERROR}</p></div>
                     </div>
                   </div>
                   <div className="rounded-lg border p-3">
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Erreurs activité</p>
+                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Erreurs Kraken</p>
                     {activityErrorEntries(data.activity_error_counts).length ? (
-                      <div className="space-y-1.5">
-                        {activityErrorEntries(data.activity_error_counts).map(([name, count]) => (
-                          <CountLine key={name} label={name} value={count} />
-                        ))}
-                      </div>
+                      <div className="space-y-1.5">{activityErrorEntries(data.activity_error_counts).map(([name, count]) => <CountLine key={name} label={name} value={count} />)}</div>
                     ) : <p className="text-[11px] text-muted-foreground">Aucune erreur technique dans le cache frais.</p>}
                   </div>
                 </div>
@@ -337,16 +307,13 @@ export function MarketAttentionDock() {
                 <div className="rounded-lg border p-3">
                   <div className="flex items-baseline justify-between gap-3">
                     <p className="text-xs font-semibold">Plus fortes activités sous seuil</p>
-                    <p className="text-[10px] text-muted-foreground">Diagnostic uniquement · aucun appel web</p>
+                    <p className="text-[10px] text-muted-foreground">Diagnostic déterministe uniquement</p>
                   </div>
                   {data.subthreshold_activity.length ? (
                     <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
                       {data.subthreshold_activity.map((item) => (
                         <div key={`${item.market.market_type}:${item.market.symbol}`} className="flex items-center justify-between gap-3 rounded-md bg-muted/15 px-2.5 py-2 text-xs">
-                          <div className="min-w-0">
-                            <span className="truncate font-semibold">{item.market.symbol}</span>
-                            <span className="ml-1.5 text-[10px] text-muted-foreground">{item.market.market_type}</span>
-                          </div>
+                          <div className="min-w-0"><span className="truncate font-semibold">{item.market.symbol}</span><span className="ml-1.5 text-[10px] text-muted-foreground">{item.market.market_type}</span></div>
                           <span className="shrink-0 font-mono font-semibold tabular-nums">{formatVolumeRatio(item.peak_volume_ratio)} · {item.peak_timeframe}</span>
                         </div>
                       ))}
@@ -366,7 +333,7 @@ export function MarketAttentionDock() {
                     {loading ? "Construction du premier snapshot du radar…" : data.status === "NOT_CONFIGURED" ? "Radar non configuré." : "Aucun candidat d’attention disponible pour le moment."}
                   </div>
                 )}
-                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · le classement reste fondé sur l’activité inhabituelle, avec diversification descriptive par régime. Les montants USD sont affichés uniquement lorsqu’une normalisation fiable est disponible ; sinon « — ».</p>
+                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · classement déterministe avec diversification descriptive par régime de liquidité. Les montants USD sont affichés uniquement lorsqu’une normalisation fiable est disponible ; sinon « — ».</p>
               </div>
             ) : <p className="text-sm text-muted-foreground">{loading ? "Chargement du radar…" : "Aucun snapshot chargé."}</p>}
           </CardContent>

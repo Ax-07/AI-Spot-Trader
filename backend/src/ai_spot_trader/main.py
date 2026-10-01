@@ -33,7 +33,6 @@ from ai_spot_trader.core.runtime import (
 )
 from ai_spot_trader.integrations.kraken.attention import KrakenAttentionCatalogue
 from ai_spot_trader.integrations.kraken.candles import KrakenCandleProvider
-from ai_spot_trader.integrations.openai_market_attention import OpenAIWebAttentionResearcher
 from ai_spot_trader.market.attention import MarketAttentionPolicy, MarketAttentionRadar
 from ai_spot_trader.market.candles import CandleCache, CandleStreamService
 from ai_spot_trader.persistence.analytics import (
@@ -101,17 +100,6 @@ def create_app(
         )
 
     def build_market_attention(candles: CandleStreamService) -> MarketAttentionRadar:
-        api_key = resolved_settings.openai_api_key
-        researcher = (
-            OpenAIWebAttentionResearcher(
-                api_key=api_key,
-                model=resolved_settings.llm_model,
-                base_url=resolved_settings.openai_base_url,
-                timeout_seconds=resolved_settings.openai_timeout_seconds,
-            )
-            if api_key is not None and api_key.get_secret_value().strip()
-            else None
-        )
         return MarketAttentionRadar(
             candle_service=candles,
             catalogue=KrakenAttentionCatalogue(
@@ -119,7 +107,6 @@ def create_app(
                 derivatives_rest_url=resolved_settings.kraken_derivatives_rest_url,
                 timeout_seconds=resolved_settings.kraken_rest_timeout_seconds,
             ),
-            researcher=researcher,
             policy=MarketAttentionPolicy(),
         )
 

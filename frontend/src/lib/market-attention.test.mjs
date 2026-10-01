@@ -4,7 +4,6 @@ import test from "node:test";
 import {
   activityErrorEntries,
   attentionHorizon,
-  citedPublicSources,
   formatSignedPercent,
   formatVolumeRatio,
   marketAttentionStatusMessage,
@@ -12,11 +11,16 @@ import {
 
 const item = {
   market_activity: {
-    market: { symbol: "QNT/USD", market_type: "PERPETUAL" },
-    observed_at: "2026-09-28T12:00:00Z",
+    market: { symbol: "QNT/USD", market_type: "SPOT" },
+    observed_at: "2026-10-01T10:00:00Z",
     status: "AVAILABLE",
     activity_state: "ACCELERATING",
+    liquidity_regime: "MEDIUM",
+    liquidity_reference_usd: "500000",
     freshness_seconds: "20",
+    characteristics: ["TRENDING", "VOLUME_ANOMALY"],
+    interest_level: "HIGH",
+    interest_reasons: ["Volume inhabituel"],
     horizons: [
       { timeframe: "5m", volume_ratio: "2.8", price_return: "0.01", complete: true },
       { timeframe: "15m", volume_ratio: "2.05", price_return: "0.031", complete: true },
@@ -24,24 +28,6 @@ const item = {
     data_quality: "COMPLETE",
     error_type: null,
   },
-  public_attention: {
-    asset: "QNT",
-    observed_at: "2026-09-28T12:00:00Z",
-    research_status: "AVAILABLE",
-    attention_direction: "RISING",
-    quantitative_metrics: [],
-    qualitative_observations: [],
-    possible_catalysts: [],
-    confidence_context: "multiple public sources",
-    error_type: null,
-    sources: [
-      { title: "Official", url: "https://example.com/a", source_domain: "example.com", observed_at: "2026-09-28T12:00:00Z", published_at: null },
-      { title: "Duplicate", url: "https://example.com/a", source_domain: "example.com", observed_at: "2026-09-28T12:00:00Z", published_at: null },
-      { title: "Invalid", url: "javascript:alert(1)", source_domain: "invalid", observed_at: "2026-09-28T12:00:00Z", published_at: null },
-    ],
-  },
-  cross_state: "CONVERGING",
-  attention_level: "HIGH",
 };
 
 const emptyActivityErrors = () => ({
@@ -59,8 +45,8 @@ const emptyActivityErrors = () => ({
 });
 
 const overview = (status, candidateCount = 0) => ({
-  protocol_version: "market-attention-radar-v1",
-  observed_at: "2026-09-28T12:00:00Z",
+  protocol_version: "market-attention-radar-v2",
+  observed_at: "2026-10-01T10:00:00Z",
   status,
   informative_only: true,
   catalogue_market_count: 100,
@@ -69,79 +55,42 @@ const overview = (status, candidateCount = 0) => ({
   scanned_market_type_counts: { SPOT: 12, PERPETUAL: 8 },
   fresh_market_type_counts: { SPOT: 42, PERPETUAL: 38 },
   candidate_market_count: candidateCount,
-  web_search_count: 0,
   activity_status_counts: { AVAILABLE: 80, PARTIAL: 0, STALE: 0, ERROR: 0 },
   activity_state_counts: { UNKNOWN: 10, NORMAL: 70, ELEVATED: 0, ACCELERATING: 0, VERY_HIGH: 0 },
   activity_data_quality_counts: { COMPLETE: 70, NO_TRADE_GAPS: 10, INSUFFICIENT_HISTORY: 0, DISCONTINUOUS_HISTORY: 0, TECHNICAL_ERROR: 0 },
   activity_error_counts: emptyActivityErrors(),
+  activity_payload_stage_counts: { ASSET_PAIRS_PAYLOAD: 0, ASSET_PAIRS_ENTRY: 0, ASSET_PAIRS_SYMBOL: 0, OHLC_RESULT: 0, OHLC_SERIES: 0, OHLC_PAIR_KEY: 0, OHLC_ROW: 0, OHLC_TIMESTAMP: 0, OHLC_NUMERIC: 0 },
   activity_market_type_status_counts: {
     SPOT: { AVAILABLE: 50, PARTIAL: 0, STALE: 0, ERROR: 0 },
     PERPETUAL: { AVAILABLE: 30, PARTIAL: 0, STALE: 0, ERROR: 0 },
   },
   liquidity_regime_counts: { UNKNOWN: 80, MICRO: 0, LOW: 0, MEDIUM: 0, HIGH: 0, VERY_HIGH: 0 },
-  subthreshold_activity: [
-    { market: { symbol: "SOL/USD", market_type: "SPOT" }, peak_volume_ratio: "1.31", peak_timeframe: "15m" },
-  ],
+  subthreshold_activity: [],
   shortlist: [],
   error_type: null,
 });
 
-test("reads requested volume horizons without inventing missing ones", () => {
+test("reads requested deterministic horizons without inventing missing ones", () => {
   assert.equal(attentionHorizon(item, "15m")?.volume_ratio, "2.05");
   assert.equal(attentionHorizon(item, "1h"), null);
 });
 
-test("keeps only unique clickable public HTTP sources", () => {
-  assert.deepEqual(citedPublicSources(item).map((source) => source.url), ["https://example.com/a"]);
-});
-
-test("formats descriptive ratios and returns without trading semantics", () => {
+test("formats descriptive ratios without trading semantics", () => {
   assert.equal(formatVolumeRatio("2.8"), "2.80×");
   assert.equal(formatSignedPercent("0.031"), "+3.10 %");
   assert.equal(formatVolumeRatio(null), "—");
 });
 
 test("maps an operational empty shortlist to an explicit healthy message", () => {
-  assert.equal(
-    marketAttentionStatusMessage(overview("AVAILABLE")),
-    "Radar opérationnel — aucun événement inhabituel détecté.",
-  );
+  assert.equal(marketAttentionStatusMessage(overview("AVAILABLE")), "Radar opérationnel — aucun événement inhabituel détecté.");
 });
 
-test("keeps a genuinely partial empty shortlist distinguishable", () => {
+test("keeps partial and stale Kraken states distinguishable", () => {
   assert.match(marketAttentionStatusMessage(overview("PARTIAL")), /partiellement disponible/i);
+  assert.match(marketAttentionStatusMessage(overview("STALE")), /Kraken périmées/i);
 });
 
-test("preserves diagnostic counters, balanced scan mapping and subthreshold payload", () => {
-  const value = overview("AVAILABLE");
-  value.activity_status_counts.PARTIAL = 8;
-  value.activity_market_type_status_counts.SPOT.PARTIAL = 5;
-  value.activity_market_type_status_counts.PERPETUAL.ERROR = 3;
-  assert.equal(value.activity_status_counts.PARTIAL, 8);
-  assert.equal(value.activity_state_counts.NORMAL, 70);
-  assert.equal(value.activity_data_quality_counts.NO_TRADE_GAPS, 10);
-  assert.deepEqual(value.scanned_market_type_counts, { SPOT: 12, PERPETUAL: 8 });
-  assert.deepEqual(value.fresh_market_type_counts, { SPOT: 42, PERPETUAL: 38 });
-  assert.equal(value.activity_market_type_status_counts.SPOT.PARTIAL, 5);
-  assert.equal(value.activity_market_type_status_counts.PERPETUAL.ERROR, 3);
-  assert.equal(value.subthreshold_activity[0].peak_volume_ratio, "1.31");
-  assert.equal(value.subthreshold_activity[0].peak_timeframe, "15m");
-});
-
-test("returns only non-zero bounded error categories in deterministic order", () => {
-  const counts = {
-    ...emptyActivityErrors(),
-    KrakenNetworkError: 8,
-    KrakenRateLimitError: 3,
-    KrakenAPIError: 2,
-    UnknownKrakenSymbolError: 1,
-    Other: 1,
-  };
-  assert.deepEqual(activityErrorEntries(counts), [
-    ["KrakenNetworkError", 8],
-    ["KrakenRateLimitError", 3],
-    ["KrakenAPIError", 2],
-    ["UnknownKrakenSymbolError", 1],
-    ["Other", 1],
-  ]);
+test("returns only non-zero bounded Kraken error categories in deterministic order", () => {
+  const counts = { ...emptyActivityErrors(), KrakenNetworkError: 8, KrakenRateLimitError: 3, Other: 1 };
+  assert.deepEqual(activityErrorEntries(counts), [["KrakenNetworkError", 8], ["KrakenRateLimitError", 3], ["Other", 1]]);
 });

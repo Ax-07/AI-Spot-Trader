@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import FastAPI
@@ -11,364 +11,75 @@ from ai_spot_trader.api.routes.market_attention import router as market_attentio
 from ai_spot_trader.domain.enums import MarketType
 from ai_spot_trader.domain.models import ExecutableMarket
 from ai_spot_trader.market.attention import (
+    ActivityDataQuality,
     ActivityHorizonSnapshot,
     MarketActivitySnapshot,
     MarketActivityState,
-    MarketAttentionPolicy,
     MarketAttentionRadar,
-    PublicAttentionDirection,
-    PublicAttentionSnapshot,
     RadarStatus,
+    _activity_data_quality_counts,
+    _activity_state_counts,
+    _activity_status_counts,
 )
-from ai_spot_trader.market.candles import Candle, CandleKey, CandleTimeframe
+from ai_spot_trader.market.candles import CandleKey, CandleTimeframe
 
-NOW = datetime(2026, 9, 28, 14, 0, tzinfo=UTC)
-
-
-def _market(symbol: str) -> ExecutableMarket:
-    return ExecutableMarket(symbol=symbol, market_type=MarketType.SPOT)
+NOW = datetime(2026, 10, 1, 10, 0, tzinfo=UTC)
 
 
-def _candles(
-    symbol: str,
-    *,
-    anchor: datetime = NOW,
-    last_volume: str = "1",
-    count: int = 404,
-) -> tuple[Candle, ...]:
-    rows: list[Candle] = []
-    for index in range(count):
-        open_time = anchor - timedelta(minutes=5 * (count - index))
-        close_time = open_time + timedelta(minutes=5)
-        volume = Decimal(last_volume if index == count - 1 else "1")
-        rows.append(
-            Candle(
-                symbol=symbol,
-                market_type=MarketType.SPOT,
-                timeframe=CandleTimeframe.M5,
-                open_time=open_time,
-                close_time=close_time,
-                open=Decimal("100"),
-                high=Decimal("101"),
-                low=Decimal("99"),
-                close=Decimal("100"),
-                volume=volume,
-                is_final=True,
-                updated_at=close_time,
-            )
-        )
-    return tuple(rows)
+def _snapshot(symbol: str, status: RadarStatus, state: MarketActivityState, quality: ActivityDataQuality) -> MarketActivitySnapshot:
+    return MarketActivitySnapshot(
+        market=ExecutableMarket(symbol=symbol, market_type=MarketType.SPOT),
+        observed_at=NOW,
+        status=status,
+        activity_state=state,
+        freshness_seconds=Decimal("0"),
+        horizons=(ActivityHorizonSnapshot(timeframe=CandleTimeframe.M5, observation_count=0, baseline_period_count=0, complete=False),),
+        data_quality=quality,
+    )
+
+
+def test_overview_count_helpers_cover_status_state_and_quality() -> None:
+    rows = (
+        _snapshot("AAA/USD", RadarStatus.AVAILABLE, MarketActivityState.NORMAL, ActivityDataQuality.COMPLETE),
+        _snapshot("BBB/USD", RadarStatus.PARTIAL, MarketActivityState.UNKNOWN, ActivityDataQuality.INSUFFICIENT_HISTORY),
+        _snapshot("CCC/USD", RadarStatus.ERROR, MarketActivityState.UNKNOWN, ActivityDataQuality.TECHNICAL_ERROR),
+    )
+    assert _activity_status_counts(rows).model_dump() == {"AVAILABLE": 1, "PARTIAL": 1, "STALE": 0, "ERROR": 1}
+    assert _activity_state_counts(rows).NORMAL == 1
+    assert _activity_state_counts(rows).UNKNOWN == 2
+    assert _activity_data_quality_counts(rows).TECHNICAL_ERROR == 1
 
 
 class Catalogue:
-    def __init__(self, markets: tuple[ExecutableMarket, ...]) -> None:
-        self.markets = markets
-
-    async def list_markets(self) -> tuple[ExecutableMarket, ...]:
-        return self.markets
-
-    async def aclose(self) -> None:
+    async def list_markets(self):
+        return (ExecutableMarket(symbol="AAA/USD", market_type=MarketType.SPOT),)
+    async def aclose(self):
         return None
 
 
-class CandleService:
-    def __init__(self, rows: dict[str, tuple[Candle, ...] | Exception]) -> None:
-        self.rows = rows
-
-    async def history(self, key: CandleKey, *, limit: int = 1000) -> tuple[Candle, ...]:
-        value = self.rows[key.symbol]
-        if isinstance(value, Exception):
-            raise value
-        return value[-limit:]
+class BrokenCandles:
+    async def history(self, key: CandleKey, *, limit: int = 1000):
+        raise TimeoutError("private details")
 
 
-class Researcher:
-    def __init__(self) -> None:
-        self.calls: list[str] = []
-
-    async def research(self, *, asset: str, symbols: tuple[str, ...], observed_at: datetime):
-        self.calls.append(asset)
-        return PublicAttentionSnapshot(
-            asset=asset,
-            observed_at=observed_at,
-            research_status=RadarStatus.AVAILABLE,
-            attention_direction=PublicAttentionDirection.STABLE,
-            confidence_context="diagnostic test",
-        )
-
-    async def aclose(self) -> None:
-        return None
-
-
-def _policy(**updates: object) -> MarketAttentionPolicy:
-    values: dict[str, object] = {
-        "scan_limit": 10,
-        "candidate_limit": 10,
-        "diagnostic_market_limit": 10,
-        # Legacy test policy kept intentionally above the Batch 38 effective runtime cap.
-        "max_web_searches_per_refresh": 10,
-        "candle_limit": 404,
-    }
-    values.update(updates)
-    return MarketAttentionPolicy(**values)
-
-
-def test_overview_counts_status_and_activity_state_for_fresh_cache_only() -> None:
+def test_kraken_failure_is_fail_soft_and_bounded() -> None:
     async def scenario() -> None:
-        markets = (_market("AAA/USD"), _market("BBB/USD"), _market("CCC/USD"), _market("DDD/USD"))
-        radar = MarketAttentionRadar(
-            candle_service=CandleService(
-                {
-                    "AAA/USD": _candles("AAA/USD", last_volume="1.20"),
-                    "BBB/USD": _candles("BBB/USD", count=20),
-                    "CCC/USD": _candles("CCC/USD", anchor=NOW - timedelta(hours=2)),
-                    "DDD/USD": RuntimeError("simulated candle failure"),
-                }
-            ),  # type: ignore[arg-type]
-            catalogue=Catalogue(markets),
-            researcher=None,
-            policy=_policy(max_web_searches_per_refresh=0),
-        )
-
-        expired = MarketActivitySnapshot(
-            market=_market("OLD/USD"),
-            observed_at=NOW - timedelta(hours=1),
-            status=RadarStatus.AVAILABLE,
-            activity_state=MarketActivityState.VERY_HIGH,
-            freshness_seconds=Decimal("0"),
-            horizons=(),
-        )
-        radar._activity_cache[expired.market] = expired
-
+        radar = MarketAttentionRadar(candle_service=BrokenCandles(), catalogue=Catalogue())  # type: ignore[arg-type]
         overview = await radar.refresh_once(observed_at=NOW)
-
-        assert overview.cached_activity_market_count == 4
-        assert overview.activity_status_counts.model_dump() == {
-            "AVAILABLE": 1,
-            "PARTIAL": 1,
-            "STALE": 1,
-            "ERROR": 1,
-        }
-        assert sum(overview.activity_state_counts.model_dump().values()) == 4
-        assert overview.activity_state_counts.VERY_HIGH == 0
-        assert overview.activity_state_counts.UNKNOWN >= 1
+        assert overview.activity_status_counts.ERROR == 1
+        assert overview.activity_error_counts.Other == 1
+        assert "private details" not in str(overview.model_dump(mode="json"))
         await radar.aclose()
-
     asyncio.run(scenario())
 
 
-def test_activity_state_counts_cover_all_states_and_ignore_expired_snapshots() -> None:
-    async def scenario() -> None:
-        radar = MarketAttentionRadar(
-            candle_service=CandleService({}),  # type: ignore[arg-type]
-            catalogue=Catalogue(()),
-            researcher=None,
-            policy=_policy(max_web_searches_per_refresh=0),
-        )
-        states = (
-            MarketActivityState.UNKNOWN,
-            MarketActivityState.NORMAL,
-            MarketActivityState.ELEVATED,
-            MarketActivityState.ACCELERATING,
-            MarketActivityState.VERY_HIGH,
-        )
-        for index, state in enumerate(states):
-            snapshot = MarketActivitySnapshot(
-                market=_market(f"S{index}/USD"),
-                observed_at=NOW,
-                status=RadarStatus.AVAILABLE,
-                activity_state=state,
-                freshness_seconds=Decimal("0"),
-                horizons=(),
-            )
-            radar._activity_cache[snapshot.market] = snapshot
-        expired = MarketActivitySnapshot(
-            market=_market("EXPIRED/USD"),
-            observed_at=NOW - timedelta(hours=1),
-            status=RadarStatus.AVAILABLE,
-            activity_state=MarketActivityState.VERY_HIGH,
-            freshness_seconds=Decimal("0"),
-            horizons=(),
-        )
-        radar._activity_cache[expired.market] = expired
-
-        overview = await radar.refresh_once(observed_at=NOW)
-
-        assert overview.cached_activity_market_count == 5
-        assert overview.activity_state_counts.model_dump() == {
-            "UNKNOWN": 1,
-            "NORMAL": 1,
-            "ELEVATED": 1,
-            "ACCELERATING": 1,
-            "VERY_HIGH": 1,
-        }
-        await radar.aclose()
-
-    asyncio.run(scenario())
-
-
-def test_normal_markets_are_ranked_below_threshold_with_best_horizon() -> None:
-    async def scenario() -> None:
-        markets = (_market("AAA/USD"), _market("BBB/USD"))
-        researcher = Researcher()
-        radar = MarketAttentionRadar(
-            candle_service=CandleService(
-                {
-                    "AAA/USD": _candles("AAA/USD", last_volume="1.31"),
-                    "BBB/USD": _candles("BBB/USD", last_volume="1.27"),
-                }
-            ),  # type: ignore[arg-type]
-            catalogue=Catalogue(markets),
-            researcher=researcher,
-            policy=_policy(),
-        )
-
-        overview = await radar.refresh_once(observed_at=NOW)
-
-        assert overview.status is RadarStatus.AVAILABLE
-        assert overview.candidate_market_count == 0
-        assert overview.web_search_count == 0
-        assert researcher.calls == []
-        assert [item.market.symbol for item in overview.subthreshold_activity] == [
-            "AAA/USD",
-            "BBB/USD",
-        ]
-        assert overview.subthreshold_activity[0].peak_volume_ratio == Decimal("1.31")
-        assert overview.subthreshold_activity[0].peak_timeframe is CandleTimeframe.M5
-        await radar.aclose()
-
-    asyncio.run(scenario())
-
-
-def test_isolated_volume_candidate_does_not_trigger_public_research() -> None:
-    async def scenario() -> None:
-        markets = (_market("NORMAL/USD"), _market("HOT/USD"))
-        researcher = Researcher()
-        radar = MarketAttentionRadar(
-            candle_service=CandleService(
-                {
-                    "NORMAL/USD": _candles("NORMAL/USD", last_volume="1.39"),
-                    "HOT/USD": _candles("HOT/USD", last_volume="1.50"),
-                }
-            ),  # type: ignore[arg-type]
-            catalogue=Catalogue(markets),
-            researcher=researcher,
-            policy=_policy(),
-        )
-
-        overview = await radar.refresh_once(observed_at=NOW)
-
-        assert [item.market.symbol for item in overview.subthreshold_activity] == ["NORMAL/USD"]
-        assert [item.market_activity.market.symbol for item in overview.shortlist] == ["HOT/USD"]
-        assert overview.shortlist[0].market_activity.interest_level.value == "LOW"
-        assert researcher.calls == []
-        assert overview.web_search_count == 0
-        assert overview.public_research_eligible_count == 0
-        assert overview.public_research_skipped_count == 1
-        await radar.aclose()
-
-    asyncio.run(scenario())
-
-
-def test_empty_shortlist_with_healthy_available_activity_is_operational() -> None:
-    async def scenario() -> None:
-        market = _market("AAA/USD")
-        radar = MarketAttentionRadar(
-            candle_service=CandleService({"AAA/USD": _candles("AAA/USD", last_volume="1.10")}),  # type: ignore[arg-type]
-            catalogue=Catalogue((market,)),
-            researcher=Researcher(),
-            policy=_policy(),
-        )
-
-        overview = await radar.refresh_once(observed_at=NOW)
-        assert overview.status is RadarStatus.AVAILABLE
-        assert overview.candidate_market_count == 0
-        await radar.aclose()
-
-    asyncio.run(scenario())
-
-
-def test_empty_shortlist_with_no_available_activity_remains_partial() -> None:
-    async def scenario() -> None:
-        market = _market("AAA/USD")
-        radar = MarketAttentionRadar(
-            candle_service=CandleService({"AAA/USD": _candles("AAA/USD", count=20)}),  # type: ignore[arg-type]
-            catalogue=Catalogue((market,)),
-            researcher=Researcher(),
-            policy=_policy(),
-        )
-
-        overview = await radar.refresh_once(observed_at=NOW)
-        assert overview.status is RadarStatus.PARTIAL
-        assert overview.activity_status_counts.PARTIAL == 1
-        await radar.aclose()
-
-    asyncio.run(scenario())
-
-
-def test_read_only_api_exposes_additive_observability_fields() -> None:
-    market = _market("AAA/USD")
-    horizon = ActivityHorizonSnapshot(
-        timeframe=CandleTimeframe.M5,
-        volume_ratio=Decimal("1.31"),
-        observation_count=1,
-        baseline_period_count=6,
-        complete=True,
-    )
-    activity = MarketActivitySnapshot(
-        market=market,
-        observed_at=NOW,
-        status=RadarStatus.AVAILABLE,
-        activity_state=MarketActivityState.NORMAL,
-        freshness_seconds=Decimal("0"),
-        horizons=(horizon,),
-    )
-    assert activity.interest_level.value == "LOW"
-
-    class Reader:
-        @property
-        def latest(self):
-            from ai_spot_trader.market.attention import (
-                ActivityStateCounts,
-                ActivityStatusCounts,
-                MarketAttentionOverview,
-                SubthresholdActivitySnapshot,
-            )
-
-            return MarketAttentionOverview(
-                observed_at=NOW,
-                status=RadarStatus.AVAILABLE,
-                cached_activity_market_count=1,
-                public_research_eligible_count=0,
-                web_search_count=0,
-                public_research_cache_hit_count=0,
-                public_research_event_refresh_count=0,
-                public_research_skipped_count=1,
-                activity_status_counts=ActivityStatusCounts(AVAILABLE=1),
-                activity_state_counts=ActivityStateCounts(NORMAL=1),
-                subthreshold_activity=(
-                    SubthresholdActivitySnapshot(
-                        market=market,
-                        peak_volume_ratio=Decimal("1.31"),
-                        peak_timeframe=CandleTimeframe.M5,
-                    ),
-                ),
-            )
-
-        def history(self, *, limit: int = 24):
-            return (self.latest,)
-
+def test_read_only_api_exposes_deterministic_observability_fields_only() -> None:
     app = FastAPI()
-    app.state.market_attention = Reader()
+    app.state.market_attention = None
     app.include_router(market_attention_router)
-
     with TestClient(app) as client:
-        response = client.get("/api/v1/market-attention")
-        payload = response.json()
-        assert response.status_code == 200
-        assert payload["activity_status_counts"]["AVAILABLE"] == 1
-        assert payload["activity_state_counts"]["NORMAL"] == 1
-        assert payload["public_research_eligible_count"] == 0
-        assert payload["public_research_skipped_count"] == 1
-        assert payload["subthreshold_activity"][0]["market"]["symbol"] == "AAA/USD"
-        assert client.post("/api/v1/market-attention").status_code == 405
+        payload = client.get("/api/v1/market-attention").json()
+    assert payload["protocol_version"] == "market-attention-radar-v2"
+    assert "activity_error_counts" in payload
+    assert "activity_payload_stage_counts" in payload
+    assert not any("web" in key or "public_research" in key for key in payload)

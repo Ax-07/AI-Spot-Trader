@@ -2,100 +2,80 @@
 
 > Les décisions détaillées plus anciennes restent dans Git. Ce document conserve les principes actifs, les décisions structurantes récentes et les éléments nécessaires à la reprise.
 
-## Principes historiques conservés
+## Principes actifs
 
-Un seul Agent stratégique, PAPER, Risk autorité finale, aucune sortie LLM/tool directe vers Broker/Kraken, SPOT sans short, PERPETUAL derrière les contrôles dérivés déterministes, FUTURE daté interdit, audit durable, no-look-ahead, backend indépendant du frontend, `HOLD` valide, aucun secret versionné et LIVE séparé.
+Un seul Agent stratégique, Risk autorité finale, aucune sortie LLM directe vers Broker/Kraken, SPOT sans vente d'actif non détenu, audit durable, no-look-ahead, backend indépendant du frontend, `HOLD` valide, aucun secret versionné et LIVE séparé.
 
-Market Attention Radar reste strictement observationnel et n'est pas un input de l'Agent stratégique.
+Market Attention Radar reste strictement observationnel et ne prend aucune décision de trading.
 
 ## Référence courante
 
 ```text
-HEAD GitHub audité     : c699e7ce9fc4f9f43f005d7e8c19199a30befdf1
-HEAD                   : feat: align AI decisions with candle closes
-Batch 37               : intégré
-Batch 38               : patch Market Attention préfiltrage proposé localement
+HEAD GitHub audité : 2776fc68fb0ff8c094148a246d22de844ee868c7
+Commit              : feat: prefilter market attention web research
+Batch 38            : intégré
+Batch 39            : patch local proposé
 ```
 
-## Changelog — 2026-10-01 — Batch 38 Market Attention préfiltrage Kraken
+## Changelog — 2026-10-01 — Batch 39 Radar Kraken sans IA
 
-- base GitHub auditée : `c699e7ce9fc4f9f43f005d7e8c19199a30befdf1` ;
-- correction de la documentation qui décrivait encore le Batch 37 comme local ;
+- correction de `docs/00_ETAT_ACTUEL.md`, qui pointait encore vers `c699e7c` et décrivait Batch 38 comme non intégré ;
 - conservation du pipeline canonique `CandleStreamService` / OHLCV 5m ;
-- enrichissement déterministe des horizons avec retours précédent/courant, range de référence, expansion range/volatilité et distance de breakout ;
-- caractéristiques descriptives : tendance, anomalie de volume, expansion de volatilité, breakout/reversal watch, consolidation, divergence prix/volume ;
-- nouveau niveau d'intérêt Radar `LOW/MEDIUM/HIGH/VERY_HIGH`, déterministe et non directionnel ;
-- shortlist déterministe réduite ;
-- aucune nouvelle recherche publique pour `LOW` / `MEDIUM` ;
-- `max_web_searches_per_refresh` passe à 2 par défaut avec limite dure 3 ;
-- Public Attention TTL passe à 2 h ;
-- refresh anticipé possible après 15 min en cas d'escalade d'intérêt, nouveau breakout/reversal descriptif ou nouvelle entrée en tête ;
-- cache réutilisé lorsque l'événement ne justifie pas un refresh ;
-- recherches toujours séquentielles et bornées ;
-- exposition de la décision de recherche par candidat et de compteurs d'éligibilité/cache/refresh/skip ;
-- aucun changement Risk, Broker, Campaign, exécution PAPER, frais, spread, slippage ou Agent stratégique ;
-- le couplage de modèle du Radar à `resolved_settings.llm_model` est confirmé mais non modifié dans ce batch.
+- conservation des horizons 5m / 15m / 1h / 4h et des caractéristiques Batch 38 ;
+- maintien du niveau d'intérêt déterministe `LOW/MEDIUM/HIGH/VERY_HIGH` ;
+- suppression du wiring OpenAI du Market Attention Radar ;
+- suppression du chemin de recherche publique, de son cache, TTL, cooldown et budget ;
+- suppression des décisions et compteurs de recherche Web du contrat API ;
+- passage du contrat Radar à `market-attention-radar-v2` ;
+- cockpit recentré sur intérêt, caractéristiques, raisons, liquidité, fraîcheur, qualité et erreurs Kraken ;
+- conservation de `informative_only=True` ;
+- aucune modification du Risk Engine, Broker, Agent stratégique ou politique d'exécution ;
+- trades Kraken et carnet L2 explicitement reportés au Batch 40.
 
-## ADR-240 à ADR-279 — décisions antérieures actives
+## ADR-291 — Préfiltrage déterministe Batch 38
 
-Les décisions Session/lifecycle, Trading Style, coûts, multi-timeframes, gestion des positions, cycle multi-décisions, contrats Agent, reasoning et causalité restent actives. Les détails historiques demeurent dans Git.
+**INTÉGRÉ dans `2776fc6`.**
 
-## ADR-280 à ADR-286 — Market Attention Radar v1
+Le Radar calcule des faits descriptifs Kraken avant toute éventuelle recherche externe. Les caractéristiques et le niveau d'intérêt ne sont pas des signaux de trading.
 
-Market Attention Radar v1, son observabilité, sa robustesse, ses régimes de liquidité et son runtime hardening restent intégrés. Il ne produit aucun ordre, aucun score stratégique et aucune préférence LONG/SHORT.
+## ADR-292 — Politique Web Batch 38
 
-## ADR-287 à ADR-290 — scheduling stratégique Batch 37
+**HISTORIQUE — SUPPLANTÉ PAR ADR-295.**
 
-**INTÉGRÉS dans `c699e7c`.**
+Le Batch 38 avait introduit budget, TTL et cooldown de recherche publique. Batch 39 supprime entièrement ce mécanisme du Radar.
 
-- `strategic_schedule` optionnel dans Campaign ; absence = `INTERVAL` historique exact ;
-- un seul `ScheduledTradingEngine` gère INTERVAL et CANDLE_CLOSE ;
-- le timeframe de décision est un trigger, pas un nouveau contexte stratégique ;
-- Discovery conserve sa cadence et son orchestration propres ;
-- aucune migration DB, aucun second pipeline OHLC, aucun catch-up en rafale.
+## ADR-293 — Isolation du Radar
 
-## ADR-291 — Market Attention devient un entonnoir déterministe avant le Web
+**ACTIF.**
 
-**ADOPTÉ DANS LE PATCH BATCH 38 — À INTÉGRER.**
+Le module Market Attention ne dépend pas d'Agent, Risk, Broker ou Market Discovery. `informative_only=True` reste un invariant de modèle.
 
-Le scan Kraken reste fréquent et bon marché. Les données OHLCV servent à calculer des faits descriptifs auditables avant toute recherche publique. Le Web n'est plus alloué simplement parce qu'un actif fait partie des premiers candidats.
+## ADR-294 — Modèle auxiliaire Radar
 
-Le niveau `LOW/MEDIUM/HIGH/VERY_HIGH` exprime uniquement une priorité d'observation. Il ne constitue ni un score de trading, ni une probabilité de hausse/baisse, ni une préférence directionnelle.
+**CLOS / SANS OBJET.**
 
-## ADR-292 — Les recherches publiques sont événementielles, cachées et fortement bornées
+La question d'un modèle OpenAI auxiliaire distinct n'a plus lieu d'être puisque le Radar v2 n'utilise plus de LLM.
 
-**ADOPTÉ DANS LE PATCH BATCH 38 — À INTÉGRER.**
+## ADR-295 — Market Attention Radar v2 est Kraken-only et déterministe
 
-Politique :
+**ADOPTÉ DANS LE PATCH BATCH 39 — À INTÉGRER.**
 
-```text
-LOW / MEDIUM     -> aucune nouvelle recherche
-HIGH / VERY_HIGH -> recherche possible
-TTL              -> 2 h
-cooldown événementiel -> 15 min
-budget default   -> 2 / refresh
-limite dure      -> 3 / refresh
-```
+Le Radar répond uniquement à la question : « quels marchés présentent actuellement un comportement suffisamment inhabituel ou intéressant pour mériter l'attention ? ». Il ne recherche plus d'explication narrative ou de news.
 
-Un cache frais est réutilisé, sauf changement significatif après cooldown. Les événements reconnus sont l'escalade d'intérêt, l'apparition de `BREAKOUT_WATCH` / `REVERSAL_WATCH` et une nouvelle entrée parmi les marchés de tête. Les recherches restent séquentielles afin d'éviter les bursts.
+## ADR-296 — Suppression de la couche Public Attention
 
-## ADR-293 — Le Radar reste hors du chemin de trading
+**ADOPTÉ DANS LE PATCH BATCH 39 — À INTÉGRER.**
 
-**ADOPTÉ DANS LE PATCH BATCH 38 — À INTÉGRER.**
+`PublicAttentionResearcher`, `PublicAttentionSnapshot`, `PublicResearchDecision`, l'adaptateur OpenAI dédié et les métriques Web disparaissent du contrat courant. Aucun compteur artificiellement nul n'est conservé.
 
-Le module Market Attention ne dépend pas d'Agent, Risk, Broker ou Market Discovery. `informative_only=True` reste un invariant de modèle. Les nouvelles caractéristiques servent exclusivement au préfiltrage du Radar et à son observabilité.
+## ADR-297 — Contrat API Radar v2
 
-## ADR-294 — Séparation du modèle auxiliaire Market Attention reportée
+**ADOPTÉ DANS LE PATCH BATCH 39 — À INTÉGRER.**
 
-**À DÉCIDER.**
-
-L'audit confirme que `main.py` construit encore `OpenAIWebAttentionResearcher` avec `resolved_settings.llm_model`. Une option préférée est d'introduire un réglage auxiliaire distinct, Luna par défaut, afin qu'une future sélection Sol pour la stratégie n'augmente pas automatiquement le coût du Radar.
-
-Cette modification touche la configuration process et ses tests ; elle est volontairement reportée afin de garder le Batch 38 centré sur le levier de coût principal : le nombre de recherches Web.
+Le protocole `market-attention-radar-v2` expose directement l'activité Kraken, les caractéristiques, l'intérêt, les raisons, la liquidité, la qualité/fraîcheur et les diagnostics. Une rupture de contrat explicite est préférée au maintien de champs trompeurs.
 
 ## Points explicitement non décidés
 
-- modèle auxiliaire Radar configurable séparément ;
-- utilisation de Market Attention comme contexte Agent ;
+- utilisation du Radar comme contexte de l'Agent stratégique ;
 - réaction stratégique intra-bougie ;
 - LIVE.
