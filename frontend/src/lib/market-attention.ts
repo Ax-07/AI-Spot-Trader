@@ -2,6 +2,8 @@ export type RadarStatus = "AVAILABLE" | "PARTIAL" | "NOT_CONFIGURED" | "STALE" |
 export type MarketActivityState = "UNKNOWN" | "NORMAL" | "ELEVATED" | "ACCELERATING" | "VERY_HIGH";
 export type ActivityDataQuality = "COMPLETE" | "NO_TRADE_GAPS" | "INSUFFICIENT_HISTORY" | "DISCONTINUOUS_HISTORY" | "TECHNICAL_ERROR";
 export type LiquidityRegime = "UNKNOWN" | "MICRO" | "LOW" | "MEDIUM" | "HIGH" | "VERY_HIGH";
+export type MarketScope = "SPOT" | "PERPETUAL" | "ALL";
+export type TrendDirection = "UP" | "DOWN" | "NEUTRAL" | "MIXED" | "UNKNOWN";
 export type MarketCharacteristic =
   | "TRENDING"
   | "VOLUME_ANOMALY"
@@ -34,6 +36,7 @@ export type AttentionMarket = {
 
 export type ActivityHorizonSnapshot = {
   timeframe: AttentionTimeframe;
+  trend_direction: TrendDirection;
   current_volume: string | null;
   previous_comparable_volume: string | null;
   baseline_volume: string | null;
@@ -66,6 +69,7 @@ export type MarketActivitySnapshot = {
   observed_at: string;
   status: RadarStatus;
   activity_state: MarketActivityState;
+  trend_direction: TrendDirection;
   liquidity_regime: LiquidityRegime;
   liquidity_reference_usd: string | null;
   freshness_seconds: string | null;
@@ -194,10 +198,11 @@ export type MarketAttentionSnapshot = {
 };
 
 export type MarketAttentionOverview = {
-  protocol_version: "market-attention-radar-v3";
+  protocol_version: "market-attention-radar-v4";
   observed_at: string;
   status: RadarStatus;
   informative_only: true;
+  market_scope: MarketScope;
   catalogue_market_count: number;
   cached_activity_market_count: number;
   scanned_market_count: number;
@@ -257,6 +262,14 @@ export function slippageEstimate(
   return item.microstructure.slippage.find(
     (entry) => entry.side === side && Number(entry.notional_quote) === notionalQuote,
   ) ?? null;
+}
+
+export function trendDirectionLabel(value: TrendDirection | null | undefined): string {
+  if (value === "UP") return "Haussière ↑";
+  if (value === "DOWN") return "Baissière ↓";
+  if (value === "NEUTRAL") return "Neutre →";
+  if (value === "MIXED") return "Mixte ↕";
+  return "Indéterminée";
 }
 
 export function formatVolumeRatio(value: string | null | undefined): string {
@@ -350,5 +363,23 @@ export async function fetchMarketAttention(signal?: AbortSignal): Promise<Market
     signal,
   });
   if (!response.ok) throw new Error(`Radar backend indisponible (${response.status})`);
+  return (await response.json()) as MarketAttentionOverview;
+}
+
+export async function setMarketAttentionScope(
+  marketScope: MarketScope,
+  signal?: AbortSignal,
+): Promise<MarketAttentionOverview> {
+  const response = await fetch("/backend/api/v1/market-attention/scope", {
+    method: "PUT",
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ market_scope: marketScope }),
+    signal,
+  });
+  if (!response.ok) throw new Error(`Changement de marché impossible (${response.status})`);
   return (await response.json()) as MarketAttentionOverview;
 }

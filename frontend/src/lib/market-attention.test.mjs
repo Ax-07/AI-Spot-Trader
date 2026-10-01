@@ -9,7 +9,9 @@ import {
   formatSignedPercent,
   formatVolumeRatio,
   marketAttentionStatusMessage,
+  setMarketAttentionScope,
   slippageEstimate,
+  trendDirectionLabel,
 } from "./market-attention.ts";
 
 const item = {
@@ -18,6 +20,7 @@ const item = {
     observed_at: "2026-10-01T10:00:00Z",
     status: "AVAILABLE",
     activity_state: "ACCELERATING",
+    trend_direction: "UP",
     liquidity_regime: "MEDIUM",
     liquidity_reference_usd: "500000",
     freshness_seconds: "20",
@@ -25,8 +28,8 @@ const item = {
     interest_level: "HIGH",
     interest_reasons: ["Volume inhabituel"],
     horizons: [
-      { timeframe: "5m", volume_ratio: "2.8", price_return: "0.01", complete: true },
-      { timeframe: "15m", volume_ratio: "2.05", price_return: "0.031", complete: true },
+      { timeframe: "5m", trend_direction: "UP", volume_ratio: "2.8", price_return: "0.01", complete: true },
+      { timeframe: "15m", trend_direction: "UP", volume_ratio: "2.05", price_return: "0.031", complete: true },
     ],
     data_quality: "COMPLETE",
     error_type: null,
@@ -57,10 +60,11 @@ const emptyActivityErrors = () => ({
 });
 
 const overview = (status, candidateCount = 0) => ({
-  protocol_version: "market-attention-radar-v3",
+  protocol_version: "market-attention-radar-v4",
   observed_at: "2026-10-01T10:00:00Z",
   status,
   informative_only: true,
+  market_scope: "ALL",
   catalogue_market_count: 100,
   cached_activity_market_count: 80,
   scanned_market_count: 20,
@@ -100,6 +104,14 @@ test("formats descriptive ratios and microstructure metrics", () => {
   assert.equal(formatVolumeRatio(null), "—");
 });
 
+test("renders deterministic trend directions as descriptive French labels", () => {
+  assert.equal(trendDirectionLabel("UP"), "Haussière ↑");
+  assert.equal(trendDirectionLabel("DOWN"), "Baissière ↓");
+  assert.equal(trendDirectionLabel("NEUTRAL"), "Neutre →");
+  assert.equal(trendDirectionLabel("MIXED"), "Mixte ↕");
+  assert.equal(trendDirectionLabel("UNKNOWN"), "Indéterminée");
+});
+
 test("selects a theoretical slippage scenario without turning it into an order", () => {
   assert.equal(slippageEstimate(item, "BUY", 1000)?.slippage_bps, "4.2");
   assert.equal(slippageEstimate(item, "BUY", 500), null);
@@ -117,4 +129,24 @@ test("keeps partial and stale Kraken states distinguishable", () => {
 test("returns only non-zero bounded Kraken error categories in deterministic order", () => {
   const counts = { ...emptyActivityErrors(), KrakenNetworkError: 8, KrakenRateLimitError: 3, Other: 1 };
   assert.deepEqual(activityErrorEntries(counts), [["KrakenNetworkError", 8], ["KrakenRateLimitError", 3], ["Other", 1]]);
+});
+
+test("sends a backend scope change before replacing the radar snapshot", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, "/backend/api/v1/market-attention/scope");
+    assert.equal(init?.method, "PUT");
+    assert.equal(init?.body, JSON.stringify({ market_scope: "SPOT" }));
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ...overview("AVAILABLE"), market_scope: "SPOT" }),
+    };
+  };
+  try {
+    const result = await setMarketAttentionScope("SPOT");
+    assert.equal(result.market_scope, "SPOT");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
 });

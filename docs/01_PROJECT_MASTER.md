@@ -4,16 +4,16 @@
 
 AI Spot Trader est une application expérimentale de trading pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est un cockpit de contrôle et de visualisation qui peut être fermé sans arrêter le moteur.
 
-Référence GitHub auditée à la clôture documentaire du Batch 40 :
+Référence GitHub auditée au lancement du Batch 41 :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 6d263be5edb589723101c32065ad68434b0b64f1
-Commit     : feat: enrich market attention with kraken microstructure
+HEAD       : 2a368c76f30373a6b9003324a1a14d8192cc0ad8
+Commit     : docs: mark batch 40 as integrated
 ```
 
-Les Batches 39 et 40 sont intégrés sur GitHub `main`.
+Les Batches 39 et 40 sont intégrés. Le Batch 41 décrit dans ce document est un patch proposé localement, non intégré tant qu'aucun commit utilisateur n'a été poussé.
 
 ## 2. Invariants fonctionnels
 
@@ -78,54 +78,76 @@ contexte causal
 
 ## 7. Cadences distinctes
 
-L'application distingue le monitoring déterministe, la cadence du cycle stratégique IA, Market Discovery, le streaming/cache candles et le Market Attention Radar. Le Radar Batch 40 conserve une cadence propre et un cache microstructure court ; il n'impose jamais la cadence de l'Agent.
+L'application distingue le monitoring déterministe, la cadence du cycle stratégique IA, Market Discovery, le streaming/cache candles et le Market Attention Radar. Le Radar conserve sa cadence propre et son cache microstructure court ; il n'impose jamais la cadence de l'Agent.
 
 ## 8. Transparence des appels IA
 
-Les appels de l'Agent stratégique et, lorsqu'elle existe, la logique IA de Market Discovery doivent rester distinguables. **Le Market Attention Radar v3 ne produit aucun appel IA ni aucune recherche Web.**
+Les appels de l'Agent stratégique et, lorsqu'elle existe, la logique IA de Market Discovery doivent rester distinguables. **Le Market Attention Radar ne produit aucun appel IA ni aucune recherche Web.**
 
 ## 9. Risk, coûts et exécution
 
-Le Radar ne modifie ni Risk, ni Broker. Le slippage Batch 40 est une **simulation théorique read-only** obtenue en parcourant le snapshot L2 ; aucun ordre réel ou PAPER n'est construit.
+Le Radar ne modifie ni Risk, ni Broker. Le slippage microstructure est une **simulation théorique read-only** obtenue en parcourant le snapshot L2 ; aucun ordre réel ou PAPER n'est construit.
 
-## 10. Market Attention Radar v3 — Kraken déterministe
+## 10. Market Attention Radar v4 — Kraken déterministe
+
+Le patch Batch 41 conserve le Radar v3 comme socle et ajoute une couche v4 de scope runtime et de direction de tendance :
 
 ```text
-Kraken
-├── catalogue
-├── CandleStreamService / OHLCV 5m canonique finalisé
-├── trades SPOT récents REST bornés
-└── carnet SPOT L2 REST borné
+catalogue Kraken complet
         ↓
-facts 5m / 15m / 1h / 4h + microstructure
+scope runtime SPOT / PERPETUAL / ALL
         ↓
-caractéristiques déterministes
+population réellement éligible
         ↓
-intérêt LOW / MEDIUM / HIGH / VERY_HIGH
+rotation / scan_limit
         ↓
-shortlist diversifiée
+CandleStreamService / OHLCV 5m canonique finalisé
         ↓
-API/cockpit read-only
+facts 5m / 15m / 1h / 4h
+        ↓
+direction par horizon + synthèse globale
+        ↓
+caractéristiques / intérêt / shortlist
+        ↓
+microstructure SPOT uniquement lorsque applicable
+        ↓
+API/cockpit informatif
 ```
 
-Les caractéristiques OHLCV du Batch 39 sont conservées. Le Batch 40 ajoute, uniquement lorsqu'elles sont supportées par les données, des caractéristiques descriptives de spread, profondeur, déséquilibre, activité des trades, pression fournisseur et risque de slippage.
+Le scope par défaut est `ALL`, afin de préserver le comportement historique si l'utilisateur ne modifie aucun réglage.
 
-## 11. Contrat API Radar
+## 11. Direction de tendance
 
-Le protocole intégré est `market-attention-radar-v3`. Il ajoute au contrat v2 : état/qualité/fraîcheur microstructure, spread, profondeur base/quote, profondeur par bandes, déséquilibre L2, métriques de trades récents et slippage théorique par taille notionnelle en devise cotée.
+La direction réutilise les seuils matériels `_MATERIAL_RETURN` existants. Par horizon :
+
+- `UP` si `price_return >= +seuil` ;
+- `DOWN` si `price_return <= -seuil` ;
+- `NEUTRAL` si le rendement reste strictement entre les deux seuils ;
+- `UNKNOWN` si l'horizon est incomplet ou non exploitable.
+
+La synthèse globale est multi-timeframe : conflit matériel positif/négatif => `MIXED`; au moins deux horizons matériels alignés sans conflit => `UP` ou `DOWN`; aucun mouvement matériel avec au moins deux horizons exploitables => `NEUTRAL`; sinon => `UNKNOWN`.
+
+`TRENDING` est dérivé de la même synthèse et n'est présent que pour une synthèse globale `UP` ou `DOWN`.
+
+## 12. Contrat API Radar
+
+Le patch propose `market-attention-radar-v4`. Il ajoute :
+
+- `market_scope` au snapshot global ;
+- `trend_direction` au `MarketActivitySnapshot` ;
+- `trend_direction` à chaque horizon ;
+- `PUT /api/v1/market-attention/scope` pour modifier le scope runtime et obtenir immédiatement un snapshot rafraîchi.
 
 `informative_only=True` reste validé côté backend.
 
-## 12. Isolation architecturale
+## 13. Isolation architecturale
 
-Le module Radar ne dépend pas d'Agent, Risk, Broker ou Market Discovery. L'Agent stratégique reste le seul agent IA de l'application. Le Batch 40 réutilise le calcul OHLCV du Batch 39 et n'introduit aucun second pipeline candles.
+La couche v4 hérite du Radar microstructure existant. Elle ne crée ni second catalogue, ni second pipeline candles, ni nouveau client Kraken privé. L'Agent stratégique reste le seul agent IA de l'application.
 
-## 13. Bornage microstructure
+## 14. Microstructure
 
-Par défaut : carnet L2 limité à 100 niveaux par côté, trades récents limités à 1 000 lignes, 24 marchés SPOT microstructure par refresh, concurrence 4, refresh 300 s, cache 900 s. Ces valeurs sont centralisées dans `MicrostructurePolicy`.
+La microstructure reste **SPOT uniquement**. En scope `PERPETUAL`, aucun sous-scan microstructure n'est lancé et les marchés dérivés restent `NOT_APPLICABLE`. En scope `ALL`, seuls les éléments SPOT peuvent être enrichis par `/Depth` et `/Trades`.
 
-Les tailles de slippage `100 / 500 / 1 000 / 5 000` sont exprimées dans la **devise cotée** du marché ; pour `*/USD`, elles correspondent exactement à des USD. Aucun FX implicite n'est créé.
+## 15. Hors périmètre du Batch 41
 
-## 14. Hors périmètre du Batch 40
-
-Décision stratégique automatique par carnet, déclenchement intra-bougie de l'Agent, smart order routing, exécution VWAP/TWAP réelle, market making, arbitrage, LIVE, clés privées Kraken supplémentaires, refonte Risk et Rust restent hors périmètre.
+Aucune décision automatique basée sur la tendance, aucun BUY/SELL depuis le Radar, aucun passage automatique vers l'Agent, aucun ordre Kraken, aucun short/levier/margin/future dans le moteur d'exécution, aucun nouvel indicateur technique décoratif et aucune refonte générale ne sont introduits.

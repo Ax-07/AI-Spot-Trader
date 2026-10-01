@@ -15,13 +15,15 @@ import {
   formatQuoteCompact,
   formatRate,
   formatSignedPercent,
-  formatUsdCompact,
   formatVolumeRatio,
   marketAttentionStatusMessage,
+  setMarketAttentionScope,
   slippageEstimate,
+  trendDirectionLabel,
   type LiquidityRegime,
   type MarketAttentionOverview,
   type MarketAttentionSnapshot,
+  type MarketScope,
   type MicrostructureCharacteristic,
   type RadarInterestLevel,
   type RadarStatus,
@@ -81,6 +83,12 @@ const MICRO_LABELS: Record<MicrostructureCharacteristic, string> = {
   SLIPPAGE_RISK: "Risque de slippage",
 };
 
+const SCOPE_OPTIONS: Array<{ value: MarketScope; label: string }> = [
+  { value: "SPOT", label: "SPOT" },
+  { value: "PERPETUAL", label: "PERP" },
+  { value: "ALL", label: "TOUS" },
+];
+
 function microLabel(value: string) {
   return MICRO_LABELS[value as MicrostructureCharacteristic] ?? value.replaceAll("_", " ");
 }
@@ -98,11 +106,12 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
 
   return (
     <div className="rounded-xl border bg-background/70">
-      <button type="button" onClick={onToggle} className="grid w-full gap-3 p-3 text-left md:grid-cols-[minmax(190px,1.3fr)_repeat(7,minmax(74px,0.7fr))] md:items-center">
+      <button type="button" onClick={onToggle} className="grid w-full gap-3 p-3 text-left md:grid-cols-[minmax(190px,1.3fr)_repeat(8,minmax(74px,0.7fr))] md:items-center">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="font-semibold">{activity.market.symbol}</span>
             <Badge tone="neutral">{activity.market.market_type}</Badge>
+            <Badge tone="neutral">{trendDirectionLabel(activity.trend_direction)}</Badge>
             <Badge tone={liquidityTone(activity.liquidity_regime)}>{activity.liquidity_regime}</Badge>
             <Badge tone={interestTone(item.interest_level)}>{item.interest_level}</Badge>
           </div>
@@ -111,6 +120,7 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
           </p>
         </div>
         <Fact label="Activité" value={activity.activity_state.replaceAll("_", " ")} />
+        <Fact label="Tendance" value={trendDirectionLabel(activity.trend_direction)} />
         <Fact label="Vol. 5m" value={formatVolumeRatio(h5?.volume_ratio)} />
         <Fact label="Spread" value={formatBps(micro.spread_bps)} />
         <Fact label="Prof. L2" value={formatQuoteCompact(micro.total_depth_quote, micro.quote_asset)} />
@@ -121,8 +131,9 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
 
       {expanded ? (
         <div className="space-y-4 border-t px-3 py-4 text-xs">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
             <Fact label="Niveau d’intérêt" value={item.interest_level} />
+            <Fact label="Tendance globale" value={trendDirectionLabel(activity.trend_direction)} />
             <Fact label="Qualité OHLCV" value={activity.data_quality} />
             <Fact label="Microstructure" value={`${micro.status} / ${micro.data_quality}`} />
             <Fact label="Fraîcheur OHLCV" value={freshness(activity.freshness_seconds)} />
@@ -195,6 +206,7 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
               <div key={horizon?.timeframe ?? index} className="rounded-lg border bg-muted/10 p-3">
                 <p className="font-semibold">OHLCV · {horizon?.timeframe ?? "—"}</p>
                 <div className="mt-2 space-y-1.5">
+                  <Fact label="Tendance" value={trendDirectionLabel(horizon?.trend_direction)} />
                   <Fact label="Volume relatif" value={formatVolumeRatio(horizon?.volume_ratio)} />
                   <Fact label="Variation prix" value={formatSignedPercent(horizon?.price_return)} />
                   <Fact label="Expansion range" value={formatVolumeRatio(horizon?.range_expansion_ratio)} />
@@ -260,6 +272,20 @@ export function MarketAttentionDock() {
     }
   }, []);
 
+  const changeScope = useCallback(async (marketScope: MarketScope) => {
+    setLoading(true);
+    try {
+      const next = await setMarketAttentionScope(marketScope);
+      setData(next);
+      setExpandedKey(null);
+      setError(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Changement de marché impossible");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
@@ -295,8 +321,9 @@ export function MarketAttentionDock() {
                   <CardTitle className="flex items-center gap-2"><Radar className="size-4" /> Market Attention</CardTitle>
                   <span className="inline-flex"><Badge tone="info">INFORMATIF — N’INFLUENCE PAS LE TRADING</Badge></span>
                   {data ? <span className="inline-flex"><Badge tone={statusTone(data.status)}>État · {data.status}</Badge></span> : null}
+                  {data ? <span className="inline-flex"><Badge tone="neutral">Marché · {data.market_scope === "ALL" ? "TOUS" : data.market_scope === "PERPETUAL" ? "PERP" : "SPOT"}</Badge></span> : null}
                 </div>
-                <CardDescription className="mt-1">Données Kraken déterministes : OHLCV finalisé + snapshots SPOT de trades récents et carnet L2. Aucun appel IA, aucune recherche Web, aucune exécution.</CardDescription>
+                <CardDescription className="mt-1">Données Kraken déterministes : OHLCV finalisé sur le scope actif, avec microstructure uniquement pour les marchés SPOT. Aucun appel IA, aucune recherche Web, aucune exécution.</CardDescription>
               </div>
               <div className="flex gap-1">
                 <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading} aria-label="Actualiser le radar">
@@ -310,8 +337,32 @@ export function MarketAttentionDock() {
             {error ? <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive-subtle p-3 text-xs text-destructive-subtle-foreground">{error}</div> : null}
             {data ? (
               <div className="space-y-4">
+                <div className="rounded-lg border p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold">Marché analysé</p>
+                      <p className="text-[10px] text-muted-foreground">Le scope actif est piloté par le backend avant le scan Kraken.</p>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {SCOPE_OPTIONS.map((option) => (
+                        <Button
+                          key={option.value}
+                          type="button"
+                          size="sm"
+                          variant={data.market_scope === option.value ? "default" : "outline"}
+                          disabled={loading}
+                          aria-pressed={data.market_scope === option.value}
+                          onClick={() => void changeScope(option.value)}
+                        >
+                          {option.label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
                 <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
-                  <Fact label="Catalogue" value={String(data.catalogue_market_count)} />
+                  <Fact label="Catalogue scope" value={String(data.catalogue_market_count)} />
                   <Fact label="Marchés frais OHLCV" value={String(data.cached_activity_market_count)} />
                   <Fact label="Scannés OHLCV" value={String(data.scanned_market_count)} />
                   <Fact label="Scannés micro" value={String(data.microstructure_scanned_market_count)} />
@@ -387,10 +438,10 @@ export function MarketAttentionDock() {
                   </div>
                 ) : (
                   <div className="rounded-xl border border-dashed p-5 text-sm text-muted-foreground">
-                    {loading ? "Construction du premier snapshot du radar…" : data.status === "NOT_CONFIGURED" ? "Radar non configuré." : "Aucun candidat d’attention disponible pour le moment."}
+                    {loading ? "Construction du snapshot du radar…" : data.status === "NOT_CONFIGURED" ? "Radar non configuré." : "Aucun candidat d’attention disponible pour le moment."}
                   </div>
                 )}
-                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · classement déterministe enrichi par la microstructure SPOT. Les montants L2 sont exprimés dans la devise cotée du marché ; aucun taux de change n’est inventé.</p>
+                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · scope backend {data.market_scope} · classement déterministe. Les montants L2 sont exprimés dans la devise cotée du marché ; aucun taux de change n’est inventé.</p>
               </div>
             ) : <p className="text-sm text-muted-foreground">{loading ? "Chargement du radar…" : "Aucun snapshot chargé."}</p>}
           </CardContent>

@@ -5,35 +5,30 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD réel  : 6d263be5edb589723101c32065ad68434b0b64f1
-Commit     : feat: enrich market attention with kraken microstructure
+HEAD réel  : 2a368c76f30373a6b9003324a1a14d8192cc0ad8
+Commit     : docs: mark batch 40 as integrated
 ```
 
-État revérifié le 01/10/2026 lors de la clôture documentaire du Batch 40. Le Batch 40 est intégré sur GitHub `main` dans `6d263be5edb589723101c32065ad68434b0b64f1` (`feat: enrich market attention with kraken microstructure`).
+État revérifié le 01/10/2026 au lancement du Batch 41. Le document référençait encore le commit applicatif Batch 40 `6d263be5edb589723101c32065ad68434b0b64f1`; le HEAD GitHub réel ci-dessus prime.
 
-## Batch 40 — Microstructure Kraken
+## Batch 40 — intégré
 
-**État : intégré sur GitHub `main` au HEAD `6d263be5edb589723101c32065ad68434b0b64f1`.**
+Le Radar déterministe v3 combine OHLCV Kraken via `CandleStreamService` et microstructure publique SPOT bornée (`/Depth`, `/Trades`). Il reste strictement informatif, fail-soft, sans OpenAI, sans Web et sans dépendance Agent/Risk/Broker.
 
-Le Batch 40 enrichit le Radar déterministe sans remplacer le pipeline OHLCV canonique :
+## Batch 41 — patch proposé, non intégré
 
-```text
-Kraken SPOT public
-├── CandleStreamService / OHLCV 5m finalisé
-├── REST /public/Trades borné
-└── REST /public/Depth L2 borné
-        ↓
-calculs déterministes
-        ↓
-spread / profondeur / déséquilibre
-intensité des trades / côté fournisseur si connu
-slippage théorique sans ordre
-        ↓
-Market Attention Radar v3
-```
+Le patch Batch 41 ajoute au Radar :
 
-Le Radar reste `informative_only=True`, sans appel OpenAI, sans recherche Web, sans dépendance Agent/Risk/Broker et sans construction ou envoi d'ordre. La microstructure nouvelle s'applique aux marchés SPOT ; le support PERPETUAL historique du Radar OHLCV n'est pas étendu par ce batch.
+- un scope runtime `SPOT / PERPETUAL / ALL`, `ALL` par défaut ;
+- filtrage du catalogue éligible **avant** rotation et scan OHLCV ;
+- filtrage logique des caches, compteurs, liquidité et shortlist selon le scope actif ;
+- microstructure toujours SPOT uniquement, sans appel `/Depth` ou `/Trades` en scope `PERPETUAL` ;
+- direction déterministe `UP / DOWN / NEUTRAL / MIXED / UNKNOWN` par horizon `5m/15m/1h/4h` ;
+- synthèse de tendance globale multi-timeframe ;
+- cohérence de `MarketCharacteristic.TRENDING` avec cette même synthèse ;
+- contrat public `market-attention-radar-v4` ;
+- contrôle cockpit `SPOT / PERP / TOUS` pilotant réellement le backend.
 
-Le contrat API intégré est `market-attention-radar-v3`. Les données microstructure sont fail-soft : l'OHLCV valide reste disponible lorsqu'un carnet ou des trades sont indisponibles.
+Le Batch 41 reste informatif : aucune tendance ne constitue `BUY`, `SELL`, `LONG`, `SHORT` ou `HOLD`.
 
-Voir `docs/40_BATCH_MICROSTRUCTURE_KRAKEN.md`.
+Voir `docs/41_BATCH_RADAR_SCOPE_ET_TENDANCE.md`.

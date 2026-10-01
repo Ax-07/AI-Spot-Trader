@@ -3,11 +3,12 @@
 ## 1. Référence
 
 ```text
-Repository : Ax-07/AI-Spot-Trader
-Branche    : main
-HEAD GitHub audité : 6d263be5edb589723101c32065ad68434b0b64f1
-Batch 39           : intégré
-Batch 40           : intégré
+Repository            : Ax-07/AI-Spot-Trader
+Branche               : main
+HEAD GitHub audité    : 2a368c76f30373a6b9003324a1a14d8192cc0ad8
+Batch 40              : intégré
+Batch 41              : patch proposé, non intégré
+Contrat Radar proposé : market-attention-radar-v4
 ```
 
 ## 2. Architecture générale
@@ -21,76 +22,112 @@ Next.js cockpit
         -> Risk Engine déterministe
         -> Paper Broker / Portfolio
 
-     -> Market Attention Radar v3 (observation uniquement)
-        -> MarketAttentionRadar v2 canonique
-           -> catalogue Kraken
-           -> CandleStreamService partagé / OHLCV 5m canoniques
-        -> couche d'enrichissement microstructure SPOT
-           -> GET /0/public/Depth
-           -> GET /0/public/Trades
-           -> calculs déterministes bornés
-        -> shortlist enrichie
-        -> API read-only /api/v1/market-attention
+     -> ScopedTrendMarketAttentionRadar (v4, observation uniquement)
+        -> MicrostructureMarketAttentionRadar (v3)
+           -> MarketAttentionRadar canonique
+              -> catalogue Kraken
+              -> CandleStreamService partagé / OHLCV 5m canoniques
+           -> couche microstructure SPOT
+              -> GET /0/public/Depth
+              -> GET /0/public/Trades
+        -> scope runtime SPOT / PERPETUAL / ALL
+        -> direction déterministe multi-timeframe
+        -> API /api/v1/market-attention
         -> zéro OpenAI / zéro recherche Web
         -> aucun lien vers Agent / Market Discovery / Risk / Broker
 ```
 
 Le frontend n'appartient jamais à la chaîne d'exécution.
 
-## 3. Données causales et candles
+## 3. Scope avant scan
 
-`CandleStreamService` reste la source OHLCV canonique partagée. `MarketActivityAnalyzer` ne retient que les candles `5m` finalisées dont `close_time <= observed_at`. Le Batch 40 ne duplique pas ce pipeline.
+`ScopedTrendMarketAttentionRadar` conserve en mémoire le catalogue complet fourni par le composant canonique, mais retourne au cycle de scan uniquement la population compatible avec `market_scope` :
 
-## 4. Microstructure Kraken SPOT
+```text
+catalogue complet
+-> filtre scope
+-> _next_scan_batch / scan_limit
+-> CandleStreamService
+```
 
-`KrakenSpotMicrostructureProvider` étend le client REST public existant et réutilise la normalisation des erreurs transport/API. Deux endpoints publics sont utilisés :
+Le scope vaut `ALL` par défaut. Les curseurs de rotation par famille existants sont conservés.
 
-- `/0/public/Depth` avec `assetVersion=1` et un nombre borné de niveaux ;
-- `/0/public/Trades` avec `assetVersion=1` et un nombre borné de trades.
+## 4. Caches et compteurs
 
-`MarketMicrostructureAnalyzer` calcule sans I/O : meilleur bid/ask, mid, spread, profondeur base/quote, profondeur par bandes en bps, déséquilibre, cadence récente des trades, baseline, ratio d'activité, statistiques de taille, couverture du côté fournisseur et slippage théorique.
+Les snapshots peuvent rester physiquement dans les caches historiques, mais `_fresh_activities(...)` filtre toujours selon le scope courant. Les compteurs, la classification de liquidité, les diagnostics et la shortlist sont donc construits uniquement sur la population active.
 
-Les niveaux L2 non ordonnés sont triés et les prix dupliqués agrégés. Les valeurs invalides restent des erreurs de payload ; aucune métrique n'est inventée.
+Le `catalogue_market_count` v4 est recalculé sur la population éligible du scope, y compris après un changement runtime.
 
-## 5. Côté des trades
+## 5. Changement runtime
 
-Le marqueur de côté fourni par Kraken est normalisé uniquement pour les valeurs connues `b/s`. Une valeur inconnue reste `None`. Les métriques `buy_volume_base`, `sell_volume_base` et `buy_sell_imbalance` ne sont calculées que lorsque **100 %** des trades de la fenêtre récente possèdent un côté fournisseur connu. Il n'existe aucune inférence d'agresseur par heuristique prix/tick.
+`PUT /api/v1/market-attention/scope` reçoit :
 
-## 6. Slippage théorique
+```json
+{"market_scope":"SPOT"}
+```
 
-Le calcul parcourt les asks pour une acquisition hypothétique et les bids pour une cession hypothétique. Il calcule VWAP, écart absolu/bps, volume base consommé, profondeur quote disponible et `insufficient_depth`.
+Le service :
 
-Il n'appelle jamais Broker/Risk/Agent et ne construit aucun ordre. Les notionnels sont exprimés dans la devise cotée du marché.
+1. sérialise le changement avec un verrou v4 couvrant le refresh OHLCV + microstructure complet ;
+2. remplace immédiatement le `latest` v4 par un snapshot `PARTIAL` vide du nouveau scope ;
+3. lance un refresh du Radar ;
+4. renvoie le nouveau snapshot cohérent.
 
-## 7. Fail-soft
+Le frontend utilise uniquement `market_scope` renvoyé par le backend pour afficher l'état actif.
 
-La microstructure est additive :
+## 6. Direction de tendance
 
-- carnet indisponible + trades valides -> `PARTIAL` ;
-- trades indisponibles + carnet valide -> `PARTIAL` ;
-- deux sources indisponibles avec erreur -> `ERROR` microstructure ;
-- cache ancien -> `STALE` ;
-- PERPETUAL -> `NOT_APPLICABLE` pour la nouvelle couche ;
-- OHLCV valide conservé dans tous ces cas.
+Les seuils `_MATERIAL_RETURN` du Radar existant restent la source unique :
 
-## 8. Score et shortlist
+```text
+5m  = 0.003
+15m = 0.005
+1h  = 0.010
+4h  = 0.020
+```
 
-Le niveau Batch 39 reste la base. Une hausse forte d'intensité, un déséquilibre L2 ou une pression transactionnelle descriptive peuvent renforcer l'attention. Un spread large, une profondeur faible ou un slippage élevé peuvent réduire le rang d'intérêt d'un signal apparent. Aucune de ces règles n'émet une action stratégique.
+Par horizon :
 
-La diversification par régime de liquidité du Batch 39 est conservée.
+- `UP` : rendement >= seuil ;
+- `DOWN` : rendement <= -seuil ;
+- `NEUTRAL` : mouvement non matériel ;
+- `UNKNOWN` : horizon incomplet, valeur absente/non finie ou timeframe sans seuil.
 
-## 9. Coût et cadence
+Synthèse globale :
 
-`MicrostructurePolicy` borne par défaut : 100 niveaux L2, 1 000 trades, 24 marchés SPOT par refresh, concurrence 4, refresh 300 s, TTL 900 s. Le sous-scan SPOT est rotatif. Le Radar n'interroge donc pas chaque endpoint pour chaque marché à chaque seconde.
+- moins de deux horizons exploitables => `UNKNOWN` ;
+- au moins un `UP` et un `DOWN` matériels => `MIXED` ;
+- au moins deux `UP`, aucun `DOWN` => `UP` ;
+- au moins deux `DOWN`, aucun `UP` => `DOWN` ;
+- zéro mouvement matériel avec données suffisantes => `NEUTRAL` ;
+- un seul mouvement matériel isolé => `UNKNOWN`.
 
-## 10. API et cockpit
+## 7. Cohérence TRENDING
 
-Le contrat `market-attention-radar-v3` ajoute les métriques microstructure et leurs diagnostics. Le cockpit affiche les mesures de manière descriptive et rappelle qu'elles sont informatives.
+Après la classification structurelle v3, la couche v4 normalise uniquement `TRENDING` :
 
-## 11. Lifecycle
+- synthèse `UP` ou `DOWN` => `TRENDING` présent ;
+- `MIXED`, `NEUTRAL` ou `UNKNOWN` => `TRENDING` absent.
 
-`MicrostructureMarketAttentionRadar` est possédé par le lifespan FastAPI. Il ferme son client microstructure puis la couche Radar v2/catalogue ; le service candles partagé est fermé ensuite par le lifespan.
+Le niveau d'intérêt et ses raisons sont ensuite recalculés avec les mêmes fonctions canoniques du Radar. Il n'existe donc pas deux définitions divergentes de la tendance directionnelle.
 
-## 12. Isolation
+## 8. Causalité
 
-Aucun module Batch 40 Market Attention n'importe Agent, Risk, Broker, OpenAI ou outil Web. Le Radar reste read-only et `informative_only=True`.
+La direction ne lit pas les candles directement. Elle s'appuie sur les `ActivityHorizonSnapshot` produits par `MarketActivityAnalyzer`, qui ne retient déjà que les candles `is_final == True`, de bon marché/timeframe et `close_time <= observed_at`. Le Batch 41 ne crée aucun nouveau chemin OHLCV et n'ajoute aucun look-ahead.
+
+## 9. Microstructure
+
+Les invariants Batch 40 restent inchangés :
+
+- `SPOT` : microstructure possible ;
+- `PERPETUAL` : `NOT_APPLICABLE` ;
+- scope `PERPETUAL` : `_next_micro_batch(...)` retourne vide et le cache microstructure visible est vide ;
+- scope `ALL` : seuls les marchés SPOT peuvent appeler `/Depth` et `/Trades`.
+
+## 10. Contrat et cockpit
+
+`market-attention-radar-v4` expose `market_scope`, la tendance globale et les tendances par timeframe. Le cockpit affiche `SPOT / PERP / TOUS`, la direction globale dans la ligne principale et chaque direction dans le détail OHLCV, sans masquer les variations numériques.
+
+## 11. Isolation
+
+Aucun module Batch 41 Market Attention n'importe Agent, Risk, Broker, OpenAI ou outil Web. Le Radar reste read-only vis-à-vis de Kraken et `informative_only=True`.

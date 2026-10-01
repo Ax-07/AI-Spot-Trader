@@ -93,7 +93,8 @@ def test_market_attention_api_is_read_only_and_exposes_latest_snapshot() -> None
         response = client.get("/api/v1/market-attention")
         assert response.status_code == 200
         assert response.json()["informative_only"] is True
-        assert response.json()["protocol_version"] == "market-attention-radar-v3"
+        assert response.json()["protocol_version"] == "market-attention-radar-v4"
+        assert response.json()["market_scope"] == "ALL"
         assert "microstructure_status_counts" in response.json()
         assert client.post("/api/v1/market-attention").status_code == 405
 

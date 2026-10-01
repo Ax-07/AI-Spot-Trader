@@ -3,10 +3,11 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub réel          : 6d263be5edb589723101c32065ad68434b0b64f1
-Commit                    : feat: enrich market attention with kraken microstructure
-Batch 39                  : intégré
-Batch 40                  : intégré
+HEAD GitHub réel       : 2a368c76f30373a6b9003324a1a14d8192cc0ad8
+Commit                 : docs: mark batch 40 as integrated
+Batch 39               : intégré
+Batch 40               : intégré
+Batch 41               : patch proposé, non intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -25,28 +26,25 @@ AI Spot Trader conserve un seul Agent IA stratégique, Kraken comme exchange ini
 
 ## État intégré jusqu'au Batch 40
 
-Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et les caractéristiques structurelles. Le Batch 39, intégré dans `5bff583` puis marqué intégré par `2aaff09`, a supprimé la couche Web/IA du Radar. Le Batch 40, intégré dans `6d263be`, a ajouté la microstructure Kraken SPOT et le contrat Radar v3.
+Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et les caractéristiques structurelles. Le Batch 39 a supprimé la couche Web/IA du Radar. Le Batch 40 a ajouté la microstructure Kraken SPOT et le contrat Radar v3.
 
-## Batch 40 — microstructure Kraken
+## Batch 41 — scope de marché et direction de tendance
 
-**État : intégré.**
+**État : patch proposé localement, non intégré.**
 
-Objectif : enrichir le Radar avec trades publics SPOT récents et carnet L2 Kraken, puis calculer spread, profondeur, déséquilibre, intensité, pression fournisseur descriptive et slippage théorique, sans ordre et sans IA/Web.
+Objectifs :
 
-Architecture intégrée :
-
-```text
-OHLCV Batch 39
-+
-Depth/Trades Kraken SPOT bornés
-=
-Market Attention Radar v3
-```
-
-Invariants : cache court, sous-scan SPOT rotatif, fail-soft, aucune nouvelle clé privée, PERPETUAL historique non étendu, isolation Agent/Risk/Broker et `informative_only=True`.
+- sélectionner `SPOT`, `PERPETUAL` ou `ALL` avant le scan ;
+- conserver `ALL` par défaut ;
+- empêcher toute fuite de cache ou compteur hors scope ;
+- conserver la microstructure SPOT uniquement ;
+- exposer `UP / DOWN / NEUTRAL / MIXED / UNKNOWN` par horizon et globalement ;
+- faire dériver `TRENDING` de la même synthèse ;
+- exposer le contrat `market-attention-radar-v4` et le contrôle cockpit associé.
 
 ## Périmètres ultérieurs possibles
 
+- filtre d'affichage ou de recherche par direction, dans un batch séparé ;
 - métriques de retard `scheduled_close -> cycle_start` ;
 - cadence stratégique adaptée aux positions ouvertes ;
 - éventuelle utilisation explicite de données Radar comme contexte Agent, uniquement après décision architecturale ;

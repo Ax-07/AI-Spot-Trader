@@ -35,7 +35,7 @@ from ai_spot_trader.integrations.kraken.attention import KrakenAttentionCatalogu
 from ai_spot_trader.integrations.kraken.candles import KrakenCandleProvider
 from ai_spot_trader.integrations.kraken.microstructure import KrakenSpotMicrostructureProvider
 from ai_spot_trader.market.attention import MarketAttentionPolicy, MarketAttentionRadar
-from ai_spot_trader.market.attention_microstructure import MicrostructureMarketAttentionRadar
+from ai_spot_trader.market.attention_scope_trend import ScopedTrendMarketAttentionRadar
 from ai_spot_trader.market.candles import CandleCache, CandleStreamService
 from ai_spot_trader.market.microstructure import MicrostructurePolicy
 from ai_spot_trader.persistence.analytics import (
@@ -103,7 +103,7 @@ def create_app(
         )
 
     def build_market_attention(candles: CandleStreamService) -> MarketAttentionRadar:
-        return MicrostructureMarketAttentionRadar(
+        return ScopedTrendMarketAttentionRadar(
             candle_service=candles,
             catalogue=KrakenAttentionCatalogue(
                 spot_rest_url=resolved_settings.kraken_rest_url,

@@ -11,68 +11,62 @@ Market Attention Radar reste strictement observationnel et ne prend aucune déci
 ## Référence courante
 
 ```text
-HEAD GitHub audité : 6d263be5edb589723101c32065ad68434b0b64f1
-Commit              : feat: enrich market attention with kraken microstructure
-Batch 39            : intégré
+HEAD GitHub audité : 2a368c76f30373a6b9003324a1a14d8192cc0ad8
+Commit              : docs: mark batch 40 as integrated
 Batch 40            : intégré
+Batch 41            : patch proposé, non intégré
 ```
 
-## Changelog — 2026-10-01 — Batch 40 Microstructure Kraken
+## Changelog — 2026-10-01 — Batch 41 Scope et tendance
 
-- ajout d'un lecteur REST public Kraken SPOT pour `/Depth` et `/Trades` ;
-- ajout d'un analyseur microstructure pur et déterministe ;
-- calcul meilleur bid/ask, mid, spread absolu/bps ;
-- calcul profondeur base/quote et bandes `±5/10/25/50 bps` ;
-- calcul déséquilibre bid/ask ;
-- calcul compte/volume/taille moyenne/médiane/cadence des trades ;
-- comparaison d'une fenêtre récente de 60 s à une baseline précédente de 240 s dans une fenêtre totale de 300 s ;
-- utilisation du côté fournisseur uniquement lorsqu'il est disponible ; aucune heuristique d'agresseur ;
-- slippage théorique pour `100/500/1000/5000` unités de devise cotée ;
-- sous-scan microstructure SPOT rotatif et borné à 24 marchés par refresh par défaut ;
-- cache microstructure fail-soft ;
-- nouveau contrat API `market-attention-radar-v3` ;
-- cockpit enrichi sans transformer le Radar en terminal d'exécution ;
-- aucune modification de l'Agent, du Risk Engine ou du Broker.
+- ajout d'un scope runtime `SPOT / PERPETUAL / ALL`, `ALL` par défaut ;
+- filtrage avant rotation et scan OHLCV ;
+- caches frais, compteurs, liquidité, diagnostics et shortlist filtrés au scope ;
+- nouvel endpoint `PUT /api/v1/market-attention/scope` ;
+- ajout de `UP / DOWN / NEUTRAL / MIXED / UNKNOWN` par horizon ;
+- ajout d'une synthèse globale multi-timeframe ;
+- `TRENDING` dérivé de la même synthèse directionnelle ;
+- microstructure explicitement neutralisée en scope `PERPETUAL` ;
+- contrat public proposé `market-attention-radar-v4` ;
+- cockpit piloté par le scope backend et affichage de tendance global/détaillé ;
+- aucune modification Agent/Risk/Broker et aucune exécution dérivée du Radar.
 
-## ADR-298 — Microstructure comme enrichissement, pas comme second Radar
+## ADR-304 — Scope runtime comme couche au-dessus du Radar canonique
 
-**INTÉGRÉ Batch 40.**
+**PROPOSÉ Batch 41.**
 
-`MicrostructureMarketAttentionRadar` réutilise `MarketAttentionRadar` Batch 39 et enrichit ses snapshots. Le pipeline OHLCV canonique n'est pas dupliqué.
+Le scope n'est pas un nouveau `MarketType`. `MarketType` reste le type canonique d'un marché ; `MarketScope` représente uniquement la sélection utilisateur `SPOT / PERPETUAL / ALL`.
 
-## ADR-299 — REST snapshots bornés avant streaming microstructure
+La couche `ScopedTrendMarketAttentionRadar` hérite du Radar microstructure existant et filtre la population retournée par le catalogue avant `_next_scan_batch`. Aucun second catalogue ou pipeline candles n'est créé.
 
-**INTÉGRÉ Batch 40.**
+## ADR-305 — Cache conservé physiquement, filtré logiquement
 
-Le Batch 40 utilise les endpoints publics REST L2/trades avec limites et cache court. Aucun nouveau WebSocket complexe n'est introduit sans besoin mesuré.
+**PROPOSÉ Batch 41.**
 
-## ADR-300 — Unités de slippage explicites
+Un changement de scope ne purge pas obligatoirement les snapshots d'une famille exclue. En revanche, `_fresh_activities` et les sorties v4 ne laissent jamais ces snapshots participer au calcul courant. Cela permet un retour à `ALL` sans réintroduire de données hors scope dans le snapshot actif.
 
-**INTÉGRÉ Batch 40.**
+## ADR-306 — Synthèse directionnelle unique
 
-Les notionnels théoriques sont exprimés dans la devise cotée. Un marché `BTC/USD` utilise donc des USD ; un marché `BTC/EUR` utilise des EUR. Aucune conversion FX implicite n'est autorisée.
+**PROPOSÉ Batch 41.**
 
-## ADR-301 — Côté Kraken sans inférence d'agresseur
+Les seuils `_MATERIAL_RETURN` existants déterminent la direction de chaque horizon. La synthèse globale gère explicitement l'alignement, les conflits et l'insuffisance de preuve. `TRENDING` est ensuite ajouté uniquement pour `UP` ou `DOWN`, puis l'intérêt est recalculé avec la fonction canonique existante.
 
-**INTÉGRÉ Batch 40.**
+## ADR-307 — Contrat Radar v4
 
-Le côté `b/s` fourni par Kraken peut alimenter une description acheteur/vendeur. Si la donnée est absente ou inconnue, les métriques directionnelles correspondantes restent `None`.
+**PROPOSÉ Batch 41.**
 
-## ADR-302 — Microstructure additive et fail-soft
+L'ajout d'un état runtime global et de champs directionnels imbriqués est considéré comme une évolution significative du schéma public. Backend et frontend passent donc ensemble à `market-attention-radar-v4`.
 
-**INTÉGRÉ Batch 40.**
+## ADR-308 — Microstructure toujours SPOT uniquement
 
-Une indisponibilité du carnet ou des trades ne invalide pas l'OHLCV. Le statut/qualité microstructure est exposé séparément et ne déclenche Agent, Risk ou Broker.
+**RÉAFFIRMÉ Batch 41.**
 
-## ADR-303 — Contrat API Radar v3
-
-**INTÉGRÉ Batch 40.**
-
-`market-attention-radar-v3` ajoute spread, profondeur, déséquilibre, activité des trades, slippage, qualité/fraîcheur microstructure et diagnostics à la structure v2.
+En scope `PERPETUAL`, aucun sous-scan `/Depth` ou `/Trades` n'est déclenché et le cache microstructure exposé est vide. Les marchés PERPETUAL sont représentés avec `NOT_APPLICABLE`.
 
 ## Points explicitement non décidés
 
 - utilisation du Radar comme contexte de l'Agent stratégique ;
+- filtre de shortlist par direction ;
 - réaction stratégique intra-bougie ;
 - streaming WebSocket L2/trades ;
 - LIVE.
