@@ -3,10 +3,10 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub réel          : 2776fc68fb0ff8c094148a246d22de844ee868c7
-Commit                    : feat: prefilter market attention web research
+HEAD GitHub réel          : 5bff583b47acf2b3a2a112611c40e0046c78cc3e
+Commit                    : feat: make market attention radar kraken-only
 Batch 38                  : intégré
-Batch 39                  : patch proposé/local non intégré
+Batch 39                  : intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -23,15 +23,15 @@ AI Spot Trader conserve un seul Agent IA stratégique, Kraken comme exchange ini
 4. streaming/caches marché : technique et déterministe ;
 5. Market Attention Radar : observation déterministe Kraken.
 
-## État intégré jusqu'au Batch 38
+## État intégré jusqu'au Batch 39
 
-Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38, intégré dans `2776fc6`, a ajouté le préfiltrage Kraken, les caractéristiques structurelles et `LOW/MEDIUM/HIGH/VERY_HIGH`, tout en conservant encore une couche Web auxiliaire.
+Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken, les caractéristiques structurelles et `LOW/MEDIUM/HIGH/VERY_HIGH`, tout en conservant encore une couche Web auxiliaire. Le Batch 39, intégré dans `5bff583`, a supprimé cette couche Web/IA pour rendre le Radar entièrement déterministe et basé sur les données Kraken.
 
 ## Batch 39 — Radar 100 % Kraken, zéro IA/Web
 
-**État : patch proposé/local non intégré.**
+**État : intégré sur `main`.**
 
-Objectif : supprimer la couche auxiliaire de recherche publique au lieu de seulement en réduire le coût.
+Architecture courante :
 
 ```text
 Kraken
@@ -43,7 +43,7 @@ Kraken
 -> observabilité
 ```
 
-Décisions :
+Décisions intégrées :
 
 - suppression du wiring `OpenAIWebAttentionResearcher` du Radar ;
 - suppression du cache, TTL, cooldown, budget et décisions de recherche publique ;
@@ -57,7 +57,7 @@ Décisions :
 
 ## Batch 40 — microstructure Kraken
 
-Batch dédié, volontairement séparé : trades Kraken, carnet L2, spread, profondeur, déséquilibre bid/ask, intensité des trades et slippage théorique. Ces éléments ne doivent pas être introduits dans Batch 39.
+Batch dédié, volontairement séparé : trades Kraken, carnet L2, spread, profondeur, déséquilibre bid/ask, intensité des trades et slippage théorique. Ces éléments ne doivent pas être introduits rétroactivement dans le Batch 39.
 
 ## Périmètres ultérieurs possibles
 

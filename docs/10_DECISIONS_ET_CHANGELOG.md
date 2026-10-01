@@ -11,10 +11,10 @@ Market Attention Radar reste strictement observationnel et ne prend aucune déci
 ## Référence courante
 
 ```text
-HEAD GitHub audité : 2776fc68fb0ff8c094148a246d22de844ee868c7
-Commit              : feat: prefilter market attention web research
+HEAD GitHub audité : 5bff583b47acf2b3a2a112611c40e0046c78cc3e
+Commit              : feat: make market attention radar kraken-only
 Batch 38            : intégré
-Batch 39            : patch local proposé
+Batch 39            : intégré
 ```
 
 ## Changelog — 2026-10-01 — Batch 39 Radar Kraken sans IA
@@ -58,19 +58,19 @@ La question d'un modèle OpenAI auxiliaire distinct n'a plus lieu d'être puisqu
 
 ## ADR-295 — Market Attention Radar v2 est Kraken-only et déterministe
 
-**ADOPTÉ DANS LE PATCH BATCH 39 — À INTÉGRER.**
+**INTÉGRÉ dans `5bff583`.**
 
 Le Radar répond uniquement à la question : « quels marchés présentent actuellement un comportement suffisamment inhabituel ou intéressant pour mériter l'attention ? ». Il ne recherche plus d'explication narrative ou de news.
 
 ## ADR-296 — Suppression de la couche Public Attention
 
-**ADOPTÉ DANS LE PATCH BATCH 39 — À INTÉGRER.**
+**INTÉGRÉ dans `5bff583`.**
 
 `PublicAttentionResearcher`, `PublicAttentionSnapshot`, `PublicResearchDecision`, l'adaptateur OpenAI dédié et les métriques Web disparaissent du contrat courant. Aucun compteur artificiellement nul n'est conservé.
 
 ## ADR-297 — Contrat API Radar v2
 
-**ADOPTÉ DANS LE PATCH BATCH 39 — À INTÉGRER.**
+**INTÉGRÉ dans `5bff583`.**
 
 Le protocole `market-attention-radar-v2` expose directement l'activité Kraken, les caractéristiques, l'intérêt, les raisons, la liquidité, la qualité/fraîcheur et les diagnostics. Une rupture de contrat explicite est préférée au maintien de champs trompeurs.
 

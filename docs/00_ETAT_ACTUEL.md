@@ -5,19 +5,19 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD réel  : 2776fc68fb0ff8c094148a246d22de844ee868c7
-Commit     : feat: prefilter market attention web research
+HEAD réel  : 5bff583b47acf2b3a2a112611c40e0046c78cc3e
+Commit     : feat: make market attention radar kraken-only
 ```
 
-État revérifié le 01/10/2026 au démarrage du Batch 39. Le Batch 38 est **intégré** dans ce HEAD. L'ancienne référence `c699e7c` et la mention « Batch 38 local/non intégré » étaient obsolètes.
+État revérifié le 01/10/2026 après intégration du Batch 39. Les Batches 38 et 39 sont **intégrés** dans ce HEAD.
 
 ## Batch 39 — Radar Kraken sans IA/Web
 
-**État : patch proposé/local non intégré.**
+**État : intégré sur `main`.**
 
-Objectif du patch : supprimer complètement le chemin auxiliaire OpenAI/Web du Market Attention Radar et conserver uniquement l'analyse déterministe des données Kraken.
+Le Batch 39 supprime complètement le chemin auxiliaire OpenAI/Web du Market Attention Radar et conserve uniquement l'analyse déterministe des données Kraken.
 
-Architecture proposée :
+Architecture intégrée :
 
 ```text
 Kraken
@@ -30,7 +30,7 @@ Kraken
 -> observabilité read-only
 ```
 
-Le contrat API passe à `market-attention-radar-v2`. Sont supprimés du contrat courant : Public Attention, recherche Web, cache/TTL/cooldown/budget Web et leurs compteurs. Le cockpit affiche directement les caractéristiques, raisons d'intérêt, régime de liquidité, fraîcheur/qualité des données et erreurs Kraken.
+Le contrat API est `market-attention-radar-v2`. Sont supprimés du contrat courant : Public Attention, recherche Web, cache/TTL/cooldown/budget Web et leurs compteurs. Le cockpit affiche directement les caractéristiques, raisons d'intérêt, régime de liquidité, fraîcheur/qualité des données et erreurs Kraken.
 
 Invariants : `informative_only=True`, aucune décision `BUY/SELL/HOLD`, aucun appel LLM/Web depuis le Radar, aucune dépendance vers Agent/Risk/Broker/Discovery, réutilisation du `CandleStreamService`, calculs uniquement sur bougies finalisées et non futures.
 
