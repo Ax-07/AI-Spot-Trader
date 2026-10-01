@@ -5,30 +5,44 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD réel  : 9fc6a4a15f1c44c8ff7b43a342ab8d74bbedb892
-Commit     : ux: simplify financial terminology
+HEAD réel  : c699e7ce9fc4f9f43f005d7e8c19199a30befdf1
+Commit     : feat: align AI decisions with candle closes
 ```
 
-État revérifié le 30/09/2026 au démarrage du Batch 37. Le Batch 36 est **intégré** dans ce HEAD. Les références documentaires précédentes à `58b59ba...` et au Batch 36 « local/non intégré » sont obsolètes.
+État revérifié le 01/10/2026 au démarrage du Batch 38. Le Batch 37 est **intégré** dans ce HEAD. L'ancienne référence `9fc6a4a...` et la mention « Batch 37 local/non intégré » étaient obsolètes.
 
-## Batch 37 — cadence stratégique IA synchronisée aux bougies
+## Batch 38 — Market Attention : préfiltrage Kraken et maîtrise du coût IA
 
 **État : patch proposé/local non intégré.**
 
-Le patch ajoute un scheduling stratégique unique avec deux modes :
+Le Radar conserve son rôle strictement informatif et indépendant du trading. Le changement principal est un entonnoir déterministe avant toute recherche publique :
 
-- `CANDLE_CLOSE` : cycle autonome aligné sur une clôture de bougie canonique ;
-- `INTERVAL` : comportement historique conservé (`cycle -> attente X secondes -> cycle`).
+```text
+catalogue Kraken
+-> OHLCV canonique 5m
+-> activité / liquidité
+-> caractéristiques structurelles descriptives
+-> niveau d'intérêt déterministe
+-> shortlist réduite
+-> web_search seulement si HIGH / VERY_HIGH et événement justifié
+```
 
-Nouvelles Sessions :
+Le pipeline OHLC existant est réutilisé ; aucun second cache ou pipeline candles n'est créé.
 
-- SCALP : recommandation UX `CANDLE_CLOSE` sur `5m` ;
-- SWING : recommandation UX `CANDLE_CLOSE` sur `4h`.
+Nouvelles caractéristiques descriptives possibles : tendance multi-horizons, anomalie de volume, expansion de volatilité/range, breakout à surveiller, retournement à surveiller, consolidation et divergence prix/volume. Elles ne constituent ni un signal directionnel ni un ordre.
 
-Les Campaigns historiques sans nouveau champ restent exactement en mode `INTERVAL`; leur payload canonique et leur digest ne sont pas réécrits. Aucune migration DB n'est ajoutée.
+Politique proposée :
 
-Le scheduler réutilise `CandleStreamService` pour vérifier la finalité d'une bougie et ne crée aucun second pipeline OHLC. Le contexte stratégique multi-timeframes reste distinct du timeframe de déclenchement et conserve les garanties `history_as_of(...)` sans look-ahead.
+- `candidate_limit` par défaut : `10` au lieu de `20` ;
+- `max_web_searches_per_refresh` : `2` par défaut, plafond runtime `3` ;
+- `public_attention_ttl_seconds` : `7200` s (2 h) ;
+- cooldown événementiel : `900` s avant un refresh anticipé ;
+- aucun appel web pour `LOW` ou `MEDIUM` ;
+- cache réutilisé tant qu'il reste valable, sauf changement déterministe significatif après cooldown ;
+- recherches exécutées séquentiellement et bornées pour éviter les bursts.
 
-Le monitoring/mark-to-market continue indépendamment. Market Discovery garde sa cadence propre, évaluée lors du passage d'un cycle stratégique par Discovery. Market Attention reste strictement informatif.
+L'observabilité API expose le nombre de candidats éligibles, recherches réalisées, cache utilisé, rafraîchissements événementiels et recherches évitées, ainsi que la décision de recherche par candidat.
 
-Voir `docs/37_BATCH_CADENCE_IA_BOUGIES.md`.
+Le couplage actuel du modèle auxiliaire Radar à `resolved_settings.llm_model` est confirmé par audit. La séparation de configuration `Agent stratégique / Market Attention` reste **à décider** dans un batch dédié afin de ne pas élargir ce patch de coût/radar à la configuration globale sans validation opérateur.
+
+Voir `docs/38_BATCH_MARKET_ATTENTION_PREFILTRAGE.md`.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import math
 from collections import deque
+from dataclasses import dataclass
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -86,6 +87,45 @@ class AttentionLevel(StrEnum):
     HIGH = "HIGH"
 
 
+class MarketCharacteristic(StrEnum):
+    """Descriptive, non-strategic market facts derived only from canonical candles."""
+
+    TRENDING = "TRENDING"
+    VOLUME_ANOMALY = "VOLUME_ANOMALY"
+    VOLATILITY_EXPANSION = "VOLATILITY_EXPANSION"
+    BREAKOUT_WATCH = "BREAKOUT_WATCH"
+    REVERSAL_WATCH = "REVERSAL_WATCH"
+    CONSOLIDATING = "CONSOLIDATING"
+    PRICE_VOLUME_DIVERGENCE = "PRICE_VOLUME_DIVERGENCE"
+
+
+class RadarInterestLevel(StrEnum):
+    """Deterministic attention priority; never a BUY/SELL/HOLD recommendation."""
+
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    VERY_HIGH = "VERY_HIGH"
+
+
+class PublicResearchTrigger(StrEnum):
+    NEW_HIGH_INTEREST = "NEW_HIGH_INTEREST"
+    CACHE_EXPIRED = "CACHE_EXPIRED"
+    RETRY_AFTER_ERROR = "RETRY_AFTER_ERROR"
+    INTEREST_ESCALATION = "INTEREST_ESCALATION"
+    BREAKOUT_EVENT = "BREAKOUT_EVENT"
+    REVERSAL_EVENT = "REVERSAL_EVENT"
+    NEW_TOP_MARKET = "NEW_TOP_MARKET"
+
+
+class PublicResearchSkipReason(StrEnum):
+    INTEREST_BELOW_HIGH = "INTEREST_BELOW_HIGH"
+    RESEARCHER_NOT_CONFIGURED = "RESEARCHER_NOT_CONFIGURED"
+    CACHE_FRESH = "CACHE_FRESH"
+    EVENT_COOLDOWN = "EVENT_COOLDOWN"
+    BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
+
+
 class AttentionModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -97,13 +137,16 @@ class MarketAttentionPolicy(AttentionModel):
     refresh_seconds: float = Field(default=300.0, ge=30.0, le=86_400.0)
     catalogue_ttl_seconds: float = Field(default=1800.0, ge=60.0, le=86_400.0)
     activity_ttl_seconds: float = Field(default=900.0, ge=60.0, le=86_400.0)
-    public_attention_ttl_seconds: float = Field(default=1800.0, ge=60.0, le=86_400.0)
+    public_attention_ttl_seconds: float = Field(default=7200.0, ge=60.0, le=86_400.0)
+    public_attention_event_cooldown_seconds: float = Field(
+        default=900.0, ge=60.0, le=86_400.0
+    )
     stale_after_seconds: float = Field(default=900.0, ge=30.0, le=86_400.0)
     scan_limit: int = Field(default=120, ge=10, le=500)
     scan_concurrency: int = Field(default=8, ge=1, le=32)
-    candidate_limit: int = Field(default=20, ge=1, le=30)
+    candidate_limit: int = Field(default=10, ge=1, le=30)
     diagnostic_market_limit: int = Field(default=10, ge=1, le=30)
-    max_web_searches_per_refresh: int = Field(default=8, ge=0, le=30)
+    max_web_searches_per_refresh: int = Field(default=2, ge=0, le=30)
     candle_limit: int = Field(default=720, ge=160, le=1000)
     baseline_periods: int = Field(default=6, ge=3, le=20)
     history_limit: int = Field(default=96, ge=1, le=1000)
@@ -114,6 +157,10 @@ class MarketAttentionPolicy(AttentionModel):
             raise ValueError("unsupported market attention protocol")
         if self.max_web_searches_per_refresh > self.candidate_limit:
             raise ValueError("max_web_searches_per_refresh cannot exceed candidate_limit")
+        if self.public_attention_event_cooldown_seconds > self.public_attention_ttl_seconds:
+            raise ValueError(
+                "public_attention_event_cooldown_seconds cannot exceed public_attention_ttl_seconds"
+            )
         return self
 
 
@@ -130,8 +177,14 @@ class ActivityHorizonSnapshot(AttentionModel):
     notional_delta_usd: Decimal | None = None
     notional_method: str | None = None
     price_return: Decimal | None = None
+    previous_price_return: Decimal | None = None
     price_range: Decimal | None = None
+    baseline_price_range: Decimal | None = None
+    range_expansion_ratio: Decimal | None = None
     realized_volatility: Decimal | None = None
+    baseline_realized_volatility: Decimal | None = None
+    volatility_expansion_ratio: Decimal | None = None
+    breakout_distance: Decimal | None = None
     observation_count: int = Field(ge=0)
     baseline_period_count: int = Field(ge=0)
     no_trade_interval_count: int = Field(default=0, ge=0)
@@ -149,6 +202,9 @@ class MarketActivitySnapshot(AttentionModel):
     liquidity_reference_usd: Decimal | None = Field(default=None, ge=0)
     freshness_seconds: Decimal | None = Field(default=None, ge=0)
     horizons: tuple[ActivityHorizonSnapshot, ...]
+    characteristics: tuple[MarketCharacteristic, ...] = ()
+    interest_level: RadarInterestLevel = RadarInterestLevel.LOW
+    interest_reasons: tuple[str, ...] = ()
     data_quality: ActivityDataQuality = ActivityDataQuality.COMPLETE
     error_type: str | None = None
 
@@ -294,9 +350,32 @@ class PublicAttentionSnapshot(AttentionModel):
         return self
 
 
+class PublicResearchDecision(AttentionModel):
+    asset: str = Field(min_length=1, max_length=64)
+    eligible: bool
+    performed: bool
+    cache_used: bool
+    event_refresh: bool = False
+    trigger: PublicResearchTrigger | None = None
+    skip_reason: PublicResearchSkipReason | None = None
+
+    @model_validator(mode="after")
+    def validate_decision(self) -> "PublicResearchDecision":
+        if self.performed and (not self.eligible or self.cache_used or self.trigger is None):
+            raise ValueError("performed public research requires eligibility, a trigger and no cache hit")
+        if self.event_refresh and not self.performed:
+            raise ValueError("event_refresh requires performed public research")
+        if self.performed and self.skip_reason is not None:
+            raise ValueError("performed public research cannot carry a skip reason")
+        if not self.performed and self.skip_reason is None:
+            raise ValueError("skipped public research requires a skip reason")
+        return self
+
+
 class MarketAttentionSnapshot(AttentionModel):
     market_activity: MarketActivitySnapshot
     public_attention: PublicAttentionSnapshot
+    public_research: PublicResearchDecision
     cross_state: CrossAttentionState
     attention_level: AttentionLevel
 
@@ -316,7 +395,11 @@ class MarketAttentionOverview(AttentionModel):
     scanned_market_type_counts: MarketTypeCounts = Field(default_factory=MarketTypeCounts)
     fresh_market_type_counts: MarketTypeCounts = Field(default_factory=MarketTypeCounts)
     candidate_market_count: int = Field(default=0, ge=0)
+    public_research_eligible_count: int = Field(default=0, ge=0)
     web_search_count: int = Field(default=0, ge=0)
+    public_research_cache_hit_count: int = Field(default=0, ge=0)
+    public_research_event_refresh_count: int = Field(default=0, ge=0)
+    public_research_skipped_count: int = Field(default=0, ge=0)
     activity_status_counts: ActivityStatusCounts = Field(default_factory=ActivityStatusCounts)
     activity_state_counts: ActivityStateCounts = Field(default_factory=ActivityStateCounts)
     activity_data_quality_counts: ActivityDataQualityCounts = Field(
@@ -432,14 +515,16 @@ class MarketActivityAnalyzer:
             status = RadarStatus.STALE
         else:
             status = RadarStatus.AVAILABLE
-        return MarketActivitySnapshot(
-            market=market,
-            observed_at=observed_at,
-            status=status,
-            activity_state=activity_state,
-            freshness_seconds=freshness_seconds,
-            horizons=horizons,
-            data_quality=_snapshot_data_quality(horizons),
+        return _with_market_structure(
+            MarketActivitySnapshot(
+                market=market,
+                observed_at=observed_at,
+                status=status,
+                activity_state=activity_state,
+                freshness_seconds=freshness_seconds,
+                horizons=horizons,
+                data_quality=_snapshot_data_quality(horizons),
+            )
         )
 
     def _empty_horizon(self, timeframe: CandleTimeframe) -> ActivityHorizonSnapshot:
@@ -591,6 +676,7 @@ class MarketActivityAnalyzer:
         )
 
         current_real = real(current)
+        previous_real = real(previous)
         baseline_real_groups = tuple(real(group) for group in baseline_groups)
         current_notional_usd = _spot_usd_notional(current_real, market=market)
         baseline_notional_usd: Decimal | None = None
@@ -607,17 +693,64 @@ class MarketActivityAnalyzer:
                 notional_delta_usd = current_notional_usd - baseline_notional_usd
                 notional_method = "SPOT_BASE_VOLUME_X_5M_CLOSE_ESTIMATE"
 
-        price_return: Decimal | None = None
-        price_range: Decimal | None = None
-        realized_volatility: Decimal | None = None
-        if current_real:
-            price_return = _safe_ratio(current_real[-1].close, current_real[0].open)
-            price_return = price_return - Decimal(1) if price_return is not None else None
-            high = max(item.high for item in current_real)
-            low = min(item.low for item in current_real)
-            price_range = _safe_ratio(high, low)
-            price_range = price_range - Decimal(1) if price_range is not None else None
-            realized_volatility = _realized_volatility(current_real)
+        price_return = _price_return(current_real)
+        previous_price_return = _price_return(previous_real)
+        price_range = _price_range(current_real)
+        realized_volatility = _realized_volatility(current_real) if current_real else None
+
+        baseline_ranges = tuple(
+            value
+            for group in baseline_real_groups
+            if (value := _price_range(group)) is not None
+        )
+        baseline_price_range = (
+            Decimal(median(baseline_ranges))
+            if len(baseline_ranges) == len(baseline_real_groups) and baseline_ranges
+            else None
+        )
+        range_expansion_ratio = (
+            _safe_ratio(price_range, baseline_price_range)
+            if price_range is not None
+            and baseline_price_range is not None
+            and baseline_price_range > 0
+            else None
+        )
+
+        baseline_volatilities = tuple(
+            value
+            for group in baseline_real_groups
+            if (value := _realized_volatility(group)) is not None
+        )
+        baseline_realized_volatility = (
+            Decimal(median(baseline_volatilities))
+            if len(baseline_volatilities) == len(baseline_real_groups)
+            and baseline_volatilities
+            else None
+        )
+        volatility_expansion_ratio = (
+            _safe_ratio(realized_volatility, baseline_realized_volatility)
+            if realized_volatility is not None
+            and baseline_realized_volatility is not None
+            and baseline_realized_volatility > 0
+            else None
+        )
+
+        breakout_distance: Decimal | None = None
+        reference_real = previous_real + tuple(
+            candle for group in baseline_real_groups for candle in group
+        )
+        if current_real and reference_real:
+            reference_high = max(item.high for item in reference_real)
+            reference_low = min(item.low for item in reference_real)
+            last_close = current_real[-1].close
+            if last_close > reference_high:
+                ratio = _safe_ratio(last_close, reference_high)
+                breakout_distance = ratio - Decimal(1) if ratio is not None else None
+            elif last_close < reference_low:
+                ratio = _safe_ratio(last_close, reference_low)
+                breakout_distance = ratio - Decimal(1) if ratio is not None else None
+            else:
+                breakout_distance = Decimal(0)
 
         quality = (
             ActivityDataQuality.NO_TRADE_GAPS
@@ -637,8 +770,14 @@ class MarketActivityAnalyzer:
             notional_delta_usd=notional_delta_usd,
             notional_method=notional_method,
             price_return=price_return,
+            previous_price_return=previous_price_return,
             price_range=price_range,
+            baseline_price_range=baseline_price_range,
+            range_expansion_ratio=range_expansion_ratio,
             realized_volatility=realized_volatility,
+            baseline_realized_volatility=baseline_realized_volatility,
+            volatility_expansion_ratio=volatility_expansion_ratio,
+            breakout_distance=breakout_distance,
             observation_count=len(current_real),
             baseline_period_count=len(baseline_groups),
             no_trade_interval_count=len(missing_opens) if missing_intervals_mean_no_trades else 0,
@@ -646,6 +785,13 @@ class MarketActivityAnalyzer:
             data_quality=quality,
             complete=volume_ratio is not None,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _AssetRadarState:
+    interest_level: RadarInterestLevel
+    characteristics: frozenset[MarketCharacteristic]
+    is_top_market: bool
 
 
 class MarketAttentionRadar:
@@ -676,6 +822,7 @@ class MarketAttentionRadar:
         self._activity_cache: dict[ExecutableMarket, MarketActivitySnapshot] = {}
         self._activity_payload_stages: dict[ExecutableMarket, str] = {}
         self._public_cache: dict[str, PublicAttentionSnapshot] = {}
+        self._previous_asset_states: dict[str, _AssetRadarState] = {}
         self._history: deque[MarketAttentionOverview] = deque(maxlen=self._policy.history_limit)
         self._latest: MarketAttentionOverview | None = None
         self._task: asyncio.Task[None] | None = None
@@ -730,7 +877,7 @@ class MarketAttentionRadar:
                 liquidity_counts = _liquidity_regime_counts(fresh_activities)
                 subthreshold_activity = self._subthreshold_activity(fresh_activities)
                 candidates = self._candidates_from(fresh_activities)
-                public_by_asset, web_search_count = await self._public_attention(
+                public_by_asset, research_by_asset, web_search_count = await self._public_attention(
                     candidates,
                     now=now,
                 )
@@ -749,11 +896,16 @@ class MarketAttentionRadar:
                             context=(
                                 "OpenAI web search is not configured."
                                 if self._researcher is None
-                                else (
-                                    "No public web research was allocated to this candidate "
-                                    "in this refresh."
-                                )
+                                else "No public web research was required for this candidate."
                             ),
+                        ),
+                        research_by_asset.get(_base_asset(activity.market.symbol))
+                        or PublicResearchDecision(
+                            asset=_base_asset(activity.market.symbol),
+                            eligible=False,
+                            performed=False,
+                            cache_used=False,
+                            skip_reason=PublicResearchSkipReason.INTEREST_BELOW_HIGH,
                         ),
                     )
                     for activity in candidates
@@ -774,7 +926,19 @@ class MarketAttentionRadar:
                     scanned_market_type_counts=scanned_market_type_counts,
                     fresh_market_type_counts=fresh_market_type_counts,
                     candidate_market_count=len(shortlist),
+                    public_research_eligible_count=sum(
+                        item.eligible for item in research_by_asset.values()
+                    ),
                     web_search_count=web_search_count,
+                    public_research_cache_hit_count=sum(
+                        item.cache_used for item in research_by_asset.values()
+                    ),
+                    public_research_event_refresh_count=sum(
+                        item.event_refresh for item in research_by_asset.values()
+                    ),
+                    public_research_skipped_count=sum(
+                        not item.performed for item in research_by_asset.values()
+                    ),
                     activity_status_counts=status_counts,
                     activity_state_counts=state_counts,
                     activity_data_quality_counts=data_quality_counts,
@@ -982,8 +1146,9 @@ class MarketAttentionRadar:
             )
             references[market_type] = tuple(sorted(values))
 
-        return tuple(
-            snapshot.model_copy(
+        classified: list[MarketActivitySnapshot] = []
+        for snapshot in activities:
+            with_liquidity = snapshot.model_copy(
                 update={
                     "liquidity_reference_usd": reference_by_market[snapshot.market],
                     "liquidity_regime": _liquidity_regime(
@@ -992,8 +1157,8 @@ class MarketAttentionRadar:
                     ),
                 }
             )
-            for snapshot in activities
-        )
+            classified.append(_with_market_structure(with_liquidity))
+        return tuple(classified)
 
     def _candidates(self, now: datetime) -> tuple[MarketActivitySnapshot, ...]:
         return self._candidates_from(self._classify_liquidity(self._fresh_activities(now)))
@@ -1011,16 +1176,26 @@ class MarketAttentionRadar:
             snapshot
             for snapshot in activities
             if snapshot.status is RadarStatus.AVAILABLE
-            and snapshot.activity_state in unusual_states
+            and (
+                snapshot.activity_state in unusual_states
+                or _interest_rank(snapshot.interest_level) >= _interest_rank(RadarInterestLevel.MEDIUM)
+            )
         )
         if not eligible:
             return ()
 
-        ranked = tuple(sorted(eligible, key=_activity_sort_key, reverse=True))
+        ranked = tuple(sorted(eligible, key=_deterministic_radar_sort_key, reverse=True))
         by_regime: dict[LiquidityRegime, list[MarketActivitySnapshot]] = {}
         for snapshot in ranked:
             by_regime.setdefault(snapshot.liquidity_regime, []).append(snapshot)
 
+        # Preserve the pre-Batch-38 diversification invariant: when the candidate
+        # limit is smaller than the number of represented liquidity regimes, choose
+        # regime leaders by unusual market activity rather than by liquidity-aware
+        # radar interest. Otherwise the liquidity component of the new deterministic
+        # ranking can systematically crowd MICRO/LOW regimes out before diversification
+        # has had a chance to operate. The selected shortlist is still ordered with the
+        # Batch-38 deterministic radar key below.
         regime_leaders = sorted(
             (items[0] for items in by_regime.values()),
             key=_activity_sort_key,
@@ -1036,7 +1211,7 @@ class MarketAttentionRadar:
                 chosen_markets.add(snapshot.market)
                 if len(chosen) >= self._policy.candidate_limit:
                     break
-        return tuple(chosen)
+        return tuple(sorted(chosen, key=_deterministic_radar_sort_key, reverse=True))
 
     def _subthreshold_activity(
         self,
@@ -1065,38 +1240,178 @@ class MarketAttentionRadar:
         diagnostics.sort(key=lambda item: item[0], reverse=True)
         return tuple(item for _key, item in diagnostics[: self._policy.diagnostic_market_limit])
 
+    def _asset_states(
+        self,
+        candidates: tuple[MarketActivitySnapshot, ...],
+    ) -> dict[str, _AssetRadarState]:
+        states: dict[str, _AssetRadarState] = {}
+        top_assets = {_base_asset(item.market.symbol) for item in candidates[:3]}
+        for item in candidates:
+            asset = _base_asset(item.market.symbol)
+            existing = states.get(asset)
+            characteristics = frozenset(item.characteristics)
+            state = _AssetRadarState(
+                interest_level=item.interest_level,
+                characteristics=characteristics,
+                is_top_market=asset in top_assets,
+            )
+            if existing is None or _interest_rank(state.interest_level) > _interest_rank(existing.interest_level):
+                states[asset] = state
+            elif existing is not None:
+                states[asset] = _AssetRadarState(
+                    interest_level=existing.interest_level,
+                    characteristics=existing.characteristics | characteristics,
+                    is_top_market=existing.is_top_market or state.is_top_market,
+                )
+        return states
+
+    def _research_trigger(
+        self,
+        *,
+        asset: str,
+        state: _AssetRadarState,
+        cached: PublicAttentionSnapshot | None,
+        now: datetime,
+    ) -> tuple[PublicResearchTrigger | None, bool]:
+        previous = self._previous_asset_states.get(asset)
+        if cached is None:
+            return PublicResearchTrigger.NEW_HIGH_INTEREST, False
+        age = now - cached.observed_at.astimezone(UTC)
+        if age > timedelta(seconds=self._policy.public_attention_ttl_seconds):
+            return PublicResearchTrigger.CACHE_EXPIRED, False
+        if cached.research_status is RadarStatus.ERROR:
+            return PublicResearchTrigger.RETRY_AFTER_ERROR, False
+
+        event: PublicResearchTrigger | None = None
+        if previous is not None:
+            if _interest_rank(state.interest_level) > _interest_rank(previous.interest_level):
+                event = PublicResearchTrigger.INTEREST_ESCALATION
+            elif (
+                MarketCharacteristic.BREAKOUT_WATCH in state.characteristics
+                and MarketCharacteristic.BREAKOUT_WATCH not in previous.characteristics
+            ):
+                event = PublicResearchTrigger.BREAKOUT_EVENT
+            elif (
+                MarketCharacteristic.REVERSAL_WATCH in state.characteristics
+                and MarketCharacteristic.REVERSAL_WATCH not in previous.characteristics
+            ):
+                event = PublicResearchTrigger.REVERSAL_EVENT
+            elif state.is_top_market and not previous.is_top_market:
+                event = PublicResearchTrigger.NEW_TOP_MARKET
+        if previous is None and state.is_top_market:
+            event = PublicResearchTrigger.NEW_TOP_MARKET
+        if event is None:
+            return None, False
+        if age < timedelta(seconds=self._policy.public_attention_event_cooldown_seconds):
+            return event, False
+        return event, True
+
     async def _public_attention(
         self,
         candidates: tuple[MarketActivitySnapshot, ...],
         *,
         now: datetime,
-    ) -> tuple[dict[str, PublicAttentionSnapshot], int]:
+    ) -> tuple[
+        dict[str, PublicAttentionSnapshot],
+        dict[str, PublicResearchDecision],
+        int,
+    ]:
         assets: dict[str, list[str]] = {}
         for candidate in candidates:
             asset = _base_asset(candidate.market.symbol)
             assets.setdefault(asset, []).append(candidate.market.symbol)
+        states = self._asset_states(candidates)
 
         results: dict[str, PublicAttentionSnapshot] = {}
+        decisions: dict[str, PublicResearchDecision] = {}
         scheduled = 0
-        for asset, symbols in assets.items():
+        effective_budget = min(self._policy.max_web_searches_per_refresh, 3)
+        ordered_assets = sorted(
+            assets,
+            key=lambda asset: (
+                _interest_rank(states[asset].interest_level),
+                states[asset].is_top_market,
+                asset,
+            ),
+            reverse=True,
+        )
+        for asset in ordered_assets:
+            state = states[asset]
+            symbols = assets[asset]
+            eligible = _interest_rank(state.interest_level) >= _interest_rank(RadarInterestLevel.HIGH)
             cached = self._public_cache.get(asset)
-            if cached is not None and now - cached.observed_at.astimezone(UTC) <= timedelta(
+            cache_age_fresh = cached is not None and now - cached.observed_at.astimezone(UTC) <= timedelta(
                 seconds=self._policy.public_attention_ttl_seconds
-            ):
-                results[asset] = cached
+            )
+            cache_reusable = (
+                cache_age_fresh
+                and cached is not None
+                and cached.research_status in {RadarStatus.AVAILABLE, RadarStatus.PARTIAL}
+            )
+            cached_for_display = (
+                cached
+                if cache_age_fresh or cached is None
+                else cached.model_copy(update={"research_status": RadarStatus.STALE})
+            )
+            if not eligible:
+                if cached_for_display is not None:
+                    results[asset] = cached_for_display
+                decisions[asset] = PublicResearchDecision(
+                    asset=asset,
+                    eligible=False,
+                    performed=False,
+                    cache_used=cached is not None,
+                    skip_reason=PublicResearchSkipReason.INTEREST_BELOW_HIGH,
+                )
                 continue
-            if cached is not None:
-                results[asset] = cached.model_copy(update={"research_status": RadarStatus.STALE})
+
+            trigger, event_refresh = self._research_trigger(
+                asset=asset, state=state, cached=cached, now=now
+            )
+            if cache_reusable and not event_refresh:
+                results[asset] = cached
+                decisions[asset] = PublicResearchDecision(
+                    asset=asset,
+                    eligible=True,
+                    performed=False,
+                    cache_used=True,
+                    trigger=trigger,
+                    skip_reason=(
+                        PublicResearchSkipReason.EVENT_COOLDOWN
+                        if trigger is not None
+                        else PublicResearchSkipReason.CACHE_FRESH
+                    ),
+                )
+                continue
             if self._researcher is None:
-                results[asset] = self._public_placeholder(
+                results[asset] = cached_for_display or self._public_placeholder(
                     asset,
                     now=now,
                     status=RadarStatus.NOT_CONFIGURED,
                     context="OpenAI web search is not configured.",
                 )
+                decisions[asset] = PublicResearchDecision(
+                    asset=asset,
+                    eligible=True,
+                    performed=False,
+                    cache_used=cached is not None,
+                    trigger=trigger,
+                    skip_reason=PublicResearchSkipReason.RESEARCHER_NOT_CONFIGURED,
+                )
                 continue
-            if scheduled >= self._policy.max_web_searches_per_refresh:
+            if scheduled >= effective_budget:
+                if cached_for_display is not None:
+                    results[asset] = cached_for_display
+                decisions[asset] = PublicResearchDecision(
+                    asset=asset,
+                    eligible=True,
+                    performed=False,
+                    cache_used=cached is not None,
+                    trigger=trigger,
+                    skip_reason=PublicResearchSkipReason.BUDGET_EXHAUSTED,
+                )
                 continue
+
             scheduled += 1
             try:
                 snapshot = await self._researcher.research(
@@ -1116,7 +1431,16 @@ class MarketAttentionRadar:
                 )
             self._public_cache[asset] = snapshot
             results[asset] = snapshot
-        return results, scheduled
+            decisions[asset] = PublicResearchDecision(
+                asset=asset,
+                eligible=True,
+                performed=True,
+                cache_used=False,
+                event_refresh=event_refresh,
+                trigger=trigger or PublicResearchTrigger.NEW_HIGH_INTEREST,
+            )
+        self._previous_asset_states = states
+        return results, decisions, scheduled
 
     def _public_placeholder(
         self,
@@ -1140,12 +1464,9 @@ class MarketAttentionRadar:
         self,
         activity: MarketActivitySnapshot,
         public: PublicAttentionSnapshot,
+        research: PublicResearchDecision,
     ) -> MarketAttentionSnapshot:
-        market_unusual = activity.activity_state in {
-            MarketActivityState.ELEVATED,
-            MarketActivityState.ACCELERATING,
-            MarketActivityState.VERY_HIGH,
-        }
+        market_unusual = _interest_rank(activity.interest_level) >= _interest_rank(RadarInterestLevel.MEDIUM)
         public_rising = (
             public.research_status is RadarStatus.AVAILABLE
             and public.attention_direction is PublicAttentionDirection.RISING
@@ -1157,7 +1478,7 @@ class MarketAttentionRadar:
             cross_state = CrossAttentionState.MARKET_ONLY
             level = (
                 AttentionLevel.HIGH
-                if activity.activity_state is MarketActivityState.VERY_HIGH
+                if _interest_rank(activity.interest_level) >= _interest_rank(RadarInterestLevel.HIGH)
                 else AttentionLevel.MEDIUM
             )
         elif public_rising:
@@ -1169,10 +1490,240 @@ class MarketAttentionRadar:
         return MarketAttentionSnapshot(
             market_activity=activity,
             public_attention=public,
+            public_research=research,
             cross_state=cross_state,
             attention_level=level,
         )
 
+
+
+_MATERIAL_RETURN = {
+    CandleTimeframe.M5: Decimal("0.003"),
+    CandleTimeframe.M15: Decimal("0.005"),
+    CandleTimeframe.H1: Decimal("0.010"),
+    CandleTimeframe.H4: Decimal("0.020"),
+}
+
+
+def _price_return(candles: tuple[Candle, ...]) -> Decimal | None:
+    if not candles:
+        return None
+    ratio = _safe_ratio(candles[-1].close, candles[0].open)
+    return ratio - Decimal(1) if ratio is not None else None
+
+
+def _price_range(candles: tuple[Candle, ...]) -> Decimal | None:
+    if not candles:
+        return None
+    high = max(item.high for item in candles)
+    low = min(item.low for item in candles)
+    ratio = _safe_ratio(high, low)
+    return ratio - Decimal(1) if ratio is not None else None
+
+
+def _interest_rank(level: RadarInterestLevel) -> int:
+    return {
+        RadarInterestLevel.LOW: 0,
+        RadarInterestLevel.MEDIUM: 1,
+        RadarInterestLevel.HIGH: 2,
+        RadarInterestLevel.VERY_HIGH: 3,
+    }[level]
+
+
+def _market_characteristics(snapshot: MarketActivitySnapshot) -> tuple[MarketCharacteristic, ...]:
+    complete = tuple(item for item in snapshot.horizons if item.complete)
+    if not complete:
+        return ()
+    found: set[MarketCharacteristic] = set()
+
+    if any(
+        item.volume_ratio is not None and item.volume_ratio >= Decimal("1.40")
+        for item in complete
+    ):
+        found.add(MarketCharacteristic.VOLUME_ANOMALY)
+
+    if any(
+        (item.range_expansion_ratio is not None and item.range_expansion_ratio >= Decimal("1.50"))
+        or (
+            item.volatility_expansion_ratio is not None
+            and item.volatility_expansion_ratio >= Decimal("1.50")
+        )
+        for item in complete
+    ):
+        found.add(MarketCharacteristic.VOLATILITY_EXPANSION)
+
+    material_returns = []
+    for item in complete:
+        value = item.price_return
+        threshold = _MATERIAL_RETURN.get(item.timeframe, Decimal("0.01"))
+        if value is not None and abs(value) >= threshold:
+            material_returns.append(value)
+    positive = sum(value > 0 for value in material_returns)
+    negative = sum(value < 0 for value in material_returns)
+    if max(positive, negative) >= 2:
+        found.add(MarketCharacteristic.TRENDING)
+
+    if any(
+        item.breakout_distance is not None
+        and abs(item.breakout_distance) >= max(
+            Decimal("0.0025"), _MATERIAL_RETURN.get(item.timeframe, Decimal("0.01")) / Decimal(2)
+        )
+        and item.price_return is not None
+        and abs(item.price_return) >= _MATERIAL_RETURN.get(item.timeframe, Decimal("0.01"))
+        and (
+            (item.volume_ratio is not None and item.volume_ratio >= Decimal("1.20"))
+            or (item.range_expansion_ratio is not None and item.range_expansion_ratio >= Decimal("1.20"))
+        )
+        for item in complete
+    ):
+        found.add(MarketCharacteristic.BREAKOUT_WATCH)
+
+    if any(
+        item.price_return is not None
+        and item.previous_price_return is not None
+        and item.price_return * item.previous_price_return < 0
+        and abs(item.price_return) >= _MATERIAL_RETURN.get(item.timeframe, Decimal("0.01"))
+        and abs(item.previous_price_return) >= _MATERIAL_RETURN.get(item.timeframe, Decimal("0.01"))
+        and (
+            (item.volume_ratio is not None and item.volume_ratio >= Decimal("1.30"))
+            or (item.range_expansion_ratio is not None and item.range_expansion_ratio >= Decimal("1.30"))
+        )
+        for item in complete
+    ):
+        found.add(MarketCharacteristic.REVERSAL_WATCH)
+
+    compressed = sum(
+        item.range_expansion_ratio is not None
+        and item.range_expansion_ratio <= Decimal("0.70")
+        and (item.volume_ratio is None or item.volume_ratio <= Decimal("1.20"))
+        for item in complete
+    )
+    if compressed >= 2:
+        found.add(MarketCharacteristic.CONSOLIDATING)
+
+    if any(
+        (
+            item.price_return is not None
+            and abs(item.price_return) >= _MATERIAL_RETURN.get(item.timeframe, Decimal("0.01"))
+            and item.volume_ratio is not None
+            and item.volume_ratio <= Decimal("0.75")
+        )
+        or (
+            item.volume_ratio is not None
+            and item.volume_ratio >= Decimal("2.00")
+            and item.price_return is not None
+            and abs(item.price_return) < _MATERIAL_RETURN.get(item.timeframe, Decimal("0.01")) / Decimal(2)
+        )
+        for item in complete
+    ):
+        found.add(MarketCharacteristic.PRICE_VOLUME_DIVERGENCE)
+
+    order = tuple(MarketCharacteristic)
+    return tuple(item for item in order if item in found)
+
+
+def _interest_level_and_reasons(
+    snapshot: MarketActivitySnapshot,
+    characteristics: tuple[MarketCharacteristic, ...],
+) -> tuple[RadarInterestLevel, tuple[str, ...]]:
+    if snapshot.status is not RadarStatus.AVAILABLE:
+        return RadarInterestLevel.LOW, ("Données insuffisantes ou non fraîches",)
+
+    score = 0
+    reasons: list[str] = []
+    weights = {
+        MarketCharacteristic.VOLUME_ANOMALY: 1,
+        MarketCharacteristic.VOLATILITY_EXPANSION: 1,
+        MarketCharacteristic.TRENDING: 1,
+        MarketCharacteristic.BREAKOUT_WATCH: 2,
+        MarketCharacteristic.REVERSAL_WATCH: 2,
+        MarketCharacteristic.CONSOLIDATING: 0,
+        MarketCharacteristic.PRICE_VOLUME_DIVERGENCE: 1,
+    }
+    labels = {
+        MarketCharacteristic.VOLUME_ANOMALY: "Volume inhabituel",
+        MarketCharacteristic.VOLATILITY_EXPANSION: "Volatilité en expansion",
+        MarketCharacteristic.TRENDING: "Tendance cohérente sur plusieurs horizons",
+        MarketCharacteristic.BREAKOUT_WATCH: "Sortie de zone à surveiller",
+        MarketCharacteristic.REVERSAL_WATCH: "Retournement potentiel à surveiller",
+        MarketCharacteristic.CONSOLIDATING: "Consolidation",
+        MarketCharacteristic.PRICE_VOLUME_DIVERGENCE: "Divergence prix/volume",
+    }
+    for characteristic in characteristics:
+        score += weights[characteristic]
+        if weights[characteristic] > 0:
+            reasons.append(labels[characteristic])
+
+    if snapshot.activity_state is MarketActivityState.ACCELERATING:
+        score += 1
+        reasons.append("Activité en accélération")
+    elif snapshot.activity_state is MarketActivityState.VERY_HIGH:
+        score += 2
+        reasons.append("Activité très élevée")
+
+    if snapshot.liquidity_regime in {LiquidityRegime.HIGH, LiquidityRegime.VERY_HIGH}:
+        score += 1
+        reasons.append("Liquidité relative élevée")
+    elif snapshot.liquidity_regime is LiquidityRegime.MICRO:
+        score = max(0, score - 1)
+        reasons.append("Liquidité relative très faible")
+
+    if score >= 5:
+        level = RadarInterestLevel.VERY_HIGH
+    elif score >= 3:
+        level = RadarInterestLevel.HIGH
+    elif score >= 2:
+        level = RadarInterestLevel.MEDIUM
+    else:
+        level = RadarInterestLevel.LOW
+    return level, tuple(dict.fromkeys(reasons))[:5]
+
+
+def _with_market_structure(snapshot: MarketActivitySnapshot) -> MarketActivitySnapshot:
+    characteristics = _market_characteristics(snapshot)
+    level, reasons = _interest_level_and_reasons(snapshot, characteristics)
+    return snapshot.model_copy(
+        update={
+            "characteristics": characteristics,
+            "interest_level": level,
+            "interest_reasons": reasons,
+        }
+    )
+
+
+def _deterministic_radar_sort_key(
+    snapshot: MarketActivitySnapshot,
+) -> tuple[int, int, int, Decimal, Decimal, Decimal, str]:
+    characteristic_priority = sum(
+        {
+            MarketCharacteristic.BREAKOUT_WATCH: 4,
+            MarketCharacteristic.REVERSAL_WATCH: 4,
+            MarketCharacteristic.TRENDING: 2,
+            MarketCharacteristic.VOLATILITY_EXPANSION: 2,
+            MarketCharacteristic.VOLUME_ANOMALY: 1,
+            MarketCharacteristic.PRICE_VOLUME_DIVERGENCE: 1,
+            MarketCharacteristic.CONSOLIDATING: 0,
+        }[item]
+        for item in snapshot.characteristics
+    )
+    liquidity = {
+        LiquidityRegime.UNKNOWN: 0,
+        LiquidityRegime.MICRO: 0,
+        LiquidityRegime.LOW: 1,
+        LiquidityRegime.MEDIUM: 2,
+        LiquidityRegime.HIGH: 3,
+        LiquidityRegime.VERY_HIGH: 4,
+    }[snapshot.liquidity_regime]
+    ratio, acceleration, move = _activity_sort_key(snapshot)
+    return (
+        _interest_rank(snapshot.interest_level),
+        characteristic_priority,
+        liquidity,
+        ratio,
+        acceleration,
+        move,
+        snapshot.market.symbol,
+    )
 
 def _activity_state(
     ratios: Iterable[Decimal | None],
@@ -1511,9 +2062,12 @@ def _overview_status(
 
     if not shortlist:
         return RadarStatus.AVAILABLE
+    research_required = tuple(item for item in shortlist if item.public_research.eligible)
+    if not research_required:
+        return RadarStatus.AVAILABLE
     if not researcher_configured:
         return RadarStatus.PARTIAL
-    statuses = {item.public_attention.research_status for item in shortlist}
+    statuses = {item.public_attention.research_status for item in research_required}
     if statuses == {RadarStatus.AVAILABLE}:
         return RadarStatus.AVAILABLE
     if RadarStatus.AVAILABLE in statuses:

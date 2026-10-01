@@ -105,6 +105,7 @@ def _policy(**updates: object) -> MarketAttentionPolicy:
         "scan_limit": 10,
         "candidate_limit": 10,
         "diagnostic_market_limit": 10,
+        # Legacy test policy kept intentionally above the Batch 38 effective runtime cap.
         "max_web_searches_per_refresh": 10,
         "candle_limit": 404,
     }
@@ -239,7 +240,7 @@ def test_normal_markets_are_ranked_below_threshold_with_best_horizon() -> None:
     asyncio.run(scenario())
 
 
-def test_subthreshold_diagnostics_never_become_candidates_or_trigger_web_research() -> None:
+def test_isolated_volume_candidate_does_not_trigger_public_research() -> None:
     async def scenario() -> None:
         markets = (_market("NORMAL/USD"), _market("HOT/USD"))
         researcher = Researcher()
@@ -259,8 +260,11 @@ def test_subthreshold_diagnostics_never_become_candidates_or_trigger_web_researc
 
         assert [item.market.symbol for item in overview.subthreshold_activity] == ["NORMAL/USD"]
         assert [item.market_activity.market.symbol for item in overview.shortlist] == ["HOT/USD"]
-        assert researcher.calls == ["HOT"]
-        assert overview.web_search_count == 1
+        assert overview.shortlist[0].market_activity.interest_level.value == "LOW"
+        assert researcher.calls == []
+        assert overview.web_search_count == 0
+        assert overview.public_research_eligible_count == 0
+        assert overview.public_research_skipped_count == 1
         await radar.aclose()
 
     asyncio.run(scenario())
@@ -319,6 +323,7 @@ def test_read_only_api_exposes_additive_observability_fields() -> None:
         freshness_seconds=Decimal("0"),
         horizons=(horizon,),
     )
+    assert activity.interest_level.value == "LOW"
 
     class Reader:
         @property
@@ -334,6 +339,11 @@ def test_read_only_api_exposes_additive_observability_fields() -> None:
                 observed_at=NOW,
                 status=RadarStatus.AVAILABLE,
                 cached_activity_market_count=1,
+                public_research_eligible_count=0,
+                web_search_count=0,
+                public_research_cache_hit_count=0,
+                public_research_event_refresh_count=0,
+                public_research_skipped_count=1,
                 activity_status_counts=ActivityStatusCounts(AVAILABLE=1),
                 activity_state_counts=ActivityStateCounts(NORMAL=1),
                 subthreshold_activity=(
@@ -358,5 +368,7 @@ def test_read_only_api_exposes_additive_observability_fields() -> None:
         assert response.status_code == 200
         assert payload["activity_status_counts"]["AVAILABLE"] == 1
         assert payload["activity_state_counts"]["NORMAL"] == 1
+        assert payload["public_research_eligible_count"] == 0
+        assert payload["public_research_skipped_count"] == 1
         assert payload["subthreshold_activity"][0]["market"]["symbol"] == "AAA/USD"
         assert client.post("/api/v1/market-attention").status_code == 405

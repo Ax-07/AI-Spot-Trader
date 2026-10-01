@@ -3,11 +3,10 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub réel          : 9fc6a4a15f1c44c8ff7b43a342ab8d74bbedb892
-Commit                    : ux: simplify financial terminology
-Batches 28 à 35           : intégrés
-Batch 36 terminologie UX  : intégré dans 9fc6a4a
-Batch 37 cadence bougies  : patch proposé/local non intégré
+HEAD GitHub réel          : c699e7ce9fc4f9f43f005d7e8c19199a30befdf1
+Commit                    : feat: align AI decisions with candle closes
+Batches 28 à 37           : intégrés
+Batch 38 Market Attention : patch proposé/local non intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -32,65 +31,58 @@ AI Spot Trader conserve :
 
 1. monitoring / mark-to-market : déterministe, sans LLM stratégique ;
 2. cycle stratégique IA : `INTERVAL` historique ou `CANDLE_CLOSE` ;
-3. Market Discovery : cadence distincte, refresh évalué dans le chemin du cycle dynamique ;
+3. Market Discovery : cadence distincte ;
 4. streaming marché / candles : technique et déterministe ;
 5. Market Attention Radar : observation avec cadence/cache/TTL propres.
 
-## État Market Attention et UX
+## État intégré jusqu'au Batch 37
 
-Les Batches 28 à 35 restent intégrés : Radar v1, observabilité, robustesse, liquidité, couverture, runtime hardening, diagnostic/récupération SPOT Kraken et distinction erreur courante/historique.
+Les Batches 28 à 35 ont construit et durci Market Attention Radar v1. Le Batch 36 a simplifié la terminologie financière sans modifier les contrats techniques. Le Batch 37 est intégré dans `c699e7c` : scheduler stratégique unique `INTERVAL` / `CANDLE_CLOSE`, déclenchement conseillé SCALP 5m et SWING 4h, réutilisation du `CandleStreamService`, sans replay/catch-up en rafale.
 
-Le Batch 36 est désormais **intégré** dans `9fc6a4a15f1c44c8ff7b43a342ab8d74bbedb892`. Les libellés utilisateurs ont été simplifiés (`Montant max par ordre`, `Valeur de la position`, etc.) sans modifier les identifiants techniques, calculs, API, Risk ou trading.
-
-## Batch 37 — cadence stratégique alignée sur les bougies
+## Batch 38 — préfiltrage Kraken avant recherche publique
 
 **État : patch proposé/local non intégré.**
 
-Objectif : séparer clairement la cadence stratégique IA du monitoring et permettre un déclenchement autonome sur une clôture de bougie canonique.
+Objectif : réduire fortement le coût du Radar sans réduire inutilement la fréquence du scan Kraken.
 
-Architecture retenue :
+Architecture :
 
 ```text
-CampaignConfiguration
-  trading_cadence_seconds      # historique, toujours conservé
-  strategic_schedule?          # extension optionnelle
-    mode = INTERVAL | CANDLE_CLOSE
-    decision_timeframe?        # seulement CANDLE_CLOSE
-
-ScheduledTradingEngine unique
-  INTERVAL -> boucle historique
-  CANDLE_CLOSE -> grille UTC + finalité CandleStreamService -> cycle
+catalogue Kraken
+-> scan OHLCV déterministe
+-> activité / liquidité
+-> faits structurels déterministes
+-> intérêt LOW / MEDIUM / HIGH / VERY_HIGH
+-> shortlist bornée
+-> web_search événementiel et mis en cache
 ```
 
-Defaults UX proposés :
+Décisions du patch :
 
-- SCALP -> clôture `5m` ;
-- SWING -> clôture `4h`.
+- pas de second pipeline OHLC ;
+- `candidate_limit` par défaut réduit à 10 ;
+- budget Web par défaut 2, plafond runtime 3 ;
+- aucune nouvelle recherche pour LOW/MEDIUM ;
+- TTL Public Attention porté à 2 h ;
+- refresh anticipé uniquement sur événement significatif après cooldown 15 min ;
+- recherches séquentielles et bornées ;
+- observabilité de l'éligibilité, cache, déclencheur et raison d'absence de recherche ;
+- Radar toujours `informative_only=True` et sans dépendance Agent/Risk/Broker/Discovery.
 
-Garanties :
+## Modèle auxiliaire Market Attention
 
-- aucune migration DB ;
-- ancienne Campaign sans schedule => INTERVAL exact ;
-- aucun replay/catch-up en rafale ;
-- aucune dérive liée à la durée du cycle ;
-- stop réveille l'attente ;
-- `run-cycle` manuel reste immédiat hors moteur autonome ;
-- finalité de la candle vérifiée sans inventer de donnée ;
-- contexte MTF et trigger restent séparés ;
-- Risk/Broker/coûts inchangés ;
-- Discovery ne reçoit pas un second scheduler.
-
-Voir `docs/37_BATCH_CADENCE_IA_BOUGIES.md`.
+Audit confirmé : le Radar utilise encore le même `resolved_settings.llm_model` que le process. La séparation vers un modèle auxiliaire distinct, Luna par défaut, est recommandée mais reste **à décider** dans un batch de configuration séparé.
 
 ## Périmètres ultérieurs possibles
 
 À décider seulement sur besoin mesuré :
 
+- modèle auxiliaire Market Attention configurable séparément ;
+- journalisation agrégée des tokens fournisseur si elle reste fiable et peu intrusive ;
 - cadence stratégique différente lorsqu'une position est ouverte ;
 - réaction événementielle intra-bougie ;
-- métriques d'observabilité du retard `scheduled_close -> cycle_start` ;
-- politique explicite de tolérance aux indisponibilités longues de candles ;
+- métriques de retard `scheduled_close -> cycle_start` ;
 - éventuelle exposition de Market Attention à l'Agent : non décidée ;
 - LIVE : séparé et ultérieur.
 
-Aucun ranking déterministe, quota de trades ou promesse de rendement ne doit être introduit silencieusement.
+Aucun ranking déterministe stratégique, quota de trades ou promesse de rendement ne doit être introduit silencieusement.

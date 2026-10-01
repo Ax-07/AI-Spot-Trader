@@ -11,119 +11,91 @@ Market Attention Radar reste strictement observationnel et n'est pas un input de
 ## Référence courante
 
 ```text
-HEAD GitHub audité     : 9fc6a4a15f1c44c8ff7b43a342ab8d74bbedb892
-HEAD                   : ux: simplify financial terminology
-Batch 36               : intégré
-Batch 37               : patch cadence IA/bougies proposé localement
+HEAD GitHub audité     : c699e7ce9fc4f9f43f005d7e8c19199a30befdf1
+HEAD                   : feat: align AI decisions with candle closes
+Batch 37               : intégré
+Batch 38               : patch Market Attention préfiltrage proposé localement
 ```
 
-## Changelog — 2026-09-30 — Batch 37 cadence stratégique IA synchronisée aux bougies
+## Changelog — 2026-10-01 — Batch 38 Market Attention préfiltrage Kraken
 
-- base GitHub auditée : `9fc6a4a15f1c44c8ff7b43a342ab8d74bbedb892` ;
-- réalignement de la documentation qui décrivait encore le Batch 36 comme local ;
-- extension optionnelle `CampaignConfiguration.strategic_schedule` sans changement de `configuration_version` et sans migration DB ;
-- deux modes : `INTERVAL` et `CANDLE_CLOSE` ;
-- absence de `strategic_schedule` = comportement historique `INTERVAL` et payload/digest ancien inchangé ;
-- `CANDLE_CLOSE` exige un style explicite et un timeframe appartenant au mapping canonique de ce style ;
-- ajout d'un scheduler unique `ScheduledTradingEngine`, sous-classe du moteur existant, sans second moteur stratégique ;
-- alignement UTC sur les frontières canoniques 1m/5m/15m/30m/1h/4h/1d ;
-- recalcul de la prochaine frontière depuis l'horloge après chaque cycle afin d'éviter la dérive et les rafales de rattrapage ;
-- démarrage/restart sur une frontière strictement future, sans replay automatique des décisions manquées ;
-- vérification de finalité via le `CandleStreamService` canonique avant le cycle autonome ;
-- aucune bougie future/incomplète considérée comme clôturée ;
-- `run-cycle` manuel conserve la primitive immédiate ;
-- `stop()` interrompt l'attente ;
-- monitoring/mark-to-market, Market Discovery et Market Attention conservent leurs responsabilités séparées ;
-- UX : nouvelle Session SCALP -> clôture 5m ; SWING -> clôture 4h ;
-- le changement de style seul ne réécrit pas silencieusement une personnalisation ; l'action explicite « Réappliquer les valeurs conseillées » peut appliquer les defaults ;
-- intervalle fixe présenté en unités lisibles, tout en conservant `trading_cadence_seconds` côté contrat ;
-- aucun changement de politique Risk, Broker, pricing PAPER, frais, spread, slippage ou décision stratégique.
+- base GitHub auditée : `c699e7ce9fc4f9f43f005d7e8c19199a30befdf1` ;
+- correction de la documentation qui décrivait encore le Batch 37 comme local ;
+- conservation du pipeline canonique `CandleStreamService` / OHLCV 5m ;
+- enrichissement déterministe des horizons avec retours précédent/courant, range de référence, expansion range/volatilité et distance de breakout ;
+- caractéristiques descriptives : tendance, anomalie de volume, expansion de volatilité, breakout/reversal watch, consolidation, divergence prix/volume ;
+- nouveau niveau d'intérêt Radar `LOW/MEDIUM/HIGH/VERY_HIGH`, déterministe et non directionnel ;
+- shortlist déterministe réduite ;
+- aucune nouvelle recherche publique pour `LOW` / `MEDIUM` ;
+- `max_web_searches_per_refresh` passe à 2 par défaut avec limite dure 3 ;
+- Public Attention TTL passe à 2 h ;
+- refresh anticipé possible après 15 min en cas d'escalade d'intérêt, nouveau breakout/reversal descriptif ou nouvelle entrée en tête ;
+- cache réutilisé lorsque l'événement ne justifie pas un refresh ;
+- recherches toujours séquentielles et bornées ;
+- exposition de la décision de recherche par candidat et de compteurs d'éligibilité/cache/refresh/skip ;
+- aucun changement Risk, Broker, Campaign, exécution PAPER, frais, spread, slippage ou Agent stratégique ;
+- le couplage de modèle du Radar à `resolved_settings.llm_model` est confirmé mais non modifié dans ce batch.
 
-## ADR-240 à ADR-247 — Session et lifecycle
+## ADR-240 à ADR-279 — décisions antérieures actives
 
-`Session` reste une façade UX sur Strategy/Revision/Campaign/paper_run. La création est atomique, les modifications sont versionnées, l'archivage est logique et la reprise d'une Campaign déjà exécutée est explicite.
+Les décisions Session/lifecycle, Trading Style, coûts, multi-timeframes, gestion des positions, cycle multi-décisions, contrats Agent, reasoning et causalité restent actives. Les détails historiques demeurent dans Git.
 
-## ADR-248 à ADR-258 — Trading Style, coûts et multi-timeframes
-
-`SCALP`/`SWING`, `trading-style-map-v1`, `ExecutionCostContext` et `strategic-mtf-v1` enrichissent l'Agent sans modifier Risk. `history_as_of(...)` garantit la causalité des candles. Les defaults UX liés au style ne doivent pas écraser silencieusement une configuration persistée.
-
-## ADR-259 à ADR-268 — Gestion des positions et cycle multi-décisions
-
-Les positions ouvertes restent des alternatives stratégiques. Le plan multi-marchés est ordonné, borné et produit par le même Agent. Risk et Broker suivent cet ordre sur le portefeuille courant. Les erreurs techniques du cycle PAPER conservent l'atomicité prévue et l'audit supporte les relations 1:N.
-
-## ADR-269 à ADR-279 — Contrats Agent, coûts et reasoning
-
-Les Structured Outputs imposent le contrat BUY/SELL/HOLD. Les Sessions PAPER supportent SPOT et PERPETUAL ; FUTURE reste interdit. L'inspection LLM se fait en lecture seule à la frontière OpenAI. Les marks sont rafraîchis avant le premier cycle. L'agressivité n'impose ni quantité maximale, ni turnover. Le raisonnement courant privilégie l'equity nette après coûts, l'allocation du capital et le coût d'opportunité sans seuil mécanique de profit.
-
-## ADR-280 à ADR-286 — Market Attention Radar
+## ADR-280 à ADR-286 — Market Attention Radar v1
 
 Market Attention Radar v1, son observabilité, sa robustesse, ses régimes de liquidité et son runtime hardening restent intégrés. Il ne produit aucun ordre, aucun score stratégique et aucune préférence LONG/SHORT.
 
-## ADR-287 — Le scheduling stratégique devient une propriété explicite de Campaign
+## ADR-287 à ADR-290 — scheduling stratégique Batch 37
 
-**ADOPTÉ DANS LE PATCH BATCH 37 — À INTÉGRER.**
+**INTÉGRÉS dans `c699e7c`.**
 
-Décision : ajouter un objet optionnel `strategic_schedule` au snapshot `CampaignConfiguration` plutôt qu'un nouveau stockage ou une nouvelle table.
+- `strategic_schedule` optionnel dans Campaign ; absence = `INTERVAL` historique exact ;
+- un seul `ScheduledTradingEngine` gère INTERVAL et CANDLE_CLOSE ;
+- le timeframe de décision est un trigger, pas un nouveau contexte stratégique ;
+- Discovery conserve sa cadence et son orchestration propres ;
+- aucune migration DB, aucun second pipeline OHLC, aucun catch-up en rafale.
 
-Raisons :
+## ADR-291 — Market Attention devient un entonnoir déterministe avant le Web
 
-- la cadence fait partie de l'identité reproductible d'une Campaign ;
-- le stockage Campaign JSON existe déjà ;
-- l'extension optionnelle peut préserver exactement les anciens payloads/digests ;
-- aucune migration DB n'est nécessaire ;
-- `trading_cadence_seconds` reste conservé pour le legacy et les outils existants.
+**ADOPTÉ DANS LE PATCH BATCH 38 — À INTÉGRER.**
 
-Contrat :
+Le scan Kraken reste fréquent et bon marché. Les données OHLCV servent à calculer des faits descriptifs auditables avant toute recherche publique. Le Web n'est plus alloué simplement parce qu'un actif fait partie des premiers candidats.
+
+Le niveau `LOW/MEDIUM/HIGH/VERY_HIGH` exprime uniquement une priorité d'observation. Il ne constitue ni un score de trading, ni une probabilité de hausse/baisse, ni une préférence directionnelle.
+
+## ADR-292 — Les recherches publiques sont événementielles, cachées et fortement bornées
+
+**ADOPTÉ DANS LE PATCH BATCH 38 — À INTÉGRER.**
+
+Politique :
 
 ```text
-absent                      -> INTERVAL historique
-{mode: INTERVAL}            -> INTERVAL explicite
-{mode: CANDLE_CLOSE,
- decision_timeframe: <tf>}   -> clôture canonique
+LOW / MEDIUM     -> aucune nouvelle recherche
+HIGH / VERY_HIGH -> recherche possible
+TTL              -> 2 h
+cooldown événementiel -> 15 min
+budget default   -> 2 / refresh
+limite dure      -> 3 / refresh
 ```
 
-Pour `CANDLE_CLOSE`, un style explicite est requis et le timeframe doit appartenir au mapping canonique : SCALP `1m/5m/15m/30m`, SWING `1h/4h/1d`.
+Un cache frais est réutilisé, sauf changement significatif après cooldown. Les événements reconnus sont l'escalade d'intérêt, l'apparition de `BREAKOUT_WATCH` / `REVERSAL_WATCH` et une nouvelle entrée parmi les marchés de tête. Les recherches restent séquentielles afin d'éviter les bursts.
 
-## ADR-288 — Un seul moteur gère INTERVAL et CANDLE_CLOSE
+## ADR-293 — Le Radar reste hors du chemin de trading
 
-**ADOPTÉ DANS LE PATCH BATCH 37 — À INTÉGRER.**
+**ADOPTÉ DANS LE PATCH BATCH 38 — À INTÉGRER.**
 
-`ScheduledTradingEngine` étend la boucle autonome existante au lieu de créer un scheduler stratégique parallèle.
+Le module Market Attention ne dépend pas d'Agent, Risk, Broker ou Market Discovery. `informative_only=True` reste un invariant de modèle. Les nouvelles caractéristiques servent exclusivement au préfiltrage du Radar et à son observabilité.
 
-En `INTERVAL`, il délègue à la boucle historique inchangée.
+## ADR-294 — Séparation du modèle auxiliaire Market Attention reportée
 
-En `CANDLE_CLOSE` :
+**À DÉCIDER.**
 
-1. calcul de la prochaine frontière UTC strictement future ;
-2. attente interrompable par `stop()` ;
-3. vérification que la candle cible est explicitement finale dans le service canonique ;
-4. exécution d'un seul cycle stratégique ;
-5. recalcul de la prochaine frontière depuis l'horloge réelle après le cycle.
+L'audit confirme que `main.py` construit encore `OpenAIWebAttentionResearcher` avec `resolved_settings.llm_model`. Une option préférée est d'introduire un réglage auxiliaire distinct, Luna par défaut, afin qu'une future sélection Sol pour la stratégie n'augmente pas automatiquement le coût du Radar.
 
-Ainsi, la durée d'un cycle ne décale pas la grille et une suspension ne provoque pas de rafale de décisions rétrospectives.
-
-La méthode manuelle `run_cycle()` n'est pas remplacée. Le moteur schedulé opte explicitement pour son utilisation pendant l'attente autonome ; le runner sérialise les cycles afin qu'un appel manuel ne chevauche jamais un cycle automatique.
-
-## ADR-289 — Le timeframe de décision est un trigger, pas un nouveau contexte stratégique
-
-**ADOPTÉ DANS LE PATCH BATCH 37 — À INTÉGRER.**
-
-La bougie de décision ne remplace pas `StrategicMultiTimeframeContextService`. Le scheduler réutilise `CandleStreamService` uniquement pour l'alignement/finalité. L'Agent reçoit toujours le contexte multi-timeframes canonique du style avec les garanties de causalité existantes.
-
-Aucun second cache OHLC, aucun indicateur de direction et aucun ranking technique ne sont introduits.
-
-## ADR-290 — Discovery conserve sa cadence et son orchestration actuelles
-
-**ADOPTÉ DANS LE PATCH BATCH 37 — À INTÉGRER.**
-
-`watchlist_refresh_seconds` reste distinct de la cadence stratégique. `refresh_if_due()` continue d'être évalué lors du passage du cycle dynamique. Aucun scheduler Discovery séparé n'est créé dans ce batch.
-
-Conséquence UX : une clôture 5m signifie « un cycle stratégique peut démarrer après cette clôture », pas « exactement un seul appel fournisseur toutes les cinq minutes ».
+Cette modification touche la configuration process et ses tests ; elle est volontairement reportée afin de garder le Batch 38 centré sur le levier de coût principal : le nombre de recherches Web.
 
 ## Points explicitement non décidés
 
-- cadence accélérée lorsqu'une position est ouverte ;
-- réaction intra-bougie à un événement ;
+- modèle auxiliaire Radar configurable séparément ;
 - utilisation de Market Attention comme contexte Agent ;
-- seuil de fraîcheur Risk spécifique au SCALP ;
+- réaction stratégique intra-bougie ;
 - LIVE.
