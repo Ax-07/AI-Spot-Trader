@@ -1,12 +1,19 @@
 # Batch 40 — Microstructure Kraken pour Market Attention
 
-## Référence et état initial
+## Référence et état d'intégration
 
-Audit réalisé le 01/10/2026 sur GitHub `main` au HEAD :
+Audit initial réalisé le 01/10/2026 sur GitHub `main` au HEAD :
 
 ```text
 2aaff09b01300008e63eaadbca242817bcb4ce28
  docs: mark batch 39 as integrated
+```
+
+Le Batch 40 est désormais intégré sur GitHub `main` au HEAD :
+
+```text
+6d263be5edb589723101c32065ad68434b0b64f1
+ feat: enrich market attention with kraken microstructure
 ```
 
 Le commit applicatif Batch 39 est `5bff583b47acf2b3a2a112611c40e0046c78cc3e`.
@@ -167,7 +174,7 @@ Le sous-scan est rotatif parmi les marchés SPOT du scan OHLCV courant. À caden
 
 ## API et cockpit
 
-Le protocole proposé est `market-attention-radar-v3`.
+Le protocole intégré est `market-attention-radar-v3`.
 
 Le cockpit ajoute : spread, profondeur L2, déséquilibre, cadence/ratio des trades, slippage théorique, fraîcheur et diagnostics microstructure. Les formulations restent descriptives et un rappel explicite indique qu'aucun ordre n'est construit.
 
@@ -217,6 +224,16 @@ docs/10_DECISIONS_ET_CHANGELOG.md
 ```
 
 Aucun fichier n'est supprimé par le Batch 40.
+
+## Validation d'intégration
+
+Le Batch 40 a été validé localement puis poussé sur `main`. Validations communiquées lors de la clôture documentaire :
+
+```text
+backend pytest -q       : PASS, suite complète
+frontend pnpm typecheck : PASS
+frontend pnpm test      : 49/49 PASS
+```
 
 ## Hors périmètre
 

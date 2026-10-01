@@ -4,16 +4,16 @@
 
 AI Spot Trader est une application expérimentale de trading pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est un cockpit de contrôle et de visualisation qui peut être fermé sans arrêter le moteur.
 
-Référence GitHub auditée au lancement du Batch 40 :
+Référence GitHub auditée à la clôture documentaire du Batch 40 :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 2aaff09b01300008e63eaadbca242817bcb4ce28
-Commit     : docs: mark batch 39 as integrated
+HEAD       : 6d263be5edb589723101c32065ad68434b0b64f1
+Commit     : feat: enrich market attention with kraken microstructure
 ```
 
-Le Batch 39 est intégré. Le Batch 40 reste un patch local tant qu'il n'a pas été validé puis intégré par l'utilisateur.
+Les Batches 39 et 40 sont intégrés sur GitHub `main`.
 
 ## 2. Invariants fonctionnels
 
@@ -112,7 +112,7 @@ Les caractéristiques OHLCV du Batch 39 sont conservées. Le Batch 40 ajoute, un
 
 ## 11. Contrat API Radar
 
-Le protocole proposé est `market-attention-radar-v3`. Il ajoute au contrat v2 : état/qualité/fraîcheur microstructure, spread, profondeur base/quote, profondeur par bandes, déséquilibre L2, métriques de trades récents et slippage théorique par taille notionnelle en devise cotée.
+Le protocole intégré est `market-attention-radar-v3`. Il ajoute au contrat v2 : état/qualité/fraîcheur microstructure, spread, profondeur base/quote, profondeur par bandes, déséquilibre L2, métriques de trades récents et slippage théorique par taille notionnelle en devise cotée.
 
 `informative_only=True` reste validé côté backend.
 

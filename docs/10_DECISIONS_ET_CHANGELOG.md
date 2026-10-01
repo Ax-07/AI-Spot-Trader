@@ -11,10 +11,10 @@ Market Attention Radar reste strictement observationnel et ne prend aucune déci
 ## Référence courante
 
 ```text
-HEAD GitHub audité : 2aaff09b01300008e63eaadbca242817bcb4ce28
-Commit              : docs: mark batch 39 as integrated
+HEAD GitHub audité : 6d263be5edb589723101c32065ad68434b0b64f1
+Commit              : feat: enrich market attention with kraken microstructure
 Batch 39            : intégré
-Batch 40            : patch proposé/local non intégré
+Batch 40            : intégré
 ```
 
 ## Changelog — 2026-10-01 — Batch 40 Microstructure Kraken
@@ -36,37 +36,37 @@ Batch 40            : patch proposé/local non intégré
 
 ## ADR-298 — Microstructure comme enrichissement, pas comme second Radar
 
-**PROPOSÉ Batch 40.**
+**INTÉGRÉ Batch 40.**
 
 `MicrostructureMarketAttentionRadar` réutilise `MarketAttentionRadar` Batch 39 et enrichit ses snapshots. Le pipeline OHLCV canonique n'est pas dupliqué.
 
 ## ADR-299 — REST snapshots bornés avant streaming microstructure
 
-**PROPOSÉ Batch 40.**
+**INTÉGRÉ Batch 40.**
 
 Le Batch 40 utilise les endpoints publics REST L2/trades avec limites et cache court. Aucun nouveau WebSocket complexe n'est introduit sans besoin mesuré.
 
 ## ADR-300 — Unités de slippage explicites
 
-**PROPOSÉ Batch 40.**
+**INTÉGRÉ Batch 40.**
 
 Les notionnels théoriques sont exprimés dans la devise cotée. Un marché `BTC/USD` utilise donc des USD ; un marché `BTC/EUR` utilise des EUR. Aucune conversion FX implicite n'est autorisée.
 
 ## ADR-301 — Côté Kraken sans inférence d'agresseur
 
-**PROPOSÉ Batch 40.**
+**INTÉGRÉ Batch 40.**
 
 Le côté `b/s` fourni par Kraken peut alimenter une description acheteur/vendeur. Si la donnée est absente ou inconnue, les métriques directionnelles correspondantes restent `None`.
 
 ## ADR-302 — Microstructure additive et fail-soft
 
-**PROPOSÉ Batch 40.**
+**INTÉGRÉ Batch 40.**
 
 Une indisponibilité du carnet ou des trades ne invalide pas l'OHLCV. Le statut/qualité microstructure est exposé séparément et ne déclenche Agent, Risk ou Broker.
 
 ## ADR-303 — Contrat API Radar v3
 
-**PROPOSÉ Batch 40.**
+**INTÉGRÉ Batch 40.**
 
 `market-attention-radar-v3` ajoute spread, profondeur, déséquilibre, activité des trades, slippage, qualité/fraîcheur microstructure et diagnostics à la structure v2.
 

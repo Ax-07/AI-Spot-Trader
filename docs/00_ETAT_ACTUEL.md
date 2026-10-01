@@ -5,15 +5,15 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD réel  : 2aaff09b01300008e63eaadbca242817bcb4ce28
-Commit     : docs: mark batch 39 as integrated
+HEAD réel  : 6d263be5edb589723101c32065ad68434b0b64f1
+Commit     : feat: enrich market attention with kraken microstructure
 ```
 
-État revérifié le 01/10/2026 au démarrage du Batch 40. Le commit applicatif principal du Batch 39 reste `5bff583b47acf2b3a2a112611c40e0046c78cc3e` (`feat: make market attention radar kraken-only`) ; `2aaff09` est le HEAD GitHub documentaire qui marque cette intégration.
+État revérifié le 01/10/2026 lors de la clôture documentaire du Batch 40. Le Batch 40 est intégré sur GitHub `main` dans `6d263be5edb589723101c32065ad68434b0b64f1` (`feat: enrich market attention with kraken microstructure`).
 
 ## Batch 40 — Microstructure Kraken
 
-**État : patch proposé/local, non intégré tant que l'utilisateur ne l'a pas validé puis commit/push.**
+**État : intégré sur GitHub `main` au HEAD `6d263be5edb589723101c32065ad68434b0b64f1`.**
 
 Le Batch 40 enrichit le Radar déterministe sans remplacer le pipeline OHLCV canonique :
 
@@ -34,6 +34,6 @@ Market Attention Radar v3
 
 Le Radar reste `informative_only=True`, sans appel OpenAI, sans recherche Web, sans dépendance Agent/Risk/Broker et sans construction ou envoi d'ordre. La microstructure nouvelle s'applique aux marchés SPOT ; le support PERPETUAL historique du Radar OHLCV n'est pas étendu par ce batch.
 
-Le contrat API proposé devient `market-attention-radar-v3`. Les données microstructure sont fail-soft : l'OHLCV valide reste disponible lorsqu'un carnet ou des trades sont indisponibles.
+Le contrat API intégré est `market-attention-radar-v3`. Les données microstructure sont fail-soft : l'OHLCV valide reste disponible lorsqu'un carnet ou des trades sont indisponibles.
 
 Voir `docs/40_BATCH_MICROSTRUCTURE_KRAKEN.md`.

@@ -3,10 +3,10 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub réel          : 2aaff09b01300008e63eaadbca242817bcb4ce28
-Commit                    : docs: mark batch 39 as integrated
+HEAD GitHub réel          : 6d263be5edb589723101c32065ad68434b0b64f1
+Commit                    : feat: enrich market attention with kraken microstructure
 Batch 39                  : intégré
-Batch 40                  : patch proposé/local non intégré
+Batch 40                  : intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -23,17 +23,17 @@ AI Spot Trader conserve un seul Agent IA stratégique, Kraken comme exchange ini
 4. streaming/caches marché : technique et déterministe ;
 5. Market Attention Radar : observation déterministe Kraken, avec cadence microstructure bornée distincte.
 
-## État intégré jusqu'au Batch 39
+## État intégré jusqu'au Batch 40
 
-Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et les caractéristiques structurelles. Le Batch 39, intégré dans `5bff583` puis marqué intégré par `2aaff09`, a supprimé la couche Web/IA du Radar.
+Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et les caractéristiques structurelles. Le Batch 39, intégré dans `5bff583` puis marqué intégré par `2aaff09`, a supprimé la couche Web/IA du Radar. Le Batch 40, intégré dans `6d263be`, a ajouté la microstructure Kraken SPOT et le contrat Radar v3.
 
 ## Batch 40 — microstructure Kraken
 
-**État : patch proposé.**
+**État : intégré.**
 
 Objectif : enrichir le Radar avec trades publics SPOT récents et carnet L2 Kraken, puis calculer spread, profondeur, déséquilibre, intensité, pression fournisseur descriptive et slippage théorique, sans ordre et sans IA/Web.
 
-Architecture proposée :
+Architecture intégrée :
 
 ```text
 OHLCV Batch 39
