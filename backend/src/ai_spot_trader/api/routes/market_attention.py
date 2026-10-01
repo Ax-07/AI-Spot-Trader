@@ -7,27 +7,28 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
 
 from ai_spot_trader.market.attention import MarketAttentionOverview, RadarStatus
-from ai_spot_trader.market.attention_microstructure import (
-    MarketAttentionOverviewV3,
-)
+from ai_spot_trader.market.attention_microstructure import MarketAttentionOverviewV3
 from ai_spot_trader.market.attention_scope_trend import (
     MarketAttentionOverviewV4,
     MarketScope,
 )
+from ai_spot_trader.market.attention_structure import MarketAttentionOverviewV5
 
 router = APIRouter(prefix="/api/v1/market-attention", tags=["market-attention"])
+
+MarketAttentionPublicOverview = MarketAttentionOverviewV4 | MarketAttentionOverviewV5
 
 
 class MarketAttentionReader(Protocol):
     @property
     def latest(
         self,
-    ) -> MarketAttentionOverview | MarketAttentionOverviewV3 | MarketAttentionOverviewV4: ...
+    ) -> MarketAttentionOverview | MarketAttentionOverviewV3 | MarketAttentionPublicOverview: ...
 
     def history(
         self, *, limit: int = 24
     ) -> tuple[
-        MarketAttentionOverview | MarketAttentionOverviewV3 | MarketAttentionOverviewV4, ...
+        MarketAttentionOverview | MarketAttentionOverviewV3 | MarketAttentionPublicOverview, ...
     ]: ...
 
 
@@ -37,13 +38,13 @@ class MarketAttentionScopeWriter(Protocol):
         market_scope: MarketScope,
         *,
         observed_at: datetime | None = None,
-    ) -> MarketAttentionOverviewV4: ...
+    ) -> MarketAttentionPublicOverview: ...
 
 
 class MarketAttentionHistoryResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    items: tuple[MarketAttentionOverviewV4, ...]
+    items: tuple[MarketAttentionPublicOverview, ...]
 
 
 class MarketAttentionScopeRequest(BaseModel):
@@ -52,30 +53,31 @@ class MarketAttentionScopeRequest(BaseModel):
     market_scope: MarketScope
 
 
-@router.get("", response_model=MarketAttentionOverviewV4)
-async def market_attention(request: Request) -> MarketAttentionOverviewV4:
+@router.get("", response_model=MarketAttentionPublicOverview)
+async def market_attention(request: Request) -> MarketAttentionPublicOverview:
     service = _service(request)
     if service is None:
+        # Preserve the Batch 41 v4 fallback contract when no radar is configured.
         return MarketAttentionOverviewV4(
             observed_at=datetime.now(UTC),
             status=RadarStatus.NOT_CONFIGURED,
             informative_only=True,
             market_scope=MarketScope.ALL,
         )
-    return _as_v4(service.latest)
+    return _as_public(service.latest)
 
 
-@router.put("/scope", response_model=MarketAttentionOverviewV4)
+@router.put("/scope", response_model=MarketAttentionPublicOverview)
 async def market_attention_scope(
     payload: MarketAttentionScopeRequest,
     request: Request,
-) -> MarketAttentionOverviewV4:
+) -> MarketAttentionPublicOverview:
     service = _service(request)
     if service is None or not hasattr(service, "set_market_scope"):
         raise HTTPException(status_code=503, detail="market attention scope control unavailable")
     writer = cast(MarketAttentionScopeWriter, service)
     result = await writer.set_market_scope(payload.market_scope)
-    return _as_v4(result)
+    return _as_public(result)
 
 
 @router.get("/history", response_model=MarketAttentionHistoryResponse)
@@ -87,13 +89,18 @@ async def market_attention_history(
     if service is None:
         return MarketAttentionHistoryResponse(items=())
     return MarketAttentionHistoryResponse(
-        items=tuple(_as_v4(item) for item in service.history(limit=limit))
+        items=tuple(_as_public(item) for item in service.history(limit=limit))
     )
 
 
-def _as_v4(
-    value: MarketAttentionOverview | MarketAttentionOverviewV3 | MarketAttentionOverviewV4,
-) -> MarketAttentionOverviewV4:
+def _as_public(
+    value: MarketAttentionOverview
+    | MarketAttentionOverviewV3
+    | MarketAttentionOverviewV4
+    | MarketAttentionOverviewV5,
+) -> MarketAttentionPublicOverview:
+    if isinstance(value, MarketAttentionOverviewV5):
+        return value
     if isinstance(value, MarketAttentionOverviewV4):
         return value
     if isinstance(value, MarketAttentionOverviewV3):

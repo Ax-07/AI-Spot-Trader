@@ -28,6 +28,14 @@ import {
   type RadarInterestLevel,
   type RadarStatus,
 } from "@/lib/market-attention";
+import {
+  marketStructure,
+  structureEventLabel,
+  structureStateLabel,
+  structureTimeframe,
+  swingSequenceLabel,
+  timeframeStructureLabel,
+} from "@/lib/market-structure";
 
 function statusTone(status: RadarStatus) {
   if (status === "AVAILABLE") return "success" as const;
@@ -96,6 +104,7 @@ function microLabel(value: string) {
 function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot; expanded: boolean; onToggle: () => void }) {
   const activity = item.market_activity;
   const micro = item.microstructure;
+  const structure = marketStructure(item);
   const h5 = attentionHorizon(item, "5m");
   const h15 = attentionHorizon(item, "15m");
   const h1 = attentionHorizon(item, "1h");
@@ -106,12 +115,13 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
 
   return (
     <div className="rounded-xl border bg-background/70">
-      <button type="button" onClick={onToggle} className="grid w-full gap-3 p-3 text-left md:grid-cols-[minmax(190px,1.3fr)_repeat(8,minmax(74px,0.7fr))] md:items-center">
+      <button type="button" onClick={onToggle} className="grid w-full gap-3 p-3 text-left md:grid-cols-[minmax(190px,1.3fr)_repeat(9,minmax(74px,0.7fr))] md:items-center">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="font-semibold">{activity.market.symbol}</span>
             <Badge tone="neutral">{activity.market.market_type}</Badge>
             <Badge tone="neutral">{trendDirectionLabel(activity.trend_direction)}</Badge>
+            <Badge tone="neutral">Structure · {structureStateLabel(structure?.global_state)}</Badge>
             <Badge tone={liquidityTone(activity.liquidity_regime)}>{activity.liquidity_regime}</Badge>
             <Badge tone={interestTone(item.interest_level)}>{item.interest_level}</Badge>
           </div>
@@ -121,6 +131,7 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
         </div>
         <Fact label="Activité" value={activity.activity_state.replaceAll("_", " ")} />
         <Fact label="Tendance" value={trendDirectionLabel(activity.trend_direction)} />
+        <Fact label="Structure" value={structureStateLabel(structure?.global_state)} />
         <Fact label="Vol. 5m" value={formatVolumeRatio(h5?.volume_ratio)} />
         <Fact label="Spread" value={formatBps(micro.spread_bps)} />
         <Fact label="Prof. L2" value={formatQuoteCompact(micro.total_depth_quote, micro.quote_asset)} />
@@ -131,9 +142,10 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
 
       {expanded ? (
         <div className="space-y-4 border-t px-3 py-4 text-xs">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-8">
             <Fact label="Niveau d’intérêt" value={item.interest_level} />
             <Fact label="Tendance globale" value={trendDirectionLabel(activity.trend_direction)} />
+            <Fact label="Structure globale" value={structureStateLabel(structure?.global_state)} />
             <Fact label="Qualité OHLCV" value={activity.data_quality} />
             <Fact label="Microstructure" value={`${micro.status} / ${micro.data_quality}`} />
             <Fact label="Fraîcheur OHLCV" value={freshness(activity.freshness_seconds)} />
@@ -206,7 +218,7 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
               <div key={horizon?.timeframe ?? index} className="rounded-lg border bg-muted/10 p-3">
                 <p className="font-semibold">OHLCV · {horizon?.timeframe ?? "—"}</p>
                 <div className="mt-2 space-y-1.5">
-                  <Fact label="Tendance" value={trendDirectionLabel(horizon?.trend_direction)} />
+                  <Fact label="Tendance récente" value={trendDirectionLabel(horizon?.trend_direction)} />
                   <Fact label="Volume relatif" value={formatVolumeRatio(horizon?.volume_ratio)} />
                   <Fact label="Variation prix" value={formatSignedPercent(horizon?.price_return)} />
                   <Fact label="Expansion range" value={formatVolumeRatio(horizon?.range_expansion_ratio)} />
@@ -217,6 +229,35 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
             ))}
           </div>
 
+          <div className="rounded-lg border bg-muted/10 p-3">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <p className="font-semibold">Structure de marché multi-timeframe</p>
+              <p className="text-[10px] text-muted-foreground">Pivots confirmés sur candles Kraken natives finalisées · ~100 bougies / timeframe</p>
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {(["5m", "15m", "1h", "4h"] as const).map((timeframe) => {
+                const frame = structureTimeframe(structure, timeframe);
+                const eventLabel = structureEventLabel(frame?.event);
+                return (
+                  <div key={timeframe} className="rounded-lg border bg-background/50 p-3">
+                    <p className="font-semibold">Structure {timeframe}</p>
+                    <div className="mt-2 space-y-1.5">
+                      <Fact label="État" value={structureStateLabel(frame?.state)} />
+                      <Fact label="Swings" value={swingSequenceLabel(frame)} />
+                      <Fact label="Bougies finalisées" value={frame ? String(frame.history_count) : "—"} />
+                      <Fact label="Dernière clôture" value={shortTime(frame?.latest_final_close)} />
+                    </div>
+                    {eventLabel ? <p className="mt-2 text-[10px] font-medium text-muted-foreground">{eventLabel}</p> : null}
+                    {frame?.error_type ? <p className="mt-2 text-[10px] text-destructive-subtle-foreground">{frame.error_type}</p> : null}
+                  </div>
+                );
+              })}
+            </div>
+            <p className="mt-3 text-[10px] text-muted-foreground">
+              La tendance récente décrit le mouvement de prix observé. La structure décrit la géométrie des swings confirmés. Elles restent indépendantes et ne constituent ni BUY, ni SELL, ni HOLD.
+            </p>
+          </div>
+
           {micro.errors.length ? (
             <div className="rounded-lg border bg-muted/10 p-3">
               <p className="font-semibold">Diagnostic microstructure Kraken</p>
@@ -225,7 +266,7 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
           ) : null}
 
           <p className="rounded-lg border bg-muted/10 p-3 text-muted-foreground">
-            Radar déterministe Kraken uniquement. OHLCV, carnet L2 et trades récents décrivent l’activité observée ; ils ne constituent aucune instruction de trading.
+            Radar déterministe Kraken uniquement. OHLCV, structure de marché, carnet L2 et trades récents décrivent l’activité observée ; ils ne constituent aucune instruction de trading.
           </p>
         </div>
       ) : null}
@@ -323,7 +364,7 @@ export function MarketAttentionDock() {
                   {data ? <span className="inline-flex"><Badge tone={statusTone(data.status)}>État · {data.status}</Badge></span> : null}
                   {data ? <span className="inline-flex"><Badge tone="neutral">Marché · {data.market_scope === "ALL" ? "TOUS" : data.market_scope === "PERPETUAL" ? "PERP" : "SPOT"}</Badge></span> : null}
                 </div>
-                <CardDescription className="mt-1">Données Kraken déterministes : OHLCV finalisé sur le scope actif, avec microstructure uniquement pour les marchés SPOT. Aucun appel IA, aucune recherche Web, aucune exécution.</CardDescription>
+                <CardDescription className="mt-1">Données Kraken déterministes : OHLCV finalisé sur le scope actif, structure native 5m/15m/1h/4h, avec microstructure uniquement pour les marchés SPOT. Aucun appel IA, aucune recherche Web, aucune exécution.</CardDescription>
               </div>
               <div className="flex gap-1">
                 <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading} aria-label="Actualiser le radar">

@@ -1,15 +1,23 @@
 # 41 — Market Attention : scope SPOT/PERP/ALL et direction de tendance
 
-## Référence auditée
+## Statut
+
+**INTÉGRÉ** sur `main` au commit :
+
+```text
+e65940b4c773f0de329648f5f3bb1f8960faa696
+feat: add market attention scope and trend direction
+```
+
+## Référence auditée après intégration
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 2a368c76f30373a6b9003324a1a14d8192cc0ad8
-Commit     : docs: mark batch 40 as integrated
+HEAD       : e65940b4c773f0de329648f5f3bb1f8960faa696
 ```
 
-Le HEAD réel a été revérifié avant le patch. `docs/00_ETAT_ACTUEL.md` pointait encore sur le commit applicatif Batch 40 `6d263be5...`; cette obsolescence est corrigée dans le patch.
+Le statut antérieur « patch proposé / non intégré » est obsolète depuis ce commit.
 
 ## Objectif
 
@@ -103,8 +111,6 @@ La synthèse ne moyenne pas les rendements :
 - aucun mouvement matériel et au moins deux horizons exploitables => `NEUTRAL` ;
 - un seul mouvement matériel isolé, sans consensus multi-timeframe => `UNKNOWN`.
 
-Cette dernière règle évite de transformer un seul mouvement ponctuel en tendance globale.
-
 ## Relation avec TRENDING
 
 Après le calcul structurel existant, `TRENDING` est normalisé avec la synthèse ci-dessus :
@@ -114,7 +120,7 @@ global = UP ou DOWN -> TRENDING présent
 global = MIXED / NEUTRAL / UNKNOWN -> TRENDING absent
 ```
 
-Le niveau d'intérêt et ses raisons sont ensuite recalculés via `_interest_level_and_reasons(...)` existant. La tendance et `TRENDING` utilisent donc la même définition sous-jacente.
+Le niveau d'intérêt et ses raisons sont ensuite recalculés via `_interest_level_and_reasons(...)` existant.
 
 ## Causalité
 

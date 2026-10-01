@@ -5,10 +5,11 @@
 ```text
 Repository            : Ax-07/AI-Spot-Trader
 Branche               : main
-HEAD GitHub audité    : 2a368c76f30373a6b9003324a1a14d8192cc0ad8
-Batch 40              : intégré
-Batch 41              : patch proposé, non intégré
-Contrat Radar proposé : market-attention-radar-v4
+HEAD GitHub audité    : e65940b4c773f0de329648f5f3bb1f8960faa696
+Batch 41              : intégré
+Batch 42              : patch proposé, non intégré
+Contrat Radar intégré : market-attention-radar-v4
+Contrat Radar proposé : market-attention-radar-v5
 ```
 
 ## 2. Architecture générale
@@ -22,16 +23,22 @@ Next.js cockpit
         -> Risk Engine déterministe
         -> Paper Broker / Portfolio
 
-     -> ScopedTrendMarketAttentionRadar (v4, observation uniquement)
-        -> MicrostructureMarketAttentionRadar (v3)
-           -> MarketAttentionRadar canonique
-              -> catalogue Kraken
-              -> CandleStreamService partagé / OHLCV 5m canoniques
-           -> couche microstructure SPOT
-              -> GET /0/public/Depth
-              -> GET /0/public/Trades
-        -> scope runtime SPOT / PERPETUAL / ALL
-        -> direction déterministe multi-timeframe
+     -> StructuredMarketAttentionRadar (v5, observation uniquement)
+        -> ScopedTrendMarketAttentionRadar (v4)
+           -> MicrostructureMarketAttentionRadar (v3)
+              -> MarketAttentionRadar canonique
+                 -> catalogue Kraken
+                 -> CandleStreamService partagé / OHLCV 5m canonique
+              -> couche microstructure SPOT
+                 -> GET /0/public/Depth
+                 -> GET /0/public/Trades
+           -> scope runtime SPOT / PERPETUAL / ALL
+           -> direction récente déterministe multi-timeframe
+        -> MarketStructureAnalyzer
+           -> CandleStreamService.history_as_of(...)
+           -> CandleKey(market, 5m / 15m / 1h / 4h)
+           -> pivots confirmés / HH HL LH LL
+           -> BULLISH / BEARISH / RANGE / TRANSITION / UNKNOWN
         -> API /api/v1/market-attention
         -> zéro OpenAI / zéro recherche Web
         -> aucun lien vers Agent / Market Discovery / Risk / Broker
@@ -50,13 +57,13 @@ catalogue complet
 -> CandleStreamService
 ```
 
-Le scope vaut `ALL` par défaut. Les curseurs de rotation par famille existants sont conservés.
+Le scope vaut `ALL` par défaut. Les curseurs de rotation par famille existants sont conservés. Le Batch 42 n'analyse la structure que des éléments présents dans la shortlist déjà produite après ce filtrage ; aucun marché hors scope n'est réintroduit.
 
 ## 4. Caches et compteurs
 
 Les snapshots peuvent rester physiquement dans les caches historiques, mais `_fresh_activities(...)` filtre toujours selon le scope courant. Les compteurs, la classification de liquidité, les diagnostics et la shortlist sont donc construits uniquement sur la population active.
 
-Le `catalogue_market_count` v4 est recalculé sur la population éligible du scope, y compris après un changement runtime.
+Le `catalogue_market_count` est recalculé sur la population éligible du scope, y compris après un changement runtime.
 
 ## 5. Changement runtime
 
@@ -66,18 +73,11 @@ Le `catalogue_market_count` v4 est recalculé sur la population éligible du sco
 {"market_scope":"SPOT"}
 ```
 
-Le service :
+Le service sérialise le changement avec le verrou v4 existant, rafraîchit la population cohérente du scope puis, pour le Radar v5, enrichit la shortlist résultante avec la Market Structure. Le frontend utilise uniquement `market_scope` renvoyé par le backend pour afficher l'état actif.
 
-1. sérialise le changement avec un verrou v4 couvrant le refresh OHLCV + microstructure complet ;
-2. remplace immédiatement le `latest` v4 par un snapshot `PARTIAL` vide du nouveau scope ;
-3. lance un refresh du Radar ;
-4. renvoie le nouveau snapshot cohérent.
+## 6. Tendance récente Batch 41
 
-Le frontend utilise uniquement `market_scope` renvoyé par le backend pour afficher l'état actif.
-
-## 6. Direction de tendance
-
-Les seuils `_MATERIAL_RETURN` du Radar existant restent la source unique :
+Les seuils `_MATERIAL_RETURN` du Radar existant restent la source unique de la tendance récente :
 
 ```text
 5m  = 0.003
@@ -86,48 +86,141 @@ Les seuils `_MATERIAL_RETURN` du Radar existant restent la source unique :
 4h  = 0.020
 ```
 
-Par horizon :
+Par horizon : `UP`, `DOWN`, `NEUTRAL` ou `UNKNOWN`. La synthèse globale peut être `MIXED`. `TRENDING` continue d'être normalisé avec cette synthèse. Le Batch 42 ne modifie aucune de ces règles.
 
-- `UP` : rendement >= seuil ;
-- `DOWN` : rendement <= -seuil ;
-- `NEUTRAL` : mouvement non matériel ;
-- `UNKNOWN` : horizon incomplet, valeur absente/non finie ou timeframe sans seuil.
+## 7. Historique natif de Market Structure
 
-Synthèse globale :
+`StructuredMarketAttentionRadar` ne réutilise pas les agrégations 5m du calcul d'activité pour déduire la structure H1/H4. Pour chaque marché de shortlist et chaque timeframe :
 
-- moins de deux horizons exploitables => `UNKNOWN` ;
-- au moins un `UP` et un `DOWN` matériels => `MIXED` ;
-- au moins deux `UP`, aucun `DOWN` => `UP` ;
-- au moins deux `DOWN`, aucun `UP` => `DOWN` ;
-- zéro mouvement matériel avec données suffisantes => `NEUTRAL` ;
-- un seul mouvement matériel isolé => `UNKNOWN`.
+```python
+await CandleStreamService.history_as_of(
+    CandleKey(symbol=..., market_type=..., timeframe=...),
+    as_of=observed_at,
+    limit=100,
+)
+```
 
-## 7. Cohérence TRENDING
+La limite est portée par `MarketStructurePolicy.history_limit`, bornée entre 40 et 300, avec 100 par défaut.
 
-Après la classification structurelle v3, la couche v4 normalise uniquement `TRENDING` :
+Le service candles décide lui-même si le cache causal est suffisant. S'il dispose déjà de la profondeur demandée et de la dernière clôture finalisée attendue, il ne relance pas un backfill inutile.
 
-- synthèse `UP` ou `DOWN` => `TRENDING` présent ;
-- `MIXED`, `NEUTRAL` ou `UNKNOWN` => `TRENDING` absent.
+## 8. Détection causale des pivots
 
-Le niveau d'intérêt et ses raisons sont ensuite recalculés avec les mêmes fonctions canoniques du Radar. Il n'existe donc pas deux définitions divergentes de la tendance directionnelle.
+Politique par défaut :
 
-## 8. Causalité
+```text
+pivot_left_bars       = 2
+pivot_right_bars      = 2
+min_history_candles   = 20
+history_limit         = 100
+equality_tolerance_bps= 2
+swing_display_limit   = 8
+fetch_concurrency     = 8
+```
 
-La direction ne lit pas les candles directement. Elle s'appuie sur les `ActivityHorizonSnapshot` produits par `MarketActivityAnalyzer`, qui ne retient déjà que les candles `is_final == True`, de bon marché/timeframe et `close_time <= observed_at`. Le Batch 41 ne crée aucun nouveau chemin OHLCV et n'ajoute aucun look-ahead.
+Un pivot d'indice `i` n'est parcouru que lorsque `pivot_right_bars` candles finalisées existent après lui. Son `confirmed_at` est la clôture de la dernière candle de confirmation à droite. Tant que cette clôture n'existe pas, le pivot n'apparaît dans aucune sortie.
 
-## 9. Microstructure
+Avant analyse, les lignes sont filtrées :
 
-Les invariants Batch 40 restent inchangés :
+```text
+is_final == True
+candle.timeframe == timeframe demandé
+close_time <= observed_at
+updated_at <= observed_at
+```
 
-- `SPOT` : microstructure possible ;
-- `PERPETUAL` : `NOT_APPLICABLE` ;
-- scope `PERPETUAL` : `_next_micro_batch(...)` retourne vide et le cache microstructure visible est vide ;
-- scope `ALL` : seuls les marchés SPOT peuvent appeler `/Depth` et `/Trades`.
+`history_as_of(...)` applique déjà une barrière causale fournisseur/cache ; l'analyseur réapplique une défense locale.
 
-## 10. Contrat et cockpit
+## 9. Classification HH / HL / LH / LL
 
-`market-attention-radar-v4` expose `market_scope`, la tendance globale et les tendances par timeframe. Le cockpit affiche `SPOT / PERP / TOUS`, la direction globale dans la ligne principale et chaque direction dans le détail OHLCV, sans masquer les variations numériques.
+Chaque nouveau swing high est comparé au swing high précédent :
 
-## 11. Isolation
+```text
+plus haut -> HH
+plus bas  -> LH
+```
 
-Aucun module Batch 41 Market Attention n'importe Agent, Risk, Broker, OpenAI ou outil Web. Le Radar reste read-only vis-à-vis de Kraken et `informative_only=True`.
+Chaque nouveau swing low est comparé au swing low précédent :
+
+```text
+plus haut -> HL
+plus bas  -> LL
+```
+
+Une différence absolue inférieure ou égale à `equality_tolerance_bps` reste non directionnelle (`classification=None`) au lieu d'être forcée en HH/LH/HL/LL.
+
+## 10. États structurels
+
+La classification exige une séquence de pivots confirmés :
+
+- deux `HH` récents et deux `HL` récents => `BULLISH` ;
+- deux `LH` récents et deux `LL` récents => `BEARISH` ;
+- coexistence récente de géométries opposées ou derniers high/low contradictoires => `TRANSITION` ;
+- pivots répétés sans direction au-delà de la tolérance => `RANGE` ;
+- preuve insuffisante => `UNKNOWN`.
+
+Un `LH` ou `LL` isolé ne suffit pas à déclarer `BEARISH`.
+
+## 11. BOS / CHOCH
+
+Les événements sont descriptifs :
+
+- structure `BULLISH` avec dernier swing high classé `HH` => `BOS_UP` ;
+- structure `BEARISH` avec dernier swing low classé `LL` => `BOS_DOWN` ;
+- transition issue d'une géométrie haussière vers `LH + LL` => `CHOCH_DOWN` ;
+- transition issue d'une géométrie baissière vers `HH + HL` => `CHOCH_UP`.
+
+Ils n'ont aucune autorité stratégique.
+
+## 12. Synthèse multi-timeframe
+
+Les quatre structures individuelles sont conservées. La synthèse ne les écrase jamais :
+
+- moins de deux timeframes connus => `UNKNOWN` ;
+- tous les timeframes connus identiques => état correspondant ;
+- états connus divergents => `MIXED`.
+
+Cette synthèse reste descriptive.
+
+## 13. Performance réseau
+
+L'enrichissement structurel intervient **après** la sélection de la shortlist et non sur les 120 marchés potentiellement scannés à chaque rotation. Avec les valeurs par défaut :
+
+```text
+maximum shortlist : 10 marchés
+x 4 timeframes
+= 40 lectures history_as_of bornées par refresh
+```
+
+Ces lectures passent par le cache canonique. Le sémaphore structure (`fetch_concurrency=8`) borne également la concurrence provider.
+
+## 14. Contrat API et compatibilité
+
+`market-attention-radar-v5` ajoute à chaque entrée de shortlist :
+
+```text
+market_structure.observed_at
+market_structure.global_state
+market_structure.timeframes[]
+```
+
+Chaque timeframe expose `state`, `event`, `history_count`, `latest_final_close`, les swing highs/lows confirmés, les swings affichables et la `sequence` HH/HL/LH/LL.
+
+Les routes FastAPI acceptent aussi un `MarketAttentionOverviewV4` injecté. Les tests et consommateurs Batch 41 qui fournissent explicitement un service v4 restent donc sérialisables sans conversion forcée vers v5.
+
+## 15. Cockpit
+
+La ligne principale conserve activité, tendance récente, volume, spread, profondeur L2, déséquilibre, cadence trades et variation de prix. Le détail ajoute :
+
+```text
+Structure globale
+Structure 5m / 15m / 1h / 4h
+Swings HH → HL → ...
+Événement BOS/CHOCH éventuel
+```
+
+La section OHLCV nomme explicitement `Tendance récente` pour éviter la confusion avec la Market Structure.
+
+## 16. Isolation
+
+Aucun module Batch 42 Market Structure n'importe Agent, Risk, Broker, OpenAI ou outil Web. Le Radar reste read-only vis-à-vis de Kraken et `informative_only=True`.
