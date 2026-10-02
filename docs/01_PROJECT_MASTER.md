@@ -4,16 +4,16 @@
 
 AI Spot Trader est une application expérimentale de trading pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est un cockpit de contrôle et de visualisation qui peut être fermé sans arrêter le moteur.
 
-Référence GitHub auditée au lancement du Batch 43 :
+Référence GitHub intégrée après le Batch 43 :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : f5de73270c23c6c4e2a6114ac78b3e57c17c65b1
-Commit     : docs: close batch 42 documentation
+HEAD       : 32320e268722c6e431ae722924bca487ae45d004
+Commit     : feat: add market attention volume and market cap filters
 ```
 
-Les Batches 39 à 42 sont intégrés sur `main`. Le Batch 43 est un patch proposé à valider localement avant intégration.
+Les Batches 39 à 43 sont intégrés sur `main`.
 
 ## 2. Invariants fonctionnels
 
@@ -182,7 +182,7 @@ Batch 41 intégré : `market-attention-radar-v4`.
 
 Batch 42 intégré : `market-attention-radar-v5` pour les snapshots réellement enrichis de `market_structure`. Les routes acceptent et sérialisent aussi un service v4 injecté afin de ne pas casser les tests/intégrations Batch 41.
 
-Batch 43 proposé : `market-attention-radar-v6`, ajoutant l'état runtime des filtres ainsi que `volume_24h_usd` et les métadonnées de capitalisation sur les candidats.
+Batch 43 intégré : `market-attention-radar-v6`, ajoutant l'état runtime des filtres ainsi que `volume_24h_usd` et les métadonnées de capitalisation sur les candidats.
 
 `informative_only=True` reste validé côté backend.
 
@@ -198,7 +198,7 @@ L'observation de marchés `PERPETUAL` par le Radar ne modifie pas l'invariant d'
 
 ## 18. Batch 43 — filtres volume et capitalisation
 
-Le Batch 43 proposé ajoute des filtres backend runtime :
+Le Batch 43 intégré ajoute des filtres backend runtime :
 
 ```text
 market_scope

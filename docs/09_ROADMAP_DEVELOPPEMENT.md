@@ -3,13 +3,13 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub réel       : f5de73270c23c6c4e2a6114ac78b3e57c17c65b1
-Commit                 : docs: close batch 42 documentation
+HEAD GitHub réel       : 32320e268722c6e431ae722924bca487ae45d004
+Commit                 : feat: add market attention volume and market cap filters
 Batch 39               : intégré
 Batch 40               : intégré
 Batch 41               : intégré
 Batch 42               : intégré
-Batch 43               : patch proposé, non intégré
+Batch 43               : intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -24,13 +24,13 @@ AI Spot Trader conserve un seul Agent IA stratégique, Kraken comme exchange ini
 2. cycle stratégique IA : `INTERVAL` ou `CANDLE_CLOSE` ;
 3. Market Discovery : cadence distincte ;
 4. streaming/caches marché : technique et déterministe ;
-5. Market Attention Radar : observation déterministe avec cadence propre, données marché Kraken et, à partir du patch Batch 43, métadonnées de capitalisation externes read-only mises en cache.
+5. Market Attention Radar : observation déterministe avec cadence propre, données marché Kraken et, depuis le Batch 43 intégré, métadonnées de capitalisation externes read-only mises en cache.
 
-## État intégré jusqu'au Batch 42
+## État intégré jusqu'au Batch 43
 
-Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et des caractéristiques descriptives. Le Batch 39 a supprimé la couche Web/IA du Radar. Le Batch 40 a ajouté la microstructure Kraken SPOT et le contrat Radar v3. Le Batch 41 a ajouté le scope `SPOT / PERPETUAL / ALL`, les directions récentes par horizon et le contrat Radar v4. Le Batch 42 a ajouté la Market Structure multi-timeframe et le contrat Radar v5.
+Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et des caractéristiques descriptives. Le Batch 39 a supprimé la couche Web/IA du Radar. Le Batch 40 a ajouté la microstructure Kraken SPOT et le contrat Radar v3. Le Batch 41 a ajouté le scope `SPOT / PERPETUAL / ALL`, les directions récentes par horizon et le contrat Radar v4. Le Batch 42 a ajouté la Market Structure multi-timeframe et le contrat Radar v5. Le Batch 43 ajoute les filtres runtime de volume 24h et de capitalisation réelle ainsi que le contrat Radar v6.
 
-Le commit fonctionnel Batch 42 est `003dae8dbfdc052edbad5bfde2c23fa24852eace`; la clôture documentaire porte le HEAD intégré à `f5de73270c23c6c4e2a6114ac78b3e57c17c65b1`.
+Le HEAD intégré après le Batch 43 est `32320e268722c6e431ae722924bca487ae45d004` (`feat: add market attention volume and market cap filters`).
 
 ## Batch 42 — Market Structure multi-timeframe
 
@@ -52,47 +52,36 @@ Le commit fonctionnel Batch 42 est `003dae8dbfdc052edbad5bfde2c23fa24852eace`; l
 
 ## Batch 43 — filtres volume et capitalisation
 
-**État : patch proposé, non intégré.**
+**État : intégré.**
 
-Objectif : réduire l'univers observé avant les enrichissements coûteux avec deux filtres pilotés par le backend :
+Le Radar v6 réduit l'univers observé avant les enrichissements coûteux avec deux familles de filtres pilotées par le backend :
 
 ```text
 min_volume_24h_usd
 market_cap_categories / min_market_cap_usd / max_market_cap_usd
 ```
 
-Décisions proposées :
+Décisions intégrées :
 
 - le volume 24h USD est dérivé causalement des candles Kraken déjà chargées lorsque la devise notionnelle USD est prouvée ;
 - aucun appel Kraken additionnel par marché n'est ajouté pour ce volume ;
 - une vraie capitalisation utilise `MarketMetadataProvider`, initialement CoinPaprika, read-only, sans secret, avec TTL long et fail-soft ;
 - la capitalisation est un filtre de métadonnée, jamais un signal ;
 - la capitalisation filtre avant OHLCV ; le volume filtre après OHLCV mais avant L2/trades et structure multi-timeframe ;
-- protocole proposé `market-attention-radar-v6` ;
+- contrat intégré `market-attention-radar-v6` ;
 - cockpit piloté par l'état backend, sans configuration frontend-only.
 
-Le terme « Radar Kraken-only » n'est plus exact si ce patch est intégré. La formulation cible est : données de marché/structure/microstructure Kraken, métadonnée de capitalisation via provider externe, exécution toujours Kraken.
+Le terme « Radar Kraken-only » n'est plus exact depuis l'intégration du Batch 43. La formulation à utiliser est : données de marché/structure/microstructure Kraken, métadonnée de capitalisation via provider externe read-only, exécution toujours Kraken.
 
-## Validation Batch 42
+## Validation finale Batch 43
 
-Avant le push du Batch 42, l'utilisateur avait validé localement :
+Validations exécutées localement par l'utilisateur avant le push :
 
 ```text
-backend pytest -q       : PASS complet — 100 %
-frontend pnpm test      : 54/54 PASS
+backend pytest -q       : PASS
 frontend pnpm typecheck : PASS
-```
-
-Ces validations restent celles du Batch 42 et ne valent pas validation du Batch 43.
-
-## Validation requise avant intégration Batch 43
-
-```text
-backend pytest -q
-frontend pnpm test
-frontend pnpm typecheck
-git diff --check
-git status --short
+frontend pnpm test      : PASS — 57/57
+git diff --check        : PASS
 ```
 
 ## Périmètres ultérieurs possibles

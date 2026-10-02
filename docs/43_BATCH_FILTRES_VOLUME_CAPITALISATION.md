@@ -3,9 +3,9 @@
 ## Statut
 
 ```text
-État       : patch proposé, non intégré
-HEAD audit : f5de73270c23c6c4e2a6114ac78b3e57c17c65b1
-Contrat    : market-attention-radar-v6 proposé
+État       : intégré
+Commit     : 32320e268722c6e431ae722924bca487ae45d004
+Contrat    : market-attention-radar-v6
 ```
 
 ## Objectif
@@ -21,7 +21,7 @@ Les filtres restent informatifs. Ils ne créent aucune décision `BUY / SELL / H
 
 Le Radar canonique charge déjà jusqu'à 720 candles 5m et réutilise `CandleStreamService`. Il est donc inutile d'ajouter un appel Kraken `/Ticker` par marché uniquement pour ce filtre.
 
-Pour un marché `SPOT` directement coté en `USD`, le patch calcule causalement :
+Pour un marché `SPOT` directement coté en `USD`, le Batch 43 calcule causalement :
 
 ```text
 volume_24h_usd = somme(volume_base × close)
@@ -40,7 +40,7 @@ Si aucun filtre volume n'est actif, ces inconnues n'excluent pas le marché. Si 
 
 ## Audit de la capitalisation
 
-Une vraie capitalisation exige la supply circulante. Kraken ne constitue pas une source complète de cette métadonnée. Le patch n'utilise donc jamais un proxy de liquidité comme s'il s'agissait d'une market cap.
+Une vraie capitalisation exige la supply circulante. Kraken ne constitue pas une source complète de cette métadonnée. Le Batch 43 n'utilise donc jamais un proxy de liquidité comme s'il s'agissait d'une market cap.
 
 Architecture :
 
@@ -157,11 +157,11 @@ La vue indique explicitement que la donnée de capitalisation provient d'un prov
 
 ## Isolation
 
-Le patch n'importe aucune couche Agent/Risk/Broker dans le Radar. Le provider de métadonnées n'a aucune capacité d'exécution et aucune donnée externe n'est transformée en signal stratégique.
+Le Batch 43 n'importe aucune couche Agent/Risk/Broker dans le Radar. Le provider de métadonnées n'a aucune capacité d'exécution et aucune donnée externe n'est transformée en signal stratégique.
 
 L'exécution du projet reste SPOT sur Kraken. Le scope Radar `PERPETUAL / ALL` reste une capacité d'observation uniquement.
 
-## Tests inclus dans le patch
+## Tests couverts par le Batch 43
 
 Backend :
 
@@ -183,28 +183,15 @@ Frontend :
 - requête runtime `/filters` ;
 - conservation du comportement des helpers existants.
 
-## Validation réalisée lors de la préparation du patch
+## Validation finale
 
-Exécuté dans l'environnement ChatGPT :
+Validations exécutées localement avant le push du commit fonctionnel :
 
 ```text
-python -m py_compile sur les fichiers Python Batch 43 : PASS
-node --test --experimental-strip-types src/lib/market-attention.test.mjs : 11/11 PASS
+backend pytest -q       : PASS
+frontend pnpm typecheck : PASS
+frontend pnpm test      : PASS — 57/57
+git diff --check        : PASS
 ```
 
-Le dépôt complet n'étant pas disponible localement dans cet environnement, la suite complète doit encore être exécutée sur le clone utilisateur.
-
-## Validation locale attendue
-
-```powershell
-cd E:\AI-Spot-Trader\backend
-pytest -q
-
-cd E:\AI-Spot-Trader\frontend
-pnpm test
-pnpm typecheck
-
-cd E:\AI-Spot-Trader
-git diff --check
-git status --short
-```
+Le Batch 43 est intégré sur `main` au commit `32320e268722c6e431ae722924bca487ae45d004`.

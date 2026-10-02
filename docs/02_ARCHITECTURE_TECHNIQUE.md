@@ -5,13 +5,13 @@
 ```text
 Repository            : Ax-07/AI-Spot-Trader
 Branche               : main
-HEAD GitHub audité    : f5de73270c23c6c4e2a6114ac78b3e57c17c65b1
+HEAD GitHub audité    : 32320e268722c6e431ae722924bca487ae45d004
 Batch 41              : intégré
 Batch 42              : intégré
-Batch 43              : patch proposé, non intégré
+Batch 43              : intégré
 Contrat Radar v4      : intégré — market-attention-radar-v4
 Contrat Radar v5      : intégré — market-attention-radar-v5
-Contrat Radar v6      : proposé — market-attention-radar-v6
+Contrat Radar v6      : intégré — market-attention-radar-v6
 ```
 
 ## 2. Architecture générale

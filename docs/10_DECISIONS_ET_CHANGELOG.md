@@ -11,13 +11,13 @@ Market Attention Radar reste strictement observationnel et ne prend aucune déci
 ## Référence courante
 
 ```text
-HEAD GitHub audité : f5de73270c23c6c4e2a6114ac78b3e57c17c65b1
-Commit              : docs: close batch 42 documentation
+HEAD GitHub audité : 32320e268722c6e431ae722924bca487ae45d004
+Commit              : feat: add market attention volume and market cap filters
 Batch 42            : intégré
-Batch 43            : patch proposé, non intégré
+Batch 43            : intégré
 ```
 
-## Changelog — 2026-10-02 — Batch 43 filtres volume/capitalisation — patch proposé
+## Changelog — 2026-10-02 — Batch 43 filtres volume/capitalisation — intégré
 
 - ajout d'un état runtime unique `MarketAttentionFilters` ;
 - ajout d'un filtre minimum `volume_24h_usd` ;
@@ -29,33 +29,33 @@ Batch 43            : patch proposé, non intégré
 - provider initial `CoinPaprikaMarketMetadataProvider`, read-only, sans clé, cache long et fail-soft ;
 - filtre capitalisation appliqué avant le scan OHLCV ;
 - filtre volume appliqué avant microstructure et avant Market Structure ;
-- nouveau contrat proposé `market-attention-radar-v6` ;
-- nouveaux endpoints `GET /api/v1/market-attention/filters` et `PUT /api/v1/market-attention/filters` ;
+- contrat intégré `market-attention-radar-v6` ;
+- endpoints `GET /api/v1/market-attention/filters` et `PUT /api/v1/market-attention/filters` ;
 - `/scope` conservé pour compatibilité ;
 - cockpit enrichi avec contrôles Volume 24h et Capitalisation, pilotés par l'état backend ;
 - aucune modification Agent/Risk/Broker et aucune autorité stratégique pour les métadonnées externes.
 
-Ce changelog décrit le patch livré, pas un état intégré sur GitHub.
+Commit fonctionnel intégré : `32320e268722c6e431ae722924bca487ae45d004`.
 
 ## ADR-313 — Une vraie capitalisation utilise une source de métadonnées externe
 
-**PROPOSÉ — Batch 43.**
+**ADOPTÉ — Batch 43.**
 
 Kraken fournit les données de marché nécessaires au Radar mais pas une supply circulante universelle permettant de calculer une vraie capitalisation pour tous les actifs. Un proxy de liquidité Kraken ne doit donc pas être nommé `market_cap`.
 
-Le patch introduit `MarketMetadataProvider`. L'implémentation initiale CoinPaprika fournit uniquement des métadonnées descriptives read-only : `circulating_supply`, `market_cap_usd`, `market_cap_rank`, `observed_at`, `provider`.
+Le Batch 43 introduit `MarketMetadataProvider`. L'implémentation initiale CoinPaprika fournit uniquement des métadonnées descriptives read-only : `circulating_supply`, `market_cap_usd`, `market_cap_rank`, `observed_at`, `provider`.
 
 Cette source n'importe ni Agent, ni Risk, ni Broker et n'a aucune autorité de décision.
 
 ## ADR-314 — Cache long et fail-soft des métadonnées de capitalisation
 
-**PROPOSÉ — Batch 43.**
+**ADOPTÉ — Batch 43.**
 
 Le provider de métadonnées conserve un cache de six heures. Une indisponibilité externe ne fait jamais tomber le Radar complet. Sans donnée exploitable, la capitalisation reste `UNKNOWN`. Si un filtre de capitalisation est actif, un actif `UNKNOWN` n'est pas prétendu éligible.
 
 ## ADR-315 — Volume 24h calculé à partir du pipeline candles canonique
 
-**PROPOSÉ — Batch 43.**
+**ADOPTÉ — Batch 43.**
 
 Le Radar dispose déjà d'un historique 5m suffisamment profond. Pour les marchés SPOT cotés directement en USD, le volume notionnel 24h est calculé causalement comme somme `volume_base × close` sur les candles finalisées connues à l'instant du snapshot.
 
@@ -63,7 +63,7 @@ Aucun endpoint `/Ticker` additionnel par marché n'est introduit. Pour les march
 
 ## ADR-316 — Les filtres doivent précéder les enrichissements coûteux
 
-**PROPOSÉ — Batch 43.**
+**ADOPTÉ — Batch 43.**
 
 Ordre effectif :
 
@@ -84,7 +84,7 @@ Le filtre volume ne peut raisonnablement précéder l'OHLCV sans dupliquer une s
 
 ## ADR-317 — Contrat Radar v6 et cohérence runtime
 
-**PROPOSÉ — Batch 43.**
+**ADOPTÉ — Batch 43.**
 
 `market-attention-radar-v6` expose les filtres actifs au niveau global et, sur chaque candidat, les métadonnées disponibles de volume/capitalisation. Le changement de filtre est sérialisé par le verrou runtime existant. Avant le refresh complet, `latest` bascule sur un snapshot `PARTIAL` vide associé aux nouveaux filtres afin de ne jamais présenter une shortlist calculée avec l'ancien réglage comme actuelle.
 
@@ -92,9 +92,9 @@ Les routes v4/v5 restent sérialisables pour préserver les tests/intégrations 
 
 ## ADR-318 — Formulation précise des sources du Radar
 
-**PROPOSÉ — Batch 43.**
+**ADOPTÉ — Batch 43.**
 
-Après intégration éventuelle du Batch 43, ne plus écrire sans nuance « Radar Kraken-only ». Utiliser :
+Depuis l'intégration du Batch 43, ne plus écrire sans nuance « Radar Kraken-only ». Utiliser :
 
 ```text
 prix / OHLCV / tendance / structure / microstructure = Kraken
