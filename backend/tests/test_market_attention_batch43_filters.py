@@ -27,7 +27,10 @@ from ai_spot_trader.market.attention_filters import (
     MarketAttentionOverviewV6,
     MarketCapCategory,
     MarketMetadataSnapshot,
+    Volume24hMeasurement,
+    Volume24hStatus,
     _causal_spot_volume_24h_usd,
+    _volume_status_counts,
     market_cap_category,
 )
 from ai_spot_trader.market.attention_scope_trend import MarketScope
@@ -46,13 +49,14 @@ def _candle(
     count: int,
     volume: Decimal,
     price: Decimal = Decimal("100"),
+    market_type: MarketType = MarketType.SPOT,
 ) -> Candle:
     duration = timeframe.duration
     open_time = NOW - duration * (count - index)
     close_time = open_time + duration
     return Candle(
         symbol=symbol,
-        market_type=MarketType.SPOT,
+        market_type=market_type,
         timeframe=timeframe,
         open_time=open_time,
         close_time=close_time,
@@ -66,7 +70,12 @@ def _candle(
     )
 
 
-def _activity_history(symbol: str, *, high_volume: bool) -> tuple[Candle, ...]:
+def _activity_history(
+    symbol: str,
+    *,
+    high_volume: bool,
+    market_type: MarketType = MarketType.SPOT,
+) -> tuple[Candle, ...]:
     count = 420
     rows: list[Candle] = []
     for index in range(count):
@@ -82,9 +91,24 @@ def _activity_history(symbol: str, *, high_volume: bool) -> tuple[Candle, ...]:
                 index=index,
                 count=count,
                 volume=volume,
+                market_type=market_type,
             )
         )
     return tuple(rows)
+
+
+def _activity_history_above_100k(symbol: str) -> tuple[Candle, ...]:
+    count = 420
+    return tuple(
+        _candle(
+            symbol=symbol,
+            timeframe=CandleTimeframe.M5,
+            index=index,
+            count=count,
+            volume=Decimal("20") if index >= count - 48 else Decimal("2"),
+        )
+        for index in range(count)
+    )
 
 
 def _structure_history(symbol: str, timeframe: CandleTimeframe) -> tuple[Candle, ...]:
@@ -150,6 +174,45 @@ def test_causal_volume_24h_uses_only_finalized_candles_available_at_as_of() -> N
 
     insufficient = tuple(item for item in rows if item.open_time >= NOW - timedelta(hours=12))
     assert _causal_spot_volume_24h_usd(insufficient, as_of=NOW) is None
+
+
+def test_causal_volume_24h_anchors_window_on_last_finalized_close() -> None:
+    rows = tuple(
+        _candle(
+            symbol="BTC/USD",
+            timeframe=CandleTimeframe.M5,
+            index=index,
+            count=288,
+            volume=Decimal("2"),
+        )
+        for index in range(288)
+    )
+    as_of = NOW + timedelta(seconds=37)
+
+    assert rows[0].open_time == NOW - timedelta(hours=24)
+    assert rows[-1].close_time == NOW
+    assert _causal_spot_volume_24h_usd(rows, as_of=as_of) == Decimal(288 * 2 * 100)
+
+
+def test_volume_status_counts_distinguish_below_threshold_and_unknown_reasons() -> None:
+    counts = _volume_status_counts(
+        (
+            Volume24hMeasurement(status=Volume24hStatus.AVAILABLE, value_usd=Decimal("100000")),
+            Volume24hMeasurement(status=Volume24hStatus.AVAILABLE, value_usd=Decimal("99999")),
+            Volume24hMeasurement(status=Volume24hStatus.UNKNOWN_UNSUPPORTED_QUOTE),
+            Volume24hMeasurement(status=Volume24hStatus.UNKNOWN_UNSUPPORTED_MARKET_TYPE),
+            Volume24hMeasurement(status=Volume24hStatus.UNKNOWN_INSUFFICIENT_HISTORY),
+            Volume24hMeasurement(status=Volume24hStatus.UNKNOWN_TECHNICAL_ERROR),
+        ),
+        minimum=Decimal("100000"),
+    )
+
+    assert counts.AVAILABLE == 1
+    assert counts.BELOW_THRESHOLD == 1
+    assert counts.UNKNOWN_UNSUPPORTED_QUOTE == 1
+    assert counts.UNKNOWN_UNSUPPORTED_MARKET_TYPE == 1
+    assert counts.UNKNOWN_INSUFFICIENT_HISTORY == 1
+    assert counts.UNKNOWN_TECHNICAL_ERROR == 1
 
 
 def test_coinpaprika_mapping_rejects_ambiguous_duplicate_symbols() -> None:
@@ -248,15 +311,21 @@ class Candles:
         self.activity_calls: list[CandleKey] = []
         self.structure_calls: list[CandleKey] = []
         activity = {
-            CandleKey(symbol="BTC/USD", market_type=MarketType.SPOT, timeframe=CandleTimeframe.M5): _activity_history(
-                "BTC/USD", high_volume=True
-            ),
-            CandleKey(symbol="ETH/USD", market_type=MarketType.SPOT, timeframe=CandleTimeframe.M5): _activity_history(
-                "ETH/USD", high_volume=False
-            ),
-            CandleKey(symbol="DOGE/USD", market_type=MarketType.SPOT, timeframe=CandleTimeframe.M5): _activity_history(
-                "DOGE/USD", high_volume=True
-            ),
+            CandleKey(
+                symbol="BTC/USD",
+                market_type=MarketType.SPOT,
+                timeframe=CandleTimeframe.M5,
+            ): _activity_history("BTC/USD", high_volume=True),
+            CandleKey(
+                symbol="ETH/USD",
+                market_type=MarketType.SPOT,
+                timeframe=CandleTimeframe.M5,
+            ): _activity_history("ETH/USD", high_volume=False),
+            CandleKey(
+                symbol="DOGE/USD",
+                market_type=MarketType.SPOT,
+                timeframe=CandleTimeframe.M5,
+            ): _activity_history("DOGE/USD", high_volume=True),
         }
         self.cache = Cache(activity)
         self._activity = activity
@@ -274,6 +343,61 @@ class Candles:
     ):
         self.structure_calls.append(key)
         return _structure_history(key.symbol, key.timeframe)[-limit:]
+
+
+class RegressionCandles(Candles):
+    def __init__(self) -> None:
+        super().__init__()
+        btc = CandleKey(
+            symbol="BTC/USD",
+            market_type=MarketType.SPOT,
+            timeframe=CandleTimeframe.M5,
+        )
+        self._activity[btc] = _activity_history_above_100k("BTC/USD")
+        self.cache = Cache(self._activity)
+
+
+class PerpetualCatalogue:
+    markets = (ExecutableMarket(symbol="BTC/USD", market_type=MarketType.PERPETUAL),)
+
+    async def list_markets(self):
+        return self.markets
+
+    async def aclose(self) -> None:
+        return None
+
+
+class PerpetualCandles:
+    def __init__(self) -> None:
+        key = CandleKey(
+            symbol="BTC/USD",
+            market_type=MarketType.PERPETUAL,
+            timeframe=CandleTimeframe.M5,
+        )
+        self.activity_calls: list[CandleKey] = []
+        self.structure_calls: list[CandleKey] = []
+        self._activity = {
+            key: _activity_history(
+                "BTC/USD",
+                high_volume=True,
+                market_type=MarketType.PERPETUAL,
+            )
+        }
+        self.cache = Cache(self._activity)
+
+    async def history(self, key: CandleKey, *, limit: int = 1000):
+        self.activity_calls.append(key)
+        return self._activity.get(key, ())[-limit:]
+
+    async def history_as_of(
+        self,
+        key: CandleKey,
+        *,
+        as_of: datetime,
+        limit: int = 1000,
+    ):
+        self.structure_calls.append(key)
+        return ()
 
 
 class Microstructure:
@@ -325,27 +449,36 @@ class Metadata:
         return None
 
 
+def _radar(
+    candles: Candles | PerpetualCandles,
+    micro: Microstructure,
+    *,
+    catalogue: Catalogue | PerpetualCatalogue | None = None,
+) -> FilteredStructuredMarketAttentionRadar:
+    return FilteredStructuredMarketAttentionRadar(
+        candle_service=candles,  # type: ignore[arg-type]
+        catalogue=catalogue or Catalogue(),
+        microstructure_provider=micro,  # type: ignore[arg-type]
+        metadata_provider=Metadata(),
+        policy=MarketAttentionPolicy(
+            scan_limit=10,
+            candle_limit=420,
+            candidate_limit=10,
+        ),
+        microstructure_policy=MicrostructurePolicy(market_limit_per_refresh=10),
+        structure_policy=MarketStructurePolicy(
+            history_limit=40,
+            min_history_candles=20,
+            fetch_concurrency=4,
+        ),
+    )
+
+
 def test_scope_volume_and_market_cap_filters_run_before_expensive_enrichment() -> None:
     async def scenario() -> None:
         candles = Candles()
         micro = Microstructure()
-        radar = FilteredStructuredMarketAttentionRadar(
-            candle_service=candles,  # type: ignore[arg-type]
-            catalogue=Catalogue(),
-            microstructure_provider=micro,  # type: ignore[arg-type]
-            metadata_provider=Metadata(),
-            policy=MarketAttentionPolicy(
-                scan_limit=10,
-                candle_limit=420,
-                candidate_limit=10,
-            ),
-            microstructure_policy=MicrostructurePolicy(market_limit_per_refresh=10),
-            structure_policy=MarketStructurePolicy(
-                history_limit=40,
-                min_history_candles=20,
-                fetch_concurrency=4,
-            ),
-        )
+        radar = _radar(candles, micro)
         snapshot = await radar.set_filters(
             MarketAttentionFilters(
                 market_scope=MarketScope.SPOT,
@@ -375,12 +508,88 @@ def test_scope_volume_and_market_cap_filters_run_before_expensive_enrichment() -
 
         assert snapshot.cached_activity_market_count == 1
         assert snapshot.candidate_market_count == 1
+        assert snapshot.volume_24h_status_counts.AVAILABLE == 1
+        assert snapshot.volume_24h_status_counts.BELOW_THRESHOLD == 1
         candidate = snapshot.shortlist[0]
         assert candidate.market_activity.market.symbol == "BTC/USD"
         assert candidate.volume_24h_usd is not None
         assert candidate.volume_24h_usd == Decimal("72000")
         assert candidate.market_cap_category is MarketCapCategory.LARGE
         assert candidate.market_cap_provider == "TEST"
+
+        non_usd = radar._volume_24h_measurement(
+            ExecutableMarket(symbol="ETH/EUR", market_type=MarketType.SPOT),
+            as_of=NOW,
+        )
+        assert non_usd.status is Volume24hStatus.UNKNOWN_UNSUPPORTED_QUOTE
+
+        perpetual = radar._volume_24h_measurement(
+            ExecutableMarket(symbol="BTC/USD", market_type=MarketType.PERPETUAL),
+            as_of=NOW,
+        )
+        assert perpetual.status is Volume24hStatus.UNKNOWN_UNSUPPORTED_MARKET_TYPE
+
+        missing = radar._volume_24h_measurement(
+            ExecutableMarket(symbol="XBT/USD", market_type=MarketType.SPOT),
+            as_of=NOW,
+        )
+        assert missing.status is Volume24hStatus.UNKNOWN_INSUFFICIENT_HISTORY
+        await radar.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_scope_perpetual_with_volume_threshold_is_explicitly_unknown() -> None:
+    async def scenario() -> None:
+        candles = PerpetualCandles()
+        micro = Microstructure()
+        radar = _radar(candles, micro, catalogue=PerpetualCatalogue())
+
+        snapshot = await radar.set_filters(
+            MarketAttentionFilters(
+                market_scope=MarketScope.PERPETUAL,
+                min_volume_24h_usd=Decimal("100000"),
+            ),
+            observed_at=NOW,
+        )
+
+        assert snapshot.market_scope is MarketScope.PERPETUAL
+        assert snapshot.candidate_market_count == 0
+        assert snapshot.volume_24h_status_counts.UNKNOWN_UNSUPPORTED_MARKET_TYPE == 1
+        assert not micro.calls
+        assert not candles.structure_calls
+        await radar.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_scope_all_100k_regression_keeps_valid_spot_usd_candidate() -> None:
+    async def scenario() -> None:
+        candles = RegressionCandles()
+        micro = Microstructure()
+        radar = _radar(candles, micro)
+
+        unfiltered = await radar.set_filters(
+            MarketAttentionFilters(market_scope=MarketScope.ALL),
+            observed_at=NOW,
+        )
+        assert unfiltered.candidate_market_count > 0
+
+        filtered = await radar.set_filters(
+            MarketAttentionFilters(
+                market_scope=MarketScope.ALL,
+                min_volume_24h_usd=Decimal("100000"),
+            ),
+            observed_at=NOW,
+        )
+
+        assert filtered.filters.market_scope is MarketScope.ALL
+        assert filtered.filters.min_volume_24h_usd == Decimal("100000")
+        assert filtered.candidate_market_count == 1
+        assert filtered.shortlist[0].market_activity.market.symbol == "BTC/USD"
+        assert filtered.shortlist[0].volume_24h_usd == Decimal("144000")
+        assert filtered.volume_24h_status_counts.AVAILABLE == 1
+        assert filtered.volume_24h_status_counts.BELOW_THRESHOLD == 2
         await radar.aclose()
 
     asyncio.run(scenario())

@@ -62,6 +62,37 @@ class MarketCapCategory(StrEnum):
     LARGE = "LARGE"
 
 
+class Volume24hStatus(StrEnum):
+    AVAILABLE = "AVAILABLE"
+    UNKNOWN_UNSUPPORTED_QUOTE = "UNKNOWN_UNSUPPORTED_QUOTE"
+    UNKNOWN_UNSUPPORTED_MARKET_TYPE = "UNKNOWN_UNSUPPORTED_MARKET_TYPE"
+    UNKNOWN_INSUFFICIENT_HISTORY = "UNKNOWN_INSUFFICIENT_HISTORY"
+    UNKNOWN_TECHNICAL_ERROR = "UNKNOWN_TECHNICAL_ERROR"
+
+
+class Volume24hMeasurement(AttentionModel):
+    status: Volume24hStatus
+    value_usd: Decimal | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_measurement(self) -> "Volume24hMeasurement":
+        if self.status is Volume24hStatus.AVAILABLE:
+            if self.value_usd is None:
+                raise ValueError("available volume measurement requires value_usd")
+        elif self.value_usd is not None:
+            raise ValueError("unknown volume measurement cannot expose value_usd")
+        return self
+
+
+class Volume24hStatusCounts(AttentionModel):
+    AVAILABLE: int = Field(default=0, ge=0)
+    BELOW_THRESHOLD: int = Field(default=0, ge=0)
+    UNKNOWN_UNSUPPORTED_QUOTE: int = Field(default=0, ge=0)
+    UNKNOWN_UNSUPPORTED_MARKET_TYPE: int = Field(default=0, ge=0)
+    UNKNOWN_INSUFFICIENT_HISTORY: int = Field(default=0, ge=0)
+    UNKNOWN_TECHNICAL_ERROR: int = Field(default=0, ge=0)
+
+
 class MarketMetadataSnapshot(AttentionModel):
     asset_symbol: str
     circulating_supply: Decimal | None = Field(default=None, ge=0)
@@ -184,6 +215,9 @@ class MarketAttentionOverviewV6(AttentionModel):
     microstructure_error_counts: dict[str, int] = Field(default_factory=dict)
     market_cap_metadata_status: RadarStatus = RadarStatus.PARTIAL
     market_cap_metadata_provider: str | None = None
+    volume_24h_status_counts: Volume24hStatusCounts = Field(
+        default_factory=Volume24hStatusCounts
+    )
     subthreshold_activity: tuple[SubthresholdActivitySnapshot, ...] = ()
     shortlist: tuple[MarketAttentionSnapshotV6, ...] = ()
     error_type: str | None = None
@@ -209,6 +243,7 @@ class MarketAttentionOverviewV6(AttentionModel):
         shortlist: tuple[MarketAttentionSnapshotV6, ...],
         metadata_status: RadarStatus,
         metadata_provider: str | None,
+        volume_status_counts: Volume24hStatusCounts,
     ) -> "MarketAttentionOverviewV6":
         payload = value.model_dump(
             exclude={"protocol_version", "shortlist", "candidate_market_count"}
@@ -220,6 +255,7 @@ class MarketAttentionOverviewV6(AttentionModel):
             shortlist=shortlist,
             market_cap_metadata_status=metadata_status,
             market_cap_metadata_provider=metadata_provider,
+            volume_24h_status_counts=volume_status_counts,
         )
 
 
@@ -258,6 +294,31 @@ def _metadata_accepts(
     return True
 
 
+def _volume_status_counts(
+    measurements: tuple[Volume24hMeasurement, ...],
+    *,
+    minimum: Decimal | None,
+) -> Volume24hStatusCounts:
+    values = {
+        "AVAILABLE": 0,
+        "BELOW_THRESHOLD": 0,
+        "UNKNOWN_UNSUPPORTED_QUOTE": 0,
+        "UNKNOWN_UNSUPPORTED_MARKET_TYPE": 0,
+        "UNKNOWN_INSUFFICIENT_HISTORY": 0,
+        "UNKNOWN_TECHNICAL_ERROR": 0,
+    }
+    for measurement in measurements:
+        if measurement.status is Volume24hStatus.AVAILABLE:
+            assert measurement.value_usd is not None
+            if minimum is not None and measurement.value_usd < minimum:
+                values["BELOW_THRESHOLD"] += 1
+            else:
+                values["AVAILABLE"] += 1
+        else:
+            values[measurement.status.value] += 1
+    return Volume24hStatusCounts(**values)
+
+
 class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
     """Batch 43 Radar: runtime volume/market-cap filters around the canonical v5 pipeline."""
 
@@ -285,7 +346,7 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
         self._metadata_by_symbol: dict[str, MarketMetadataSnapshot] = {}
         self._metadata_status = RadarStatus.PARTIAL
         self._metadata_provider_name: str | None = None
-        self._volume_24h_by_market: dict[ExecutableMarket, Decimal | None] = {}
+        self._volume_24h_by_market: dict[ExecutableMarket, Volume24hMeasurement] = {}
         self._v6_latest: MarketAttentionOverviewV6 | None = None
         self._v6_history: deque[MarketAttentionOverviewV6] = deque(
             maxlen=self._policy.history_limit
@@ -371,19 +432,20 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
         activities = tuple(
             item for item in super()._fresh_activities(now) if self._market_cap_accepts(item.market)
         )
-        for item in activities:
-            self._volume_24h_by_market[item.market] = self._volume_24h_usd(
-                item.market,
-                as_of=now,
-            )
+        self._volume_24h_by_market = {
+            item.market: self._volume_24h_measurement(item.market, as_of=now)
+            for item in activities
+        }
         minimum = self.filters.min_volume_24h_usd
         if minimum is None:
             return activities
         return tuple(
             item
             for item in activities
-            if (value := self._volume_24h_by_market.get(item.market)) is not None
-            and value >= minimum
+            if (measurement := self._volume_24h_by_market.get(item.market)) is not None
+            and measurement.status is Volume24hStatus.AVAILABLE
+            and measurement.value_usd is not None
+            and measurement.value_usd >= minimum
         )
 
     def _next_micro_batch(
@@ -435,8 +497,13 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
         minimum = self.filters.min_volume_24h_usd
         if minimum is None:
             return True
-        value = self._volume_24h_by_market.get(market)
-        return value is not None and value >= minimum
+        measurement = self._volume_24h_by_market.get(market)
+        return bool(
+            measurement is not None
+            and measurement.status is Volume24hStatus.AVAILABLE
+            and measurement.value_usd is not None
+            and measurement.value_usd >= minimum
+        )
 
     async def _refresh_market_metadata(self) -> None:
         try:
@@ -459,20 +526,22 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
         self._metadata_provider_name = providers[0] if len(providers) == 1 else "MULTIPLE"
         self._metadata_status = RadarStatus.AVAILABLE
 
-    def _volume_24h_usd(
+    def _volume_24h_measurement(
         self,
         market: ExecutableMarket,
         *,
         as_of: datetime,
-    ) -> Decimal | None:
+    ) -> Volume24hMeasurement:
         if market.market_type is not MarketType.SPOT:
-            return None
+            return Volume24hMeasurement(
+                status=Volume24hStatus.UNKNOWN_UNSUPPORTED_MARKET_TYPE
+            )
         _base, quote = parse_canonical_symbol(market.symbol)
         if quote.upper() != "USD":
-            return None
+            return Volume24hMeasurement(status=Volume24hStatus.UNKNOWN_UNSUPPORTED_QUOTE)
         cache = getattr(self._candles, "cache", None)
         if cache is None or not hasattr(cache, "history_as_of"):
-            return None
+            return Volume24hMeasurement(status=Volume24hStatus.UNKNOWN_TECHNICAL_ERROR)
         key = CandleKey(
             symbol=market.symbol,
             market_type=market.market_type,
@@ -481,13 +550,28 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
         try:
             history = cache.history_as_of(key, as_of=as_of, limit=VOLUME_CANDLE_LIMIT)
         except Exception:
+            return Volume24hMeasurement(status=Volume24hStatus.UNKNOWN_TECHNICAL_ERROR)
+        value = _causal_spot_volume_24h_usd(history, as_of=as_of)
+        if value is None:
+            return Volume24hMeasurement(status=Volume24hStatus.UNKNOWN_INSUFFICIENT_HISTORY)
+        return Volume24hMeasurement(status=Volume24hStatus.AVAILABLE, value_usd=value)
+
+    def _volume_24h_usd(
+        self,
+        market: ExecutableMarket,
+        *,
+        as_of: datetime,
+    ) -> Decimal | None:
+        measurement = self._volume_24h_measurement(market, as_of=as_of)
+        if measurement.status is not Volume24hStatus.AVAILABLE:
             return None
-        return _causal_spot_volume_24h_usd(history, as_of=as_of)
+        return measurement.value_usd
 
     def _snapshot_v6(self, value: MarketAttentionSnapshotV5) -> MarketAttentionSnapshotV6:
         market = value.market_activity.market
         metadata = self._metadata_by_symbol.get(_market_base_asset(market))
         market_cap = metadata.market_cap_usd if metadata is not None else None
+        volume = self._volume_24h_by_market.get(market)
         return MarketAttentionSnapshotV6(
             market_activity=value.market_activity,
             microstructure=value.microstructure,
@@ -495,7 +579,11 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
             combined_characteristics=value.combined_characteristics,
             interest_level=value.interest_level,
             interest_reasons=value.interest_reasons,
-            volume_24h_usd=self._volume_24h_by_market.get(market),
+            volume_24h_usd=(
+                volume.value_usd
+                if volume is not None and volume.status is Volume24hStatus.AVAILABLE
+                else None
+            ),
             market_cap_usd=market_cap,
             market_cap_category=market_cap_category(market_cap),
             market_cap_rank=(metadata.market_cap_rank if metadata is not None else None),
@@ -507,12 +595,17 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
     def _overview_v6(self, value: MarketAttentionOverviewV5) -> MarketAttentionOverviewV6:
         filters = self.filters
         shortlist = tuple(self._snapshot_v6(item) for item in value.shortlist)
+        volume_status_counts = _volume_status_counts(
+            tuple(self._volume_24h_by_market.values()),
+            minimum=filters.min_volume_24h_usd,
+        )
         return MarketAttentionOverviewV6.from_v5(
             value,
             filters=filters,
             shortlist=shortlist,
             metadata_status=self._metadata_status,
             metadata_provider=self._metadata_provider_name,
+            volume_status_counts=volume_status_counts,
         )
 
 
@@ -534,13 +627,20 @@ def _causal_spot_volume_24h_usd(
     if not final:
         return None
     final = tuple(sorted(final, key=lambda item: item.open_time))
-    window_start = as_of - VOLUME_WINDOW
+
+    # Anchor the 24h window on the last finalized 5m close that was actually knowable at as_of.
+    # This avoids turning a valid 288-candle history into UNKNOWN merely because as_of contains
+    # seconds/microseconds after the exchange candle boundary.
+    window_end = final[-1].close_time.astimezone(UTC)
+    window_start = window_end - VOLUME_WINDOW
     if final[0].open_time.astimezone(UTC) > window_start:
         return None
     in_window = tuple(
         candle
         for candle in final
         if candle.open_time.astimezone(UTC) >= window_start
-        and candle.close_time.astimezone(UTC) <= as_of
+        and candle.close_time.astimezone(UTC) <= window_end
     )
+    if not in_window:
+        return None
     return sum((item.volume * item.close for item in in_window), Decimal(0))

@@ -8,6 +8,10 @@ Commit     : 32320e268722c6e431ae722924bca487ae45d004
 Contrat    : market-attention-radar-v6
 ```
 
+Le HEAD GitHub actuel après clôture documentaire est `3b8bc6bcb83604cb20eb5ee27ef1b95fcc4210da` (`docs: close batch 43 documentation`).
+
+> Correctif complémentaire proposé : `docs/43_1_CORRECTIF_FILTRE_VOLUME.md`. Le Batch 43.1 corrige l'alignement de la fenêtre 24h et ajoute des diagnostics explicites, sans changer le principe fail-closed ni inventer de conversion USD.
+
 ## Objectif
 
 Permettre à l'utilisateur de réduire l'univers du Market Attention Radar depuis le cockpit selon :
@@ -37,6 +41,21 @@ Le calcul est fail-closed :
 - historique insuffisant => `UNKNOWN`.
 
 Si aucun filtre volume n'est actif, ces inconnues n'excluent pas le marché. Si un seuil minimum est actif, `UNKNOWN` ne satisfait pas le seuil.
+
+### Complément Batch 43.1
+
+L'implémentation initiale utilisait directement `observed_at - 24h` comme borne basse. Comme `observed_at` n'est pas nécessairement aligné sur une clôture 5m, la première candle finalisée pouvait être écartée de la somme. Le correctif 43.1 ancre la fenêtre sur la dernière clôture 5m finalisée connaissable au snapshot puis remonte exactement de 24h.
+
+Le correctif expose aussi :
+
+```text
+volume_24h_status_counts.AVAILABLE
+volume_24h_status_counts.BELOW_THRESHOLD
+volume_24h_status_counts.UNKNOWN_UNSUPPORTED_QUOTE
+volume_24h_status_counts.UNKNOWN_UNSUPPORTED_MARKET_TYPE
+volume_24h_status_counts.UNKNOWN_INSUFFICIENT_HISTORY
+volume_24h_status_counts.UNKNOWN_TECHNICAL_ERROR
+```
 
 ## Audit de la capitalisation
 
@@ -130,6 +149,12 @@ market_cap_metadata_status
 market_cap_metadata_provider
 ```
 
+Le correctif 43.1 ajoute sans changer la version du protocole :
+
+```text
+volume_24h_status_counts
+```
+
 Chaque candidat expose en plus lorsque disponible :
 
 ```text
@@ -153,7 +178,7 @@ Le panneau Market Attention ajoute, près du scope marché :
 - affichage des filtres réellement renvoyés par le backend ;
 - affichage `Vol. 24h` et `Capitalisation` dans la ligne candidat et le détail lorsque disponibles.
 
-La vue indique explicitement que la donnée de capitalisation provient d'un provider externe read-only alors que les données de marché restent Kraken.
+La vue indique explicitement que la donnée de capitalisation provient d'un provider externe read-only alors que les données de marché restent Kraken. Elle précise déjà que `UNKNOWN` est exclu lorsqu'un seuil volume est actif ; le correctif 43.1 ne masque donc aucune inconnue par une logique frontend.
 
 ## Isolation
 
@@ -183,6 +208,8 @@ Frontend :
 - requête runtime `/filters` ;
 - conservation du comportement des helpers existants.
 
+Le Batch 43.1 complète la couverture backend avec l'alignement de fenêtre, les raisons `UNKNOWN`, le comptage sous seuil et la régression `ALL + >= 100 k$`.
+
 ## Validation finale
 
 Validations exécutées localement avant le push du commit fonctionnel :
@@ -194,4 +221,4 @@ frontend pnpm test      : PASS — 57/57
 git diff --check        : PASS
 ```
 
-Le Batch 43 est intégré sur `main` au commit `32320e268722c6e431ae722924bca487ae45d004`.
+Le Batch 43 est intégré sur `main` au commit `32320e268722c6e431ae722924bca487ae45d004`. Le correctif Batch 43.1 reste à valider localement avant intégration.

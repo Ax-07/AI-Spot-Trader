@@ -11,11 +11,47 @@ Market Attention Radar reste strictement observationnel et ne prend aucune déci
 ## Référence courante
 
 ```text
-HEAD GitHub audité : 32320e268722c6e431ae722924bca487ae45d004
-Commit              : feat: add market attention volume and market cap filters
+HEAD GitHub audité : 3b8bc6bcb83604cb20eb5ee27ef1b95fcc4210da
+Commit              : docs: close batch 43 documentation
 Batch 42            : intégré
 Batch 43            : intégré
+Batch 43.1          : patch proposé, non intégré
 ```
+
+## Changelog — 2026-10-02 — Batch 43.1 correctif filtre Volume 24h — patch proposé
+
+- audit confirmé du fail-closed actuel : un seuil volume exclut les marchés dont `volume_24h_usd` est `UNKNOWN` ;
+- `SPOT` non coté directement en USD et `PERPETUAL` restent volontairement `UNKNOWN` tant qu'une conversion/notionnalisation USD n'est pas démontrée ;
+- correction de la fenêtre SPOT/USD : la période de 24h est désormais ancrée sur la dernière clôture 5m finalisée connaissable à `as_of`, et non sur les secondes/microsecondes arbitraires de `as_of` ;
+- ajout d'une mesure typée du volume et de raisons explicites d'indisponibilité ;
+- ajout de `volume_24h_status_counts` au contrat v6 sans changer `protocol_version` ;
+- ajout d'une régression `ALL + >= 100 k$` garantissant qu'un marché SPOT/USD dont le volume valide dépasse le seuil ne disparaît pas ;
+- aucune modification Agent/Risk/Broker ; aucune conversion USD inventée.
+
+## ADR-319 — Fenêtre 24h alignée sur les clôtures 5m finalisées
+
+**PROPOSÉ — Batch 43.1.**
+
+Le volume 24h SPOT/USD doit être défini sur 24 heures complètes de candles 5m finalisées réellement disponibles. La borne haute est donc la dernière `close_time` finalisée `<= as_of`, puis la borne basse est cette valeur moins 24h.
+
+Cette règle conserve 288 intervalles 5m lorsqu'ils sont disponibles et évite qu'un `as_of` décalé de quelques secondes retire artificiellement la première candle. La causalité reste stricte : aucune candle clôturant après `as_of` n'est utilisée.
+
+## ADR-320 — Une valeur UNKNOWN doit avoir une raison explicite
+
+**PROPOSÉ — Batch 43.1.**
+
+Le Radar ne transforme pas une absence de conversion démontrée en estimation. Il expose toutefois la raison de l'indisponibilité et sépare une valeur connue mais sous le seuil d'une valeur inconnue :
+
+```text
+AVAILABLE
+BELOW_THRESHOLD
+UNKNOWN_UNSUPPORTED_QUOTE
+UNKNOWN_UNSUPPORTED_MARKET_TYPE
+UNKNOWN_INSUFFICIENT_HISTORY
+UNKNOWN_TECHNICAL_ERROR
+```
+
+Lorsqu'un seuil est actif, seuls les marchés `AVAILABLE` dont la valeur est supérieure ou égale au minimum sont acceptés.
 
 ## Changelog — 2026-10-02 — Batch 43 filtres volume/capitalisation — intégré
 
@@ -118,6 +154,7 @@ Commit fonctionnel : `003dae8dbfdc052edbad5bfde2c23fa24852eace`.
 - utilisation du Radar ou de la Market Structure comme contexte de l'Agent stratégique ;
 - filtre de shortlist par direction ou structure ;
 - conversion FX implicite pour le filtre de volume ;
+- notionnalisation PERPETUAL non démontrée ;
 - réaction stratégique intra-bougie ;
 - streaming WebSocket L2/trades ;
 - LIVE.
