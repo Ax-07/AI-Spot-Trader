@@ -4,16 +4,16 @@
 
 AI Spot Trader est une application expérimentale de trading pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est un cockpit de contrôle et de visualisation qui peut être fermé sans arrêter le moteur.
 
-Référence GitHub auditée après intégration du Batch 42 :
+Référence GitHub auditée au lancement du Batch 43 :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 003dae8dbfdc052edbad5bfde2c23fa24852eace
-Commit     : feat: add multi-timeframe market structure
+HEAD       : f5de73270c23c6c4e2a6114ac78b3e57c17c65b1
+Commit     : docs: close batch 42 documentation
 ```
 
-Les Batches 39 à 42 sont intégrés sur `main`.
+Les Batches 39 à 42 sont intégrés sur `main`. Le Batch 43 est un patch proposé à valider localement avant intégration.
 
 ## 2. Invariants fonctionnels
 
@@ -182,11 +182,13 @@ Batch 41 intégré : `market-attention-radar-v4`.
 
 Batch 42 intégré : `market-attention-radar-v5` pour les snapshots réellement enrichis de `market_structure`. Les routes acceptent et sérialisent aussi un service v4 injecté afin de ne pas casser les tests/intégrations Batch 41.
 
+Batch 43 proposé : `market-attention-radar-v6`, ajoutant l'état runtime des filtres ainsi que `volume_24h_usd` et les métadonnées de capitalisation sur les candidats.
+
 `informative_only=True` reste validé côté backend.
 
 ## 16. Isolation architecturale
 
-La couche v5 hérite de la couche v4. Elle ne crée ni second catalogue, ni second client privé Kraken, ni pipeline candles parallèle. Elle n'importe aucun composant Agent, Risk ou Broker. L'Agent stratégique reste le seul agent IA de l'application.
+La couche v5 hérite de la couche v4. Le Batch 43 ajoute une couche v6 sans second pipeline candles et sans dépendance Agent/Risk/Broker. L'Agent stratégique reste le seul agent IA de l'application.
 
 ## 17. Microstructure
 
@@ -194,6 +196,39 @@ La microstructure reste **SPOT uniquement**. En scope `PERPETUAL`, aucun sous-sc
 
 L'observation de marchés `PERPETUAL` par le Radar ne modifie pas l'invariant d'exécution : le projet reste SPOT, sans short, levier, margin, future ou perpetual en exécution LIVE.
 
-## 18. Hors périmètre du Batch 42
+## 18. Batch 43 — filtres volume et capitalisation
 
-Aucune décision automatique basée sur la structure, aucun BUY/SELL/LONG/SHORT/HOLD depuis le Radar, aucun passage automatique vers l'Agent, aucun ordre Kraken, aucune modification Risk/Broker, aucune agrégation artificielle 5m -> H1/H4 et aucune refonte générale ne sont introduits.
+Le Batch 43 proposé ajoute des filtres backend runtime :
+
+```text
+market_scope
+min_volume_24h_usd
+market_cap_categories
+min_market_cap_usd
+max_market_cap_usd
+```
+
+Le filtre de capitalisation intervient dès que les métadonnées sont disponibles, avant le scan OHLCV. Le filtre volume intervient au premier endroit fiable après OHLCV et avant microstructure/Market Structure.
+
+Le volume 24h est calculé causalement à partir des candles Kraken déjà présentes dans le cache. Aucune conversion de devise ou d'unité non prouvée n'est inventée : une valeur non calculable reste `UNKNOWN` et est fail-closed lorsqu'un seuil volume est actif.
+
+La capitalisation est une vraie métadonnée externe read-only :
+
+```text
+prix / OHLCV / tendance / structure / microstructure = Kraken
+market cap / supply / rank                          = CoinPaprika
+trading / Risk / Broker / ordres                    = inchangés
+```
+
+CoinPaprika est isolé derrière `MarketMetadataProvider`, sans secret, avec cache long et comportement fail-soft. Une indisponibilité du provider n'arrête jamais le Radar ; la capitalisation reste `UNKNOWN` en l'absence de donnée exploitable.
+
+Catégories applicatives centralisées :
+
+```text
+MICRO  < 100 M$
+SMALL  100 M$ à < 1 Md$
+MID    1 Md$ à < 10 Md$
+LARGE  >= 10 Md$
+```
+
+Ces catégories sont des conventions de l'application et non une définition universelle du marché.

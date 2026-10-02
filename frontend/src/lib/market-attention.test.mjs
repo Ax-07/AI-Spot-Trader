@@ -2,13 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  activeMarketAttentionFilters,
   activityErrorEntries,
   attentionHorizon,
   formatBps,
   formatImbalance,
   formatSignedPercent,
+  formatUsdCompact,
   formatVolumeRatio,
   marketAttentionStatusMessage,
+  marketCapCategoryLabel,
+  setMarketAttentionFilters,
   setMarketAttentionScope,
   slippageEstimate,
   trendDirectionLabel,
@@ -43,6 +47,9 @@ const item = {
   combined_characteristics: ["TRENDING", "TIGHT_SPREAD"],
   interest_level: "HIGH",
   interest_reasons: ["Volume inhabituel"],
+  volume_24h_usd: "12500000",
+  market_cap_usd: "8500000000",
+  market_cap_category: "MID",
 };
 
 const emptyActivityErrors = () => ({
@@ -104,6 +111,13 @@ test("formats descriptive ratios and microstructure metrics", () => {
   assert.equal(formatVolumeRatio(null), "—");
 });
 
+test("formats Batch 43 volume and market-cap metadata", () => {
+  assert.equal(formatUsdCompact(item.volume_24h_usd), "12.5 M$");
+  assert.equal(formatUsdCompact(item.market_cap_usd), "8.5 B$");
+  assert.equal(marketCapCategoryLabel(item.market_cap_category), "Mid (1 – 10 Md$)");
+  assert.equal(marketCapCategoryLabel("UNKNOWN"), "Indéterminée");
+});
+
 test("renders deterministic trend directions as descriptive French labels", () => {
   assert.equal(trendDirectionLabel("UP"), "Haussière ↑");
   assert.equal(trendDirectionLabel("DOWN"), "Baissière ↓");
@@ -131,6 +145,16 @@ test("returns only non-zero bounded Kraken error categories in deterministic ord
   assert.deepEqual(activityErrorEntries(counts), [["KrakenNetworkError", 8], ["KrakenRateLimitError", 3], ["Other", 1]]);
 });
 
+test("falls back to the legacy scope when a pre-v6 snapshot has no filter object", () => {
+  assert.deepEqual(activeMarketAttentionFilters({ ...overview("AVAILABLE"), market_scope: "SPOT" }), {
+    market_scope: "SPOT",
+    min_volume_24h_usd: null,
+    market_cap_categories: [],
+    min_market_cap_usd: null,
+    max_market_cap_usd: null,
+  });
+});
+
 test("sends a backend scope change before replacing the radar snapshot", async () => {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
@@ -146,6 +170,38 @@ test("sends a backend scope change before replacing the radar snapshot", async (
   try {
     const result = await setMarketAttentionScope("SPOT");
     assert.equal(result.market_scope, "SPOT");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("sends volume and market-cap filters as backend runtime state", async () => {
+  const previousFetch = globalThis.fetch;
+  const filters = {
+    market_scope: "SPOT",
+    min_volume_24h_usd: "1000000",
+    market_cap_categories: ["MID", "LARGE"],
+    min_market_cap_usd: null,
+    max_market_cap_usd: null,
+  };
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, "/backend/api/v1/market-attention/filters");
+    assert.equal(init?.method, "PUT");
+    assert.equal(init?.body, JSON.stringify(filters));
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ...overview("AVAILABLE"),
+        protocol_version: "market-attention-radar-v6",
+        market_scope: "SPOT",
+        filters,
+      }),
+    };
+  };
+  try {
+    const result = await setMarketAttentionFilters(filters);
+    assert.deepEqual(result.filters, filters);
   } finally {
     globalThis.fetch = previousFetch;
   }

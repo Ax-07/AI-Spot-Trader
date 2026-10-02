@@ -3,6 +3,7 @@ export type MarketActivityState = "UNKNOWN" | "NORMAL" | "ELEVATED" | "ACCELERAT
 export type ActivityDataQuality = "COMPLETE" | "NO_TRADE_GAPS" | "INSUFFICIENT_HISTORY" | "DISCONTINUOUS_HISTORY" | "TECHNICAL_ERROR";
 export type LiquidityRegime = "UNKNOWN" | "MICRO" | "LOW" | "MEDIUM" | "HIGH" | "VERY_HIGH";
 export type MarketScope = "SPOT" | "PERPETUAL" | "ALL";
+export type MarketCapCategory = "UNKNOWN" | "MICRO" | "SMALL" | "MID" | "LARGE";
 export type TrendDirection = "UP" | "DOWN" | "NEUTRAL" | "MIXED" | "UNKNOWN";
 export type MarketCharacteristic =
   | "TRENDING"
@@ -32,6 +33,14 @@ export type MicrostructureCharacteristic =
 export type AttentionMarket = {
   symbol: string;
   market_type: "SPOT" | "PERPETUAL";
+};
+
+export type MarketAttentionFilters = {
+  market_scope: MarketScope;
+  min_volume_24h_usd: string | null;
+  market_cap_categories: MarketCapCategory[];
+  min_market_cap_usd: string | null;
+  max_market_cap_usd: string | null;
 };
 
 export type ActivityHorizonSnapshot = {
@@ -195,14 +204,22 @@ export type MarketAttentionSnapshot = {
   combined_characteristics: string[];
   interest_level: RadarInterestLevel;
   interest_reasons: string[];
+  volume_24h_usd?: string | null;
+  market_cap_usd?: string | null;
+  market_cap_category?: MarketCapCategory;
+  market_cap_rank?: number | null;
+  circulating_supply?: string | null;
+  market_cap_provider?: string | null;
+  market_cap_observed_at?: string | null;
 };
 
 export type MarketAttentionOverview = {
-  protocol_version: "market-attention-radar-v4";
+  protocol_version: "market-attention-radar-v4" | "market-attention-radar-v5" | "market-attention-radar-v6";
   observed_at: string;
   status: RadarStatus;
   informative_only: true;
   market_scope: MarketScope;
+  filters?: MarketAttentionFilters;
   catalogue_market_count: number;
   cached_activity_market_count: number;
   scanned_market_count: number;
@@ -221,10 +238,29 @@ export type MarketAttentionOverview = {
   microstructure_status_counts: MicrostructureStatusCounts;
   microstructure_quality_counts: MicrostructureQualityCounts;
   microstructure_error_counts: Record<string, number>;
+  market_cap_metadata_status?: RadarStatus;
+  market_cap_metadata_provider?: string | null;
   subthreshold_activity: SubthresholdActivitySnapshot[];
   shortlist: MarketAttentionSnapshot[];
   error_type: string | null;
 };
+
+export const DEFAULT_MARKET_ATTENTION_FILTERS: MarketAttentionFilters = {
+  market_scope: "ALL",
+  min_volume_24h_usd: null,
+  market_cap_categories: [],
+  min_market_cap_usd: null,
+  max_market_cap_usd: null,
+};
+
+export function activeMarketAttentionFilters(
+  overview: MarketAttentionOverview,
+): MarketAttentionFilters {
+  return overview.filters ?? {
+    ...DEFAULT_MARKET_ATTENTION_FILTERS,
+    market_scope: overview.market_scope,
+  };
+}
 
 export function activityErrorEntries(
   counts: ActivityErrorCounts,
@@ -269,6 +305,14 @@ export function trendDirectionLabel(value: TrendDirection | null | undefined): s
   if (value === "DOWN") return "Baissière ↓";
   if (value === "NEUTRAL") return "Neutre →";
   if (value === "MIXED") return "Mixte ↕";
+  return "Indéterminée";
+}
+
+export function marketCapCategoryLabel(value: MarketCapCategory | null | undefined): string {
+  if (value === "MICRO") return "Micro (< 100 M$)";
+  if (value === "SMALL") return "Small (100 M$ – 1 Md$)";
+  if (value === "MID") return "Mid (1 – 10 Md$)";
+  if (value === "LARGE") return "Large (≥ 10 Md$)";
   return "Indéterminée";
 }
 
@@ -343,11 +387,11 @@ export function formatUsdCompact(
 
 export function marketAttentionStatusMessage(overview: MarketAttentionOverview): string {
   if (overview.status === "NOT_CONFIGURED") return "Radar non configuré.";
-  if (overview.status === "ERROR") return "Radar en erreur — consulter le diagnostic Kraken backend.";
+  if (overview.status === "ERROR") return "Radar en erreur — consulter le diagnostic backend.";
   if (overview.status === "STALE") return "Radar opérationnel mais données Kraken périmées.";
   if (overview.status === "PARTIAL") {
     return overview.candidate_market_count > 0
-      ? "Radar partiellement disponible — certains marchés Kraken sont dégradés."
+      ? "Radar partiellement disponible — certaines données descriptives sont dégradées."
       : "Radar partiellement disponible — aucune activité inhabituelle confirmée sur les données exploitables.";
   }
   if (overview.candidate_market_count === 0) {
@@ -363,6 +407,36 @@ export async function fetchMarketAttention(signal?: AbortSignal): Promise<Market
     signal,
   });
   if (!response.ok) throw new Error(`Radar backend indisponible (${response.status})`);
+  return (await response.json()) as MarketAttentionOverview;
+}
+
+export async function fetchMarketAttentionFilters(
+  signal?: AbortSignal,
+): Promise<MarketAttentionFilters> {
+  const response = await fetch("/backend/api/v1/market-attention/filters", {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  if (!response.ok) throw new Error(`Filtres Radar indisponibles (${response.status})`);
+  return (await response.json()) as MarketAttentionFilters;
+}
+
+export async function setMarketAttentionFilters(
+  filters: MarketAttentionFilters,
+  signal?: AbortSignal,
+): Promise<MarketAttentionOverview> {
+  const response = await fetch("/backend/api/v1/market-attention/filters", {
+    method: "PUT",
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(filters),
+    signal,
+  });
+  if (!response.ok) throw new Error(`Changement de filtres impossible (${response.status})`);
   return (await response.json()) as MarketAttentionOverview;
 }
 

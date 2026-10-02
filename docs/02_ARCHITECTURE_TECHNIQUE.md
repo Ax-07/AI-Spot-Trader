@@ -5,11 +5,13 @@
 ```text
 Repository            : Ax-07/AI-Spot-Trader
 Branche               : main
-HEAD GitHub audité    : 003dae8dbfdc052edbad5bfde2c23fa24852eace
+HEAD GitHub audité    : f5de73270c23c6c4e2a6114ac78b3e57c17c65b1
 Batch 41              : intégré
 Batch 42              : intégré
+Batch 43              : patch proposé, non intégré
 Contrat Radar v4      : intégré — market-attention-radar-v4
 Contrat Radar v5      : intégré — market-attention-radar-v5
+Contrat Radar v6      : proposé — market-attention-radar-v6
 ```
 
 ## 2. Architecture générale
@@ -23,22 +25,27 @@ Next.js cockpit
         -> Risk Engine déterministe
         -> Paper Broker / Portfolio
 
-     -> StructuredMarketAttentionRadar (v5, observation uniquement)
-        -> ScopedTrendMarketAttentionRadar (v4)
-           -> MicrostructureMarketAttentionRadar (v3)
-              -> MarketAttentionRadar canonique
-                 -> catalogue Kraken
-                 -> CandleStreamService partagé / OHLCV 5m canonique
-              -> couche microstructure SPOT
-                 -> GET /0/public/Depth
-                 -> GET /0/public/Trades
-           -> scope runtime SPOT / PERPETUAL / ALL
-           -> direction récente déterministe multi-timeframe
-        -> MarketStructureAnalyzer
-           -> CandleStreamService.history_as_of(...)
-           -> CandleKey(market, 5m / 15m / 1h / 4h)
-           -> pivots confirmés / HH HL LH LL
-           -> BULLISH / BEARISH / RANGE / TRANSITION / UNKNOWN
+     -> FilteredStructuredMarketAttentionRadar (v6, observation uniquement)
+        -> StructuredMarketAttentionRadar (v5)
+           -> ScopedTrendMarketAttentionRadar (v4)
+              -> MicrostructureMarketAttentionRadar (v3)
+                 -> MarketAttentionRadar canonique
+                    -> catalogue Kraken
+                    -> CandleStreamService partagé / OHLCV 5m canonique
+                 -> couche microstructure SPOT
+                    -> GET /0/public/Depth
+                    -> GET /0/public/Trades
+              -> scope runtime SPOT / PERPETUAL / ALL
+              -> direction récente déterministe multi-timeframe
+           -> MarketStructureAnalyzer
+              -> CandleStreamService.history_as_of(...)
+              -> CandleKey(market, 5m / 15m / 1h / 4h)
+              -> pivots confirmés / HH HL LH LL
+              -> BULLISH / BEARISH / RANGE / TRANSITION / UNKNOWN
+        -> MarketMetadataProvider
+           -> CoinPaprika GET /v1/tickers?quotes=USD
+           -> cache long / fail-soft / aucun secret
+        -> filtres runtime volume 24h + market cap
         -> API /api/v1/market-attention
         -> zéro OpenAI / zéro recherche Web
         -> aucun lien vers Agent / Market Discovery / Risk / Broker
@@ -53,27 +60,49 @@ Le frontend n'appartient jamais à la chaîne d'exécution.
 ```text
 catalogue complet
 -> filtre scope
+-> filtre market cap Batch 43
 -> _next_scan_batch / scan_limit
 -> CandleStreamService
+-> filtre volume 24h Batch 43
+-> microstructure / shortlist / Market Structure
 ```
 
-Le scope vaut `ALL` par défaut. Les curseurs de rotation par famille existants sont conservés. Le Batch 42 n'analyse la structure que des éléments présents dans la shortlist déjà produite après ce filtrage ; aucun marché hors scope n'est réintroduit.
+Le scope vaut `ALL` par défaut. Les curseurs de rotation par famille existants sont conservés. La Market Structure n'analyse que les éléments présents dans la shortlist déjà produite après filtrage ; aucun marché exclu n'est réintroduit.
 
 ## 4. Caches et compteurs
 
-Les snapshots peuvent rester physiquement dans les caches historiques, mais `_fresh_activities(...)` filtre toujours selon le scope courant. Les compteurs, la classification de liquidité, les diagnostics et la shortlist sont donc construits uniquement sur la population active.
+Les snapshots peuvent rester physiquement dans les caches historiques, mais `_fresh_activities(...)` filtre toujours selon le scope courant et, avec le Batch 43, selon les filtres capitalisation/volume actifs. Les compteurs, la classification de liquidité, les diagnostics et la shortlist sont donc construits uniquement sur la population active.
 
-Le `catalogue_market_count` est recalculé sur la population éligible du scope, y compris après un changement runtime.
+Le `catalogue_market_count` reflète la population éligible après scope et filtre de capitalisation. Le filtre volume intervient après la disponibilité OHLCV ; `cached_activity_market_count` reflète donc la population restante après ce filtre.
 
 ## 5. Changement runtime
 
-`PUT /api/v1/market-attention/scope` reçoit :
+La route historique reste disponible :
 
-```json
-{"market_scope":"SPOT"}
+```http
+PUT /api/v1/market-attention/scope
 ```
 
-Le service sérialise le changement avec le verrou v4 existant, rafraîchit la population cohérente du scope puis, pour le Radar v5, enrichit la shortlist résultante avec la Market Structure. Le frontend utilise uniquement `market_scope` renvoyé par le backend pour afficher l'état actif.
+Le Batch 43 ajoute :
+
+```http
+GET /api/v1/market-attention/filters
+PUT /api/v1/market-attention/filters
+```
+
+Le payload v6 complet est :
+
+```json
+{
+  "market_scope": "SPOT",
+  "min_volume_24h_usd": "1000000",
+  "market_cap_categories": ["MID", "LARGE"],
+  "min_market_cap_usd": null,
+  "max_market_cap_usd": null
+}
+```
+
+Le changement est sérialisé par le verrou runtime du Radar. Avant le nouveau refresh, `latest` est invalidé au profit d'un snapshot `PARTIAL` vide correspondant déjà aux nouveaux filtres, afin de ne pas exposer une shortlist de l'ancien état comme si elle correspondait au nouveau.
 
 ## 6. Tendance récente Batch 41
 
@@ -86,7 +115,7 @@ Les seuils `_MATERIAL_RETURN` du Radar existant restent la source unique de la t
 4h  = 0.020
 ```
 
-Par horizon : `UP`, `DOWN`, `NEUTRAL` ou `UNKNOWN`. La synthèse globale peut être `MIXED`. `TRENDING` continue d'être normalisé avec cette synthèse. Le Batch 42 ne modifie aucune de ces règles.
+Par horizon : `UP`, `DOWN`, `NEUTRAL` ou `UNKNOWN`. La synthèse globale peut être `MIXED`. `TRENDING` continue d'être normalisé avec cette synthèse. Le Batch 43 ne modifie aucune de ces règles.
 
 ## 7. Historique natif de Market Structure
 
@@ -182,47 +211,98 @@ Les quatre structures individuelles sont conservées. La synthèse ne les écras
 
 Cette synthèse reste descriptive.
 
-## 13. Performance réseau
+## 13. Volume 24h Batch 43
 
-L'enrichissement structurel intervient **après** la sélection de la shortlist et non sur les 120 marchés potentiellement scannés à chaque rotation. Avec les valeurs par défaut :
-
-```text
-maximum shortlist : 10 marchés
-x 4 timeframes
-= 40 lectures history_as_of bornées par refresh
-```
-
-Ces lectures passent par le cache canonique. Le sémaphore structure (`fetch_concurrency=8`) borne également la concurrence provider.
-
-## 14. Contrat API et compatibilité
-
-`market-attention-radar-v5` ajoute à chaque entrée de shortlist :
+Le filtre volume réutilise le cache `CandleStreamService` déjà alimenté par le scan d'activité. Pour un marché SPOT coté directement en USD, le Radar somme sur une fenêtre causale de 24h :
 
 ```text
-market_structure.observed_at
-market_structure.global_state
-market_structure.timeframes[]
+volume_24h_usd = Σ(volume_base_5m × close_5m)
 ```
 
-Chaque timeframe expose `state`, `event`, `history_count`, `latest_final_close`, les swing highs/lows confirmés, les swings affichables et la `sequence` HH/HL/LH/LL.
+Seules les candles finalisées et connues à `observed_at` sont retenues. Le calcul exige également une profondeur de cache antérieure au début de la fenêtre de 24h.
 
-Les routes FastAPI acceptent aussi un `MarketAttentionOverviewV4` injecté. Les tests et consommateurs Batch 41 qui fournissent explicitement un service v4 restent donc sérialisables sans conversion forcée vers v5.
+Aucun taux FX implicite n'est introduit. Les marchés dont le notionnel USD ne peut pas être prouvé restent `UNKNOWN`. Lorsqu'un seuil `min_volume_24h_usd` est actif, `UNKNOWN` est exclu (fail-closed).
 
-## 15. Cockpit
-
-La ligne principale conserve activité, tendance récente, volume, spread, profondeur L2, déséquilibre, cadence trades et variation de prix. Le détail ajoute :
+Le filtre volume intervient après OHLCV mais **avant** :
 
 ```text
-Structure globale
-Structure 5m / 15m / 1h / 4h
-Swings HH → HL → ...
-Événement BOS/CHOCH éventuel
+microstructure L2/trades
+Market Structure 5m/15m/1h/4h
 ```
 
-La section OHLCV nomme explicitement `Tendance récente` pour éviter la confusion avec la Market Structure.
+## 14. Capitalisation Batch 43
 
-## 16. Isolation
+Une vraie capitalisation requiert la supply circulante ; Kraken ne constitue donc pas la source de cette métadonnée. La v6 introduit l'interface `MarketMetadataProvider` et l'implémentation initiale `CoinPaprikaMarketMetadataProvider`.
 
-Aucun module Batch 42 Market Structure n'importe Agent, Risk, Broker, OpenAI ou outil Web. Le Radar reste read-only vis-à-vis de Kraken et `informative_only=True`.
+Une seule lecture agrégée `/v1/tickers?quotes=USD` alimente un cache long (6h par défaut). Aucun appel n'est réalisé par candle ou par cycle stratégique IA. Aucun secret n'est nécessaire.
 
-Le Radar peut observer `SPOT / PERPETUAL / ALL`, mais cette capacité d'observation ne constitue pas une autorisation d'exécuter des trades PERPETUAL. L'exécution du projet reste SPOT.
+Le mapping est basé sur l'actif de base canonique du marché Kraken. Si plusieurs actifs externes partagent le même symbole, le provider retient déterministement la meilleure position de classement puis la plus grande capitalisation en cas d'égalité.
+
+Données descriptives exposées :
+
+```text
+market_cap_usd
+market_cap_category
+market_cap_rank
+circulating_supply
+market_cap_provider
+market_cap_observed_at
+```
+
+Catégories centralisées :
+
+```text
+MICRO  < 100 M$
+SMALL  100 M$ à < 1 Md$
+MID    1 Md$ à < 10 Md$
+LARGE  >= 10 Md$
+```
+
+## 15. Performance réseau
+
+L'ordre logique est désormais :
+
+```text
+catalogue Kraken
+-> scope
+-> market cap metadata/filter
+-> rotation + OHLCV
+-> volume 24h/filter
+-> shortlist descriptive
+-> microstructure SPOT applicable
+-> Market Structure uniquement sur shortlist finale
+```
+
+La Market Structure conserve son maximum nominal de 40 lectures `history_as_of` pour 10 candidats × 4 timeframes, mais les filtres Batch 43 réduisent en amont le nombre de marchés pouvant atteindre cette étape.
+
+## 16. Contrat API et compatibilité
+
+`market-attention-radar-v6` conserve tous les champs v5 et ajoute :
+
+```text
+filters
+market_cap_metadata_status
+market_cap_metadata_provider
+shortlist[].volume_24h_usd
+shortlist[].market_cap_*
+```
+
+Les routes continuent d'accepter et sérialiser les modèles v4/v5 injectés dans les tests/intégrations existants. `/scope` reste compatible ; `/filters` devient le contrat complet pour le cockpit Batch 43.
+
+## 17. Cockpit
+
+Le cockpit affiche désormais trois groupes de contrôles pilotés par le backend :
+
+```text
+Marché         SPOT / PERP / TOUS
+Volume 24h     Tous / >100k / >500k / >1M / >5M / >10M
+Capitalisation Toutes / Micro / Small / Mid / Large
+```
+
+Les catégories de capitalisation sont combinables. Les lignes candidates peuvent afficher le volume 24h et la capitalisation ; le détail expose provider, rang et catégorie.
+
+## 18. Isolation
+
+Le Radar reste `informative_only=True`. Les données de prix, OHLCV, tendance, structure et microstructure proviennent de Kraken. La market cap est une métadonnée externe read-only et n'a aucune autorité stratégique.
+
+Aucun module Batch 43 n'importe Agent, Risk ou Broker. Le Radar peut observer `SPOT / PERPETUAL / ALL`, mais l'exécution du projet reste SPOT.

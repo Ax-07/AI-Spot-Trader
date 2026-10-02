@@ -5,37 +5,57 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD réel  : 003dae8dbfdc052edbad5bfde2c23fa24852eace
-Commit     : feat: add multi-timeframe market structure
+HEAD réel  : f5de73270c23c6c4e2a6114ac78b3e57c17c65b1
+Commit     : docs: close batch 42 documentation
 ```
 
-État revérifié après intégration du Batch 42.
+Le commit fonctionnel du Batch 42 reste `003dae8dbfdc052edbad5bfde2c23fa24852eace`. Le HEAD absolu de `main` a ensuite avancé avec la clôture documentaire du Batch 42.
 
-## Batch 41 — intégré
+## État intégré — Batch 42
 
-Le Radar déterministe v4 dispose du scope runtime `SPOT / PERPETUAL / ALL` et d'une tendance récente descriptive `UP / DOWN / NEUTRAL / MIXED / UNKNOWN` par horizon `5m / 15m / 1h / 4h`, avec synthèse globale. La microstructure reste SPOT uniquement. Commit : `e65940b4c773f0de329648f5f3bb1f8960faa696`.
+Le Market Attention Radar intégré est `market-attention-radar-v5` :
 
-## Batch 42 — intégré
-
-Le Batch 42 ajoute une **Market Structure multi-timeframe** déterministe et causale sur les marchés de la shortlist :
-
-- historiques natifs Kraken `5m / 15m / 1h / 4h` via `CandleStreamService.history_as_of(...)` ;
-- profondeur par défaut : 100 candles finalisées par timeframe ;
-- pivots confirmés causalement ;
-- classification `HH / HL / LH / LL` ;
-- états `BULLISH / BEARISH / RANGE / TRANSITION / UNKNOWN` ;
-- événements descriptifs `BOS_* / CHOCH_*` ;
-- synthèse multi-timeframe descriptive ;
-- contrat Radar v5 ;
-- cockpit séparant tendance récente et structure de marché.
+- déterministe et `informative_only=True` ;
+- scope runtime `SPOT / PERPETUAL / ALL` ;
+- tendance récente `5m / 15m / 1h / 4h` ;
+- Market Structure native `5m / 15m / 1h / 4h` ;
+- pivots confirmés `HH / HL / LH / LL` ;
+- états `BULLISH / BEARISH / RANGE / TRANSITION / UNKNOWN` et synthèse multi-timeframe ;
+- événements descriptifs `BOS / CHOCH` ;
+- microstructure SPOT ;
+- aucun signal `BUY / SELL / HOLD`, aucun ordre Kraken, aucune connexion directe Agent/Risk/Broker.
 
 Distinction à préserver :
 
 ```text
-recent_trend     = lecture récente de direction
+recent_trend     = direction récente
 market_structure = géométrie des swings confirmés
 ```
 
-Le Radar reste Kraken-only, déterministe, `informative_only=True`, sans OpenAI, sans recherche Web, sans décision stratégique, sans signal `BUY / SELL / HOLD`, sans ordre Kraken et sans connexion directe Agent/Risk/Broker. L'observation `SPOT / PERPETUAL / ALL` du Radar ne modifie pas l'invariant d'exécution SPOT du projet.
+## Batch 43 — patch proposé, non intégré
 
-Voir `docs/42_BATCH_MARKET_STRUCTURE_MULTI_TIMEFRAME.md`.
+Le patch Batch 43 ajoute des filtres runtime de **volume 24h** et de **capitalisation réelle** au Radar, avec contrat proposé `market-attention-radar-v6`.
+
+Architecture proposée :
+
+```text
+prix / OHLCV / tendance / structure / microstructure = Kraken
+volume 24h USD                                        = dérivé causalement des candles Kraken lorsque l'unité USD est prouvée
+market cap / circulating supply / rank               = provider metadata externe read-only
+provider initial                                      = CoinPaprika
+trading / exécution                                   = Kraken uniquement
+```
+
+Principes du patch :
+
+- capitalisation filtrée avant le scan OHLCV lorsque la métadonnée est disponible ;
+- volume 24h filtré après le scan OHLCV mais avant microstructure et Market Structure ;
+- aucune conversion implicite pour un marché dont le notionnel USD n'est pas démontré ;
+- cache long et fail-soft du provider de métadonnées ;
+- changement de filtres sans redémarrage backend ;
+- snapshot transitoire vidé lors d'un changement de filtres afin de ne pas présenter l'ancienne shortlist comme actuelle ;
+- aucune autorité stratégique donnée à la source externe.
+
+Le Batch 43 n'est pas intégré tant que les validations locales complètes n'ont pas été exécutées puis le patch explicitement poussé par l'utilisateur.
+
+Voir `docs/43_BATCH_FILTRES_VOLUME_CAPITALISATION.md`.

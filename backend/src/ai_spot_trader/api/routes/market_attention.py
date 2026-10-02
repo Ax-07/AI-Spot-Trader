@@ -7,6 +7,10 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
 
 from ai_spot_trader.market.attention import MarketAttentionOverview, RadarStatus
+from ai_spot_trader.market.attention_filters import (
+    MarketAttentionFilters,
+    MarketAttentionOverviewV6,
+)
 from ai_spot_trader.market.attention_microstructure import MarketAttentionOverviewV3
 from ai_spot_trader.market.attention_scope_trend import (
     MarketAttentionOverviewV4,
@@ -16,7 +20,9 @@ from ai_spot_trader.market.attention_structure import MarketAttentionOverviewV5
 
 router = APIRouter(prefix="/api/v1/market-attention", tags=["market-attention"])
 
-MarketAttentionPublicOverview = MarketAttentionOverviewV4 | MarketAttentionOverviewV5
+MarketAttentionPublicOverview = (
+    MarketAttentionOverviewV4 | MarketAttentionOverviewV5 | MarketAttentionOverviewV6
+)
 
 
 class MarketAttentionReader(Protocol):
@@ -36,6 +42,18 @@ class MarketAttentionScopeWriter(Protocol):
     async def set_market_scope(
         self,
         market_scope: MarketScope,
+        *,
+        observed_at: datetime | None = None,
+    ) -> MarketAttentionPublicOverview: ...
+
+
+class MarketAttentionFilterWriter(Protocol):
+    @property
+    def filters(self) -> MarketAttentionFilters: ...
+
+    async def set_filters(
+        self,
+        filters: MarketAttentionFilters,
         *,
         observed_at: datetime | None = None,
     ) -> MarketAttentionPublicOverview: ...
@@ -80,6 +98,28 @@ async def market_attention_scope(
     return _as_public(result)
 
 
+@router.get("/filters", response_model=MarketAttentionFilters)
+async def market_attention_filters(request: Request) -> MarketAttentionFilters:
+    service = _service(request)
+    if service is None or not hasattr(service, "filters"):
+        return MarketAttentionFilters()
+    writer = cast(MarketAttentionFilterWriter, service)
+    return writer.filters
+
+
+@router.put("/filters", response_model=MarketAttentionPublicOverview)
+async def market_attention_set_filters(
+    payload: MarketAttentionFilters,
+    request: Request,
+) -> MarketAttentionPublicOverview:
+    service = _service(request)
+    if service is None or not hasattr(service, "set_filters"):
+        raise HTTPException(status_code=503, detail="market attention filter control unavailable")
+    writer = cast(MarketAttentionFilterWriter, service)
+    result = await writer.set_filters(payload)
+    return _as_public(result)
+
+
 @router.get("/history", response_model=MarketAttentionHistoryResponse)
 async def market_attention_history(
     request: Request,
@@ -97,8 +137,11 @@ def _as_public(
     value: MarketAttentionOverview
     | MarketAttentionOverviewV3
     | MarketAttentionOverviewV4
-    | MarketAttentionOverviewV5,
+    | MarketAttentionOverviewV5
+    | MarketAttentionOverviewV6,
 ) -> MarketAttentionPublicOverview:
+    if isinstance(value, MarketAttentionOverviewV6):
+        return value
     if isinstance(value, MarketAttentionOverviewV5):
         return value
     if isinstance(value, MarketAttentionOverviewV4):

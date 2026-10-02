@@ -31,11 +31,12 @@ from ai_spot_trader.core.runtime import (
     PortfolioSnapshotSource,
     StoppableTradingEngine,
 )
+from ai_spot_trader.integrations.coinpaprika import CoinPaprikaMarketMetadataProvider
 from ai_spot_trader.integrations.kraken.attention import KrakenAttentionCatalogue
 from ai_spot_trader.integrations.kraken.candles import KrakenCandleProvider
 from ai_spot_trader.integrations.kraken.microstructure import KrakenSpotMicrostructureProvider
 from ai_spot_trader.market.attention import MarketAttentionPolicy, MarketAttentionRadar
-from ai_spot_trader.market.attention_structure import StructuredMarketAttentionRadar
+from ai_spot_trader.market.attention_filters import FilteredStructuredMarketAttentionRadar
 from ai_spot_trader.market.candles import CandleCache, CandleStreamService
 from ai_spot_trader.market.microstructure import MicrostructurePolicy
 from ai_spot_trader.market.structure import MarketStructurePolicy
@@ -104,7 +105,7 @@ def create_app(
         )
 
     def build_market_attention(candles: CandleStreamService) -> MarketAttentionRadar:
-        return StructuredMarketAttentionRadar(
+        return FilteredStructuredMarketAttentionRadar(
             candle_service=candles,
             catalogue=KrakenAttentionCatalogue(
                 spot_rest_url=resolved_settings.kraken_rest_url,
@@ -113,6 +114,9 @@ def create_app(
             ),
             microstructure_provider=KrakenSpotMicrostructureProvider(
                 resolved_settings.kraken_rest_url,
+                timeout_seconds=resolved_settings.kraken_rest_timeout_seconds,
+            ),
+            metadata_provider=CoinPaprikaMarketMetadataProvider(
                 timeout_seconds=resolved_settings.kraken_rest_timeout_seconds,
             ),
             policy=MarketAttentionPolicy(),

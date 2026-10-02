@@ -11,104 +11,113 @@ Market Attention Radar reste strictement observationnel et ne prend aucune déci
 ## Référence courante
 
 ```text
-HEAD GitHub audité : 003dae8dbfdc052edbad5bfde2c23fa24852eace
-Commit              : feat: add multi-timeframe market structure
-Batch 41            : intégré
+HEAD GitHub audité : f5de73270c23c6c4e2a6114ac78b3e57c17c65b1
+Commit              : docs: close batch 42 documentation
 Batch 42            : intégré
+Batch 43            : patch proposé, non intégré
 ```
 
-## Changelog — 2026-10-01 — Batch 42 Market Structure multi-timeframe — intégré
+## Changelog — 2026-10-02 — Batch 43 filtres volume/capitalisation — patch proposé
 
-Commit intégré : `003dae8dbfdc052edbad5bfde2c23fa24852eace`.
+- ajout d'un état runtime unique `MarketAttentionFilters` ;
+- ajout d'un filtre minimum `volume_24h_usd` ;
+- ajout de filtres de capitalisation par catégories applicatives et/ou bornes min/max ;
+- catégories centralisées : `MICRO < 100 M$`, `SMALL < 1 Md$`, `MID < 10 Md$`, `LARGE >= 10 Md$` ;
+- volume 24h SPOT/USD dérivé causalement du cache Kraken 5m existant, sans nouvel appel REST par marché ;
+- absence de conversion implicite pour les marchés dont le notionnel USD n'est pas prouvé ;
+- interface `MarketMetadataProvider` isolant les métadonnées externes ;
+- provider initial `CoinPaprikaMarketMetadataProvider`, read-only, sans clé, cache long et fail-soft ;
+- filtre capitalisation appliqué avant le scan OHLCV ;
+- filtre volume appliqué avant microstructure et avant Market Structure ;
+- nouveau contrat proposé `market-attention-radar-v6` ;
+- nouveaux endpoints `GET /api/v1/market-attention/filters` et `PUT /api/v1/market-attention/filters` ;
+- `/scope` conservé pour compatibilité ;
+- cockpit enrichi avec contrôles Volume 24h et Capitalisation, pilotés par l'état backend ;
+- aucune modification Agent/Risk/Broker et aucune autorité stratégique pour les métadonnées externes.
 
-- ajout de `MarketStructureAnalyzer`, déterministe et causal ;
-- politique bornée : 100 candles par timeframe par défaut, pivots `2 + 2`, tolérance 2 bps ;
-- lecture native Kraken `5m / 15m / 1h / 4h` via `CandleStreamService.history_as_of` ;
-- classification `HH / HL / LH / LL` ;
+Ce changelog décrit le patch livré, pas un état intégré sur GitHub.
+
+## ADR-313 — Une vraie capitalisation utilise une source de métadonnées externe
+
+**PROPOSÉ — Batch 43.**
+
+Kraken fournit les données de marché nécessaires au Radar mais pas une supply circulante universelle permettant de calculer une vraie capitalisation pour tous les actifs. Un proxy de liquidité Kraken ne doit donc pas être nommé `market_cap`.
+
+Le patch introduit `MarketMetadataProvider`. L'implémentation initiale CoinPaprika fournit uniquement des métadonnées descriptives read-only : `circulating_supply`, `market_cap_usd`, `market_cap_rank`, `observed_at`, `provider`.
+
+Cette source n'importe ni Agent, ni Risk, ni Broker et n'a aucune autorité de décision.
+
+## ADR-314 — Cache long et fail-soft des métadonnées de capitalisation
+
+**PROPOSÉ — Batch 43.**
+
+Le provider de métadonnées conserve un cache de six heures. Une indisponibilité externe ne fait jamais tomber le Radar complet. Sans donnée exploitable, la capitalisation reste `UNKNOWN`. Si un filtre de capitalisation est actif, un actif `UNKNOWN` n'est pas prétendu éligible.
+
+## ADR-315 — Volume 24h calculé à partir du pipeline candles canonique
+
+**PROPOSÉ — Batch 43.**
+
+Le Radar dispose déjà d'un historique 5m suffisamment profond. Pour les marchés SPOT cotés directement en USD, le volume notionnel 24h est calculé causalement comme somme `volume_base × close` sur les candles finalisées connues à l'instant du snapshot.
+
+Aucun endpoint `/Ticker` additionnel par marché n'est introduit. Pour les marchés où l'unité USD n'est pas prouvée, `volume_24h_usd` reste `UNKNOWN` au lieu d'inventer une conversion.
+
+## ADR-316 — Les filtres doivent précéder les enrichissements coûteux
+
+**PROPOSÉ — Batch 43.**
+
+Ordre effectif :
+
+```text
+catalogue Kraken
+-> scope SPOT / PERPETUAL / ALL
+-> market cap metadata
+-> filtre capitalisation
+-> rotation / scan OHLCV
+-> calcul volume 24h
+-> filtre volume
+-> activité / tendance / shortlist
+-> microstructure SPOT
+-> Market Structure 5m / 15m / 1h / 4h
+```
+
+Le filtre volume ne peut raisonnablement précéder l'OHLCV sans dupliquer une source déjà disponible. Il est néanmoins placé avant L2/trades et avant les quatre lectures structurelles.
+
+## ADR-317 — Contrat Radar v6 et cohérence runtime
+
+**PROPOSÉ — Batch 43.**
+
+`market-attention-radar-v6` expose les filtres actifs au niveau global et, sur chaque candidat, les métadonnées disponibles de volume/capitalisation. Le changement de filtre est sérialisé par le verrou runtime existant. Avant le refresh complet, `latest` bascule sur un snapshot `PARTIAL` vide associé aux nouveaux filtres afin de ne jamais présenter une shortlist calculée avec l'ancien réglage comme actuelle.
+
+Les routes v4/v5 restent sérialisables pour préserver les tests/intégrations injectés existants.
+
+## ADR-318 — Formulation précise des sources du Radar
+
+**PROPOSÉ — Batch 43.**
+
+Après intégration éventuelle du Batch 43, ne plus écrire sans nuance « Radar Kraken-only ». Utiliser :
+
+```text
+prix / OHLCV / tendance / structure / microstructure = Kraken
+market cap / circulating supply / rank               = provider metadata externe read-only
+trading / ordres                                     = Kraken uniquement
+```
+
+## Rappel — Batch 42 intégré
+
+Commit fonctionnel : `003dae8dbfdc052edbad5bfde2c23fa24852eace`.
+
+- Market Structure native `5m / 15m / 1h / 4h` ;
+- pivots causaux `HH / HL / LH / LL` ;
 - états `BULLISH / BEARISH / RANGE / TRANSITION / UNKNOWN` ;
-- événements descriptifs `BOS_UP / BOS_DOWN / CHOCH_UP / CHOCH_DOWN` ;
-- synthèse multi-timeframe avec état global `MIXED` lorsque les structures divergent ;
-- enrichissement uniquement après constitution de la shortlist scope-éligible ;
-- contrat public intégré `market-attention-radar-v5` avec compatibilité v4 des routes ;
-- cockpit enrichi sans masquer les métriques Batch 40/41 ;
-- aucune modification Agent/Risk/Broker et aucune exécution dérivée de la structure ;
-- validations locales avant push : backend `pytest -q` PASS complet, frontend `pnpm test` 54/54 PASS, `pnpm typecheck` PASS.
-
-## Changelog — 2026-10-01 — Batch 41 Scope et tendance — intégré
-
-Commit intégré : `e65940b4c773f0de329648f5f3bb1f8960faa696`.
-
-- ajout d'un scope runtime `SPOT / PERPETUAL / ALL`, `ALL` par défaut ;
-- filtrage avant rotation et scan OHLCV ;
-- caches frais, compteurs, liquidité, diagnostics et shortlist filtrés au scope ;
-- endpoint `PUT /api/v1/market-attention/scope` ;
-- ajout de `UP / DOWN / NEUTRAL / MIXED / UNKNOWN` par horizon ;
-- ajout d'une synthèse globale multi-timeframe ;
-- `TRENDING` dérivé de la même synthèse directionnelle ;
-- microstructure explicitement neutralisée en scope `PERPETUAL` ;
-- contrat public `market-attention-radar-v4` ;
-- cockpit piloté par le scope backend et affichage de tendance global/détaillé.
-
-## ADR-304 — Scope runtime comme couche au-dessus du Radar canonique
-
-**ADOPTÉ — Batch 41 intégré.**
-
-Le scope n'est pas un nouveau `MarketType`. `MarketType` reste le type canonique d'un marché ; `MarketScope` représente uniquement la sélection utilisateur `SPOT / PERPETUAL / ALL`.
-
-La couche `ScopedTrendMarketAttentionRadar` hérite du Radar microstructure existant et filtre la population retournée par le catalogue avant `_next_scan_batch`. Aucun second catalogue ou pipeline candles n'est créé.
-
-## ADR-305 — Cache conservé physiquement, filtré logiquement
-
-**ADOPTÉ — Batch 41 intégré.**
-
-Un changement de scope ne purge pas obligatoirement les snapshots d'une famille exclue. En revanche, `_fresh_activities` et les sorties v4 ne laissent jamais ces snapshots participer au calcul courant. Cela permet un retour à `ALL` sans réintroduire de données hors scope dans le snapshot actif.
-
-## ADR-306 — Synthèse directionnelle unique
-
-**ADOPTÉ — Batch 41 intégré.**
-
-Les seuils `_MATERIAL_RETURN` existants déterminent la direction de chaque horizon. La synthèse globale gère explicitement l'alignement, les conflits et l'insuffisance de preuve. `TRENDING` est ensuite ajouté uniquement pour `UP` ou `DOWN`, puis l'intérêt est recalculé avec la fonction canonique existante.
-
-## ADR-307 — Contrat Radar v4
-
-**ADOPTÉ — Batch 41 intégré.**
-
-L'ajout d'un état runtime global et de champs directionnels imbriqués est une évolution significative du schéma public. Backend et frontend utilisent `market-attention-radar-v4` pour cette couche.
-
-## ADR-308 — Microstructure toujours SPOT uniquement
-
-**RÉAFFIRMÉ — Batch 41 intégré.**
-
-En scope `PERPETUAL`, aucun sous-scan `/Depth` ou `/Trades` n'est déclenché et le cache microstructure exposé est vide. Les marchés PERPETUAL sont représentés avec `NOT_APPLICABLE`.
-
-## ADR-309 — Market Structure basée sur les timeframes Kraken natifs
-
-**ADOPTÉ — Batch 42 intégré.**
-
-La structure H1/H4 ne doit pas être reconstruite arbitrairement depuis les candles 5m. `StructuredMarketAttentionRadar` demande chaque timeframe directement à `CandleStreamService.history_as_of(CandleKey(...))`, ce qui conserve la causalité et le cache canonique.
-
-## ADR-310 — Confirmation causale des pivots
-
-**ADOPTÉ — Batch 42 intégré.**
-
-Un swing n'est confirmé qu'après clôture de `pivot_right_bars` candles postérieures. Les candles futures/non finalisées sont exclues, et `confirmed_at` enregistre la clôture qui rend le pivot connaissable. Les quasi-égalités ne sont pas forcées en HH/LH/HL/LL.
-
-## ADR-311 — Structure enrichie après shortlist
-
-**ADOPTÉ — Batch 42 intégré.**
-
-La structure n'est pas utilisée pour décider quels marchés entrent dans la shortlist. Elle enrichit uniquement les candidats déjà déterminés par le Radar v4. Cela borne le coût réseau et empêche la Market Structure de devenir silencieusement un ranking stratégique.
-
-## ADR-312 — Contrat Radar v5 compatible v4
-
-**ADOPTÉ — Batch 42 intégré.**
-
-Les snapshots enrichis exposent `market-attention-radar-v5` et `market_structure`. Les routes continuent d'accepter explicitement les objets v4 afin de conserver la compatibilité des tests/services Batch 41 injectés.
+- événements descriptifs `BOS / CHOCH` ;
+- contrat intégré `market-attention-radar-v5` ;
+- aucune modification Agent/Risk/Broker.
 
 ## Points explicitement non décidés
 
 - utilisation du Radar ou de la Market Structure comme contexte de l'Agent stratégique ;
 - filtre de shortlist par direction ou structure ;
+- conversion FX implicite pour le filtre de volume ;
 - réaction stratégique intra-bougie ;
 - streaming WebSocket L2/trades ;
 - LIVE.

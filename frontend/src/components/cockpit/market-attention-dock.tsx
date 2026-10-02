@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  activeMarketAttentionFilters,
   activityErrorEntries,
   attentionHorizon,
   fetchMarketAttention,
@@ -15,14 +16,18 @@ import {
   formatQuoteCompact,
   formatRate,
   formatSignedPercent,
+  formatUsdCompact,
   formatVolumeRatio,
   marketAttentionStatusMessage,
-  setMarketAttentionScope,
+  marketCapCategoryLabel,
+  setMarketAttentionFilters,
   slippageEstimate,
   trendDirectionLabel,
   type LiquidityRegime,
+  type MarketAttentionFilters,
   type MarketAttentionOverview,
   type MarketAttentionSnapshot,
+  type MarketCapCategory,
   type MarketScope,
   type MicrostructureCharacteristic,
   type RadarInterestLevel,
@@ -34,7 +39,6 @@ import {
   structureStateLabel,
   structureTimeframe,
   swingSequenceLabel,
-  timeframeStructureLabel,
 } from "@/lib/market-structure";
 
 function statusTone(status: RadarStatus) {
@@ -55,15 +59,6 @@ function liquidityTone(regime: LiquidityRegime) {
   if (regime === "VERY_HIGH" || regime === "HIGH") return "info" as const;
   if (regime === "MICRO" || regime === "LOW") return "warning" as const;
   return "neutral" as const;
-}
-
-function freshness(value: string | null) {
-  if (value === null) return "—";
-  const seconds = Number(value);
-  if (!Number.isFinite(seconds)) return "—";
-  if (seconds < 60) return `${Math.round(seconds)} s`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
-  return `${(seconds / 3600).toFixed(1)} h`;
 }
 
 function shortTime(value: string | null | undefined) {
@@ -97,6 +92,22 @@ const SCOPE_OPTIONS: Array<{ value: MarketScope; label: string }> = [
   { value: "ALL", label: "TOUS" },
 ];
 
+const VOLUME_OPTIONS: Array<{ value: string | null; label: string }> = [
+  { value: null, label: "Tous" },
+  { value: "100000", label: "≥ 100 k$" },
+  { value: "500000", label: "≥ 500 k$" },
+  { value: "1000000", label: "≥ 1 M$" },
+  { value: "5000000", label: "≥ 5 M$" },
+  { value: "10000000", label: "≥ 10 M$" },
+];
+
+const MARKET_CAP_OPTIONS: Array<{ value: MarketCapCategory; label: string }> = [
+  { value: "MICRO", label: "Micro" },
+  { value: "SMALL", label: "Small" },
+  { value: "MID", label: "Mid" },
+  { value: "LARGE", label: "Large" },
+];
+
 function microLabel(value: string) {
   return MICRO_LABELS[value as MicrostructureCharacteristic] ?? value.replaceAll("_", " ");
 }
@@ -115,7 +126,7 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
 
   return (
     <div className="rounded-xl border bg-background/70">
-      <button type="button" onClick={onToggle} className="grid w-full gap-3 p-3 text-left md:grid-cols-[minmax(190px,1.3fr)_repeat(9,minmax(74px,0.7fr))] md:items-center">
+      <button type="button" onClick={onToggle} className="grid w-full gap-3 p-3 text-left md:grid-cols-[minmax(190px,1.3fr)_repeat(11,minmax(68px,0.7fr))] md:items-center">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="font-semibold">{activity.market.symbol}</span>
@@ -132,6 +143,8 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
         <Fact label="Activité" value={activity.activity_state.replaceAll("_", " ")} />
         <Fact label="Tendance" value={trendDirectionLabel(activity.trend_direction)} />
         <Fact label="Structure" value={structureStateLabel(structure?.global_state)} />
+        <Fact label="Vol. 24h" value={formatUsdCompact(item.volume_24h_usd)} />
+        <Fact label="Capitalisation" value={formatUsdCompact(item.market_cap_usd)} />
         <Fact label="Vol. 5m" value={formatVolumeRatio(h5?.volume_ratio)} />
         <Fact label="Spread" value={formatBps(micro.spread_bps)} />
         <Fact label="Prof. L2" value={formatQuoteCompact(micro.total_depth_quote, micro.quote_asset)} />
@@ -142,14 +155,16 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
 
       {expanded ? (
         <div className="space-y-4 border-t px-3 py-4 text-xs">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-8">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-10">
             <Fact label="Niveau d’intérêt" value={item.interest_level} />
             <Fact label="Tendance globale" value={trendDirectionLabel(activity.trend_direction)} />
             <Fact label="Structure globale" value={structureStateLabel(structure?.global_state)} />
+            <Fact label="Volume 24h" value={formatUsdCompact(item.volume_24h_usd)} />
+            <Fact label="Capitalisation" value={formatUsdCompact(item.market_cap_usd)} />
+            <Fact label="Catégorie cap." value={marketCapCategoryLabel(item.market_cap_category)} />
+            <Fact label="Rang cap." value={item.market_cap_rank ? `#${item.market_cap_rank}` : "—"} />
             <Fact label="Qualité OHLCV" value={activity.data_quality} />
             <Fact label="Microstructure" value={`${micro.status} / ${micro.data_quality}`} />
-            <Fact label="Fraîcheur OHLCV" value={freshness(activity.freshness_seconds)} />
-            <Fact label="Fraîcheur micro" value={freshness(micro.freshness_seconds)} />
             <Fact label="Observation" value={shortTime(activity.observed_at)} />
           </div>
 
@@ -200,15 +215,13 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
             </div>
 
             <div className="rounded-lg border bg-muted/10 p-3">
-              <p className="font-semibold">Profondeur proche du mid</p>
+              <p className="font-semibold">Métadonnées de taille</p>
               <div className="mt-2 space-y-1.5">
-                {micro.depth_bands.length ? micro.depth_bands.map((band) => (
-                  <Fact
-                    key={band.band_bps}
-                    label={`±${band.band_bps} bps`}
-                    value={`${formatQuoteCompact(band.bid_depth_quote, micro.quote_asset)} / ${formatQuoteCompact(band.ask_depth_quote, micro.quote_asset)}`}
-                  />
-                )) : <p className="text-muted-foreground">—</p>}
+                <Fact label="Capitalisation" value={formatUsdCompact(item.market_cap_usd)} />
+                <Fact label="Catégorie" value={marketCapCategoryLabel(item.market_cap_category)} />
+                <Fact label="Rang" value={item.market_cap_rank ? `#${item.market_cap_rank}` : "—"} />
+                <Fact label="Provider" value={item.market_cap_provider ?? "—"} />
+                <Fact label="Mise à jour" value={shortTime(item.market_cap_observed_at)} />
               </div>
             </div>
           </div>
@@ -266,7 +279,7 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
           ) : null}
 
           <p className="rounded-lg border bg-muted/10 p-3 text-muted-foreground">
-            Radar déterministe Kraken uniquement. OHLCV, structure de marché, carnet L2 et trades récents décrivent l’activité observée ; ils ne constituent aucune instruction de trading.
+            Prix, OHLCV, structure de marché, carnet L2 et trades récents proviennent de Kraken. La capitalisation est une métadonnée externe read-only ; elle n’autorise aucune décision ni aucun ordre.
           </p>
         </div>
       ) : null}
@@ -313,19 +326,21 @@ export function MarketAttentionDock() {
     }
   }, []);
 
-  const changeScope = useCallback(async (marketScope: MarketScope) => {
+  const changeFilters = useCallback(async (update: Partial<MarketAttentionFilters>) => {
+    if (!data) return;
     setLoading(true);
     try {
-      const next = await setMarketAttentionScope(marketScope);
+      const current = activeMarketAttentionFilters(data);
+      const next = await setMarketAttentionFilters({ ...current, ...update });
       setData(next);
       setExpandedKey(null);
       setError(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Changement de marché impossible");
+      setError(caught instanceof Error ? caught.message : "Changement de filtres impossible");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [data]);
 
   useEffect(() => {
     if (!open) return;
@@ -338,10 +353,19 @@ export function MarketAttentionDock() {
   }, [open, refresh]);
 
   const displayed = useMemo(() => data?.shortlist.slice(0, 20) ?? [], [data]);
+  const filters = useMemo(() => data ? activeMarketAttentionFilters(data) : null, [data]);
 
   function toggleOpen() {
     if (!open) void refresh();
     setOpen((value) => !value);
+  }
+
+  function toggleMarketCapCategory(category: MarketCapCategory) {
+    if (!filters) return;
+    const selected = new Set(filters.market_cap_categories);
+    if (selected.has(category)) selected.delete(category);
+    else selected.add(category);
+    void changeFilters({ market_cap_categories: Array.from(selected) });
   }
 
   return (
@@ -354,7 +378,7 @@ export function MarketAttentionDock() {
       {open ? <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setOpen(false)} aria-hidden="true" /> : null}
 
       {open ? (
-        <Card className="fixed bottom-20 right-3 z-50 max-h-[78vh] w-[min(96vw,1180px)] overflow-hidden shadow-2xl sm:right-5">
+        <Card className="fixed bottom-20 right-3 z-50 max-h-[78vh] w-[min(96vw,1240px)] overflow-hidden shadow-2xl sm:right-5">
           <CardHeader className="border-b">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -364,7 +388,7 @@ export function MarketAttentionDock() {
                   {data ? <span className="inline-flex"><Badge tone={statusTone(data.status)}>État · {data.status}</Badge></span> : null}
                   {data ? <span className="inline-flex"><Badge tone="neutral">Marché · {data.market_scope === "ALL" ? "TOUS" : data.market_scope === "PERPETUAL" ? "PERP" : "SPOT"}</Badge></span> : null}
                 </div>
-                <CardDescription className="mt-1">Données Kraken déterministes : OHLCV finalisé sur le scope actif, structure native 5m/15m/1h/4h, avec microstructure uniquement pour les marchés SPOT. Aucun appel IA, aucune recherche Web, aucune exécution.</CardDescription>
+                <CardDescription className="mt-1">Données de marché Kraken déterministes, avec capitalisation descriptive via provider externe read-only. Aucun appel IA, aucune exécution et aucun signal BUY / SELL / HOLD.</CardDescription>
               </div>
               <div className="flex gap-1">
                 <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading} aria-label="Actualiser le radar">
@@ -376,24 +400,72 @@ export function MarketAttentionDock() {
           </CardHeader>
           <CardContent className="max-h-[calc(78vh-110px)] overflow-y-auto py-4">
             {error ? <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive-subtle p-3 text-xs text-destructive-subtle-foreground">{error}</div> : null}
-            {data ? (
+            {data && filters ? (
               <div className="space-y-4">
-                <div className="rounded-lg border p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold">Marché analysé</p>
-                      <p className="text-[10px] text-muted-foreground">Le scope actif est piloté par le backend avant le scan Kraken.</p>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
+                <div className="grid gap-3 rounded-lg border p-3 lg:grid-cols-3">
+                  <div>
+                    <p className="text-xs font-semibold">Marché</p>
+                    <p className="text-[10px] text-muted-foreground">Appliqué avant le scan OHLCV.</p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
                       {SCOPE_OPTIONS.map((option) => (
                         <Button
                           key={option.value}
                           type="button"
                           size="sm"
-                          variant={data.market_scope === option.value ? "default" : "outline"}
+                          variant={filters.market_scope === option.value ? "default" : "outline"}
                           disabled={loading}
-                          aria-pressed={data.market_scope === option.value}
-                          onClick={() => void changeScope(option.value)}
+                          aria-pressed={filters.market_scope === option.value}
+                          onClick={() => void changeFilters({ market_scope: option.value })}
+                        >
+                          {option.label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-semibold">Volume 24h</p>
+                    <p className="text-[10px] text-muted-foreground">Notionnel USD causal issu des candles Kraken ; UNKNOWN est exclu lorsqu’un seuil est actif.</p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {VOLUME_OPTIONS.map((option) => (
+                        <Button
+                          key={option.value ?? "ALL"}
+                          type="button"
+                          size="sm"
+                          variant={filters.min_volume_24h_usd === option.value ? "default" : "outline"}
+                          disabled={loading}
+                          aria-pressed={filters.min_volume_24h_usd === option.value}
+                          onClick={() => void changeFilters({ min_volume_24h_usd: option.value })}
+                        >
+                          {option.label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-semibold">Capitalisation</p>
+                    <p className="text-[10px] text-muted-foreground">Catégories applicatives : &lt;100 M$, 100 M$–1 Md$, 1–10 Md$, ≥10 Md$.</p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={filters.market_cap_categories.length === 0 ? "default" : "outline"}
+                        disabled={loading}
+                        aria-pressed={filters.market_cap_categories.length === 0}
+                        onClick={() => void changeFilters({ market_cap_categories: [] })}
+                      >
+                        Toutes
+                      </Button>
+                      {MARKET_CAP_OPTIONS.map((option) => (
+                        <Button
+                          key={option.value}
+                          type="button"
+                          size="sm"
+                          variant={filters.market_cap_categories.includes(option.value) ? "default" : "outline"}
+                          disabled={loading}
+                          aria-pressed={filters.market_cap_categories.includes(option.value)}
+                          onClick={() => toggleMarketCapCategory(option.value)}
                         >
                           {option.label}
                         </Button>
@@ -402,13 +474,14 @@ export function MarketAttentionDock() {
                   </div>
                 </div>
 
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
-                  <Fact label="Catalogue scope" value={String(data.catalogue_market_count)} />
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-7">
+                  <Fact label="Catalogue filtré" value={String(data.catalogue_market_count)} />
                   <Fact label="Marchés frais OHLCV" value={String(data.cached_activity_market_count)} />
                   <Fact label="Scannés OHLCV" value={String(data.scanned_market_count)} />
                   <Fact label="Scannés micro" value={String(data.microstructure_scanned_market_count)} />
                   <Fact label="Cache micro" value={String(data.microstructure_cached_market_count)} />
                   <Fact label="Candidats" value={String(data.candidate_market_count)} />
+                  <Fact label="Metadata cap." value={data.market_cap_metadata_status ?? "—"} />
                 </div>
 
                 <div className="rounded-lg border bg-muted/10 px-3 py-2 text-xs font-medium">{marketAttentionStatusMessage(data)}</div>
@@ -479,10 +552,10 @@ export function MarketAttentionDock() {
                   </div>
                 ) : (
                   <div className="rounded-xl border border-dashed p-5 text-sm text-muted-foreground">
-                    {loading ? "Construction du snapshot du radar…" : data.status === "NOT_CONFIGURED" ? "Radar non configuré." : "Aucun candidat d’attention disponible pour le moment."}
+                    {loading ? "Construction du snapshot du radar…" : data.status === "NOT_CONFIGURED" ? "Radar non configuré." : "Aucun candidat d’attention disponible avec les filtres actifs."}
                   </div>
                 )}
-                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · scope backend {data.market_scope} · classement déterministe. Les montants L2 sont exprimés dans la devise cotée du marché ; aucun taux de change n’est inventé.</p>
+                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · filtres pilotés par le backend · classement déterministe. Volume 24h = Kraken lorsque la conversion USD est prouvable ; capitalisation = {data.market_cap_metadata_provider ?? "provider externe indisponible"}. UNKNOWN est fail-closed lorsqu’un filtre correspondant est actif.</p>
               </div>
             ) : <p className="text-sm text-muted-foreground">{loading ? "Chargement du radar…" : "Aucun snapshot chargé."}</p>}
           </CardContent>
