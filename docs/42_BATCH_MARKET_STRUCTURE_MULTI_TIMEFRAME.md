@@ -2,9 +2,14 @@
 
 ## Statut
 
-**Patch proposé, non intégré** au moment de la livraison.
+**INTÉGRÉ** sur `main` au commit :
 
-Référence de départ auditée :
+```text
+003dae8dbfdc052edbad5bfde2c23fa24852eace
+feat: add multi-timeframe market structure
+```
+
+Référence de départ auditée avant développement :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
@@ -25,7 +30,7 @@ La Market Structure est un **contexte descriptif**. Elle ne produit aucune actio
 
 ## Relation avec le Batch 41
 
-Le Batch 41 est intégré au HEAD de référence et reste inchangé conceptuellement :
+Le Batch 41 reste inchangé conceptuellement :
 
 ```text
 recent_trend = UP / DOWN / NEUTRAL / MIXED / UNKNOWN
@@ -116,7 +121,7 @@ Règles principales :
 
 ## Événements descriptifs
 
-Le patch peut exposer :
+Le Batch 42 peut exposer :
 
 ```text
 BOS_UP
@@ -125,7 +130,7 @@ CHOCH_UP
 CHOCH_DOWN
 ```
 
-Ils servent uniquement à expliquer la géométrie observée. Aucun événement ne devient `BUY`, `SELL`, `LONG`, `SHORT` ou `HOLD`.
+Ils servent uniquement à expliquer la géométrie observée. Aucun événement ne devient `BUY`, `SELL`, `LONG`, `SHORT` ou `HOLD` et aucun `BOS`/`CHOCH` ne constitue un signal de trading automatique.
 
 ## Synthèse multi-timeframe
 
@@ -149,9 +154,11 @@ Ces lectures utilisent `CandleStreamService`, donc son cache process-local, ses 
 
 Le scope `SPOT / PERPETUAL / ALL` est toujours appliqué avant la shortlist. Puisque la Market Structure n'enrichit que cette shortlist, elle ne demande aucune série pour un marché qui n'est pas éligible au scope actif.
 
+Cette capacité d'observation de marchés PERPETUAL ne modifie pas l'invariant d'exécution du projet : le trading reste SPOT, sans short, levier, margin, future ou perpetual en exécution LIVE.
+
 ## API
 
-Le patch introduit :
+Le Batch 42 introduit :
 
 ```text
 market-attention-radar-v5
@@ -202,9 +209,23 @@ frontend/src/lib/market-structure.test.mjs
 frontend/src/components/cockpit/market-attention-dock.tsx
 ```
 
-## Tests du patch
+## Validations réalisées avant intégration
 
-Le test backend dédié couvre :
+Validations locales réalisées par l'utilisateur avant le commit et le push du Batch 42 :
+
+```text
+backend pytest -q          : PASS complet — 100 %
+frontend pnpm test         : 54/54 PASS
+frontend pnpm typecheck    : PASS (tsc --noEmit)
+```
+
+Le branchement production a également été contrôlé dans `backend/src/ai_spot_trader/main.py` avec `StructuredMarketAttentionRadar` et `MarketStructurePolicy` avant l'intégration.
+
+Ces validations sont historiques ; elles ne sont pas présentées comme ayant été réexécutées lors de cette clôture documentaire.
+
+## Couverture fonctionnelle validée avant intégration
+
+Les tests dédiés couvrent notamment :
 
 - swing highs / swing lows ;
 - `HH / HL / LH / LL` ;
@@ -214,9 +235,8 @@ Le test backend dédié couvre :
 - stabilité d'un pivot déjà confirmé ;
 - indépendance 5m/15m/1h/4h ;
 - appel natif `history_as_of` pour chacun des quatre timeframes ;
-- contrat API v5 et compatibilité v4.
-
-Le frontend possède des tests des helpers de projection/labels de structure.
+- contrat API v5 et compatibilité v4 ;
+- helpers frontend de projection/labels de structure.
 
 ## Hors périmètre
 

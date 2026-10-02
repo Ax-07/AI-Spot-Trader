@@ -4,16 +4,16 @@
 
 AI Spot Trader est une application expérimentale de trading pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est un cockpit de contrôle et de visualisation qui peut être fermé sans arrêter le moteur.
 
-Référence GitHub auditée au lancement du Batch 42 :
+Référence GitHub auditée après intégration du Batch 42 :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : e65940b4c773f0de329648f5f3bb1f8960faa696
-Commit     : feat: add market attention scope and trend direction
+HEAD       : 003dae8dbfdc052edbad5bfde2c23fa24852eace
+Commit     : feat: add multi-timeframe market structure
 ```
 
-Les Batches 39 à 41 sont intégrés. Le Batch 42 décrit dans ce document est un patch proposé localement, non intégré tant qu'aucun commit utilisateur n'a été poussé.
+Les Batches 39 à 42 sont intégrés sur `main`.
 
 ## 2. Invariants fonctionnels
 
@@ -131,7 +131,7 @@ La synthèse globale est multi-timeframe : conflit matériel positif/négatif =>
 
 ## 12. Market Structure v5 — géométrie des swings
 
-Le Batch 42 proposé ajoute une information distincte de la tendance récente. Pour chaque candidat de shortlist, le Radar lit directement les historiques natifs Kraken :
+Le Batch 42 intégré ajoute une information distincte de la tendance récente. Pour chaque candidat de shortlist, le Radar lit directement les historiques natifs Kraken :
 
 ```text
 CandleStreamService.history_as_of(...)
@@ -170,7 +170,7 @@ Structure H4         : TRANSITION
 Swings               : HH → HL → LH → LL
 ```
 
-Aucun des deux ne constitue une action stratégique.
+Aucun des deux ne constitue une action stratégique. Un `BOS` ou un `CHOCH` reste descriptif et n'est jamais un signal automatique.
 
 ## 14. Performance et cache
 
@@ -180,7 +180,7 @@ La Market Structure est enrichie **après** la constitution déterministe de la 
 
 Batch 41 intégré : `market-attention-radar-v4`.
 
-Batch 42 proposé : `market-attention-radar-v5` pour les snapshots réellement enrichis de `market_structure`. Les routes acceptent et sérialisent aussi un service v4 injecté afin de ne pas casser les tests/intégrations Batch 41.
+Batch 42 intégré : `market-attention-radar-v5` pour les snapshots réellement enrichis de `market_structure`. Les routes acceptent et sérialisent aussi un service v4 injecté afin de ne pas casser les tests/intégrations Batch 41.
 
 `informative_only=True` reste validé côté backend.
 
@@ -191,6 +191,8 @@ La couche v5 hérite de la couche v4. Elle ne crée ni second catalogue, ni seco
 ## 17. Microstructure
 
 La microstructure reste **SPOT uniquement**. En scope `PERPETUAL`, aucun sous-scan microstructure n'est lancé et les marchés dérivés restent `NOT_APPLICABLE`. En scope `ALL`, seuls les éléments SPOT peuvent être enrichis par `/Depth` et `/Trades`.
+
+L'observation de marchés `PERPETUAL` par le Radar ne modifie pas l'invariant d'exécution : le projet reste SPOT, sans short, levier, margin, future ou perpetual en exécution LIVE.
 
 ## 18. Hors périmètre du Batch 42
 

@@ -11,13 +11,15 @@ Market Attention Radar reste strictement observationnel et ne prend aucune déci
 ## Référence courante
 
 ```text
-HEAD GitHub audité : e65940b4c773f0de329648f5f3bb1f8960faa696
-Commit              : feat: add market attention scope and trend direction
+HEAD GitHub audité : 003dae8dbfdc052edbad5bfde2c23fa24852eace
+Commit              : feat: add multi-timeframe market structure
 Batch 41            : intégré
-Batch 42            : patch proposé, non intégré
+Batch 42            : intégré
 ```
 
-## Changelog — 2026-10-01 — Batch 42 Market Structure multi-timeframe
+## Changelog — 2026-10-01 — Batch 42 Market Structure multi-timeframe — intégré
+
+Commit intégré : `003dae8dbfdc052edbad5bfde2c23fa24852eace`.
 
 - ajout de `MarketStructureAnalyzer`, déterministe et causal ;
 - politique bornée : 100 candles par timeframe par défaut, pivots `2 + 2`, tolérance 2 bps ;
@@ -27,9 +29,10 @@ Batch 42            : patch proposé, non intégré
 - événements descriptifs `BOS_UP / BOS_DOWN / CHOCH_UP / CHOCH_DOWN` ;
 - synthèse multi-timeframe avec état global `MIXED` lorsque les structures divergent ;
 - enrichissement uniquement après constitution de la shortlist scope-éligible ;
-- contrat public proposé `market-attention-radar-v5` avec compatibilité v4 des routes ;
+- contrat public intégré `market-attention-radar-v5` avec compatibilité v4 des routes ;
 - cockpit enrichi sans masquer les métriques Batch 40/41 ;
-- aucune modification Agent/Risk/Broker et aucune exécution dérivée de la structure.
+- aucune modification Agent/Risk/Broker et aucune exécution dérivée de la structure ;
+- validations locales avant push : backend `pytest -q` PASS complet, frontend `pnpm test` 54/54 PASS, `pnpm typecheck` PASS.
 
 ## Changelog — 2026-10-01 — Batch 41 Scope et tendance — intégré
 
@@ -80,25 +83,25 @@ En scope `PERPETUAL`, aucun sous-scan `/Depth` ou `/Trades` n'est déclenché et
 
 ## ADR-309 — Market Structure basée sur les timeframes Kraken natifs
 
-**PROPOSÉ — Batch 42.**
+**ADOPTÉ — Batch 42 intégré.**
 
 La structure H1/H4 ne doit pas être reconstruite arbitrairement depuis les candles 5m. `StructuredMarketAttentionRadar` demande chaque timeframe directement à `CandleStreamService.history_as_of(CandleKey(...))`, ce qui conserve la causalité et le cache canonique.
 
 ## ADR-310 — Confirmation causale des pivots
 
-**PROPOSÉ — Batch 42.**
+**ADOPTÉ — Batch 42 intégré.**
 
 Un swing n'est confirmé qu'après clôture de `pivot_right_bars` candles postérieures. Les candles futures/non finalisées sont exclues, et `confirmed_at` enregistre la clôture qui rend le pivot connaissable. Les quasi-égalités ne sont pas forcées en HH/LH/HL/LL.
 
 ## ADR-311 — Structure enrichie après shortlist
 
-**PROPOSÉ — Batch 42.**
+**ADOPTÉ — Batch 42 intégré.**
 
 La structure n'est pas utilisée pour décider quels marchés entrent dans la shortlist. Elle enrichit uniquement les candidats déjà déterminés par le Radar v4. Cela borne le coût réseau et empêche la Market Structure de devenir silencieusement un ranking stratégique.
 
 ## ADR-312 — Contrat Radar v5 compatible v4
 
-**PROPOSÉ — Batch 42.**
+**ADOPTÉ — Batch 42 intégré.**
 
 Les snapshots enrichis exposent `market-attention-radar-v5` et `market_structure`. Les routes continuent d'accepter explicitement les objets v4 afin de conserver la compatibilité des tests/services Batch 41 injectés.
 

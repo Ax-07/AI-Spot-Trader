@@ -5,11 +5,11 @@
 ```text
 Repository            : Ax-07/AI-Spot-Trader
 Branche               : main
-HEAD GitHub audité    : e65940b4c773f0de329648f5f3bb1f8960faa696
+HEAD GitHub audité    : 003dae8dbfdc052edbad5bfde2c23fa24852eace
 Batch 41              : intégré
-Batch 42              : patch proposé, non intégré
-Contrat Radar intégré : market-attention-radar-v4
-Contrat Radar proposé : market-attention-radar-v5
+Batch 42              : intégré
+Contrat Radar v4      : intégré — market-attention-radar-v4
+Contrat Radar v5      : intégré — market-attention-radar-v5
 ```
 
 ## 2. Architecture générale
@@ -170,7 +170,7 @@ Les événements sont descriptifs :
 - transition issue d'une géométrie haussière vers `LH + LL` => `CHOCH_DOWN` ;
 - transition issue d'une géométrie baissière vers `HH + HL` => `CHOCH_UP`.
 
-Ils n'ont aucune autorité stratégique.
+Ils n'ont aucune autorité stratégique et ne constituent jamais un signal de trading automatique.
 
 ## 12. Synthèse multi-timeframe
 
@@ -224,3 +224,5 @@ La section OHLCV nomme explicitement `Tendance récente` pour éviter la confusi
 ## 16. Isolation
 
 Aucun module Batch 42 Market Structure n'importe Agent, Risk, Broker, OpenAI ou outil Web. Le Radar reste read-only vis-à-vis de Kraken et `informative_only=True`.
+
+Le Radar peut observer `SPOT / PERPETUAL / ALL`, mais cette capacité d'observation ne constitue pas une autorisation d'exécuter des trades PERPETUAL. L'exécution du projet reste SPOT.
