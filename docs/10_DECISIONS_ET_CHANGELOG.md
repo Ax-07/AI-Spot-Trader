@@ -11,16 +11,20 @@ Market Attention Radar reste strictement observationnel et ne prend aucune déci
 ## Référence courante
 
 ```text
-HEAD GitHub audité : df1cc36633d4c94dcc94fd31d202b1dac94a5983
-Commit              : docs: close batch 43.2
+Dernier commit fonctionnel : c262d54
+Commit                     : feat: add perpetual liquidity and radar coverage diagnostics
 Batch 42            : intégré
 Batch 43            : intégré
 Batch 43.1          : intégré
 Batch 43.2          : intégré
-Batch 44            : patch proposé, non intégré
+Batch 44            : intégré fonctionnellement via c262d54
 ```
 
-## Changelog — 2026-10-03 — Batch 44 liquidité PERPETUAL et couverture — patch proposé
+## Changelog — 2026-10-03 — Batch 44 liquidité PERPETUAL et couverture — intégré
+
+Commit fonctionnel intégré : `c262d54` (`feat: add perpetual liquidity and radar coverage diagnostics`).
+
+Validation locale avant intégration : backend `pytest -q` PASS, frontend `pnpm typecheck` PASS, frontend `pnpm test` PASS — 59/59, `git diff --check` PASS avec uniquement les avertissements LF/CRLF attendus sous Windows.
 
 - audit confirmé : le calcul canonique de liquidité s'appuie sur les notionnels SPOT des horizons et renvoie donc `UNKNOWN` pour les PERP ;
 - le scoring canonique donne déjà un bonus aux régimes `HIGH / VERY_HIGH`, d'où une asymétrie SPOT/PERP lorsque la liquidité PERP reste inconnue ;
@@ -38,7 +42,7 @@ Batch 44            : patch proposé, non intégré
 
 ## ADR-323 — La liquidité PERPETUAL réutilise uniquement le `volumeQuote` USD validé
 
-**PROPOSÉ — Batch 44.**
+**ADOPTÉ — Batch 44.**
 
 La référence de liquidité doit rester cohérente avec la famille de marché :
 
@@ -56,7 +60,7 @@ Le scoring général n'est pas modifié. Après attribution d'un régime PERP ex
 
 ## ADR-324 — La couverture du Radar est observée, pas auto-corrigée
 
-**PROPOSÉ — Batch 44.**
+**ADOPTÉ — Batch 44.**
 
 Le Radar expose la capacité théorique de sa configuration à revisiter l'univers avant expiration du cache au lieu d'augmenter automatiquement ses limites réseau.
 

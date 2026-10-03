@@ -3,8 +3,8 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub réel       : df1cc36633d4c94dcc94fd31d202b1dac94a5983
-Commit                 : docs: close batch 43.2
+Dernier commit fonctionnel : c262d54
+Commit                     : feat: add perpetual liquidity and radar coverage diagnostics
 Batch 39               : intégré
 Batch 40               : intégré
 Batch 41               : intégré
@@ -12,7 +12,7 @@ Batch 42               : intégré
 Batch 43               : intégré
 Batch 43.1             : intégré
 Batch 43.2             : intégré
-Batch 44               : patch proposé, non intégré
+Batch 44               : intégré fonctionnellement via c262d54
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -29,11 +29,11 @@ AI Spot Trader conserve un seul Agent IA stratégique, Kraken comme exchange ini
 4. streaming/caches marché : technique et déterministe ;
 5. Market Attention Radar : observation déterministe avec cadence propre, données marché Kraken et, depuis le Batch 43 intégré, métadonnées de capitalisation externes read-only mises en cache.
 
-## État intégré jusqu'au Batch 43.2
+## État intégré jusqu'au Batch 44
 
 Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et des caractéristiques descriptives. Le Batch 39 a supprimé la couche Web/IA du Radar. Le Batch 40 a ajouté la microstructure Kraken SPOT et le contrat Radar v3. Le Batch 41 a ajouté le scope `SPOT / PERPETUAL / ALL`, les directions récentes par horizon et le contrat Radar v4. Le Batch 42 a ajouté la Market Structure multi-timeframe et le contrat Radar v5. Le Batch 43 ajoute les filtres runtime de volume 24h et de capitalisation réelle ainsi que le contrat Radar v6. Le Batch 43.1 corrige la fenêtre causale SPOT/USD et ajoute les diagnostics typés du filtre volume. Le Batch 43.2 rend le filtre volume opérationnel pour les linear perpetuals USD via le turnover quote public Kraken Futures.
 
-Le HEAD GitHub actuel `df1cc36633d4c94dcc94fd31d202b1dac94a5983` clôt la documentation du Batch 43.2. Le dernier commit fonctionnel du Radar est `25dcb5c069a519af8b92ae386f3d21d0aa4db9f3`.
+Le dernier commit fonctionnel du Radar pour le Batch 44 est `c262d54` (`feat: add perpetual liquidity and radar coverage diagnostics`). Une éventuelle clôture documentaire ultérieure ne change pas cette référence fonctionnelle.
 
 ## Batch 42 — Market Structure multi-timeframe
 
@@ -111,9 +111,9 @@ Voir `docs/43_2_CORRECTIF_RADAR_PERPETUAL.md`.
 
 ## Batch 44 — liquidité PERPETUAL et couverture du Radar
 
-**État : patch proposé, non intégré.**
+**État : intégré fonctionnellement via `c262d54`.**
 
-Objectifs du patch :
+Éléments intégrés :
 
 - conserver intégralement la référence de liquidité canonique SPOT/USD ;
 - pour les PERP linear/USD, réutiliser uniquement le `volumeQuote` 24h USD validé par le Batch 43.2 comme `liquidity_reference_usd` ;
@@ -139,7 +139,15 @@ frontend pnpm test      : PASS — 57/57
 git diff --check        : PASS
 ```
 
-Pour le Batch 44, la suite complète doit être rejouée localement avant intégration.
+Batch 44 validé localement avant intégration :
+
+```text
+backend pytest -q       : PASS
+frontend pnpm typecheck : PASS
+frontend pnpm test      : PASS — 59/59
+git diff --check        : PASS (avertissements LF/CRLF uniquement)
+git status --short      : propre après commit fonctionnel
+```
 
 ## Périmètres ultérieurs possibles
 

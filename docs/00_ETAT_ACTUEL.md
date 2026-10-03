@@ -1,17 +1,17 @@
 # 00 — État actuel
 
-## Référence GitHub intégrée
+## Référence fonctionnelle intégrée
 
 ```text
-Repository : Ax-07/AI-Spot-Trader
-Branche    : main
-HEAD réel  : df1cc36633d4c94dcc94fd31d202b1dac94a5983
-Commit     : docs: close batch 43.2
+Repository                : Ax-07/AI-Spot-Trader
+Branche                   : main
+Dernier commit fonctionnel: c262d54
+Commit                    : feat: add perpetual liquidity and radar coverage diagnostics
 ```
 
-Le dernier commit fonctionnel du Radar reste `25dcb5c069a519af8b92ae386f3d21d0aa4db9f3` (`fix: repair perpetual market attention radar`). Le commit `df1cc366` clôt uniquement la documentation du Batch 43.2.
+Le Batch 44 est validé localement et intégré fonctionnellement via `c262d54`. Une clôture documentaire distincte peut suivre sans modifier ce SHA fonctionnel de référence.
 
-## État intégré — Batch 43.2
+## État intégré — Batch 44
 
 Le Market Attention Radar reste `market-attention-radar-v6`, strictement informatif, déterministe, causal et read-only.
 
@@ -26,7 +26,7 @@ Le Market Attention Radar reste `market-attention-radar-v6`, strictement informa
 - diagnostics explicites du filtre volume ;
 - aucune capacité d'exécution PERP, aucune modification Agent / Risk Engine / Broker.
 
-## Batch 44 — patch local proposé
+## Batch 44 — intégré fonctionnellement
 
 Le Batch 44 corrige deux limites du Radar v6 sans modifier son rôle :
 
@@ -48,4 +48,12 @@ frontend pnpm test      : PASS — 57/57 local avant intégration
 git diff --check        : PASS local avant intégration
 ```
 
-Batch 44 : patch non intégré ; exécuter les validations locales indiquées dans le document du batch avant commit/push.
+Batch 44 validé localement avant intégration :
+
+```text
+backend pytest -q       : PASS
+frontend pnpm typecheck : PASS
+frontend pnpm test      : PASS — 59/59
+git diff --check        : PASS (avertissements LF/CRLF uniquement)
+git status --short      : propre après commit fonctionnel
+```

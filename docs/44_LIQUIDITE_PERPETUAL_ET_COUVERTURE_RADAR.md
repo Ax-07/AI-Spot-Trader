@@ -2,14 +2,14 @@
 
 ## Statut
 
-Patch préparé à partir du HEAD GitHub `main` audité :
+Batch validé localement puis intégré fonctionnellement via :
 
 ```text
-df1cc36633d4c94dcc94fd31d202b1dac94a5983
-docs: close batch 43.2
+c262d54
+feat: add perpetual liquidity and radar coverage diagnostics
 ```
 
-Le patch n'est pas intégré à GitHub au moment de cette livraison.
+Le développement avait été préparé à partir de `df1cc366` (`docs: close batch 43.2`). Une clôture documentaire distincte peut suivre sans modifier la référence fonctionnelle `c262d54`.
 
 ## Objectif
 
@@ -159,21 +159,18 @@ Le test frontend `market-attention.test.mjs` couvre aussi le formatage et les me
 
 Les tests historiques des Batches 43/43.1/43.2 restent la couverture de non-régression des filtres volume/capitalisation, du fail-closed et de la causalité SPOT.
 
-## Validation à effectuer avant intégration
+## Validation exécutée avant intégration
 
-Depuis la racine du repository :
+Validations locales exécutées :
 
-```powershell
-cd E:\AI-Spot-Trader\backend
-pytest -q
-
-cd E:\AI-Spot-Trader\frontend
-pnpm typecheck
-pnpm test
-
-cd E:\AI-Spot-Trader
-git diff --check
-git status --short
+```text
+backend pytest -q       : PASS
+frontend pnpm typecheck : PASS
+frontend pnpm test      : PASS — 59/59
+git diff --check        : PASS (avertissements LF/CRLF uniquement)
+git status --short      : propre après commit fonctionnel
 ```
 
-Un smoke read-only Kraken peut compléter la validation pour observer des PERP/USD réels, mais aucune donnée LIVE privée n'est requise pour valider ce batch.
+Les warnings Python observés concernent des dépréciations de dépendances `starlette/httpx/anyio` et ne constituent pas un échec du Batch 44. Les warnings Node sur le type de module n'ont pas empêché les 59 tests frontend de réussir.
+
+Un smoke read-only Kraken peut compléter l'observation réelle de PERP/USD, sans être requis pour la clôture du batch.
