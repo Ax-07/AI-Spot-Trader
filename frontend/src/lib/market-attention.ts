@@ -4,6 +4,12 @@ export type ActivityDataQuality = "COMPLETE" | "NO_TRADE_GAPS" | "INSUFFICIENT_H
 export type LiquidityRegime = "UNKNOWN" | "MICRO" | "LOW" | "MEDIUM" | "HIGH" | "VERY_HIGH";
 export type MarketScope = "SPOT" | "PERPETUAL" | "ALL";
 export type MarketCapCategory = "UNKNOWN" | "MICRO" | "SMALL" | "MID" | "LARGE";
+export type MarketAttentionCoverageStatus =
+  | "NO_MARKETS"
+  | "COVERED"
+  | "ROTATING"
+  | "TTL_EXPIRED"
+  | "CONFIGURATION_TOO_SLOW";
 export type TrendDirection = "UP" | "DOWN" | "NEUTRAL" | "MIXED" | "UNKNOWN";
 export type MarketCharacteristic =
   | "TRENDING"
@@ -201,6 +207,21 @@ export type Volume24hStatusCounts = {
   UNKNOWN_TECHNICAL_ERROR: number;
 };
 
+export type MarketAttentionCoverageDiagnostics = {
+  eligible_market_count: number;
+  fresh_market_count: number;
+  expired_market_count: number;
+  unseen_market_count: number;
+  coverage_ratio: number | null;
+  effective_scan_limit: number;
+  estimated_refreshes_per_full_rotation: number;
+  estimated_full_rotation_seconds: number;
+  activity_ttl_seconds: number;
+  oldest_activity_age_seconds: number | null;
+  rotation_within_activity_ttl: boolean;
+  status: MarketAttentionCoverageStatus;
+};
+
 export type SubthresholdActivitySnapshot = {
   market: AttentionMarket;
   peak_volume_ratio: string;
@@ -250,6 +271,7 @@ export type MarketAttentionOverview = {
   market_cap_metadata_status?: RadarStatus;
   market_cap_metadata_provider?: string | null;
   volume_24h_status_counts?: Volume24hStatusCounts;
+  coverage?: MarketAttentionCoverageDiagnostics;
   subthreshold_activity: SubthresholdActivitySnapshot[];
   shortlist: MarketAttentionSnapshot[];
   error_type: string | null;
@@ -393,6 +415,37 @@ export function formatUsdCompact(
   if (absolute >= 1_000) return `${sign}${(parsed / 1_000).toFixed(1)} k$`;
   if (absolute >= 10) return `${sign}${Math.round(parsed).toLocaleString("fr-FR")} $`;
   return `${sign}${parsed.toFixed(2)} $`;
+}
+
+export function formatDurationSeconds(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  if (value < 60) return `${Math.round(value)} s`;
+  const minutes = value / 60;
+  if (minutes < 60) return `${minutes.toFixed(minutes >= 10 ? 0 : 1)} min`;
+  const hours = minutes / 60;
+  return `${hours.toFixed(hours >= 10 ? 0 : 1)} h`;
+}
+
+export function formatCoverageRatio(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  return `${(value * 100).toFixed(1)} %`;
+}
+
+export function marketAttentionCoverageMessage(
+  coverage: MarketAttentionCoverageDiagnostics | null | undefined,
+): string {
+  if (!coverage) return "Diagnostic de couverture non exposé par cette version du Radar.";
+  if (coverage.status === "NO_MARKETS") return "Aucun marché éligible dans le scope courant.";
+  if (coverage.status === "CONFIGURATION_TOO_SLOW") {
+    return `Rotation théorique ${formatDurationSeconds(coverage.estimated_full_rotation_seconds)} > TTL ${formatDurationSeconds(coverage.activity_ttl_seconds)} : la configuration ne peut pas maintenir toute la population fraîche.`;
+  }
+  if (coverage.status === "TTL_EXPIRED") {
+    return `${coverage.expired_market_count} marché${coverage.expired_market_count > 1 ? "s" : ""} sorti${coverage.expired_market_count > 1 ? "s" : ""} du TTL d’activité.`;
+  }
+  if (coverage.status === "ROTATING") {
+    return `Rotation en cours : ${coverage.fresh_market_count}/${coverage.eligible_market_count} marchés frais.`;
+  }
+  return `Univers couvert : ${coverage.fresh_market_count}/${coverage.eligible_market_count} marchés frais.`;
 }
 
 export function marketAttentionStatusMessage(overview: MarketAttentionOverview): string {

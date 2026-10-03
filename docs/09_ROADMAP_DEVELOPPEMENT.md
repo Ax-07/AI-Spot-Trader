@@ -3,8 +3,8 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub réel       : 25dcb5c069a519af8b92ae386f3d21d0aa4db9f3
-Commit                 : fix: repair perpetual market attention radar
+HEAD GitHub réel       : df1cc36633d4c94dcc94fd31d202b1dac94a5983
+Commit                 : docs: close batch 43.2
 Batch 39               : intégré
 Batch 40               : intégré
 Batch 41               : intégré
@@ -12,6 +12,7 @@ Batch 42               : intégré
 Batch 43               : intégré
 Batch 43.1             : intégré
 Batch 43.2             : intégré
+Batch 44               : patch proposé, non intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -32,7 +33,7 @@ AI Spot Trader conserve un seul Agent IA stratégique, Kraken comme exchange ini
 
 Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et des caractéristiques descriptives. Le Batch 39 a supprimé la couche Web/IA du Radar. Le Batch 40 a ajouté la microstructure Kraken SPOT et le contrat Radar v3. Le Batch 41 a ajouté le scope `SPOT / PERPETUAL / ALL`, les directions récentes par horizon et le contrat Radar v4. Le Batch 42 a ajouté la Market Structure multi-timeframe et le contrat Radar v5. Le Batch 43 ajoute les filtres runtime de volume 24h et de capitalisation réelle ainsi que le contrat Radar v6. Le Batch 43.1 corrige la fenêtre causale SPOT/USD et ajoute les diagnostics typés du filtre volume. Le Batch 43.2 rend le filtre volume opérationnel pour les linear perpetuals USD via le turnover quote public Kraken Futures.
 
-Le HEAD GitHub actuel `25dcb5c069a519af8b92ae386f3d21d0aa4db9f3` intègre le Batch 43.2 (`fix: repair perpetual market attention radar`).
+Le HEAD GitHub actuel `df1cc36633d4c94dcc94fd31d202b1dac94a5983` clôt la documentation du Batch 43.2. Le dernier commit fonctionnel du Radar est `25dcb5c069a519af8b92ae386f3d21d0aa4db9f3`.
 
 ## Batch 42 — Market Structure multi-timeframe
 
@@ -104,13 +105,32 @@ Le correctif :
 - distinction entre panne du Radar PERP et marché valide sans activité assez inhabituelle ;
 - aucune modification Agent, Risk Engine, Broker ni des invariants d'exécution SPOT/PAPER.
 
-Commit intégré : `25dcb5c069a519af8b92ae386f3d21d0aa4db9f3` (`fix: repair perpetual market attention radar`).
+Commit fonctionnel intégré : `25dcb5c069a519af8b92ae386f3d21d0aa4db9f3` (`fix: repair perpetual market attention radar`).
 
 Voir `docs/43_2_CORRECTIF_RADAR_PERPETUAL.md`.
 
+## Batch 44 — liquidité PERPETUAL et couverture du Radar
+
+**État : patch proposé, non intégré.**
+
+Objectifs du patch :
+
+- conserver intégralement la référence de liquidité canonique SPOT/USD ;
+- pour les PERP linear/USD, réutiliser uniquement le `volumeQuote` 24h USD validé par le Batch 43.2 comme `liquidity_reference_usd` ;
+- calculer les percentiles PERP dans une population PERP distincte de la population SPOT ;
+- conserver `UNKNOWN` lorsque le `volumeQuote` fiable n'existe pas ;
+- recalculer le niveau d'intérêt avec le scoring canonique existant après attribution du régime de liquidité, sans modifier les seuils ;
+- exposer une observabilité déterministe de couverture/rotation : éligibles, frais, expirés, jamais vus, ratio de couverture, scan effectif, nombre estimé de refreshs par rotation, durée de rotation, TTL, âge de la plus vieille activité et invariant rotation/TTL ;
+- conserver les curseurs SPOT/PERP et la répartition proportionnelle canonique du `scan_limit` ;
+- afficher ces diagnostics dans le cockpit sans ajouter de capacité d'exécution.
+
+Le diagnostic théorique utilise l'allocation réellement calculée par le Radar pour chaque famille de marché. Il n'augmente ni `scan_limit`, ni la concurrence, ni la cadence réseau.
+
+Voir `docs/44_LIQUIDITE_PERPETUAL_ET_COUVERTURE_RADAR.md`.
+
 ## Validation connue
 
-Validations exécutées localement avant le push du Batch 43.2 :
+Batch 43.2 intégré :
 
 ```text
 backend pytest -q       : PASS
@@ -119,11 +139,13 @@ frontend pnpm test      : PASS — 57/57
 git diff --check        : PASS
 ```
 
-Le Batch 43.2 a ensuite été intégré via `25dcb5c`. Aucune relance des suites backend/frontend n'est requise pour une clôture strictement documentaire sauf raison concrète.
+Pour le Batch 44, la suite complète doit être rejouée localement avant intégration.
 
 ## Périmètres ultérieurs possibles
 
 - filtres explicites par structure/tendance dans un batch séparé ;
+- baseline statistique adaptative ;
+- Open Interest, Funding, Liquidations et CVD ;
 - conversion multi-devise du volume uniquement derrière une source FX explicite et testée ;
 - extension future de la microstructure aux dérivés uniquement si un besoin est démontré ;
 - éventuelle utilisation explicite des données Radar comme contexte Agent après décision architecturale ;

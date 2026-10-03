@@ -11,13 +11,85 @@ Market Attention Radar reste strictement observationnel et ne prend aucune déci
 ## Référence courante
 
 ```text
-HEAD GitHub audité : 25dcb5c069a519af8b92ae386f3d21d0aa4db9f3
-Commit              : fix: repair perpetual market attention radar
+HEAD GitHub audité : df1cc36633d4c94dcc94fd31d202b1dac94a5983
+Commit              : docs: close batch 43.2
 Batch 42            : intégré
 Batch 43            : intégré
 Batch 43.1          : intégré
 Batch 43.2          : intégré
+Batch 44            : patch proposé, non intégré
 ```
+
+## Changelog — 2026-10-03 — Batch 44 liquidité PERPETUAL et couverture — patch proposé
+
+- audit confirmé : le calcul canonique de liquidité s'appuie sur les notionnels SPOT des horizons et renvoie donc `UNKNOWN` pour les PERP ;
+- le scoring canonique donne déjà un bonus aux régimes `HIGH / VERY_HIGH`, d'où une asymétrie SPOT/PERP lorsque la liquidité PERP reste inconnue ;
+- réutilisation du `volumeQuote` 24h USD validé du Batch 43.2 comme référence de liquidité uniquement pour les linear perpetuals/USD ;
+- aucune notionnalisation PERP dérivée de `candle.volume * close` ;
+- percentiles de liquidité PERP calculés uniquement sur la population PERP mesurable ;
+- population SPOT conservée dans le mécanisme canonique existant et séparée de la population PERP ;
+- `UNKNOWN` conservé lorsque `volumeQuote` est absent, invalide ou techniquement indisponible ;
+- aucun seuil de liquidité ou d'intérêt modifié ; le niveau d'intérêt est recalculé par la fonction canonique après correction du régime PERP ;
+- audit confirmé : la rotation possède déjà des curseurs distincts SPOT/PERP et une allocation proportionnelle déterministe du `scan_limit` ;
+- ajout au contrat v6 d'un diagnostic de couverture distinguant univers couvert, rotation en cours, activité sortie du TTL et configuration théoriquement trop lente ;
+- estimation de rotation basée sur l'allocation réelle du scan par famille, sans modification silencieuse de `refresh_seconds`, `scan_limit`, TTL ou concurrence ;
+- cockpit enrichi avec un bloc de couverture/rotation ;
+- aucune modification Agent/Risk/Broker et aucune capacité d'exécution PERP ajoutée.
+
+## ADR-323 — La liquidité PERPETUAL réutilise uniquement le `volumeQuote` USD validé
+
+**PROPOSÉ — Batch 44.**
+
+La référence de liquidité doit rester cohérente avec la famille de marché :
+
+```text
+SPOT/USD
+=> référence canonique issue des notionnels OHLCV causaux existants
+
+PERPETUAL linear/USD
+=> volumeQuote 24h Kraken Futures déjà validé
+```
+
+Le Radar ne convertit pas une quote non USD et ne déduit pas le notionnel PERP des chart candles. Les percentiles SPOT et PERP restent séparés. Une donnée non démontrée produit `LiquidityRegime.UNKNOWN`.
+
+Le scoring général n'est pas modifié. Après attribution d'un régime PERP exploitable, la fonction canonique de calcul de l'intérêt est simplement réappliquée pour que le même régime ait le même effet descriptif dans les deux familles.
+
+## ADR-324 — La couverture du Radar est observée, pas auto-corrigée
+
+**PROPOSÉ — Batch 44.**
+
+Le Radar expose la capacité théorique de sa configuration à revisiter l'univers avant expiration du cache au lieu d'augmenter automatiquement ses limites réseau.
+
+Le diagnostic v6 expose notamment :
+
+```text
+eligible_market_count
+fresh_market_count
+expired_market_count
+unseen_market_count
+coverage_ratio
+effective_scan_limit
+estimated_refreshes_per_full_rotation
+estimated_full_rotation_seconds
+activity_ttl_seconds
+oldest_activity_age_seconds
+rotation_within_activity_ttl
+status
+```
+
+L'estimation de rotation reprend `_scan_allocations()` et les populations SPOT/PERP réellement éligibles au scan après scope et filtre de capitalisation. Le filtre volume reste post-OHLCV pour préserver le pipeline canonique et la symétrie avec le SPOT.
+
+Statuts :
+
+```text
+NO_MARKETS
+COVERED
+ROTATING
+TTL_EXPIRED
+CONFIGURATION_TOO_SLOW
+```
+
+Aucune valeur de configuration n'est modifiée automatiquement.
 
 ## Changelog — 2026-10-03 — Batch 43.2 correctif Radar PERPETUAL — intégré
 
@@ -210,6 +282,8 @@ Commit fonctionnel : `003dae8dbfdc052edbad5bfde2c23fa24852eace`.
 
 - utilisation du Radar ou de la Market Structure comme contexte de l'Agent stratégique ;
 - filtre de shortlist par direction ou structure ;
+- baseline statistique adaptative ;
+- Open Interest, Funding, Liquidations et CVD ;
 - conversion FX implicite pour le filtre de volume ;
 - réaction stratégique intra-bougie ;
 - streaming WebSocket L2/trades ;

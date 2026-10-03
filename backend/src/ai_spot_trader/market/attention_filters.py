@@ -5,6 +5,7 @@ from collections import deque
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from math import ceil
 from typing import Protocol
 
 from pydantic import Field, model_validator
@@ -20,6 +21,7 @@ from ai_spot_trader.market.attention import (
     ActivityStateCounts,
     ActivityStatusCounts,
     AttentionModel,
+    LiquidityRegime,
     LiquidityRegimeCounts,
     MarketActivitySnapshot,
     MarketAttentionPolicy,
@@ -28,6 +30,9 @@ from ai_spot_trader.market.attention import (
     RadarInterestLevel,
     RadarStatus,
     SubthresholdActivitySnapshot,
+    _liquidity_regime,
+    _scan_allocations,
+    _with_market_structure,
 )
 from ai_spot_trader.market.attention_microstructure import (
     MicrostructureQualityCounts,
@@ -93,6 +98,40 @@ class Volume24hStatusCounts(AttentionModel):
     UNKNOWN_MISSING_QUOTE_VOLUME: int = Field(default=0, ge=0)
     UNKNOWN_INSUFFICIENT_HISTORY: int = Field(default=0, ge=0)
     UNKNOWN_TECHNICAL_ERROR: int = Field(default=0, ge=0)
+
+
+class MarketAttentionCoverageStatus(StrEnum):
+    NO_MARKETS = "NO_MARKETS"
+    COVERED = "COVERED"
+    ROTATING = "ROTATING"
+    TTL_EXPIRED = "TTL_EXPIRED"
+    CONFIGURATION_TOO_SLOW = "CONFIGURATION_TOO_SLOW"
+
+
+class MarketAttentionCoverageDiagnostics(AttentionModel):
+    eligible_market_count: int = Field(default=0, ge=0)
+    fresh_market_count: int = Field(default=0, ge=0)
+    expired_market_count: int = Field(default=0, ge=0)
+    unseen_market_count: int = Field(default=0, ge=0)
+    coverage_ratio: float | None = Field(default=None, ge=0, le=1)
+    effective_scan_limit: int = Field(default=0, ge=0)
+    estimated_refreshes_per_full_rotation: int = Field(default=0, ge=0)
+    estimated_full_rotation_seconds: float = Field(default=0.0, ge=0)
+    activity_ttl_seconds: float = Field(default=0.0, ge=0)
+    oldest_activity_age_seconds: float | None = Field(default=None, ge=0)
+    rotation_within_activity_ttl: bool = True
+    status: MarketAttentionCoverageStatus = MarketAttentionCoverageStatus.NO_MARKETS
+
+    @model_validator(mode="after")
+    def validate_diagnostics(self) -> "MarketAttentionCoverageDiagnostics":
+        if (
+            self.fresh_market_count
+            + self.expired_market_count
+            + self.unseen_market_count
+            != self.eligible_market_count
+        ):
+            raise ValueError("coverage market counts must partition the eligible population")
+        return self
 
 
 class MarketMetadataSnapshot(AttentionModel):
@@ -220,6 +259,9 @@ class MarketAttentionOverviewV6(AttentionModel):
     volume_24h_status_counts: Volume24hStatusCounts = Field(
         default_factory=Volume24hStatusCounts
     )
+    coverage: MarketAttentionCoverageDiagnostics = Field(
+        default_factory=MarketAttentionCoverageDiagnostics
+    )
     subthreshold_activity: tuple[SubthresholdActivitySnapshot, ...] = ()
     shortlist: tuple[MarketAttentionSnapshotV6, ...] = ()
     error_type: str | None = None
@@ -246,6 +288,7 @@ class MarketAttentionOverviewV6(AttentionModel):
         metadata_status: RadarStatus,
         metadata_provider: str | None,
         volume_status_counts: Volume24hStatusCounts,
+        coverage: MarketAttentionCoverageDiagnostics,
     ) -> "MarketAttentionOverviewV6":
         payload = value.model_dump(
             exclude={"protocol_version", "shortlist", "candidate_market_count"}
@@ -258,6 +301,7 @@ class MarketAttentionOverviewV6(AttentionModel):
             market_cap_metadata_status=metadata_status,
             market_cap_metadata_provider=metadata_provider,
             volume_24h_status_counts=volume_status_counts,
+            coverage=coverage,
         )
 
 
@@ -322,8 +366,109 @@ def _volume_status_counts(
     return Volume24hStatusCounts(**values)
 
 
+def _classify_perpetual_liquidity(
+    activities: tuple[MarketActivitySnapshot, ...],
+    measurements: dict[ExecutableMarket, Volume24hMeasurement],
+) -> tuple[MarketActivitySnapshot, ...]:
+    references = {
+        snapshot.market: measurement.value_usd
+        for snapshot in activities
+        if snapshot.market.market_type is MarketType.PERPETUAL
+        and (measurement := measurements.get(snapshot.market)) is not None
+        and measurement.status is Volume24hStatus.AVAILABLE
+        and measurement.value_usd is not None
+    }
+    population = tuple(sorted(references.values()))
+
+    classified: list[MarketActivitySnapshot] = []
+    for snapshot in activities:
+        if snapshot.market.market_type is not MarketType.PERPETUAL:
+            classified.append(snapshot)
+            continue
+        reference = references.get(snapshot.market)
+        with_liquidity = snapshot.model_copy(
+            update={
+                "liquidity_reference_usd": reference,
+                "liquidity_regime": _liquidity_regime(reference, population),
+            }
+        )
+        classified.append(_with_market_structure(with_liquidity))
+    return tuple(classified)
+
+
+def _coverage_diagnostics(
+    *,
+    eligible_markets: tuple[ExecutableMarket, ...],
+    activity_cache: dict[ExecutableMarket, MarketActivitySnapshot],
+    now: datetime,
+    policy: MarketAttentionPolicy,
+) -> MarketAttentionCoverageDiagnostics:
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("coverage now must be timezone-aware")
+    now = now.astimezone(UTC)
+    ttl_seconds = float(policy.activity_ttl_seconds)
+
+    fresh_count = 0
+    expired_count = 0
+    unseen_count = 0
+    ages: list[float] = []
+    for market in eligible_markets:
+        snapshot = activity_cache.get(market)
+        if snapshot is None:
+            unseen_count += 1
+            continue
+        age = max(0.0, (now - snapshot.observed_at.astimezone(UTC)).total_seconds())
+        ages.append(age)
+        if age <= ttl_seconds:
+            fresh_count += 1
+        else:
+            expired_count += 1
+
+    populations = {
+        market_type: sum(market.market_type is market_type for market in eligible_markets)
+        for market_type in (MarketType.SPOT, MarketType.PERPETUAL)
+    }
+    allocations = _scan_allocations(populations, limit=policy.scan_limit)
+    refreshes_per_family = tuple(
+        ceil(populations[market_type] / allocations[market_type])
+        for market_type in (MarketType.SPOT, MarketType.PERPETUAL)
+        if populations[market_type] > 0 and allocations[market_type] > 0
+    )
+    refreshes = max(refreshes_per_family, default=0)
+    estimated_seconds = float(refreshes) * float(policy.refresh_seconds)
+    within_ttl = refreshes == 0 or estimated_seconds <= ttl_seconds
+    eligible_count = len(eligible_markets)
+    ratio = fresh_count / eligible_count if eligible_count else None
+
+    if eligible_count == 0:
+        status = MarketAttentionCoverageStatus.NO_MARKETS
+    elif not within_ttl:
+        status = MarketAttentionCoverageStatus.CONFIGURATION_TOO_SLOW
+    elif expired_count > 0:
+        status = MarketAttentionCoverageStatus.TTL_EXPIRED
+    elif fresh_count == eligible_count:
+        status = MarketAttentionCoverageStatus.COVERED
+    else:
+        status = MarketAttentionCoverageStatus.ROTATING
+
+    return MarketAttentionCoverageDiagnostics(
+        eligible_market_count=eligible_count,
+        fresh_market_count=fresh_count,
+        expired_market_count=expired_count,
+        unseen_market_count=unseen_count,
+        coverage_ratio=ratio,
+        effective_scan_limit=sum(allocations.values()),
+        estimated_refreshes_per_full_rotation=refreshes,
+        estimated_full_rotation_seconds=estimated_seconds,
+        activity_ttl_seconds=ttl_seconds,
+        oldest_activity_age_seconds=max(ages) if ages else None,
+        rotation_within_activity_ttl=within_ttl,
+        status=status,
+    )
+
+
 class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
-    """Batch 43 Radar: runtime volume/market-cap filters around the canonical v5 pipeline."""
+    """Batch 44 Radar: v6 filters plus PERPETUAL liquidity and coverage diagnostics."""
 
     def __init__(
         self,
@@ -414,6 +559,7 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
                 catalogue_market_count=self._scope_catalogue_count(),
                 market_cap_metadata_status=self._metadata_status,
                 market_cap_metadata_provider=self._metadata_provider_name,
+                coverage=self._coverage(now),
             )
             return await self._refresh_v4_once(observed_at=observed_at)
 
@@ -454,6 +600,13 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
             and measurement.value_usd >= minimum
         )
 
+    def _classify_liquidity(
+        self,
+        activities: tuple[MarketActivitySnapshot, ...],
+    ) -> tuple[MarketActivitySnapshot, ...]:
+        classified = super()._classify_liquidity(activities)
+        return _classify_perpetual_liquidity(classified, self._volume_24h_by_market)
+
     def _next_micro_batch(
         self,
         markets: tuple[ExecutableMarket, ...],
@@ -477,9 +630,21 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
         }
 
     def _scope_catalogue_count(self) -> int:
-        return sum(
-            self._scope_accepts_market(market) and self._market_cap_accepts(market)
+        return len(self._eligible_coverage_markets())
+
+    def _eligible_coverage_markets(self) -> tuple[ExecutableMarket, ...]:
+        return tuple(
+            market
             for market in self._catalogue
+            if self._scope_accepts_market(market) and self._market_cap_accepts(market)
+        )
+
+    def _coverage(self, now: datetime) -> MarketAttentionCoverageDiagnostics:
+        return _coverage_diagnostics(
+            eligible_markets=self._eligible_coverage_markets(),
+            activity_cache=self._activity_cache,
+            now=now,
+            policy=self._policy,
         )
 
     async def aclose(self) -> None:
@@ -659,6 +824,7 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
             metadata_status=self._metadata_status,
             metadata_provider=self._metadata_provider_name,
             volume_status_counts=volume_status_counts,
+            coverage=self._coverage(value.observed_at),
         )
 
 

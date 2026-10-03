@@ -6,10 +6,13 @@ import {
   activityErrorEntries,
   attentionHorizon,
   formatBps,
+  formatCoverageRatio,
+  formatDurationSeconds,
   formatImbalance,
   formatSignedPercent,
   formatUsdCompact,
   formatVolumeRatio,
+  marketAttentionCoverageMessage,
   marketAttentionStatusMessage,
   marketCapCategoryLabel,
   setMarketAttentionFilters,
@@ -116,6 +119,65 @@ test("formats Batch 43 volume and market-cap metadata", () => {
   assert.equal(formatUsdCompact(item.market_cap_usd), "8.5 B$");
   assert.equal(marketCapCategoryLabel(item.market_cap_category), "Mid (1 – 10 Md$)");
   assert.equal(marketCapCategoryLabel("UNKNOWN"), "Indéterminée");
+});
+
+test("formats Batch 44 coverage diagnostics", () => {
+  assert.equal(formatCoverageRatio(0.625), "62.5 %");
+  assert.equal(formatDurationSeconds(1200), "20 min");
+  assert.match(
+    marketAttentionCoverageMessage({
+      eligible_market_count: 400,
+      fresh_market_count: 120,
+      expired_market_count: 0,
+      unseen_market_count: 280,
+      coverage_ratio: 0.3,
+      effective_scan_limit: 120,
+      estimated_refreshes_per_full_rotation: 4,
+      estimated_full_rotation_seconds: 1200,
+      activity_ttl_seconds: 900,
+      oldest_activity_age_seconds: 300,
+      rotation_within_activity_ttl: false,
+      status: "CONFIGURATION_TOO_SLOW",
+    }),
+    /ne peut pas maintenir toute la population fraîche/i,
+  );
+});
+
+test("keeps rotation, expired TTL and full coverage distinguishable", () => {
+  const base = {
+    eligible_market_count: 10,
+    fresh_market_count: 5,
+    expired_market_count: 0,
+    unseen_market_count: 5,
+    coverage_ratio: 0.5,
+    effective_scan_limit: 10,
+    estimated_refreshes_per_full_rotation: 1,
+    estimated_full_rotation_seconds: 300,
+    activity_ttl_seconds: 900,
+    oldest_activity_age_seconds: 200,
+    rotation_within_activity_ttl: true,
+  };
+  assert.match(marketAttentionCoverageMessage({ ...base, status: "ROTATING" }), /rotation en cours/i);
+  assert.match(
+    marketAttentionCoverageMessage({
+      ...base,
+      fresh_market_count: 8,
+      expired_market_count: 1,
+      unseen_market_count: 1,
+      status: "TTL_EXPIRED",
+    }),
+    /sorti du TTL/i,
+  );
+  assert.match(
+    marketAttentionCoverageMessage({
+      ...base,
+      fresh_market_count: 10,
+      unseen_market_count: 0,
+      coverage_ratio: 1,
+      status: "COVERED",
+    }),
+    /univers couvert/i,
+  );
 });
 
 test("renders deterministic trend directions as descriptive French labels", () => {

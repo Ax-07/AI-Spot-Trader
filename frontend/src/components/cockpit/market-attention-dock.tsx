@@ -12,18 +12,22 @@ import {
   attentionHorizon,
   fetchMarketAttention,
   formatBps,
+  formatCoverageRatio,
+  formatDurationSeconds,
   formatImbalance,
   formatQuoteCompact,
   formatRate,
   formatSignedPercent,
   formatUsdCompact,
   formatVolumeRatio,
+  marketAttentionCoverageMessage,
   marketAttentionStatusMessage,
   marketCapCategoryLabel,
   setMarketAttentionFilters,
   slippageEstimate,
   trendDirectionLabel,
   type LiquidityRegime,
+  type MarketAttentionCoverageStatus,
   type MarketAttentionFilters,
   type MarketAttentionOverview,
   type MarketAttentionSnapshot,
@@ -45,6 +49,13 @@ function statusTone(status: RadarStatus) {
   if (status === "AVAILABLE") return "success" as const;
   if (status === "PARTIAL" || status === "STALE") return "warning" as const;
   if (status === "ERROR") return "danger" as const;
+  return "neutral" as const;
+}
+
+function coverageTone(status: MarketAttentionCoverageStatus) {
+  if (status === "COVERED") return "success" as const;
+  if (status === "ROTATING") return "info" as const;
+  if (status === "TTL_EXPIRED" || status === "CONFIGURATION_TOO_SLOW") return "warning" as const;
   return "neutral" as const;
 }
 
@@ -425,7 +436,7 @@ export function MarketAttentionDock() {
 
                   <div>
                     <p className="text-xs font-semibold">Volume 24h</p>
-                    <p className="text-[10px] text-muted-foreground">Notionnel USD causal issu des candles Kraken ; UNKNOWN est exclu lorsqu’un seuil est actif.</p>
+                    <p className="text-[10px] text-muted-foreground">SPOT/USD : candles Kraken causales. PERP linear/USD : `volumeQuote` Kraken Futures. UNKNOWN est exclu lorsqu’un seuil est actif.</p>
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {VOLUME_OPTIONS.map((option) => (
                         <Button
@@ -485,6 +496,32 @@ export function MarketAttentionDock() {
                 </div>
 
                 <div className="rounded-lg border bg-muted/10 px-3 py-2 text-xs font-medium">{marketAttentionStatusMessage(data)}</div>
+
+                {data.coverage ? (
+                  <div className="rounded-lg border p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-semibold">Couverture et rotation OHLCV</p>
+                        <p className="text-[10px] text-muted-foreground">Univers de scan après scope et filtre de capitalisation, avant filtre volume post-OHLCV.</p>
+                      </div>
+                      <Badge tone={coverageTone(data.coverage.status)}>{data.coverage.status}</Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+                      <Fact label="Éligibles" value={String(data.coverage.eligible_market_count)} />
+                      <Fact label="Frais" value={String(data.coverage.fresh_market_count)} />
+                      <Fact label="Expirés TTL" value={String(data.coverage.expired_market_count)} />
+                      <Fact label="Jamais vus" value={String(data.coverage.unseen_market_count)} />
+                      <Fact label="Couverture" value={formatCoverageRatio(data.coverage.coverage_ratio)} />
+                      <Fact label="Scan effectif" value={String(data.coverage.effective_scan_limit)} />
+                      <Fact label="Cycles / rotation" value={String(data.coverage.estimated_refreshes_per_full_rotation)} />
+                      <Fact label="Rotation estimée" value={formatDurationSeconds(data.coverage.estimated_full_rotation_seconds)} />
+                      <Fact label="TTL activité" value={formatDurationSeconds(data.coverage.activity_ttl_seconds)} />
+                      <Fact label="Plus vieille activité" value={formatDurationSeconds(data.coverage.oldest_activity_age_seconds)} />
+                      <Fact label="Rotation ≤ TTL" value={data.coverage.rotation_within_activity_ttl ? "OUI" : "NON"} />
+                    </div>
+                    <p className="mt-3 text-[11px] text-muted-foreground">{marketAttentionCoverageMessage(data.coverage)}</p>
+                  </div>
+                ) : null}
 
                 <div className="grid gap-3 lg:grid-cols-4">
                   <div className="rounded-lg border p-3">
@@ -555,7 +592,7 @@ export function MarketAttentionDock() {
                     {loading ? "Construction du snapshot du radar…" : data.status === "NOT_CONFIGURED" ? "Radar non configuré." : "Aucun candidat d’attention disponible avec les filtres actifs."}
                   </div>
                 )}
-                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · filtres pilotés par le backend · classement déterministe. Volume 24h = Kraken lorsque la conversion USD est prouvable ; capitalisation = {data.market_cap_metadata_provider ?? "provider externe indisponible"}. UNKNOWN est fail-closed lorsqu’un filtre correspondant est actif.</p>
+                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · filtres pilotés par le backend · classement déterministe. Volume 24h SPOT = candles Kraken causales ; volume 24h PERP linear/USD = `volumeQuote` Kraken Futures uniquement lorsqu’il est validé ; capitalisation = {data.market_cap_metadata_provider ?? "provider externe indisponible"}. UNKNOWN est fail-closed lorsqu’un filtre correspondant est actif.</p>
               </div>
             ) : <p className="text-sm text-muted-foreground">{loading ? "Chargement du radar…" : "Aucun snapshot chargé."}</p>}
           </CardContent>
