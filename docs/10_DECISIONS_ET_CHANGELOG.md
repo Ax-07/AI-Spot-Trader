@@ -11,19 +11,21 @@ Market Attention Radar reste strictement observationnel et ne prend aucune déci
 ## Référence courante
 
 ```text
-HEAD GitHub audité : 85cbd01be40680a099bc1a251dc919ef3bbc7212
-Commit              : fix: correct market attention volume filter
+HEAD GitHub audité : 25dcb5c069a519af8b92ae386f3d21d0aa4db9f3
+Commit              : fix: repair perpetual market attention radar
 Batch 42            : intégré
 Batch 43            : intégré
 Batch 43.1          : intégré
-Batch 43.2          : patch proposé, non intégré
+Batch 43.2          : intégré
 ```
 
-## Changelog — 2026-10-03 — Batch 43.2 correctif Radar PERPETUAL — patch proposé
+## Changelog — 2026-10-03 — Batch 43.2 correctif Radar PERPETUAL — intégré
+
+Commit intégré : `25dcb5c069a519af8b92ae386f3d21d0aa4db9f3` (`fix: repair perpetual market attention radar`).
 
 - audit de la chaîne `instruments -> catalogue -> scope -> OHLCV -> activité -> volume -> shortlist` ;
 - confirmation que `PERPETUAL + Volume Tous` n'est pas supprimé par le filtre volume : un résultat vide doit être expliqué par le scan, la qualité des données ou l'absence d'activité inhabituelle ;
-- confirmation du défaut `PERPETUAL + seuil volume` : le code intégré renvoie `UNKNOWN_UNSUPPORTED_MARKET_TYPE` pour tous les PERP et les exclut fail-closed ;
+- cause racine confirmée au HEAD pré-43.2 `85cbd01` : avec un seuil volume, tous les PERP étaient classés `UNKNOWN_UNSUPPORTED_MARKET_TYPE` puis exclus fail-closed ;
 - exploitation du ticker public bulk Kraken Futures `/tickers` et de `volumeQuote` ;
 - mapping uniquement des linear perpetuals cotés directement en USD ;
 - aucun calcul inventé `candle.volume * close` pour les PERP ;
@@ -36,9 +38,9 @@ Batch 43.2          : patch proposé, non intégré
 
 ## ADR-321 — Le volume PERPETUAL USD utilise le turnover quote public Kraken
 
-**PROPOSÉ — Batch 43.2.**
+**ADOPTÉ — Batch 43.2.**
 
-Pour les linear perpetuals Kraken cotés directement en USD, le Radar peut utiliser le champ public `volumeQuote` du ticker Futures bulk comme volume 24h USD. La donnée est déjà exprimée dans l'actif de cotation et ne nécessite donc aucune hypothèse sur l'unité du champ `volume` des chart candles.
+Pour les linear perpetuals Kraken cotés directement en USD, le Radar utilise le champ public `volumeQuote` du ticker Futures bulk comme volume 24h USD. La donnée est déjà exprimée dans l'actif de cotation et ne nécessite donc aucune hypothèse sur l'unité du champ `volume` des chart candles.
 
 Règle :
 
@@ -54,7 +56,7 @@ Sinon la mesure reste explicitement `UNKNOWN_*`. Le Radar ne convertit pas impli
 
 ## ADR-322 — Un résultat PERPETUAL vide ne doit pas être « réparé » en abaissant le scoring
 
-**PROPOSÉ — Batch 43.2.**
+**ADOPTÉ — Batch 43.2.**
 
 Le scope `PERPETUAL` est appliqué avant le scan. Avec `Volume Tous`, aucun filtre volume n'élimine le marché. Si le catalogue et les scans sont valides mais qu'aucune activité n'atteint les critères d'intérêt, une shortlist vide est un résultat normal.
 
@@ -101,6 +103,7 @@ AVAILABLE
 BELOW_THRESHOLD
 UNKNOWN_UNSUPPORTED_QUOTE
 UNKNOWN_UNSUPPORTED_MARKET_TYPE
+UNKNOWN_MISSING_QUOTE_VOLUME
 UNKNOWN_INSUFFICIENT_HISTORY
 UNKNOWN_TECHNICAL_ERROR
 ```
@@ -170,7 +173,7 @@ catalogue Kraken
 -> Market Structure 5m / 15m / 1h / 4h
 ```
 
-Le filtre volume ne peut raisonnablement précéder l'OHLCV pour le SPOT sans dupliquer une source déjà disponible. Pour le PERPETUAL, le Batch 43.2 propose un snapshot bulk public Futures réutilisé par le même filtre. Dans les deux cas, le filtre reste placé avant L2/trades et avant les quatre lectures structurelles.
+Le filtre volume ne peut raisonnablement précéder l'OHLCV pour le SPOT sans dupliquer une source déjà disponible. Pour le PERPETUAL, le Batch 43.2 intégré utilise un snapshot bulk public Futures réutilisé par le même filtre. Dans les deux cas, le filtre reste placé avant L2/trades et avant les quatre lectures structurelles.
 
 ## ADR-317 — Contrat Radar v6 et cohérence runtime
 

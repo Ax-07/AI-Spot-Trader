@@ -2,31 +2,31 @@
 
 ## Statut
 
-Patch proposé à partir du HEAD GitHub `main` :
+Batch intégré sur GitHub `main` :
 
 ```text
-85cbd01be40680a099bc1a251dc919ef3bbc7212
-fix: correct market attention volume filter
+25dcb5c069a519af8b92ae386f3d21d0aa4db9f3
+fix: repair perpetual market attention radar
 ```
 
-Ce document décrit le patch fourni ; il ne prétend pas que celui-ci est déjà intégré à GitHub.
+Le Batch 43.2 est intégré. Ce document décrit le correctif effectivement présent dans `main`.
 
 ## Audit
 
 ### Confirmé
 
-- `KrakenAttentionCatalogue.list_markets()` construit déjà un catalogue mixte SPOT + linear perpetuals à partir des instruments publics Kraken.
+- `KrakenAttentionCatalogue.list_markets()` construit un catalogue mixte SPOT + linear perpetuals à partir des instruments publics Kraken.
 - Le scope `PERPETUAL` est filtré avant le scan OHLCV.
 - `KrakenCandleProvider` utilise les chart candles Futures `trade/{venue_symbol}/{resolution}` et conserve le volume tradé.
 - L'activité du Radar est déterminée à partir de l'OHLCV. La microstructure est SPOT-only ; les PERP sont `NOT_APPLICABLE` et ne doivent pas être rejetés pour cette raison.
 - Lorsque `min_volume_24h_usd` vaut `None`, `attention_filters` ne rejette pas un PERP sur son volume.
-- Au HEAD `85cbd01`, lorsqu'un seuil volume est actif, `_volume_24h_measurement()` renvoie systématiquement `UNKNOWN_UNSUPPORTED_MARKET_TYPE` pour un PERP. Le fail-closed supprime donc tous les PERP avant la shortlist.
+- Au HEAD pré-43.2 `85cbd01`, lorsqu'un seuil volume était actif, `_volume_24h_measurement()` renvoyait systématiquement `UNKNOWN_UNSUPPORTED_MARKET_TYPE` pour un PERP. Le fail-closed supprimait donc tous les PERP avant la shortlist.
 
-### Cause racine du filtre volume PERP
+### Cause racine et correction du filtre volume PERP
 
 Kraken Futures expose dans le ticker public bulk un champ `volumeQuote` correspondant au turnover dans l'actif de cotation sur la fenêtre 24h du ticker. Pour un linear perpetual coté directement en USD, cette valeur est déjà un notionnel USD exploitable.
 
-Le patch utilise donc :
+Le correctif intégré utilise donc :
 
 ```text
 PERPETUAL linear + quote USD
@@ -56,11 +56,11 @@ catalogue PERP
 → shortlist
 ```
 
-Une shortlist vide est légitime si les marchés valides sont `NORMAL` / sous les critères d'intérêt. Elle peut aussi provenir d'erreurs Kraken, d'un historique insuffisant ou discontinu. Le patch ne réduit donc aucun seuil d'intérêt pour « forcer » des résultats.
+Une shortlist vide est légitime si les marchés valides sont `NORMAL` / sous les critères d'intérêt. Elle peut aussi provenir d'erreurs Kraken, d'un historique insuffisant ou discontinu. Le Batch 43.2 ne réduit aucun seuil d'intérêt pour « forcer » des résultats.
 
-Le cockpit possède déjà les compteurs catalogue/scannés/frais/statuts/erreurs/activité. Le patch complète son message de statut avec les compteurs `volume_24h_status_counts` lorsqu'un filtre volume actif explique un résultat vide.
+Le cockpit possède les compteurs catalogue/scannés/frais/statuts/erreurs/activité. Le Batch 43.2 complète son message de statut avec les compteurs `volume_24h_status_counts` lorsqu'un filtre volume actif explique un résultat vide.
 
-## Implémentation
+## Implémentation intégrée
 
 ### `integrations/kraken/attention.py`
 
@@ -84,7 +84,7 @@ Le cockpit possède déjà les compteurs catalogue/scannés/frais/statuts/erreur
 
 ### Frontend
 
-`frontend/src/lib/market-attention.ts` connaît désormais `volume_24h_status_counts` et explique explicitement, lorsque le filtre volume actif laisse zéro candidat :
+`frontend/src/lib/market-attention.ts` connaît `volume_24h_status_counts` et explique explicitement, lorsque le filtre volume actif laisse zéro candidat :
 
 - combien de marchés n'ont pas de volume 24h USD exploitable ; ou
 - combien de marchés connus sont sous le seuil.
@@ -100,7 +100,7 @@ Le cockpit possède déjà les compteurs catalogue/scannés/frais/statuts/erreur
 - aucun LLM ;
 - aucun ordre ;
 - aucune modification Agent / Risk Engine / Broker ;
-- aucun short, levier, margin, future ou perpetual n'est rendu exécutable par ce patch ;
+- aucun short, levier, margin, future ou perpetual n'est rendu exécutable par ce batch ;
 - aucune baisse artificielle des critères d'intérêt.
 
 ## Tests ajoutés
@@ -120,27 +120,17 @@ Le cockpit possède déjà les compteurs catalogue/scannés/frais/statuts/erreur
 
 Les tests historiques existants couvrent déjà le chart endpoint Futures, le venue symbol, `from/to/count`, le volume candle, les payloads invalides et les erreurs de transport. La couverture de causalité/finalisation existante est conservée.
 
-## Validation locale attendue
+## Validation avant intégration
 
-```powershell
-cd E:\AI-Spot-Trader\backend
-pytest -q
-
-cd E:\AI-Spot-Trader\frontend
-pnpm typecheck
-pnpm test
-
-cd E:\AI-Spot-Trader
-git diff --check
-git status --short
-```
-
-Un smoke read-only réel Kraken reste recommandé localement pour observer :
+Validations exécutées localement avant le push du Batch 43.2 :
 
 ```text
-nombre de linear perpetuals
-BTC/USD -> PF_XBTUSD
-ETH/USD -> PF_ETHUSD
-volumeQuote de quelques PERP USD
-nombre / première / dernière candle trade 5m
+backend pytest -q       : PASS
+frontend pnpm typecheck : PASS
+frontend pnpm test      : PASS — 57/57
+git diff --check        : PASS
 ```
+
+Le Batch 43.2 a ensuite été intégré sur `main` via `25dcb5c069a519af8b92ae386f3d21d0aa4db9f3`.
+
+Un smoke read-only réel Kraken reste une validation complémentaire utile pour observer les linear perpetuals, leur venue symbol, `volumeQuote` et les candles trade 5m, mais il n'est pas requis pour la clôture documentaire.

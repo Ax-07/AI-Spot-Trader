@@ -3,15 +3,15 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub réel       : 85cbd01be40680a099bc1a251dc919ef3bbc7212
-Commit                 : fix: correct market attention volume filter
+HEAD GitHub réel       : 25dcb5c069a519af8b92ae386f3d21d0aa4db9f3
+Commit                 : fix: repair perpetual market attention radar
 Batch 39               : intégré
 Batch 40               : intégré
 Batch 41               : intégré
 Batch 42               : intégré
 Batch 43               : intégré
 Batch 43.1             : intégré
-Batch 43.2             : patch correctif proposé, non intégré
+Batch 43.2             : intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -28,11 +28,11 @@ AI Spot Trader conserve un seul Agent IA stratégique, Kraken comme exchange ini
 4. streaming/caches marché : technique et déterministe ;
 5. Market Attention Radar : observation déterministe avec cadence propre, données marché Kraken et, depuis le Batch 43 intégré, métadonnées de capitalisation externes read-only mises en cache.
 
-## État intégré jusqu'au Batch 43.1
+## État intégré jusqu'au Batch 43.2
 
-Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et des caractéristiques descriptives. Le Batch 39 a supprimé la couche Web/IA du Radar. Le Batch 40 a ajouté la microstructure Kraken SPOT et le contrat Radar v3. Le Batch 41 a ajouté le scope `SPOT / PERPETUAL / ALL`, les directions récentes par horizon et le contrat Radar v4. Le Batch 42 a ajouté la Market Structure multi-timeframe et le contrat Radar v5. Le Batch 43 ajoute les filtres runtime de volume 24h et de capitalisation réelle ainsi que le contrat Radar v6. Le Batch 43.1 corrige la fenêtre causale SPOT/USD et ajoute les diagnostics typés du filtre volume.
+Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et des caractéristiques descriptives. Le Batch 39 a supprimé la couche Web/IA du Radar. Le Batch 40 a ajouté la microstructure Kraken SPOT et le contrat Radar v3. Le Batch 41 a ajouté le scope `SPOT / PERPETUAL / ALL`, les directions récentes par horizon et le contrat Radar v4. Le Batch 42 a ajouté la Market Structure multi-timeframe et le contrat Radar v5. Le Batch 43 ajoute les filtres runtime de volume 24h et de capitalisation réelle ainsi que le contrat Radar v6. Le Batch 43.1 corrige la fenêtre causale SPOT/USD et ajoute les diagnostics typés du filtre volume. Le Batch 43.2 rend le filtre volume opérationnel pour les linear perpetuals USD via le turnover quote public Kraken Futures.
 
-Le HEAD GitHub actuel `85cbd01be40680a099bc1a251dc919ef3bbc7212` intègre le Batch 43.1 (`fix: correct market attention volume filter`).
+Le HEAD GitHub actuel `25dcb5c069a519af8b92ae386f3d21d0aa4db9f3` intègre le Batch 43.2 (`fix: repair perpetual market attention radar`).
 
 ## Batch 42 — Market Structure multi-timeframe
 
@@ -65,8 +65,9 @@ market_cap_categories / min_market_cap_usd / max_market_cap_usd
 
 Décisions intégrées :
 
-- le volume 24h USD est dérivé causalement des candles Kraken déjà chargées lorsque la devise notionnelle USD est prouvée ;
-- aucun appel Kraken additionnel par marché n'est ajouté pour ce volume ;
+- le volume 24h `SPOT/USD` est dérivé causalement des candles Kraken déjà chargées ;
+- pour les linear perpetuals cotés USD, le volume 24h utilise le `volumeQuote` du ticker public bulk Kraken Futures ;
+- aucune requête volume additionnelle par marché n'est introduite ;
 - une vraie capitalisation utilise `MarketMetadataProvider`, initialement CoinPaprika, read-only, sans secret, avec TTL long et fail-soft ;
 - la capitalisation est un filtre de métadonnée, jamais un signal ;
 - la capitalisation filtre avant OHLCV ; le volume filtre après OHLCV mais avant L2/trades et structure multi-timeframe ;
@@ -90,23 +91,26 @@ Le correctif :
 
 ## Batch 43.2 — Radar PERPETUAL et volume 24h Futures
 
-**État : patch proposé, non intégré.**
+**État : intégré via `25dcb5c`.**
 
-Objectifs du patch :
+Éléments intégrés :
 
-- conserver le fonctionnement actuel de `PERPETUAL + Volume Tous` et ajouter une régression garantissant qu'un PERP valide et objectivement actif est réellement scanné ;
-- utiliser le ticker public bulk Kraken Futures pour obtenir `volumeQuote` sans requête par marché ;
-- accepter directement `volumeQuote` comme volume 24h USD uniquement pour les linear perpetuals cotés `USD` ;
-- ne jamais dériver le volume PERP par une formule non démontrée `candle.volume * close` ;
-- conserver un `UNKNOWN_*` explicite lorsque la donnée n'est pas exploitable ;
-- afficher dans le cockpit la raison d'un résultat vide lorsque le filtre volume est la cause ;
-- ne pas toucher Agent, Risk Engine, Broker ni aux invariants d'exécution SPOT/PAPER.
+- conservation du fonctionnement `PERPETUAL + Volume Tous` avec une régression garantissant qu'un PERP valide et objectivement actif est réellement scanné ;
+- utilisation du ticker public bulk Kraken Futures pour obtenir `volumeQuote` sans requête par marché ;
+- utilisation directe de `volumeQuote` comme volume 24h USD uniquement pour les linear perpetuals cotés `USD` ;
+- aucun volume PERP dérivé par une formule non démontrée `candle.volume * close` ;
+- conservation d'un `UNKNOWN_*` explicite lorsque la donnée n'est pas exploitable ;
+- diagnostic cockpit de la cause d'un résultat vide lorsque le filtre volume est en cause ;
+- distinction entre panne du Radar PERP et marché valide sans activité assez inhabituelle ;
+- aucune modification Agent, Risk Engine, Broker ni des invariants d'exécution SPOT/PAPER.
+
+Commit intégré : `25dcb5c069a519af8b92ae386f3d21d0aa4db9f3` (`fix: repair perpetual market attention radar`).
 
 Voir `docs/43_2_CORRECTIF_RADAR_PERPETUAL.md`.
 
 ## Validation connue
 
-Validations exécutées localement par l'utilisateur avant le push du Batch 43 :
+Validations exécutées localement avant le push du Batch 43.2 :
 
 ```text
 backend pytest -q       : PASS
@@ -115,7 +119,7 @@ frontend pnpm test      : PASS — 57/57
 git diff --check        : PASS
 ```
 
-Le Batch 43.1 a ensuite été intégré via `85cbd01`. Le patch Batch 43.2 doit être revalidé localement avec la suite complète avant intégration.
+Le Batch 43.2 a ensuite été intégré via `25dcb5c`. Aucune relance des suites backend/frontend n'est requise pour une clôture strictement documentaire sauf raison concrète.
 
 ## Périmètres ultérieurs possibles
 
