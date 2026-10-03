@@ -66,6 +66,7 @@ class Volume24hStatus(StrEnum):
     AVAILABLE = "AVAILABLE"
     UNKNOWN_UNSUPPORTED_QUOTE = "UNKNOWN_UNSUPPORTED_QUOTE"
     UNKNOWN_UNSUPPORTED_MARKET_TYPE = "UNKNOWN_UNSUPPORTED_MARKET_TYPE"
+    UNKNOWN_MISSING_QUOTE_VOLUME = "UNKNOWN_MISSING_QUOTE_VOLUME"
     UNKNOWN_INSUFFICIENT_HISTORY = "UNKNOWN_INSUFFICIENT_HISTORY"
     UNKNOWN_TECHNICAL_ERROR = "UNKNOWN_TECHNICAL_ERROR"
 
@@ -89,6 +90,7 @@ class Volume24hStatusCounts(AttentionModel):
     BELOW_THRESHOLD: int = Field(default=0, ge=0)
     UNKNOWN_UNSUPPORTED_QUOTE: int = Field(default=0, ge=0)
     UNKNOWN_UNSUPPORTED_MARKET_TYPE: int = Field(default=0, ge=0)
+    UNKNOWN_MISSING_QUOTE_VOLUME: int = Field(default=0, ge=0)
     UNKNOWN_INSUFFICIENT_HISTORY: int = Field(default=0, ge=0)
     UNKNOWN_TECHNICAL_ERROR: int = Field(default=0, ge=0)
 
@@ -304,6 +306,7 @@ def _volume_status_counts(
         "BELOW_THRESHOLD": 0,
         "UNKNOWN_UNSUPPORTED_QUOTE": 0,
         "UNKNOWN_UNSUPPORTED_MARKET_TYPE": 0,
+        "UNKNOWN_MISSING_QUOTE_VOLUME": 0,
         "UNKNOWN_INSUFFICIENT_HISTORY": 0,
         "UNKNOWN_TECHNICAL_ERROR": 0,
     }
@@ -347,6 +350,11 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
         self._metadata_status = RadarStatus.PARTIAL
         self._metadata_provider_name: str | None = None
         self._volume_24h_by_market: dict[ExecutableMarket, Volume24hMeasurement] = {}
+        self._perpetual_volume_24h_usd: dict[ExecutableMarket, Decimal] = {}
+        self._perpetual_volume_provider_configured = callable(
+            getattr(catalogue, "volume_24h_usd_by_market", None)
+        )
+        self._perpetual_volume_refresh_failed = False
         self._v6_latest: MarketAttentionOverviewV6 | None = None
         self._v6_history: deque[MarketAttentionOverviewV6] = deque(
             maxlen=self._policy.history_limit
@@ -362,12 +370,9 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
     def latest(self) -> MarketAttentionOverviewV6:  # type: ignore[override]
         if self._v6_latest is not None:
             return self._v6_latest
-        base = super().latest
-        return self._overview_v6(base)
+        return self._overview_v6(super().latest)
 
-    def history(  # type: ignore[override]
-        self, *, limit: int = 24
-    ) -> tuple[MarketAttentionOverviewV6, ...]:
+    def history(self, *, limit: int = 24) -> tuple[MarketAttentionOverviewV6, ...]:  # type: ignore[override]
         if isinstance(limit, bool) or limit <= 0 or limit > self._policy.history_limit:
             raise ValueError("invalid market attention history limit")
         return tuple(self._v6_history)[-limit:]
@@ -426,6 +431,7 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
     async def _catalogue_if_due(self, now: datetime) -> tuple[ExecutableMarket, ...]:
         catalogue = await super()._catalogue_if_due(now)
         await self._refresh_market_metadata()
+        await self._refresh_perpetual_volume_24h(catalogue)
         return tuple(market for market in catalogue if self._market_cap_accepts(market))
 
     def _fresh_activities(self, now: datetime) -> tuple[MarketActivitySnapshot, ...]:
@@ -526,19 +532,66 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
         self._metadata_provider_name = providers[0] if len(providers) == 1 else "MULTIPLE"
         self._metadata_status = RadarStatus.AVAILABLE
 
+    async def _refresh_perpetual_volume_24h(
+        self,
+        catalogue: tuple[ExecutableMarket, ...],
+    ) -> None:
+        relevant = tuple(
+            market
+            for market in catalogue
+            if market.market_type is MarketType.PERPETUAL and self._scope_accepts_market(market)
+        )
+        if not relevant:
+            self._perpetual_volume_24h_usd = {}
+            self._perpetual_volume_refresh_failed = False
+            return
+        provider = getattr(self._catalogue_provider, "volume_24h_usd_by_market", None)
+        if not callable(provider):
+            self._perpetual_volume_24h_usd = {}
+            self._perpetual_volume_refresh_failed = False
+            return
+        try:
+            values = await provider()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._perpetual_volume_24h_usd = {}
+            self._perpetual_volume_refresh_failed = True
+            return
+        self._perpetual_volume_refresh_failed = False
+        relevant_set = set(relevant)
+        self._perpetual_volume_24h_usd = {
+            market: value
+            for market, value in values.items()
+            if market in relevant_set and value >= 0
+        }
+
     def _volume_24h_measurement(
         self,
         market: ExecutableMarket,
         *,
         as_of: datetime,
     ) -> Volume24hMeasurement:
+        _base, quote = parse_canonical_symbol(market.symbol)
+        if quote.upper() != "USD":
+            return Volume24hMeasurement(status=Volume24hStatus.UNKNOWN_UNSUPPORTED_QUOTE)
+
+        if market.market_type is MarketType.PERPETUAL:
+            if not self._perpetual_volume_provider_configured:
+                return Volume24hMeasurement(
+                    status=Volume24hStatus.UNKNOWN_UNSUPPORTED_MARKET_TYPE
+                )
+            if self._perpetual_volume_refresh_failed:
+                return Volume24hMeasurement(status=Volume24hStatus.UNKNOWN_TECHNICAL_ERROR)
+            value = self._perpetual_volume_24h_usd.get(market)
+            if value is None:
+                return Volume24hMeasurement(status=Volume24hStatus.UNKNOWN_MISSING_QUOTE_VOLUME)
+            return Volume24hMeasurement(status=Volume24hStatus.AVAILABLE, value_usd=value)
+
         if market.market_type is not MarketType.SPOT:
             return Volume24hMeasurement(
                 status=Volume24hStatus.UNKNOWN_UNSUPPORTED_MARKET_TYPE
             )
-        _base, quote = parse_canonical_symbol(market.symbol)
-        if quote.upper() != "USD":
-            return Volume24hMeasurement(status=Volume24hStatus.UNKNOWN_UNSUPPORTED_QUOTE)
         cache = getattr(self._candles, "cache", None)
         if cache is None or not hasattr(cache, "history_as_of"):
             return Volume24hMeasurement(status=Volume24hStatus.UNKNOWN_TECHNICAL_ERROR)
@@ -628,9 +681,6 @@ def _causal_spot_volume_24h_usd(
         return None
     final = tuple(sorted(final, key=lambda item: item.open_time))
 
-    # Anchor the 24h window on the last finalized 5m close that was actually knowable at as_of.
-    # This avoids turning a valid 288-candle history into UNKNOWN merely because as_of contains
-    # seconds/microseconds after the exchange candle boundary.
     window_end = final[-1].close_time.astimezone(UTC)
     window_start = window_end - VOLUME_WINDOW
     if final[0].open_time.astimezone(UTC) > window_start:

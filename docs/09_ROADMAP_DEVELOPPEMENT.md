@@ -3,14 +3,15 @@
 ## Référence de reprise
 
 ```text
-HEAD GitHub réel       : 3b8bc6bcb83604cb20eb5ee27ef1b95fcc4210da
-Commit                 : docs: close batch 43 documentation
+HEAD GitHub réel       : 85cbd01be40680a099bc1a251dc919ef3bbc7212
+Commit                 : fix: correct market attention volume filter
 Batch 39               : intégré
 Batch 40               : intégré
 Batch 41               : intégré
 Batch 42               : intégré
 Batch 43               : intégré
-Batch 43.1             : patch correctif proposé, non intégré
+Batch 43.1             : intégré
+Batch 43.2             : patch correctif proposé, non intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -27,11 +28,11 @@ AI Spot Trader conserve un seul Agent IA stratégique, Kraken comme exchange ini
 4. streaming/caches marché : technique et déterministe ;
 5. Market Attention Radar : observation déterministe avec cadence propre, données marché Kraken et, depuis le Batch 43 intégré, métadonnées de capitalisation externes read-only mises en cache.
 
-## État intégré jusqu'au Batch 43
+## État intégré jusqu'au Batch 43.1
 
-Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et des caractéristiques descriptives. Le Batch 39 a supprimé la couche Web/IA du Radar. Le Batch 40 a ajouté la microstructure Kraken SPOT et le contrat Radar v3. Le Batch 41 a ajouté le scope `SPOT / PERPETUAL / ALL`, les directions récentes par horizon et le contrat Radar v4. Le Batch 42 a ajouté la Market Structure multi-timeframe et le contrat Radar v5. Le Batch 43 ajoute les filtres runtime de volume 24h et de capitalisation réelle ainsi que le contrat Radar v6.
+Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et des caractéristiques descriptives. Le Batch 39 a supprimé la couche Web/IA du Radar. Le Batch 40 a ajouté la microstructure Kraken SPOT et le contrat Radar v3. Le Batch 41 a ajouté le scope `SPOT / PERPETUAL / ALL`, les directions récentes par horizon et le contrat Radar v4. Le Batch 42 a ajouté la Market Structure multi-timeframe et le contrat Radar v5. Le Batch 43 ajoute les filtres runtime de volume 24h et de capitalisation réelle ainsi que le contrat Radar v6. Le Batch 43.1 corrige la fenêtre causale SPOT/USD et ajoute les diagnostics typés du filtre volume.
 
-Le commit fonctionnel intégré du Batch 43 est `32320e268722c6e431ae722924bca487ae45d004` (`feat: add market attention volume and market cap filters`). Le HEAD GitHub actuel `3b8bc6bcb83604cb20eb5ee27ef1b95fcc4210da` est sa clôture documentaire.
+Le HEAD GitHub actuel `85cbd01be40680a099bc1a251dc919ef3bbc7212` intègre le Batch 43.1 (`fix: correct market attention volume filter`).
 
 ## Batch 42 — Market Structure multi-timeframe
 
@@ -76,7 +77,7 @@ Le terme « Radar Kraken-only » n'est plus exact depuis l'intégration du Batch
 
 ## Batch 43.1 — correctif du filtre Volume 24h
 
-**État : patch proposé, non intégré.**
+**État : intégré via `85cbd01`.**
 
 Le correctif :
 
@@ -87,9 +88,25 @@ Le correctif :
 - ajoute une régression `market_scope = ALL` + `min_volume_24h_usd = 100000` garantissant qu'un `SPOT/USD` valide au-dessus du seuil reste présent ;
 - n'ajoute aucune conversion implicite `EUR/USDT/USDC -> USD` ni notionnalisation PERPETUAL non démontrée.
 
-## Validation finale Batch 43
+## Batch 43.2 — Radar PERPETUAL et volume 24h Futures
 
-Validations exécutées localement par l'utilisateur avant le push :
+**État : patch proposé, non intégré.**
+
+Objectifs du patch :
+
+- conserver le fonctionnement actuel de `PERPETUAL + Volume Tous` et ajouter une régression garantissant qu'un PERP valide et objectivement actif est réellement scanné ;
+- utiliser le ticker public bulk Kraken Futures pour obtenir `volumeQuote` sans requête par marché ;
+- accepter directement `volumeQuote` comme volume 24h USD uniquement pour les linear perpetuals cotés `USD` ;
+- ne jamais dériver le volume PERP par une formule non démontrée `candle.volume * close` ;
+- conserver un `UNKNOWN_*` explicite lorsque la donnée n'est pas exploitable ;
+- afficher dans le cockpit la raison d'un résultat vide lorsque le filtre volume est la cause ;
+- ne pas toucher Agent, Risk Engine, Broker ni aux invariants d'exécution SPOT/PAPER.
+
+Voir `docs/43_2_CORRECTIF_RADAR_PERPETUAL.md`.
+
+## Validation connue
+
+Validations exécutées localement par l'utilisateur avant le push du Batch 43 :
 
 ```text
 backend pytest -q       : PASS
@@ -98,13 +115,13 @@ frontend pnpm test      : PASS — 57/57
 git diff --check        : PASS
 ```
 
-Ces résultats concernent le Batch 43 intégré ; le patch Batch 43.1 doit être revalidé localement.
+Le Batch 43.1 a ensuite été intégré via `85cbd01`. Le patch Batch 43.2 doit être revalidé localement avec la suite complète avant intégration.
 
 ## Périmètres ultérieurs possibles
 
 - filtres explicites par structure/tendance dans un batch séparé ;
 - conversion multi-devise du volume uniquement derrière une source FX explicite et testée ;
-- éventuelle notionnalisation PERPETUAL uniquement après preuve de la sémantique du volume et transport explicite de la taille de contrat dans le pipeline Radar ;
+- extension future de la microstructure aux dérivés uniquement si un besoin est démontré ;
 - éventuelle utilisation explicite des données Radar comme contexte Agent après décision architecturale ;
 - LIVE, séparé et ultérieur.
 

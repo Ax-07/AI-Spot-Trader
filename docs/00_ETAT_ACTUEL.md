@@ -5,13 +5,13 @@
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD réel  : 3b8bc6bcb83604cb20eb5ee27ef1b95fcc4210da
-Commit     : docs: close batch 43 documentation
+HEAD réel  : 85cbd01be40680a099bc1a251dc919ef3bbc7212
+Commit     : fix: correct market attention volume filter
 ```
 
-Le commit fonctionnel du Batch 43 reste `32320e268722c6e431ae722924bca487ae45d004` (`feat: add market attention volume and market cap filters`). Le commit `3b8bc6b...` ferme uniquement sa documentation.
+Le Batch 43.1 est intégré sur `main` via `85cbd01`. La précédente référence à `3b8bc6b` et l'état « patch proposé, non intégré » étaient obsolètes.
 
-## État intégré — Batch 43
+## État intégré — Batch 43.1
 
 Le Market Attention Radar intégré est `market-attention-radar-v6` avec :
 
@@ -19,22 +19,11 @@ Le Market Attention Radar intégré est `market-attention-radar-v6` avec :
 - filtres runtime volume 24h et capitalisation ;
 - OHLCV, tendance, microstructure et Market Structure issus de Kraken ;
 - capitalisation réelle via un provider externe read-only, initialement CoinPaprika ;
+- volume 24h `SPOT/USD` calculé causalement sur les candles Kraken 5m finalisées ;
+- valeurs de volume non démontrables conservées en `UNKNOWN` et fail-closed lorsqu'un seuil est actif ;
 - Radar strictement informatif, sans décision `BUY / SELL / HOLD` et sans connexion Agent/Risk/Broker.
 
-## Batch 43.1 — correctif filtre Volume 24h
-
-**État : patch proposé, non intégré à GitHub au moment de cette livraison.**
-
-Audit du code intégré :
-
-- `SPOT/USD` peut fournir un volume notionnel 24h démontrable via les candles Kraken 5m ;
-- `SPOT` non coté directement en `USD` reste `UNKNOWN` en l'absence de conversion FX explicite ;
-- `PERPETUAL` reste `UNKNOWN` tant que l'unité du champ volume des candles Futures n'est pas reliée de façon démontrée au notionnel USD dans le pipeline Radar ;
-- lorsqu'un seuil volume est actif, `UNKNOWN` reste fail-closed ;
-- l'ancienne fenêtre `as_of - 24h` pouvait écarter une bougie 5m finalisée lorsque `as_of` n'était pas exactement aligné sur une clôture, sous-comptant le volume ;
-- le patch ancre la fenêtre sur la dernière clôture 5m finalisée et expose des diagnostics de disponibilité/rejet du volume.
-
-Diagnostics proposés dans `MarketAttentionOverviewV6.volume_24h_status_counts` :
+Diagnostics `MarketAttentionOverviewV6.volume_24h_status_counts` :
 
 ```text
 AVAILABLE
@@ -45,6 +34,30 @@ UNKNOWN_INSUFFICIENT_HISTORY
 UNKNOWN_TECHNICAL_ERROR
 ```
 
-Le contrat reste `market-attention-radar-v6` ; aucune conversion USD implicite n'est ajoutée.
-
 Voir `docs/43_1_CORRECTIF_FILTRE_VOLUME.md`.
+
+## Batch 43.2 — correctif Radar PERPETUAL
+
+**État : patch proposé dans cette livraison, non intégré à GitHub.**
+
+Audit confirmé au HEAD `85cbd01` :
+
+- le catalogue Kraken sait déjà découvrir les linear perpetuals ;
+- le scope `PERPETUAL` est appliqué avant le scan OHLCV ;
+- les candles Futures `trade` sont utilisées pour l'activité ;
+- la microstructure reste volontairement SPOT-only et `NOT_APPLICABLE` pour les PERP ;
+- `Volume Tous` ne supprime pas les PERP : une shortlist vide peut donc venir d'une erreur de données, d'un historique incomplet ou simplement d'une activité sous les critères d'intérêt ;
+- avec un seuil volume actif, le code intégré classe en revanche tous les PERP `UNKNOWN_UNSUPPORTED_MARKET_TYPE`, ce qui les élimine systématiquement.
+
+Le patch 43.2 propose :
+
+- récupération bulk des tickers publics Kraken Futures ;
+- utilisation directe de `volumeQuote` pour les linear perpetuals cotés USD ;
+- aucune conversion inventée de `candle.volume * close` pour les PERP ;
+- un seul appel bulk, sans requête par marché ;
+- `UNKNOWN_MISSING_QUOTE_VOLUME` si le ticker répond mais ne fournit pas de `volumeQuote` exploitable pour ce marché ;
+- `UNKNOWN_TECHNICAL_ERROR` si le snapshot ticker public échoue ;
+- message cockpit explicite lorsqu'un seuil volume exclut tous les marchés pour cause de volume inconnu ou sous seuil ;
+- régressions dédiées `PERPETUAL + Volume Tous` et `PERPETUAL + Volume >= 100k`.
+
+Voir `docs/43_2_CORRECTIF_RADAR_PERPETUAL.md`.

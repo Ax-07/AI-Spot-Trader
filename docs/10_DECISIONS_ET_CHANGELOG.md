@@ -11,18 +11,72 @@ Market Attention Radar reste strictement observationnel et ne prend aucune déci
 ## Référence courante
 
 ```text
-HEAD GitHub audité : 3b8bc6bcb83604cb20eb5ee27ef1b95fcc4210da
-Commit              : docs: close batch 43 documentation
+HEAD GitHub audité : 85cbd01be40680a099bc1a251dc919ef3bbc7212
+Commit              : fix: correct market attention volume filter
 Batch 42            : intégré
 Batch 43            : intégré
-Batch 43.1          : patch proposé, non intégré
+Batch 43.1          : intégré
+Batch 43.2          : patch proposé, non intégré
 ```
 
-## Changelog — 2026-10-02 — Batch 43.1 correctif filtre Volume 24h — patch proposé
+## Changelog — 2026-10-03 — Batch 43.2 correctif Radar PERPETUAL — patch proposé
 
-- audit confirmé du fail-closed actuel : un seuil volume exclut les marchés dont `volume_24h_usd` est `UNKNOWN` ;
-- `SPOT` non coté directement en USD et `PERPETUAL` restent volontairement `UNKNOWN` tant qu'une conversion/notionnalisation USD n'est pas démontrée ;
-- correction de la fenêtre SPOT/USD : la période de 24h est désormais ancrée sur la dernière clôture 5m finalisée connaissable à `as_of`, et non sur les secondes/microsecondes arbitraires de `as_of` ;
+- audit de la chaîne `instruments -> catalogue -> scope -> OHLCV -> activité -> volume -> shortlist` ;
+- confirmation que `PERPETUAL + Volume Tous` n'est pas supprimé par le filtre volume : un résultat vide doit être expliqué par le scan, la qualité des données ou l'absence d'activité inhabituelle ;
+- confirmation du défaut `PERPETUAL + seuil volume` : le code intégré renvoie `UNKNOWN_UNSUPPORTED_MARKET_TYPE` pour tous les PERP et les exclut fail-closed ;
+- exploitation du ticker public bulk Kraken Futures `/tickers` et de `volumeQuote` ;
+- mapping uniquement des linear perpetuals cotés directement en USD ;
+- aucun calcul inventé `candle.volume * close` pour les PERP ;
+- un seul appel bulk, aucune requête réseau par marché ;
+- absence de `volumeQuote` marché par marché exposée en `UNKNOWN_MISSING_QUOTE_VOLUME` ;
+- panne du snapshot ticker bulk exposée en `UNKNOWN_TECHNICAL_ERROR` ;
+- cockpit enrichi d'un diagnostic explicite lorsque le filtre volume explique zéro candidat ;
+- ajout de régressions `PERPETUAL + Volume Tous`, seuil `> / == / < 100k`, et provider volume en erreur ;
+- aucune modification Agent/Risk/Broker, aucune capacité d'exécution PERP ajoutée.
+
+## ADR-321 — Le volume PERPETUAL USD utilise le turnover quote public Kraken
+
+**PROPOSÉ — Batch 43.2.**
+
+Pour les linear perpetuals Kraken cotés directement en USD, le Radar peut utiliser le champ public `volumeQuote` du ticker Futures bulk comme volume 24h USD. La donnée est déjà exprimée dans l'actif de cotation et ne nécessite donc aucune hypothèse sur l'unité du champ `volume` des chart candles.
+
+Règle :
+
+```text
+market_type = PERPETUAL
+contract_kind = LINEAR
+quote_asset = USD
+volumeQuote disponible et valide
+=> Volume24hStatus.AVAILABLE
+```
+
+Sinon la mesure reste explicitement `UNKNOWN_*`. Le Radar ne convertit pas implicitement une autre quote en USD.
+
+## ADR-322 — Un résultat PERPETUAL vide ne doit pas être « réparé » en abaissant le scoring
+
+**PROPOSÉ — Batch 43.2.**
+
+Le scope `PERPETUAL` est appliqué avant le scan. Avec `Volume Tous`, aucun filtre volume n'élimine le marché. Si le catalogue et les scans sont valides mais qu'aucune activité n'atteint les critères d'intérêt, une shortlist vide est un résultat normal.
+
+Les diagnostics doivent distinguer :
+
+```text
+catalogue vide
+scan en erreur
+historique/qualité insuffisant
+volume inconnu ou sous seuil
+aucune activité assez inhabituelle
+```
+
+Aucun seuil d'intérêt n'est réduit uniquement pour produire artificiellement des candidats.
+
+## Changelog — 2026-10-02 — Batch 43.1 correctif filtre Volume 24h — intégré
+
+Commit intégré : `85cbd01be40680a099bc1a251dc919ef3bbc7212` (`fix: correct market attention volume filter`).
+
+- audit confirmé du fail-closed : un seuil volume exclut les marchés dont `volume_24h_usd` est `UNKNOWN` ;
+- `SPOT` non coté directement en USD et `PERPETUAL` restent `UNKNOWN` tant qu'une conversion/notionnalisation USD n'est pas démontrée ;
+- correction de la fenêtre SPOT/USD : la période de 24h est ancrée sur la dernière clôture 5m finalisée connaissable à `as_of` ;
 - ajout d'une mesure typée du volume et de raisons explicites d'indisponibilité ;
 - ajout de `volume_24h_status_counts` au contrat v6 sans changer `protocol_version` ;
 - ajout d'une régression `ALL + >= 100 k$` garantissant qu'un marché SPOT/USD dont le volume valide dépasse le seuil ne disparaît pas ;
@@ -30,17 +84,17 @@ Batch 43.1          : patch proposé, non intégré
 
 ## ADR-319 — Fenêtre 24h alignée sur les clôtures 5m finalisées
 
-**PROPOSÉ — Batch 43.1.**
+**ADOPTÉ — Batch 43.1.**
 
-Le volume 24h SPOT/USD doit être défini sur 24 heures complètes de candles 5m finalisées réellement disponibles. La borne haute est donc la dernière `close_time` finalisée `<= as_of`, puis la borne basse est cette valeur moins 24h.
+Le volume 24h SPOT/USD est défini sur 24 heures complètes de candles 5m finalisées réellement disponibles. La borne haute est la dernière `close_time` finalisée `<= as_of`, puis la borne basse est cette valeur moins 24h.
 
 Cette règle conserve 288 intervalles 5m lorsqu'ils sont disponibles et évite qu'un `as_of` décalé de quelques secondes retire artificiellement la première candle. La causalité reste stricte : aucune candle clôturant après `as_of` n'est utilisée.
 
 ## ADR-320 — Une valeur UNKNOWN doit avoir une raison explicite
 
-**PROPOSÉ — Batch 43.1.**
+**ADOPTÉ — Batch 43.1.**
 
-Le Radar ne transforme pas une absence de conversion démontrée en estimation. Il expose toutefois la raison de l'indisponibilité et sépare une valeur connue mais sous le seuil d'une valeur inconnue :
+Le Radar ne transforme pas une absence de conversion démontrée en estimation. Il expose la raison de l'indisponibilité et sépare une valeur connue mais sous le seuil d'une valeur inconnue :
 
 ```text
 AVAILABLE
@@ -116,7 +170,7 @@ catalogue Kraken
 -> Market Structure 5m / 15m / 1h / 4h
 ```
 
-Le filtre volume ne peut raisonnablement précéder l'OHLCV sans dupliquer une source déjà disponible. Il est néanmoins placé avant L2/trades et avant les quatre lectures structurelles.
+Le filtre volume ne peut raisonnablement précéder l'OHLCV pour le SPOT sans dupliquer une source déjà disponible. Pour le PERPETUAL, le Batch 43.2 propose un snapshot bulk public Futures réutilisé par le même filtre. Dans les deux cas, le filtre reste placé avant L2/trades et avant les quatre lectures structurelles.
 
 ## ADR-317 — Contrat Radar v6 et cohérence runtime
 
@@ -154,7 +208,7 @@ Commit fonctionnel : `003dae8dbfdc052edbad5bfde2c23fa24852eace`.
 - utilisation du Radar ou de la Market Structure comme contexte de l'Agent stratégique ;
 - filtre de shortlist par direction ou structure ;
 - conversion FX implicite pour le filtre de volume ;
-- notionnalisation PERPETUAL non démontrée ;
 - réaction stratégique intra-bougie ;
 - streaming WebSocket L2/trades ;
+- microstructure Futures ;
 - LIVE.

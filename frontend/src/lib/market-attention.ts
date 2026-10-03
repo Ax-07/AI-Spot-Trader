@@ -191,6 +191,15 @@ export type MarketTypeCounts = { SPOT: number; PERPETUAL: number };
 export type LiquidityRegimeCounts = Record<LiquidityRegime, number>;
 export type MicrostructureStatusCounts = Record<MicrostructureStatus, number>;
 export type MicrostructureQualityCounts = Record<MicrostructureDataQuality, number>;
+export type Volume24hStatusCounts = {
+  AVAILABLE: number;
+  BELOW_THRESHOLD: number;
+  UNKNOWN_UNSUPPORTED_QUOTE: number;
+  UNKNOWN_UNSUPPORTED_MARKET_TYPE: number;
+  UNKNOWN_MISSING_QUOTE_VOLUME: number;
+  UNKNOWN_INSUFFICIENT_HISTORY: number;
+  UNKNOWN_TECHNICAL_ERROR: number;
+};
 
 export type SubthresholdActivitySnapshot = {
   market: AttentionMarket;
@@ -240,6 +249,7 @@ export type MarketAttentionOverview = {
   microstructure_error_counts: Record<string, number>;
   market_cap_metadata_status?: RadarStatus;
   market_cap_metadata_provider?: string | null;
+  volume_24h_status_counts?: Volume24hStatusCounts;
   subthreshold_activity: SubthresholdActivitySnapshot[];
   shortlist: MarketAttentionSnapshot[];
   error_type: string | null;
@@ -389,6 +399,38 @@ export function marketAttentionStatusMessage(overview: MarketAttentionOverview):
   if (overview.status === "NOT_CONFIGURED") return "Radar non configuré.";
   if (overview.status === "ERROR") return "Radar en erreur — consulter le diagnostic backend.";
   if (overview.status === "STALE") return "Radar opérationnel mais données Kraken périmées.";
+
+  const filters = activeMarketAttentionFilters(overview);
+  const volume = overview.volume_24h_status_counts;
+  if (filters.min_volume_24h_usd !== null && overview.candidate_market_count === 0 && volume) {
+    const unknown =
+      volume.UNKNOWN_UNSUPPORTED_QUOTE +
+      volume.UNKNOWN_UNSUPPORTED_MARKET_TYPE +
+      (volume.UNKNOWN_MISSING_QUOTE_VOLUME ?? 0) +
+      volume.UNKNOWN_INSUFFICIENT_HISTORY +
+      volume.UNKNOWN_TECHNICAL_ERROR;
+    if (volume.AVAILABLE === 0 && unknown > 0) {
+      return `Filtre volume actif — ${unknown} marché${unknown > 1 ? "s" : ""} sans volume 24h USD exploitable ; ils sont exclus du filtre.`;
+    }
+    if (volume.AVAILABLE === 0 && volume.BELOW_THRESHOLD > 0) {
+      return `Filtre volume actif — ${volume.BELOW_THRESHOLD} marché${volume.BELOW_THRESHOLD > 1 ? "s" : ""} sous le seuil demandé.`;
+    }
+  }
+
+  if (filters.market_scope === "PERPETUAL" && overview.candidate_market_count === 0) {
+    if (overview.catalogue_market_count === 0) {
+      return "Radar PERPETUAL — aucun marché Kraken compatible découvert dans le catalogue.";
+    }
+    if (overview.scanned_market_count === 0) {
+      return `Radar PERPETUAL — ${overview.catalogue_market_count} marché${overview.catalogue_market_count > 1 ? "s" : ""} découvert${overview.catalogue_market_count > 1 ? "s" : ""}, aucun scanné sur ce cycle.`;
+    }
+    const fresh = overview.fresh_market_type_counts.PERPETUAL;
+    if (fresh === 0) {
+      return `Radar PERPETUAL — ${overview.scanned_market_count} marché${overview.scanned_market_count > 1 ? "s" : ""} scanné${overview.scanned_market_count > 1 ? "s" : ""}, aucune activité fraîche exploitable.`;
+    }
+    return `Radar PERPETUAL — ${fresh} marché${fresh > 1 ? "s" : ""} frais analysé${fresh > 1 ? "s" : ""}, aucun événement assez inhabituel pour la shortlist.`;
+  }
+
   if (overview.status === "PARTIAL") {
     return overview.candidate_market_count > 0
       ? "Radar partiellement disponible — certaines données descriptives sont dégradées."
