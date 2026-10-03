@@ -23,9 +23,13 @@ import {
   marketAttentionCoverageMessage,
   marketAttentionStatusMessage,
   marketCapCategoryLabel,
+  marketStructureCoverageMessage,
   setMarketAttentionFilters,
   slippageEstimate,
+  structureEventFilterLabel,
+  structureStateFilterLabel,
   trendDirectionLabel,
+  type AttentionTimeframe,
   type LiquidityRegime,
   type MarketAttentionCoverageStatus,
   type MarketAttentionFilters,
@@ -33,9 +37,13 @@ import {
   type MarketAttentionSnapshot,
   type MarketCapCategory,
   type MarketScope,
+  type MarketStructureState,
   type MicrostructureCharacteristic,
+  type MultiTimeframeStructureState,
   type RadarInterestLevel,
   type RadarStatus,
+  type StructureEvent,
+  type TrendDirection,
 } from "@/lib/market-attention";
 import {
   marketStructure,
@@ -118,6 +126,34 @@ const MARKET_CAP_OPTIONS: Array<{ value: MarketCapCategory; label: string }> = [
   { value: "MID", label: "Mid" },
   { value: "LARGE", label: "Large" },
 ];
+
+const TREND_OPTIONS: TrendDirection[] = ["UP", "DOWN", "NEUTRAL", "MIXED"];
+const GLOBAL_STRUCTURE_OPTIONS: MultiTimeframeStructureState[] = [
+  "BULLISH",
+  "BEARISH",
+  "RANGE",
+  "TRANSITION",
+  "MIXED",
+];
+const TIMEFRAME_STRUCTURE_STATES: MarketStructureState[] = [
+  "BULLISH",
+  "BEARISH",
+  "RANGE",
+  "TRANSITION",
+];
+const STRUCTURE_EVENTS: StructureEvent[] = ["BOS_UP", "BOS_DOWN", "CHOCH_UP", "CHOCH_DOWN"];
+const STRUCTURE_FILTER_KEYS = {
+  "5m": "structure_5m",
+  "15m": "structure_15m",
+  "1h": "structure_1h",
+  "4h": "structure_4h",
+} as const;
+
+type StructureFilterKey = (typeof STRUCTURE_FILTER_KEYS)[AttentionTimeframe];
+
+function toggleValue<T extends string>(values: T[], value: T): T[] {
+  return values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value];
+}
 
 function microLabel(value: string) {
   return MICRO_LABELS[value as MicrostructureCharacteristic] ?? value.replaceAll("_", " ");
@@ -373,10 +409,43 @@ export function MarketAttentionDock() {
 
   function toggleMarketCapCategory(category: MarketCapCategory) {
     if (!filters) return;
-    const selected = new Set(filters.market_cap_categories);
-    if (selected.has(category)) selected.delete(category);
-    else selected.add(category);
-    void changeFilters({ market_cap_categories: Array.from(selected) });
+    void changeFilters({ market_cap_categories: toggleValue(filters.market_cap_categories, category) });
+  }
+
+  function toggleTrend(direction: TrendDirection) {
+    if (!filters) return;
+    void changeFilters({ trend_directions: toggleValue(filters.trend_directions, direction) });
+  }
+
+  function toggleGlobalStructure(state: MultiTimeframeStructureState) {
+    if (!filters) return;
+    void changeFilters({
+      structure_global_states: toggleValue(filters.structure_global_states, state),
+    });
+  }
+
+  function updateTimeframeStructure(
+    timeframe: AttentionTimeframe,
+    field: "states" | "events",
+    value: MarketStructureState | StructureEvent,
+  ) {
+    if (!filters) return;
+    const key: StructureFilterKey = STRUCTURE_FILTER_KEYS[timeframe];
+    const criterion = filters[key];
+    const next = field === "states"
+      ? { ...criterion, states: toggleValue(criterion.states, value as MarketStructureState) }
+      : { ...criterion, events: toggleValue(criterion.events, value as StructureEvent) };
+    void changeFilters({ [key]: next } as Partial<MarketAttentionFilters>);
+  }
+
+  function clearStructureFilters() {
+    void changeFilters({
+      structure_global_states: [],
+      structure_5m: { states: [], events: [] },
+      structure_15m: { states: [], events: [] },
+      structure_1h: { states: [], events: [] },
+      structure_4h: { states: [], events: [] },
+    });
   }
 
   return (
@@ -485,12 +554,104 @@ export function MarketAttentionDock() {
                   </div>
                 </div>
 
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-7">
+                <details className="rounded-lg border p-3">
+                  <summary className="cursor-pointer text-xs font-semibold">Filtres Tendance & Market Structure</summary>
+                  <p className="mt-1 text-[10px] text-muted-foreground">OR dans un même champ ; AND entre familles et timeframes configurées. UNKNOWN est fail-closed lorsqu’un filtre est actif.</p>
+
+                  <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                    <div className="rounded-lg border bg-muted/10 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-semibold">Tendance récente</p>
+                        <Button size="sm" variant="outline" disabled={loading || filters.trend_directions.length === 0} onClick={() => void changeFilters({ trend_directions: [] })}>Toutes</Button>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {TREND_OPTIONS.map((direction) => (
+                          <Button
+                            key={direction}
+                            size="sm"
+                            variant={filters.trend_directions.includes(direction) ? "default" : "outline"}
+                            disabled={loading}
+                            aria-pressed={filters.trend_directions.includes(direction)}
+                            onClick={() => toggleTrend(direction)}
+                          >
+                            {trendDirectionLabel(direction)}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border bg-muted/10 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-semibold">Structure globale</p>
+                        <Button size="sm" variant="outline" disabled={loading || filters.structure_global_states.length === 0} onClick={clearStructureFilters}>Effacer Structure</Button>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {GLOBAL_STRUCTURE_OPTIONS.map((state) => (
+                          <Button
+                            key={state}
+                            size="sm"
+                            variant={filters.structure_global_states.includes(state) ? "default" : "outline"}
+                            disabled={loading}
+                            aria-pressed={filters.structure_global_states.includes(state)}
+                            onClick={() => toggleGlobalStructure(state)}
+                          >
+                            {structureStateFilterLabel(state)}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    {(["5m", "15m", "1h", "4h"] as const).map((timeframe) => {
+                      const key: StructureFilterKey = STRUCTURE_FILTER_KEYS[timeframe];
+                      const criterion = filters[key];
+                      return (
+                        <div key={timeframe} className="rounded-lg border bg-muted/10 p-3">
+                          <p className="text-xs font-semibold">Structure {timeframe}</p>
+                          <p className="mt-2 text-[9px] font-bold uppercase tracking-wide text-muted-foreground">États</p>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {TIMEFRAME_STRUCTURE_STATES.map((state) => (
+                              <Button
+                                key={state}
+                                size="sm"
+                                variant={criterion.states.includes(state) ? "default" : "outline"}
+                                disabled={loading}
+                                aria-pressed={criterion.states.includes(state)}
+                                onClick={() => updateTimeframeStructure(timeframe, "states", state)}
+                              >
+                                {structureStateFilterLabel(state)}
+                              </Button>
+                            ))}
+                          </div>
+                          <p className="mt-3 text-[9px] font-bold uppercase tracking-wide text-muted-foreground">Événements</p>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {STRUCTURE_EVENTS.map((event) => (
+                              <Button
+                                key={event}
+                                size="sm"
+                                variant={criterion.events.includes(event) ? "default" : "outline"}
+                                disabled={loading}
+                                aria-pressed={criterion.events.includes(event)}
+                                onClick={() => updateTimeframeStructure(timeframe, "events", event)}
+                              >
+                                {structureEventFilterLabel(event)}
+                              </Button>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </details>
+
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-8">
                   <Fact label="Catalogue filtré" value={String(data.catalogue_market_count)} />
                   <Fact label="Marchés frais OHLCV" value={String(data.cached_activity_market_count)} />
                   <Fact label="Scannés OHLCV" value={String(data.scanned_market_count)} />
                   <Fact label="Scannés micro" value={String(data.microstructure_scanned_market_count)} />
                   <Fact label="Cache micro" value={String(data.microstructure_cached_market_count)} />
+                  <Fact label="Scannés Structure" value={String(data.structure_coverage?.scanned_market_count ?? 0)} />
                   <Fact label="Candidats" value={String(data.candidate_market_count)} />
                   <Fact label="Metadata cap." value={data.market_cap_metadata_status ?? "—"} />
                 </div>
@@ -520,6 +681,33 @@ export function MarketAttentionDock() {
                       <Fact label="Rotation ≤ TTL" value={data.coverage.rotation_within_activity_ttl ? "OUI" : "NON"} />
                     </div>
                     <p className="mt-3 text-[11px] text-muted-foreground">{marketAttentionCoverageMessage(data.coverage)}</p>
+                  </div>
+                ) : null}
+
+                {data.structure_coverage ? (
+                  <div className="rounded-lg border p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-semibold">Couverture et rotation Market Structure</p>
+                        <p className="text-[10px] text-muted-foreground">Pool après scope, capitalisation, OHLCV exploitable et filtre volume ; cache Structure séparé du cache activité.</p>
+                      </div>
+                      <Badge tone={coverageTone(data.structure_coverage.status)}>{data.structure_coverage.status}</Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+                      <Fact label="Éligibles Structure" value={String(data.structure_coverage.eligible_market_count)} />
+                      <Fact label="Structures fraîches" value={String(data.structure_coverage.fresh_market_count)} />
+                      <Fact label="Structures expirées" value={String(data.structure_coverage.expired_market_count)} />
+                      <Fact label="Jamais analysés" value={String(data.structure_coverage.unseen_market_count)} />
+                      <Fact label="Scannés ce cycle" value={String(data.structure_coverage.scanned_market_count)} />
+                      <Fact label="Couverture" value={formatCoverageRatio(data.structure_coverage.coverage_ratio)} />
+                      <Fact label="Limite / refresh" value={String(data.structure_coverage.effective_market_limit)} />
+                      <Fact label="Cycles / rotation" value={String(data.structure_coverage.estimated_refreshes_per_full_rotation)} />
+                      <Fact label="Rotation estimée" value={formatDurationSeconds(data.structure_coverage.estimated_full_rotation_seconds)} />
+                      <Fact label="TTL Structure" value={formatDurationSeconds(data.structure_coverage.cache_ttl_seconds)} />
+                      <Fact label="Plus vieille Structure" value={formatDurationSeconds(data.structure_coverage.oldest_structure_age_seconds)} />
+                      <Fact label="Rotation ≤ TTL" value={data.structure_coverage.rotation_within_cache_ttl ? "OUI" : "NON"} />
+                    </div>
+                    <p className="mt-3 text-[11px] text-muted-foreground">{marketStructureCoverageMessage(data.structure_coverage)}</p>
                   </div>
                 ) : null}
 
@@ -589,10 +777,10 @@ export function MarketAttentionDock() {
                   </div>
                 ) : (
                   <div className="rounded-xl border border-dashed p-5 text-sm text-muted-foreground">
-                    {loading ? "Construction du snapshot du radar…" : data.status === "NOT_CONFIGURED" ? "Radar non configuré." : "Aucun candidat d’attention disponible avec les filtres actifs."}
+                    {loading ? "Construction du snapshot du radar…" : data.status === "NOT_CONFIGURED" ? "Radar non configuré." : marketAttentionStatusMessage(data)}
                   </div>
                 )}
-                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · filtres pilotés par le backend · classement déterministe. Volume 24h SPOT = candles Kraken causales ; volume 24h PERP linear/USD = `volumeQuote` Kraken Futures uniquement lorsqu’il est validé ; capitalisation = {data.market_cap_metadata_provider ?? "provider externe indisponible"}. UNKNOWN est fail-closed lorsqu’un filtre correspondant est actif.</p>
+                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · filtres pilotés par le backend · classement déterministe. Volume 24h SPOT = candles Kraken causales ; volume 24h PERP linear/USD = `volumeQuote` Kraken Futures uniquement lorsqu’il est validé ; capitalisation = {data.market_cap_metadata_provider ?? "provider externe indisponible"}. La Market Structure utilise uniquement des candles finalisées et des pivots confirmés ; UNKNOWN est fail-closed lorsqu’un filtre correspondant est actif.</p>
               </div>
             ) : <p className="text-sm text-muted-foreground">{loading ? "Chargement du radar…" : "Aucun snapshot chargé."}</p>}
           </CardContent>

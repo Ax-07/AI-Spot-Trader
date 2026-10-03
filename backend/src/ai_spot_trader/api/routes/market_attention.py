@@ -7,21 +7,25 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
 
 from ai_spot_trader.market.attention import MarketAttentionOverview, RadarStatus
-from ai_spot_trader.market.attention_filters import (
-    MarketAttentionFilters,
-    MarketAttentionOverviewV6,
-)
+from ai_spot_trader.market.attention_filters import MarketAttentionOverviewV6
 from ai_spot_trader.market.attention_microstructure import MarketAttentionOverviewV3
 from ai_spot_trader.market.attention_scope_trend import (
     MarketAttentionOverviewV4,
     MarketScope,
 )
 from ai_spot_trader.market.attention_structure import MarketAttentionOverviewV5
+from ai_spot_trader.market.attention_structure_prefilter import (
+    MarketAttentionOverviewV6Structure,
+    StructureAwareMarketAttentionFilters,
+)
 
 router = APIRouter(prefix="/api/v1/market-attention", tags=["market-attention"])
 
 MarketAttentionPublicOverview = (
-    MarketAttentionOverviewV4 | MarketAttentionOverviewV5 | MarketAttentionOverviewV6
+    MarketAttentionOverviewV6Structure
+    | MarketAttentionOverviewV6
+    | MarketAttentionOverviewV5
+    | MarketAttentionOverviewV4
 )
 
 
@@ -49,11 +53,11 @@ class MarketAttentionScopeWriter(Protocol):
 
 class MarketAttentionFilterWriter(Protocol):
     @property
-    def filters(self) -> MarketAttentionFilters: ...
+    def filters(self) -> StructureAwareMarketAttentionFilters: ...
 
     async def set_filters(
         self,
-        filters: MarketAttentionFilters,
+        filters: StructureAwareMarketAttentionFilters,
         *,
         observed_at: datetime | None = None,
     ) -> MarketAttentionPublicOverview: ...
@@ -98,18 +102,18 @@ async def market_attention_scope(
     return _as_public(result)
 
 
-@router.get("/filters", response_model=MarketAttentionFilters)
-async def market_attention_filters(request: Request) -> MarketAttentionFilters:
+@router.get("/filters", response_model=StructureAwareMarketAttentionFilters)
+async def market_attention_filters(request: Request) -> StructureAwareMarketAttentionFilters:
     service = _service(request)
     if service is None or not hasattr(service, "filters"):
-        return MarketAttentionFilters()
+        return StructureAwareMarketAttentionFilters()
     writer = cast(MarketAttentionFilterWriter, service)
     return writer.filters
 
 
 @router.put("/filters", response_model=MarketAttentionPublicOverview)
 async def market_attention_set_filters(
-    payload: MarketAttentionFilters,
+    payload: StructureAwareMarketAttentionFilters,
     request: Request,
 ) -> MarketAttentionPublicOverview:
     service = _service(request)
@@ -138,8 +142,11 @@ def _as_public(
     | MarketAttentionOverviewV3
     | MarketAttentionOverviewV4
     | MarketAttentionOverviewV5
-    | MarketAttentionOverviewV6,
+    | MarketAttentionOverviewV6
+    | MarketAttentionOverviewV6Structure,
 ) -> MarketAttentionPublicOverview:
+    if isinstance(value, MarketAttentionOverviewV6Structure):
+        return value
     if isinstance(value, MarketAttentionOverviewV6):
         return value
     if isinstance(value, MarketAttentionOverviewV5):

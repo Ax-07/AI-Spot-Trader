@@ -36,7 +36,10 @@ from ai_spot_trader.integrations.kraken.attention import KrakenAttentionCatalogu
 from ai_spot_trader.integrations.kraken.candles import KrakenCandleProvider
 from ai_spot_trader.integrations.kraken.microstructure import KrakenSpotMicrostructureProvider
 from ai_spot_trader.market.attention import MarketAttentionPolicy, MarketAttentionRadar
-from ai_spot_trader.market.attention_filters import FilteredStructuredMarketAttentionRadar
+from ai_spot_trader.market.attention_structure_prefilter import (
+    MarketStructureScanPolicy,
+    StructureAwareFilteredMarketAttentionRadar,
+)
 from ai_spot_trader.market.candles import CandleCache, CandleStreamService
 from ai_spot_trader.market.microstructure import MicrostructurePolicy
 from ai_spot_trader.market.structure import MarketStructurePolicy
@@ -105,7 +108,7 @@ def create_app(
         )
 
     def build_market_attention(candles: CandleStreamService) -> MarketAttentionRadar:
-        return FilteredStructuredMarketAttentionRadar(
+        return StructureAwareFilteredMarketAttentionRadar(
             candle_service=candles,
             catalogue=KrakenAttentionCatalogue(
                 spot_rest_url=resolved_settings.kraken_rest_url,
@@ -122,6 +125,7 @@ def create_app(
             policy=MarketAttentionPolicy(),
             microstructure_policy=MicrostructurePolicy(),
             structure_policy=MarketStructurePolicy(),
+            structure_scan_policy=MarketStructureScanPolicy(),
         )
 
     @asynccontextmanager

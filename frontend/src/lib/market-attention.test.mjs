@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  DEFAULT_MARKET_ATTENTION_FILTERS,
   activeMarketAttentionFilters,
   activityErrorEntries,
   attentionHorizon,
@@ -12,12 +13,16 @@ import {
   formatSignedPercent,
   formatUsdCompact,
   formatVolumeRatio,
+  hasActiveStructureFilter,
   marketAttentionCoverageMessage,
   marketAttentionStatusMessage,
   marketCapCategoryLabel,
+  marketStructureCoverageMessage,
   setMarketAttentionFilters,
   setMarketAttentionScope,
   slippageEstimate,
+  structureEventFilterLabel,
+  structureStateFilterLabel,
   trendDirectionLabel,
 } from "./market-attention.ts";
 
@@ -70,11 +75,12 @@ const emptyActivityErrors = () => ({
 });
 
 const overview = (status, candidateCount = 0) => ({
-  protocol_version: "market-attention-radar-v4",
+  protocol_version: "market-attention-radar-v6",
   observed_at: "2026-10-01T10:00:00Z",
   status,
   informative_only: true,
   market_scope: "ALL",
+  filters: { ...DEFAULT_MARKET_ATTENTION_FILTERS },
   catalogue_market_count: 100,
   cached_activity_market_count: 80,
   scanned_market_count: 20,
@@ -143,7 +149,45 @@ test("formats Batch 44 coverage diagnostics", () => {
   );
 });
 
-test("keeps rotation, expired TTL and full coverage distinguishable", () => {
+test("formats Batch 45 structure coverage diagnostics", () => {
+  const rotating = {
+    eligible_market_count: 40,
+    fresh_market_count: 20,
+    expired_market_count: 0,
+    unseen_market_count: 20,
+    scanned_market_count: 10,
+    coverage_ratio: 0.5,
+    effective_market_limit: 20,
+    estimated_refreshes_per_full_rotation: 2,
+    estimated_full_rotation_seconds: 600,
+    cache_ttl_seconds: 3600,
+    oldest_structure_age_seconds: 300,
+    rotation_within_cache_ttl: true,
+    status: "ROTATING",
+  };
+  assert.match(marketStructureCoverageMessage(rotating), /rotation Structure en cours/i);
+  assert.match(
+    marketStructureCoverageMessage({
+      ...rotating,
+      status: "CONFIGURATION_TOO_SLOW",
+      estimated_full_rotation_seconds: 7200,
+      rotation_within_cache_ttl: false,
+    }),
+    /trop lente/i,
+  );
+  assert.match(
+    marketStructureCoverageMessage({
+      ...rotating,
+      fresh_market_count: 40,
+      unseen_market_count: 0,
+      coverage_ratio: 1,
+      status: "COVERED",
+    }),
+    /complète/i,
+  );
+});
+
+test("keeps rotation, expired TTL and full OHLCV coverage distinguishable", () => {
   const base = {
     eligible_market_count: 10,
     fresh_market_count: 5,
@@ -180,12 +224,16 @@ test("keeps rotation, expired TTL and full coverage distinguishable", () => {
   );
 });
 
-test("renders deterministic trend directions as descriptive French labels", () => {
+test("renders deterministic trend and structure labels", () => {
   assert.equal(trendDirectionLabel("UP"), "Haussière ↑");
   assert.equal(trendDirectionLabel("DOWN"), "Baissière ↓");
   assert.equal(trendDirectionLabel("NEUTRAL"), "Neutre →");
   assert.equal(trendDirectionLabel("MIXED"), "Mixte ↕");
   assert.equal(trendDirectionLabel("UNKNOWN"), "Indéterminée");
+  assert.equal(structureStateFilterLabel("TRANSITION"), "Transition");
+  assert.equal(structureStateFilterLabel("MIXED"), "Mixte");
+  assert.equal(structureEventFilterLabel("BOS_UP"), "BOS ↑");
+  assert.equal(structureEventFilterLabel("CHOCH_DOWN"), "CHOCH ↓");
 });
 
 test("selects a theoretical slippage scenario without turning it into an order", () => {
@@ -195,6 +243,63 @@ test("selects a theoretical slippage scenario without turning it into an order",
 
 test("maps an operational empty shortlist to an explicit healthy message", () => {
   assert.equal(marketAttentionStatusMessage(overview("AVAILABLE")), "Radar opérationnel — aucun événement inhabituel détecté.");
+});
+
+test("distinguishes incomplete structure rotation from no matching structure", () => {
+  const filters = {
+    ...DEFAULT_MARKET_ATTENTION_FILTERS,
+    structure_4h: { states: ["TRANSITION"], events: ["CHOCH_DOWN"] },
+  };
+  const incomplete = {
+    ...overview("AVAILABLE"),
+    filters,
+    structure_coverage: {
+      eligible_market_count: 30,
+      fresh_market_count: 10,
+      expired_market_count: 0,
+      unseen_market_count: 20,
+      scanned_market_count: 10,
+      coverage_ratio: 1 / 3,
+      effective_market_limit: 20,
+      estimated_refreshes_per_full_rotation: 2,
+      estimated_full_rotation_seconds: 600,
+      cache_ttl_seconds: 3600,
+      oldest_structure_age_seconds: 120,
+      rotation_within_cache_ttl: true,
+      status: "ROTATING",
+    },
+  };
+  assert.match(marketAttentionStatusMessage(incomplete), /couverture encore incomplète/i);
+
+  const complete = {
+    ...incomplete,
+    structure_coverage: {
+      ...incomplete.structure_coverage,
+      fresh_market_count: 30,
+      unseen_market_count: 0,
+      coverage_ratio: 1,
+      status: "COVERED",
+    },
+  };
+  assert.match(marketAttentionStatusMessage(complete), /aucun marché couvert ne correspond/i);
+});
+
+test("detects active structure filters across global states and timeframe criteria", () => {
+  assert.equal(hasActiveStructureFilter(DEFAULT_MARKET_ATTENTION_FILTERS), false);
+  assert.equal(
+    hasActiveStructureFilter({
+      ...DEFAULT_MARKET_ATTENTION_FILTERS,
+      structure_global_states: ["MIXED"],
+    }),
+    true,
+  );
+  assert.equal(
+    hasActiveStructureFilter({
+      ...DEFAULT_MARKET_ATTENTION_FILTERS,
+      structure_1h: { states: [], events: ["BOS_DOWN"] },
+    }),
+    true,
+  );
 });
 
 test("keeps partial and stale Kraken states distinguishable", () => {
@@ -207,13 +312,12 @@ test("returns only non-zero bounded Kraken error categories in deterministic ord
   assert.deepEqual(activityErrorEntries(counts), [["KrakenNetworkError", 8], ["KrakenRateLimitError", 3], ["Other", 1]]);
 });
 
-test("falls back to the legacy scope when a pre-v6 snapshot has no filter object", () => {
-  assert.deepEqual(activeMarketAttentionFilters({ ...overview("AVAILABLE"), market_scope: "SPOT" }), {
+test("falls back to legacy scope with all Batch 45 filters disabled", () => {
+  const legacy = { ...overview("AVAILABLE"), market_scope: "SPOT" };
+  delete legacy.filters;
+  assert.deepEqual(activeMarketAttentionFilters(legacy), {
+    ...DEFAULT_MARKET_ATTENTION_FILTERS,
     market_scope: "SPOT",
-    min_volume_24h_usd: null,
-    market_cap_categories: [],
-    min_market_cap_usd: null,
-    max_market_cap_usd: null,
   });
 });
 
@@ -237,14 +341,17 @@ test("sends a backend scope change before replacing the radar snapshot", async (
   }
 });
 
-test("sends volume and market-cap filters as backend runtime state", async () => {
+test("sends volume, cap, trend and structure filters as one backend runtime state", async () => {
   const previousFetch = globalThis.fetch;
   const filters = {
+    ...DEFAULT_MARKET_ATTENTION_FILTERS,
     market_scope: "SPOT",
     min_volume_24h_usd: "1000000",
     market_cap_categories: ["MID", "LARGE"],
-    min_market_cap_usd: null,
-    max_market_cap_usd: null,
+    trend_directions: ["DOWN", "MIXED"],
+    structure_global_states: ["TRANSITION", "MIXED"],
+    structure_1h: { states: ["BEARISH"], events: [] },
+    structure_4h: { states: ["TRANSITION"], events: ["CHOCH_DOWN"] },
   };
   globalThis.fetch = async (url, init) => {
     assert.equal(url, "/backend/api/v1/market-attention/filters");
@@ -255,7 +362,6 @@ test("sends volume and market-cap filters as backend runtime state", async () =>
       status: 200,
       json: async () => ({
         ...overview("AVAILABLE"),
-        protocol_version: "market-attention-radar-v6",
         market_scope: "SPOT",
         filters,
       }),

@@ -11,13 +11,135 @@ Market Attention Radar reste strictement observationnel et ne prend aucune déci
 ## Référence courante
 
 ```text
-Dernier commit fonctionnel : c262d54
-Commit                     : feat: add perpetual liquidity and radar coverage diagnostics
+HEAD GitHub observé       : c4f474c
+Commit HEAD               : docs: close batch 44
+Dernier commit fonctionnel: c262d54
+Commit fonctionnel        : feat: add perpetual liquidity and radar coverage diagnostics
 Batch 42            : intégré
 Batch 43            : intégré
 Batch 43.1          : intégré
 Batch 43.2          : intégré
 Batch 44            : intégré fonctionnellement via c262d54
+Batch 45            : patch proposé, non intégré
+```
+
+## Changelog — 2026-10-03 — Batch 45 Structure en amont et filtres — patch proposé
+
+Patch préparé à partir du HEAD GitHub `c4f474c` (`docs: close batch 44`). Aucun changement n'est poussé sur GitHub par ChatGPT.
+
+- audit confirmé : la couche `StructuredMarketAttentionRadar` du Batch 42 calcule la Market Structure uniquement après constitution de `base.shortlist` ;
+- conséquence confirmée : un marché `NORMAL` présentant un `CHOCH`/`BOS` confirmé peut ne jamais être analysé par la Structure si l'ancien classement activité/microstructure ne le retient pas ;
+- le patch Batch 45 contourne proprement l'ancien enrichissement Structure post-shortlist pour le runtime canonique, sans dupliquer les scans microstructure ni modifier la rotation OHLCV ;
+- le pipeline v4 activité/tendance/microstructure reste la source canonique des données descriptives avant Structure ;
+- ajout d'une rotation Structure déterministe, séparée des curseurs OHLCV, avec limite par refresh et cache TTL ;
+- conservation de `MarketStructurePolicy` comme policy de géométrie causale ; ajout d'une `MarketStructureScanPolicy` distincte pour la responsabilité réseau/cache ;
+- réutilisation de `_market_structure_for_market()` et donc de `history_as_of()`, des quatre timeframes natives, des candles finalisées et des pivots confirmés ;
+- cache Structure causal : un snapshot dont `observed_at` est postérieur au nouvel `as_of` n'est jamais réutilisé ;
+- ajout d'un diagnostic de couverture Structure séparé de la couverture OHLCV ;
+- hors filtre explicite, seuls des événements confirmés `BOS_UP`, `BOS_DOWN`, `CHOCH_UP`, `CHOCH_DOWN` peuvent ajouter une attention structurelle à la shortlist ;
+- un simple état persistant `BULLISH` ou `BEARISH` ne force pas un candidat en permanence ;
+- priorité structurelle directionnellement symétrique : `UP` et `DOWN` ont le même rang ; les timeframes supérieures ont la priorité descriptive ; `CHOCH` est distingué de `BOS` sans vocabulaire BUY/SELL ;
+- ajout de filtres runtime `trend_directions`, `structure_global_states` et critères `state/event` pour `5m / 15m / 1h / 4h` ;
+- sémantique : `OR` dans un même champ, `AND` entre timeframes/familles, et `state AND event` lorsqu'ils sont tous deux renseignés sur une timeframe ;
+- `UNKNOWN` est fail-closed lorsqu'un filtre correspondant est actif ;
+- lorsqu'un filtre tendance/Structure est explicitement actif, les états persistants deviennent recherchables sans être transformés en anomalie par défaut ;
+- conservation additive du protocole `market-attention-radar-v6` : nouveaux champs/filtres sans route parallèle ni bump mécanique ;
+- cockpit enrichi d'une zone repliable de filtres et d'un diagnostic distinguant « aucun résultat » de « rotation Structure encore incomplète » ;
+- aucune modification Agent / Risk Engine / Broker ; aucune capacité d'exécution PERP ; mode PAPER et invariants SPOT d'exécution inchangés.
+
+Validations exécutées par ChatGPT sur le patch préparé :
+
+```text
+Python py_compile des fichiers Python modifiés : PASS
+frontend market-attention.test.mjs ciblé           : PASS — 16/16
+typecheck TypeScript ciblé market-attention.ts     : PASS
+typecheck ciblé cockpit avec stubs de dépendances  : PASS
+```
+
+La suite complète backend/frontend et les validations Git restent à exécuter localement après extraction.
+
+## ADR-325 — La géométrie Structure et sa politique de scan sont deux responsabilités distinctes
+
+**PROPOSÉ — Batch 45, non intégré.**
+
+`MarketStructurePolicy` continue de définir uniquement la causalité et la géométrie de l'analyse :
+
+```text
+history_limit
+min_history_candles
+pivot_left_bars
+pivot_right_bars
+equality_tolerance_bps
+swing_display_limit
+fetch_concurrency
+```
+
+Le Radar ajoute une policy de scan/cache séparée :
+
+```text
+market_limit_per_refresh
+cache_ttl_seconds
+```
+
+Cette séparation évite de transformer les paramètres de détection HH/HL/LH/LL en paramètres de couverture réseau. Le curseur Structure est indépendant des curseurs OHLCV SPOT/PERP.
+
+## ADR-326 — L'attention structurelle par défaut repose sur des événements confirmés, pas sur un régime permanent
+
+**PROPOSÉ — Batch 45, non intégré.**
+
+Par défaut :
+
+```text
+BULLISH / BEARISH / RANGE / TRANSITION sans événement confirmé
+=> ne force pas l'entrée dans la shortlist
+
+BOS_UP / BOS_DOWN / CHOCH_UP / CHOCH_DOWN confirmé
+=> peut compléter les candidats canoniques
+```
+
+Le classement reste descriptif et directionnellement symétrique. `CHOCH_UP` et `CHOCH_DOWN` ont la même importance ; idem pour `BOS_UP` et `BOS_DOWN`. Une timeframe supérieure peut être priorisée par rapport à une timeframe inférieure sans constituer une prédiction de prix.
+
+Lorsqu'un opérateur active explicitement un filtre Structure, les états persistants correspondants peuvent être recherchés. Cette recherche explicite ne change pas la règle d'attention par défaut.
+
+## ADR-327 — Les filtres Structure sont fail-closed et la couverture doit expliquer les zéros
+
+**PROPOSÉ — Batch 45, non intégré.**
+
+Sémantique des filtres :
+
+```text
+plusieurs valeurs d'un même champ => OR
+plusieurs timeframes configurées   => AND
+plusieurs familles actives         => AND
+state + event sur une timeframe    => AND
+champ vide                          => aucune contrainte
+```
+
+`UNKNOWN` n'est jamais prétendu compatible avec un filtre actif. Une structure absente, expirée ou pas encore calculée échoue donc au filtre Structure concerné.
+
+Le payload v6 ajoute un diagnostic Structure distinct :
+
+```text
+eligible_market_count
+fresh_market_count
+expired_market_count
+unseen_market_count
+scanned_market_count
+coverage_ratio
+effective_market_limit
+estimated_refreshes_per_full_rotation
+estimated_full_rotation_seconds
+cache_ttl_seconds
+oldest_structure_age_seconds
+rotation_within_cache_ttl
+status
+```
+
+Le cockpit doit distinguer :
+
+```text
+couverture incomplète => résultat encore non concluant
+couverture complète   => aucun marché couvert ne correspond réellement au filtre
 ```
 
 ## Changelog — 2026-10-03 — Batch 44 liquidité PERPETUAL et couverture — intégré
@@ -232,9 +354,9 @@ Aucun endpoint `/Ticker` additionnel par marché n'est introduit. Pour les march
 
 ## ADR-316 — Les filtres doivent précéder les enrichissements coûteux
 
-**ADOPTÉ — Batch 43.**
+**ADOPTÉ — Batch 43 ; complété par le Batch 45 proposé.**
 
-Ordre effectif :
+Ordre intégré avant Batch 45 :
 
 ```text
 catalogue Kraken
@@ -249,15 +371,25 @@ catalogue Kraken
 -> Market Structure 5m / 15m / 1h / 4h
 ```
 
-Le filtre volume ne peut raisonnablement précéder l'OHLCV pour le SPOT sans dupliquer une source déjà disponible. Pour le PERPETUAL, le Batch 43.2 intégré utilise un snapshot bulk public Futures réutilisé par le même filtre. Dans les deux cas, le filtre reste placé avant L2/trades et avant les quatre lectures structurelles.
+Le Batch 45 proposé remplace uniquement la fin du pipeline runtime par :
+
+```text
+-> activité / tendance / liquidité
+-> microstructure SPOT canonique
+-> pool Market Structure borné / cache frais
+-> filtres tendance / Structure
+-> shortlist finale
+```
+
+Le filtre volume ne peut raisonnablement précéder l'OHLCV pour le SPOT sans dupliquer une source déjà disponible. Pour le PERPETUAL, le Batch 43.2 intégré utilise un snapshot bulk public Futures réutilisé par le même filtre. Dans les deux cas, le filtre reste placé avant les quatre lectures structurelles.
 
 ## ADR-317 — Contrat Radar v6 et cohérence runtime
 
-**ADOPTÉ — Batch 43.**
+**ADOPTÉ — Batch 43 ; étendu additivement par le Batch 45 proposé.**
 
 `market-attention-radar-v6` expose les filtres actifs au niveau global et, sur chaque candidat, les métadonnées disponibles de volume/capitalisation. Le changement de filtre est sérialisé par le verrou runtime existant. Avant le refresh complet, `latest` bascule sur un snapshot `PARTIAL` vide associé aux nouveaux filtres afin de ne jamais présenter une shortlist calculée avec l'ancien réglage comme actuelle.
 
-Les routes v4/v5 restent sérialisables pour préserver les tests/intégrations injectés existants.
+Le Batch 45 ajoute des champs de filtres et `structure_coverage` sans nouvelle route parallèle et sans incrément mécanique du protocole. Les routes v4/v5/v6 historiques restent sérialisables pour préserver les tests/intégrations injectés existants.
 
 ## ADR-318 — Formulation précise des sources du Radar
 
@@ -285,7 +417,6 @@ Commit fonctionnel : `003dae8dbfdc052edbad5bfde2c23fa24852eace`.
 ## Points explicitement non décidés
 
 - utilisation du Radar ou de la Market Structure comme contexte de l'Agent stratégique ;
-- filtre de shortlist par direction ou structure ;
 - baseline statistique adaptative ;
 - Open Interest, Funding, Liquidations et CVD ;
 - conversion FX implicite pour le filtre de volume ;

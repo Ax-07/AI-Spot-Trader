@@ -3,8 +3,10 @@
 ## Référence de reprise
 
 ```text
-Dernier commit fonctionnel : c262d54
-Commit                     : feat: add perpetual liquidity and radar coverage diagnostics
+HEAD GitHub observé       : c4f474c
+Commit HEAD               : docs: close batch 44
+Dernier commit fonctionnel: c262d54
+Commit fonctionnel        : feat: add perpetual liquidity and radar coverage diagnostics
 Batch 39               : intégré
 Batch 40               : intégré
 Batch 41               : intégré
@@ -13,6 +15,7 @@ Batch 43               : intégré
 Batch 43.1             : intégré
 Batch 43.2             : intégré
 Batch 44               : intégré fonctionnellement via c262d54
+Batch 45               : patch proposé, non intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -31,9 +34,9 @@ AI Spot Trader conserve un seul Agent IA stratégique, Kraken comme exchange ini
 
 ## État intégré jusqu'au Batch 44
 
-Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et des caractéristiques descriptives. Le Batch 39 a supprimé la couche Web/IA du Radar. Le Batch 40 a ajouté la microstructure Kraken SPOT et le contrat Radar v3. Le Batch 41 a ajouté le scope `SPOT / PERPETUAL / ALL`, les directions récentes par horizon et le contrat Radar v4. Le Batch 42 a ajouté la Market Structure multi-timeframe et le contrat Radar v5. Le Batch 43 ajoute les filtres runtime de volume 24h et de capitalisation réelle ainsi que le contrat Radar v6. Le Batch 43.1 corrige la fenêtre causale SPOT/USD et ajoute les diagnostics typés du filtre volume. Le Batch 43.2 rend le filtre volume opérationnel pour les linear perpetuals USD via le turnover quote public Kraken Futures.
+Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et des caractéristiques descriptives. Le Batch 39 a supprimé la couche Web/IA du Radar. Le Batch 40 a ajouté la microstructure Kraken SPOT et le contrat Radar v3. Le Batch 41 a ajouté le scope `SPOT / PERPETUAL / ALL`, les directions récentes par horizon et le contrat Radar v4. Le Batch 42 a ajouté la Market Structure multi-timeframe et le contrat Radar v5. Le Batch 43 ajoute les filtres runtime de volume 24h et de capitalisation réelle ainsi que le contrat Radar v6. Le Batch 43.1 corrige la fenêtre causale SPOT/USD et ajoute les diagnostics typés du filtre volume. Le Batch 43.2 rend le filtre volume opérationnel pour les linear perpetuals USD via le turnover quote public Kraken Futures. Le Batch 44 ajoute la liquidité PERPETUAL et l'observabilité de couverture OHLCV.
 
-Le dernier commit fonctionnel du Radar pour le Batch 44 est `c262d54` (`feat: add perpetual liquidity and radar coverage diagnostics`). Une éventuelle clôture documentaire ultérieure ne change pas cette référence fonctionnelle.
+Le dernier commit fonctionnel du Radar intégré est `c262d54` (`feat: add perpetual liquidity and radar coverage diagnostics`). Le HEAD `c4f474c` clôt la documentation du Batch 44 sans changer cette référence fonctionnelle.
 
 ## Batch 42 — Market Structure multi-timeframe
 
@@ -128,16 +131,47 @@ Le diagnostic théorique utilise l'allocation réellement calculée par le Radar
 
 Voir `docs/44_LIQUIDITE_PERPETUAL_ET_COUVERTURE_RADAR.md`.
 
-## Validation connue
+## Batch 45 — Structure en amont et filtres tendance/structure
 
-Batch 43.2 intégré :
+**État : patch proposé, non intégré.**
+
+Objectif : rendre la Market Structure capable de faire remonter un marché avant qu'une anomalie de volume importante n'apparaisse, tout en conservant un coût réseau borné et une causalité stricte.
+
+Pipeline proposé :
 
 ```text
-backend pytest -q       : PASS
-frontend pnpm typecheck : PASS
-frontend pnpm test      : PASS — 57/57
-git diff --check        : PASS
+catalogue Kraken
+-> scope SPOT / PERPETUAL / ALL
+-> métadonnées / filtre capitalisation
+-> rotation OHLCV
+-> filtre volume
+-> activité / tendance / liquidité
+-> microstructure SPOT canonique
+-> pool Market Structure borné et rotatif
+-> cache Market Structure frais
+-> filtres tendance / Structure
+-> shortlist finale bornée
+-> cockpit
 ```
+
+Décisions du patch :
+
+- la rotation Structure est séparée des curseurs OHLCV et ne les modifie pas ;
+- `MarketStructurePolicy` reste la policy de géométrie/pivots ; une `MarketStructureScanPolicy` distincte gère uniquement `market_limit_per_refresh` et `cache_ttl_seconds` ;
+- `fetch_concurrency` reste fourni par `MarketStructurePolicy` et continue de borner les lectures natives ;
+- le cache conserve le `observed_at` du `MultiTimeframeMarketStructure` ; un snapshot futur par rapport à `as_of` n'est jamais réutilisé ;
+- un état persistant `BULLISH` ou `BEARISH` ne constitue pas à lui seul une anomalie permanente ;
+- hors filtre explicite, seuls des événements confirmés `BOS / CHOCH` peuvent ajouter une attention structurelle ;
+- la priorité structurelle est symétrique haussier/baissier et donne naturellement plus de poids descriptif aux timeframes supérieures ;
+- lorsqu'un filtre tendance/Structure est explicitement actif, il devient un critère de recherche sur le pool couvert, avec `OR` dans un champ et `AND` entre familles/timeframes ;
+- `UNKNOWN` est fail-closed pour tout filtre actif correspondant ;
+- diagnostic Structure séparé de la couverture OHLCV : éligibles, frais, expirés, jamais analysés, scannés au cycle, ratio, rotation et compatibilité TTL ;
+- extension additive du contrat public `market-attention-radar-v6`, sans nouvelle route parallèle ;
+- cockpit repliable pour éviter un bloc permanent trop volumineux.
+
+Voir `docs/45_STRUCTURE_EN_AMONT_ET_FILTRES_RADAR.md`.
+
+## Validation connue
 
 Batch 44 validé localement avant intégration :
 
@@ -149,9 +183,19 @@ git diff --check        : PASS (avertissements LF/CRLF uniquement)
 git status --short      : propre après commit fonctionnel
 ```
 
+Batch 45 — validations exécutées par ChatGPT sur le patch préparé :
+
+```text
+Python py_compile des fichiers Python modifiés : PASS
+frontend test ciblé market-attention             : PASS — 16/16
+typecheck ciblé market-attention.ts               : PASS
+typecheck ciblé cockpit avec stubs                : PASS
+```
+
+La validation complète `pytest -q`, `pnpm typecheck`, `pnpm test`, `git diff --check` et `git status --short` reste à exécuter localement après extraction.
+
 ## Périmètres ultérieurs possibles
 
-- filtres explicites par structure/tendance dans un batch séparé ;
 - baseline statistique adaptative ;
 - Open Interest, Funding, Liquidations et CVD ;
 - conversion multi-devise du volume uniquement derrière une source FX explicite et testée ;

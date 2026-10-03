@@ -10,7 +10,11 @@ export type MarketAttentionCoverageStatus =
   | "ROTATING"
   | "TTL_EXPIRED"
   | "CONFIGURATION_TOO_SLOW";
+export type StructureCoverageStatus = MarketAttentionCoverageStatus;
 export type TrendDirection = "UP" | "DOWN" | "NEUTRAL" | "MIXED" | "UNKNOWN";
+export type MarketStructureState = "BULLISH" | "BEARISH" | "RANGE" | "TRANSITION" | "UNKNOWN";
+export type MultiTimeframeStructureState = MarketStructureState | "MIXED";
+export type StructureEvent = "BOS_UP" | "BOS_DOWN" | "CHOCH_UP" | "CHOCH_DOWN";
 export type MarketCharacteristic =
   | "TRENDING"
   | "VOLUME_ANOMALY"
@@ -41,12 +45,23 @@ export type AttentionMarket = {
   market_type: "SPOT" | "PERPETUAL";
 };
 
+export type StructureTimeframeFilter = {
+  states: MarketStructureState[];
+  events: StructureEvent[];
+};
+
 export type MarketAttentionFilters = {
   market_scope: MarketScope;
   min_volume_24h_usd: string | null;
   market_cap_categories: MarketCapCategory[];
   min_market_cap_usd: string | null;
   max_market_cap_usd: string | null;
+  trend_directions: TrendDirection[];
+  structure_global_states: MultiTimeframeStructureState[];
+  structure_5m: StructureTimeframeFilter;
+  structure_15m: StructureTimeframeFilter;
+  structure_1h: StructureTimeframeFilter;
+  structure_4h: StructureTimeframeFilter;
 };
 
 export type ActivityHorizonSnapshot = {
@@ -222,6 +237,22 @@ export type MarketAttentionCoverageDiagnostics = {
   status: MarketAttentionCoverageStatus;
 };
 
+export type MarketStructureCoverageDiagnostics = {
+  eligible_market_count: number;
+  fresh_market_count: number;
+  expired_market_count: number;
+  unseen_market_count: number;
+  scanned_market_count: number;
+  coverage_ratio: number | null;
+  effective_market_limit: number;
+  estimated_refreshes_per_full_rotation: number;
+  estimated_full_rotation_seconds: number;
+  cache_ttl_seconds: number;
+  oldest_structure_age_seconds: number | null;
+  rotation_within_cache_ttl: boolean;
+  status: StructureCoverageStatus;
+};
+
 export type SubthresholdActivitySnapshot = {
   market: AttentionMarket;
   peak_volume_ratio: string;
@@ -272,10 +303,13 @@ export type MarketAttentionOverview = {
   market_cap_metadata_provider?: string | null;
   volume_24h_status_counts?: Volume24hStatusCounts;
   coverage?: MarketAttentionCoverageDiagnostics;
+  structure_coverage?: MarketStructureCoverageDiagnostics;
   subthreshold_activity: SubthresholdActivitySnapshot[];
   shortlist: MarketAttentionSnapshot[];
   error_type: string | null;
 };
+
+const EMPTY_STRUCTURE_FILTER = (): StructureTimeframeFilter => ({ states: [], events: [] });
 
 export const DEFAULT_MARKET_ATTENTION_FILTERS: MarketAttentionFilters = {
   market_scope: "ALL",
@@ -283,15 +317,48 @@ export const DEFAULT_MARKET_ATTENTION_FILTERS: MarketAttentionFilters = {
   market_cap_categories: [],
   min_market_cap_usd: null,
   max_market_cap_usd: null,
+  trend_directions: [],
+  structure_global_states: [],
+  structure_5m: EMPTY_STRUCTURE_FILTER(),
+  structure_15m: EMPTY_STRUCTURE_FILTER(),
+  structure_1h: EMPTY_STRUCTURE_FILTER(),
+  structure_4h: EMPTY_STRUCTURE_FILTER(),
 };
 
 export function activeMarketAttentionFilters(
   overview: MarketAttentionOverview,
 ): MarketAttentionFilters {
-  return overview.filters ?? {
+  const filters = overview.filters;
+  if (!filters) {
+    return {
+      ...DEFAULT_MARKET_ATTENTION_FILTERS,
+      market_scope: overview.market_scope,
+      structure_5m: EMPTY_STRUCTURE_FILTER(),
+      structure_15m: EMPTY_STRUCTURE_FILTER(),
+      structure_1h: EMPTY_STRUCTURE_FILTER(),
+      structure_4h: EMPTY_STRUCTURE_FILTER(),
+    };
+  }
+  return {
     ...DEFAULT_MARKET_ATTENTION_FILTERS,
-    market_scope: overview.market_scope,
+    ...filters,
+    trend_directions: filters.trend_directions ?? [],
+    structure_global_states: filters.structure_global_states ?? [],
+    structure_5m: filters.structure_5m ?? EMPTY_STRUCTURE_FILTER(),
+    structure_15m: filters.structure_15m ?? EMPTY_STRUCTURE_FILTER(),
+    structure_1h: filters.structure_1h ?? EMPTY_STRUCTURE_FILTER(),
+    structure_4h: filters.structure_4h ?? EMPTY_STRUCTURE_FILTER(),
   };
+}
+
+export function hasActiveStructureFilter(filters: MarketAttentionFilters): boolean {
+  return Boolean(
+    filters.structure_global_states.length ||
+      filters.structure_5m.states.length || filters.structure_5m.events.length ||
+      filters.structure_15m.states.length || filters.structure_15m.events.length ||
+      filters.structure_1h.states.length || filters.structure_1h.events.length ||
+      filters.structure_4h.states.length || filters.structure_4h.events.length
+  );
 }
 
 export function activityErrorEntries(
@@ -338,6 +405,25 @@ export function trendDirectionLabel(value: TrendDirection | null | undefined): s
   if (value === "NEUTRAL") return "Neutre →";
   if (value === "MIXED") return "Mixte ↕";
   return "Indéterminée";
+}
+
+export function structureStateFilterLabel(
+  value: MultiTimeframeStructureState | MarketStructureState | null | undefined,
+): string {
+  if (value === "BULLISH") return "Haussière";
+  if (value === "BEARISH") return "Baissière";
+  if (value === "RANGE") return "Range";
+  if (value === "TRANSITION") return "Transition";
+  if (value === "MIXED") return "Mixte";
+  return "Indéterminée";
+}
+
+export function structureEventFilterLabel(value: StructureEvent | null | undefined): string {
+  if (value === "BOS_UP") return "BOS ↑";
+  if (value === "BOS_DOWN") return "BOS ↓";
+  if (value === "CHOCH_UP") return "CHOCH ↑";
+  if (value === "CHOCH_DOWN") return "CHOCH ↓";
+  return "—";
 }
 
 export function marketCapCategoryLabel(value: MarketCapCategory | null | undefined): string {
@@ -448,6 +534,23 @@ export function marketAttentionCoverageMessage(
   return `Univers couvert : ${coverage.fresh_market_count}/${coverage.eligible_market_count} marchés frais.`;
 }
 
+export function marketStructureCoverageMessage(
+  coverage: MarketStructureCoverageDiagnostics | null | undefined,
+): string {
+  if (!coverage) return "Diagnostic de couverture Structure non exposé par cette version du Radar.";
+  if (coverage.status === "NO_MARKETS") return "Aucun marché actuellement éligible à la Market Structure.";
+  if (coverage.status === "CONFIGURATION_TOO_SLOW") {
+    return `Rotation Structure estimée à ${formatDurationSeconds(coverage.estimated_full_rotation_seconds)} pour un TTL de ${formatDurationSeconds(coverage.cache_ttl_seconds)} : la configuration est trop lente pour maintenir toute la couverture fraîche.`;
+  }
+  if (coverage.status === "TTL_EXPIRED") {
+    return `${coverage.expired_market_count} structure${coverage.expired_market_count > 1 ? "s" : ""} expirée${coverage.expired_market_count > 1 ? "s" : ""} ; la rotation continue.`;
+  }
+  if (coverage.status === "ROTATING") {
+    return `Rotation Structure en cours : ${coverage.fresh_market_count}/${coverage.eligible_market_count} marchés couverts, ${coverage.unseen_market_count} jamais analysé${coverage.unseen_market_count > 1 ? "s" : ""}.`;
+  }
+  return `Couverture Structure complète : ${coverage.fresh_market_count}/${coverage.eligible_market_count} marchés frais.`;
+}
+
 export function marketAttentionStatusMessage(overview: MarketAttentionOverview): string {
   if (overview.status === "NOT_CONFIGURED") return "Radar non configuré.";
   if (overview.status === "ERROR") return "Radar en erreur — consulter le diagnostic backend.";
@@ -468,6 +571,22 @@ export function marketAttentionStatusMessage(overview: MarketAttentionOverview):
     if (volume.AVAILABLE === 0 && volume.BELOW_THRESHOLD > 0) {
       return `Filtre volume actif — ${volume.BELOW_THRESHOLD} marché${volume.BELOW_THRESHOLD > 1 ? "s" : ""} sous le seuil demandé.`;
     }
+  }
+
+  if (overview.candidate_market_count === 0 && hasActiveStructureFilter(filters)) {
+    const structureCoverage = overview.structure_coverage;
+    if (
+      structureCoverage &&
+      structureCoverage.eligible_market_count > 0 &&
+      structureCoverage.fresh_market_count < structureCoverage.eligible_market_count
+    ) {
+      return `Filtres Structure actifs — couverture encore incomplète (${structureCoverage.fresh_market_count}/${structureCoverage.eligible_market_count}) ; zéro résultat ne signifie pas encore qu’aucun marché ne correspond.`;
+    }
+    return "Filtres Structure actifs — aucun marché couvert ne correspond aux critères demandés.";
+  }
+
+  if (overview.candidate_market_count === 0 && filters.trend_directions.length > 0) {
+    return "Filtre de tendance actif — aucun marché exploitable ne correspond aux directions demandées.";
   }
 
   if (filters.market_scope === "PERPETUAL" && overview.candidate_market_count === 0) {
