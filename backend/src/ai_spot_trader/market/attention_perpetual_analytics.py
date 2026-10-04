@@ -31,13 +31,13 @@ from ai_spot_trader.market.structure import MarketStructurePolicy
 
 
 class MarketAttentionSnapshotV6Analytics(MarketAttentionSnapshotV6):
-    """Additive Batch 47.2 candidate extension; protocol remains v6."""
+    """Additive Futures Analytics candidate extension; protocol remains v6."""
 
     perpetual_analytics: PerpetualAnalyticsSnapshot | None = None
 
 
 class MarketAttentionOverviewV6Analytics(MarketAttentionOverviewV6Structure):
-    """Additive Batch 47.2 overview; OHLCV and Structure coverage stay separate."""
+    """Additive overview; OHLCV, Structure and Futures Analytics coverage stay separate."""
 
     shortlist: tuple[MarketAttentionSnapshotV6Analytics, ...] = ()
     perpetual_analytics_coverage: PerpetualAnalyticsCoverageDiagnostics = Field(
@@ -46,7 +46,7 @@ class MarketAttentionOverviewV6Analytics(MarketAttentionOverviewV6Structure):
 
 
 class PerpetualAnalyticsMarketAttentionRadar(StructureAwareFilteredMarketAttentionRadar):
-    """Batch 47.2 Radar: independent bounded historical OI rotation, descriptive only."""
+    """Bounded Futures Analytics rotation, descriptive only and downstream of canonical ranking."""
 
     def __init__(
         self,
@@ -110,9 +110,8 @@ class PerpetualAnalyticsMarketAttentionRadar(StructureAwareFilteredMarketAttenti
         *,
         observed_at: datetime | None = None,
     ) -> MarketAttentionOverviewV6Analytics:
-        # The parent still owns the canonical shortlist/ranking. Our _scan_structure override
-        # inserts the independent OI rotation immediately before Structure scanning, after the
-        # cheap scope/cap/OHLCV/volume/activity filters have populated the eligible cache.
+        # The parent still owns the canonical shortlist/ranking. _scan_structure inserts the
+        # single Analytics rotation immediately before Structure scanning, after cheaper filters.
         base = await super()._refresh_v4_once(observed_at=observed_at)
         now = base.observed_at.astimezone(UTC)
         eligible = self._analytics_eligible_markets(now)
@@ -173,18 +172,35 @@ class PerpetualAnalyticsMarketAttentionRadar(StructureAwareFilteredMarketAttenti
         )
         characteristics = list(item.combined_characteristics)
         reasons = list(item.interest_reasons)
-        if (
-            PerpetualAnalyticsCharacteristic.OPEN_INTEREST_EXPANSION
-            in analytics.characteristics
-        ):
-            characteristics.append("OPEN_INTEREST_EXPANSION")
-            reasons.append("Open Interest historiquement élevé vs baseline propre au marché")
-        if (
-            PerpetualAnalyticsCharacteristic.OPEN_INTEREST_CONTRACTION
-            in analytics.characteristics
-        ):
-            characteristics.append("OPEN_INTEREST_CONTRACTION")
-            reasons.append("Open Interest historiquement faible vs baseline propre au marché")
+        labels = {
+            PerpetualAnalyticsCharacteristic.OPEN_INTEREST_EXPANSION: (
+                "OPEN_INTEREST_EXPANSION",
+                "Open Interest historiquement élevé vs baseline propre au marché",
+            ),
+            PerpetualAnalyticsCharacteristic.OPEN_INTEREST_CONTRACTION: (
+                "OPEN_INTEREST_CONTRACTION",
+                "Open Interest historiquement faible vs baseline propre au marché",
+            ),
+            PerpetualAnalyticsCharacteristic.FUNDING_POSITIVE_EXTREME: (
+                "FUNDING_POSITIVE_EXTREME",
+                "Funding relatif positif inhabituel vs historique propre au marché",
+            ),
+            PerpetualAnalyticsCharacteristic.FUNDING_NEGATIVE_EXTREME: (
+                "FUNDING_NEGATIVE_EXTREME",
+                "Funding relatif négatif inhabituel vs historique propre au marché",
+            ),
+            PerpetualAnalyticsCharacteristic.LIQUIDATION_VOLUME_SPIKE: (
+                "LIQUIDATION_VOLUME_SPIKE",
+                "Volume total de liquidations inhabituellement élevé vs historique propre au marché",
+            ),
+        }
+        for characteristic in analytics.characteristics:
+            mapped = labels.get(characteristic)
+            if mapped is None:
+                continue
+            label, reason = mapped
+            characteristics.append(label)
+            reasons.append(reason)
 
         payload = item.model_dump()
         payload["combined_characteristics"] = tuple(dict.fromkeys(characteristics))

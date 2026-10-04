@@ -14,7 +14,10 @@ from ai_spot_trader.integrations.kraken.derivatives import (
 )
 from ai_spot_trader.integrations.kraken.errors import UnknownKrakenSymbolError
 from ai_spot_trader.integrations.kraken.rest import KrakenPublicRestClient
-from ai_spot_trader.market.perpetual_analytics import PerpetualAnalyticsPoint
+from ai_spot_trader.market.perpetual_analytics import (
+    PerpetualAnalyticsPoint,
+    PerpetualFundingPoint,
+)
 
 
 class KrakenAttentionCatalogue:
@@ -31,8 +34,8 @@ class KrakenAttentionCatalogue:
             spot_rest_url,
             timeout_seconds=timeout_seconds,
         )
-        # One canonical Futures public-client instance. Batch 47.2 extends the existing client
-        # surface for Market Analytics; it does not add another Futures transport.
+        # One canonical Futures public-client instance. Market Analytics extends this existing
+        # transport; OI, funding and liquidation-volume never create parallel HTTP clients.
         self._derivatives = KrakenDerivativesAnalyticsClient(
             derivatives_rest_url,
             timeout_seconds=timeout_seconds,
@@ -65,10 +68,7 @@ class KrakenAttentionCatalogue:
     ) -> dict[ExecutableMarket, KrakenDerivativesTickerSnapshot]:
         """Return one shared public bulk-ticker snapshot keyed by canonical PERPETUAL market."""
 
-        if not self._perpetual_instruments:
-            instruments = await self._derivatives.fetch_instruments()
-            self._perpetual_instruments = build_kraken_linear_perpetual_instrument_map(instruments)
-
+        await self._ensure_perpetual_instruments()
         tickers = await self._derivatives.fetch_tickers()
         by_venue_symbol = {ticker.venue_symbol.upper(): ticker for ticker in tickers}
         result: dict[ExecutableMarket, KrakenDerivativesTickerSnapshot] = {}
@@ -100,17 +100,62 @@ class KrakenAttentionCatalogue:
     ) -> tuple[PerpetualAnalyticsPoint, ...]:
         """Provider-neutral historical OI view over the canonical Kraken Futures client."""
 
-        if market.market_type is not MarketType.PERPETUAL:
-            return ()
-        if not self._perpetual_instruments:
-            instruments = await self._derivatives.fetch_instruments()
-            self._perpetual_instruments = build_kraken_linear_perpetual_instrument_map(instruments)
-        instrument = self._perpetual_instruments.get(market.symbol)
+        instrument = await self._analytics_instrument(market)
         if instrument is None:
-            raise UnknownKrakenSymbolError(
-                f"no Kraken linear perpetual instrument mapped to {market.symbol}"
-            )
+            return ()
         points = await self._derivatives.fetch_open_interest_history(
+            instrument,
+            since=since,
+            until=until,
+            interval_seconds=interval_seconds,
+        )
+        return tuple(
+            PerpetualAnalyticsPoint(observed_at=point.observed_at, value=point.value)
+            for point in points
+        )
+
+    async def funding_history(
+        self,
+        market: ExecutableMarket,
+        *,
+        since: datetime,
+        until: datetime,
+        interval_seconds: int,
+    ) -> tuple[PerpetualFundingPoint, ...]:
+        """Keep Kraken absolute/raw funding and relative funding as distinct historical fields."""
+
+        instrument = await self._analytics_instrument(market)
+        if instrument is None:
+            return ()
+        points = await self._derivatives.fetch_funding_history(
+            instrument,
+            since=since,
+            until=until,
+            interval_seconds=interval_seconds,
+        )
+        return tuple(
+            PerpetualFundingPoint(
+                observed_at=point.observed_at,
+                rate=point.rate,
+                relative_rate=point.relative_rate,
+            )
+            for point in points
+        )
+
+    async def liquidation_volume_history(
+        self,
+        market: ExecutableMarket,
+        *,
+        since: datetime,
+        until: datetime,
+        interval_seconds: int,
+    ) -> tuple[PerpetualAnalyticsPoint, ...]:
+        """Provider-neutral aggregate liquidation volume with no invented directional split."""
+
+        instrument = await self._analytics_instrument(market)
+        if instrument is None:
+            return ()
+        points = await self._derivatives.fetch_liquidation_volume_history(
             instrument,
             since=since,
             until=until,
@@ -134,6 +179,26 @@ class KrakenAttentionCatalogue:
                 continue
             result[market] = ticker.volume_quote
         return result
+
+    async def _ensure_perpetual_instruments(self) -> None:
+        if self._perpetual_instruments:
+            return
+        instruments = await self._derivatives.fetch_instruments()
+        self._perpetual_instruments = build_kraken_linear_perpetual_instrument_map(instruments)
+
+    async def _analytics_instrument(
+        self,
+        market: ExecutableMarket,
+    ) -> DerivativeInstrument | None:
+        if market.market_type is not MarketType.PERPETUAL:
+            return None
+        await self._ensure_perpetual_instruments()
+        instrument = self._perpetual_instruments.get(market.symbol)
+        if instrument is None:
+            raise UnknownKrakenSymbolError(
+                f"no Kraken linear perpetual instrument mapped to {market.symbol}"
+            )
+        return instrument
 
     async def aclose(self) -> None:
         await self._spot.aclose()

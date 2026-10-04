@@ -71,13 +71,55 @@ export type PerpetualAnalyticsStatus =
 
 export type PerpetualAnalyticsCharacteristic =
   | "OPEN_INTEREST_EXPANSION"
-  | "OPEN_INTEREST_CONTRACTION";
+  | "OPEN_INTEREST_CONTRACTION"
+  | "FUNDING_POSITIVE_EXTREME"
+  | "FUNDING_NEGATIVE_EXTREME"
+  | "LIQUIDATION_VOLUME_SPIKE";
+
+export type PerpetualFundingAnalyticsSnapshot = {
+  status: PerpetualAnalyticsStatus;
+  observed_at: string;
+  current_observed_at: string | null;
+  freshness_seconds: string | null;
+  current_rate: string | null;
+  previous_rate: string | null;
+  baseline_rate: string | null;
+  current_relative_rate: string | null;
+  previous_relative_rate: string | null;
+  baseline_relative_rate: string | null;
+  baseline_relative_rate_mad: string | null;
+  relative_rate_change: string | null;
+  relative_rate_anomaly_score: string | null;
+  relative_rate_anomaly_method: ActivityAnomalyMethod;
+  baseline_period_count: number;
+  history_point_count: number;
+  error_type: string | null;
+};
+
+export type PerpetualLiquidationVolumeAnalyticsSnapshot = {
+  status: PerpetualAnalyticsStatus;
+  observed_at: string;
+  current_observed_at: string | null;
+  freshness_seconds: string | null;
+  current_volume: string | null;
+  previous_volume: string | null;
+  baseline_volume: string | null;
+  baseline_volume_mad: string | null;
+  volume_change: string | null;
+  volume_change_ratio: string | null;
+  volume_anomaly_score: string | null;
+  volume_anomaly_method: ActivityAnomalyMethod;
+  baseline_period_count: number;
+  history_point_count: number;
+  error_type: string | null;
+};
 
 export type PerpetualAnalyticsSnapshot = {
   market: AttentionMarket;
   status: PerpetualAnalyticsStatus;
   provider: string;
   observed_at: string;
+  open_interest_status: PerpetualAnalyticsStatus;
   current_open_interest_observed_at: string | null;
   freshness_seconds: string | null;
   current_open_interest: string | null;
@@ -90,8 +132,19 @@ export type PerpetualAnalyticsSnapshot = {
   open_interest_anomaly_method: ActivityAnomalyMethod;
   baseline_period_count: number;
   history_point_count: number;
+  funding: PerpetualFundingAnalyticsSnapshot | null;
+  liquidation_volume: PerpetualLiquidationVolumeAnalyticsSnapshot | null;
   characteristics: PerpetualAnalyticsCharacteristic[];
   error_type: string | null;
+};
+
+export type PerpetualAnalyticsSeriesCoverageDiagnostics = {
+  series: "open-interest" | "funding" | "liquidation-volume" | string;
+  available_market_count: number;
+  insufficient_history_market_count: number;
+  stale_market_count: number;
+  technical_error_market_count: number;
+  unavailable_market_count: number;
 };
 
 export type PerpetualAnalyticsCoverageDiagnostics = {
@@ -109,6 +162,7 @@ export type PerpetualAnalyticsCoverageDiagnostics = {
   rotation_within_cache_ttl: boolean;
   requests_attempted: number;
   requests_failed: number;
+  series_coverage: PerpetualAnalyticsSeriesCoverageDiagnostics[];
   status: MarketAttentionCoverageStatus;
 };
 
@@ -497,6 +551,13 @@ export function perpetualAnalyticsContext(
   item: MarketAttentionSnapshot,
 ): PerpetualAnalyticsSnapshot | null {
   return item.perpetual_analytics ?? null;
+}
+
+export function perpetualAnalyticsSeriesCoverage(
+  coverage: PerpetualAnalyticsCoverageDiagnostics | null | undefined,
+  series: string,
+): PerpetualAnalyticsSeriesCoverageDiagnostics | null {
+  return coverage?.series_coverage?.find((item) => item.series === series) ?? null;
 }
 
 export function perpetualTickerStatusLabel(

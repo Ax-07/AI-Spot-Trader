@@ -1,130 +1,78 @@
-# Batch 47.2 — Open Interest historique et infrastructure Analytics Futures
+# Batch 47.2 — Open Interest historique
 
 ## Statut
 
-**Patch préparé, non intégré.**
+**INTÉGRÉ sur GitHub `main` via `c09dd14` — `feat: add historical open interest analytics`.**
 
-Base auditée :
+Base précédente : Batch 47.1 `842e6bd7`.
 
-```text
-Repository : Ax-07/AI-Spot-Trader
-Branche    : main
-HEAD       : 842e6bd7f005f1f57bd9b2131d201777020d1d24
-Commit     : feat: add futures ticker analytics foundations
-```
+Les ADR-333, ADR-334, ADR-335 et ADR-336 sont **ADOPTÉES** puisque leur architecture est confirmée par le code intégré.
 
-Le Batch 47.1 est intégré à ce HEAD. Les mentions documentaires antérieures indiquant « patch préparé, non intégré » pour 47.1 ainsi que `ADR-331/332 PROPOSÉ` étaient obsolètes.
+## Objectif
 
-## Objectif strict
+Ajouter l'historique Open Interest Kraken Futures et poser une infrastructure Analytics générique réutilisable par les batches suivants, sans donner à ces données d'autorité stratégique.
 
-Le Batch 47.2 introduit **une seule série Futures historique** :
-
-```text
-OPEN INTEREST
-```
-
-et l'infrastructure commune de rotation/cache/coverage qui pourra être réutilisée par les Batches suivants.
-
-Hors périmètre : funding historique, liquidation-volume, CVD, aggressor-differential, long/short ratio, microstructure Futures, filtre utilisateur OI, autorité de ranking OI, Agent/Risk Engine utilisant l'OI et exécution PERPETUAL.
-
-## Source Kraken auditée
-
-Contrat public retenu :
+## Source Kraken
 
 ```text
 GET https://futures.kraken.com/api/charts/v1/analytics/{venue_symbol}/open-interest
+query:
+  since=<epoch secondes>
+  interval=<secondes>
+  to=<epoch secondes>
 ```
 
-Paramètres documentés :
+Intervalles documentés :
 
 ```text
-since    : int64, epoch secondes, obligatoire
-interval : résolution en secondes, obligatoire
-to       : int64, epoch secondes, optionnel
+60 / 300 / 900 / 1800 / 3600 / 14400 / 43200 / 86400 / 604800
 ```
 
-Résolutions documentées :
+Smoke réel observé avant intégration sur `PF_XBTUSD` :
 
 ```text
-60
-300
-900
-1800
-3600
-14400
-43200
-86400
-604800
+result.timestamp[]
+result.data[] = [[open, high, low, close], ...]
+result.more = false
+errors = []
 ```
 
-Schéma générique officiel audité : la documentation décrit `timestamp` comme `integer[]`, `more` comme booléen et `data` via une union de sous-formes Analytics incluant `Ohlc`.
+Cette observation a corrigé l'hypothèse initiale d'une série scalaire.
 
-Le smoke public local réalisé sur `PF_XBTUSD` avec `interval=3600` a confirmé la forme réellement utilisée par `open-interest` :
+## Parser intégré
 
-```json
-{
-  "result": {
-    "timestamp": [1791122400, 1791126000],
-    "data": [
-      ["2113.6645", "2115.6165", "2109.5432", "2112.2841"],
-      ["2112.2841", "2144.3341", "2109.0608", "2142.3721"]
-    ],
-    "more": false
-  },
-  "errors": []
-}
-```
+`KrakenDerivativesAnalyticsClient.fetch_open_interest_history()` réutilise le transport Futures public canonique.
 
-La continuité observée (`open` du bucket suivant égal au `close` précédent) et l'encadrement par `high` / `low` confirment l'interprétation OHLC `[open, high, low, close]`. Le parser 47.2 exige donc désormais **exactement quatre valeurs par bucket**, toutes finies et non négatives, avec `low <= open/close <= high`. Le `close` est la valeur transmise à la série provider-neutral `PerpetualAnalyticsPoint.value`. Les quatre composantes sont conservées dans `KrakenMarketAnalyticsPoint` pour validation et diagnostic.
+Le parser :
 
-Une forme scalaire, une longueur différente, un OHLC incohérent ou un objet inconnu est rejeté explicitement. Le parser exige également des timestamps epoch secondes entiers, des longueurs `timestamp/data` identiques, un ordre temporel strictement croissant et, lorsque le champ racine `errors` est présent, une liste vide.
+- exige `result.timestamp[]`, `result.data[]` et `result.more` ;
+- rejette les erreurs provider ;
+- exige autant de timestamps que de buckets ;
+- rejette `more=true` afin de ne pas masquer une page tronquée ;
+- exige exactement quatre valeurs OHLC par bucket ;
+- exige des valeurs finies et non négatives ;
+- contrôle `low <= open/close <= high` ;
+- exige un ordre temporel strict ;
+- utilise uniquement le quatrième élément, `close`, comme valeur historique représentative.
 
-`more=true` est rejeté en Batch 47.2. La raison est volontaire : le coût réseau est borné à une requête OI par marché sélectionné et une page tronquée ne doit pas être interprétée silencieusement comme une baseline complète. Une pagination bornée pourra être décidée ultérieurement si les conditions réelles de rétention/page l'exigent.
+Aucune unité économique absente du contrat n'est inventée. En particulier, aucun champ `open_interest_usd` n'est créé.
 
-La documentation publique auditée ne démontre pas de garantie de rétention exploitable par le projet ; aucune durée n'est inventée dans la policy.
-
-## Unité Open Interest
-
-Le contrat utilisé ne démontre pas une unité économique permettant de nommer la série `open_interest_usd`.
-
-Décision :
+## Infrastructure intégrée
 
 ```text
-open_interest
-open_interest_unit = non supposée
+KrakenDerivativesAnalyticsClient
+KrakenMarketAnalyticsPoint
+PerpetualAnalyticsProvider
+PerpetualAnalyticsPolicy
+PerpetualAnalyticsScanner
+PerpetualAnalyticsSnapshot
+PerpetualAnalyticsCoverageDiagnostics
+perpetual_analytics_coverage
 ```
 
-L'analyse est relative à l'historique propre du marché. Aucune conversion USD, notionnalisation ou facteur de contrat n'est appliqué à l'historique OI dans ce batch.
+La rotation Analytics possède son propre curseur et son propre cache. Elle ne réutilise ni le curseur OHLCV ni le curseur Structure.
 
-## Client et provider
-
-Le transport reste dans `integrations/kraken/`.
-
-Le patch ajoute une extension spécialisée du client Futures public canonique :
-
-```text
-KrakenDerivativesAnalyticsClient(KrakenDerivativesPublicClient)
-```
-
-`KrakenAttentionCatalogue` instancie cette extension **comme son unique client Futures public**. Elle hérite donc de `/instruments`, `/tickers`, ticker individuel et chart mark du client canonique tout en ajoutant `fetch_open_interest_history()`. Aucun deuxième `httpx.AsyncClient` Futures n'est créé dans le Radar.
-
-Le Radar ne connaît pas HTTP. Il dépend de :
-
-```text
-PerpetualAnalyticsProvider.open_interest_history(...)
-```
-
-et le catalogue adapte les points Kraken vers :
-
-```text
-PerpetualAnalyticsPoint(observed_at, value)
-```
-
-Cette séparation prépare l'accueil de futures séries sans faire remonter les détails Kraken dans `market/`.
-
-## Policy Analytics
-
-`PerpetualAnalyticsPolicy` centralise :
+Policy :
 
 ```text
 market_limit_per_refresh = 10
@@ -134,424 +82,111 @@ history_lookback_seconds = 172800
 fetch_concurrency        = 4
 baseline_periods         = 12
 data_stale_after_seconds = 7200
-anomaly_score_threshold  = 2.5
-fallback_expansion_ratio = 1.10
-fallback_contraction_ratio = 0.90
+anomaly_score_threshold  = ±2.5
+fallback OI              = ratio >= 1.10 ou <= 0.90 si MAD nul
 ```
 
-Le lookback par défaut de 48h est une décision applicative conservatrice destinée à obtenir 12 points de baseline à intervalle 1h avec marge ; il ne constitue pas une affirmation de rétention Kraken.
+Le coût réseau 47.2 est borné à 10 requêtes OI historiques maximum par refresh avec la policy par défaut.
 
-## Coût réseau borné
+## Causalité
 
-Batch 47.2 n'interroge qu'une seule série : `open-interest`.
-
-Avec la policy par défaut :
+L'appel utilise `to <= as_of`. Un point n'est exploité que si :
 
 ```text
-market_limit_per_refresh = 10
-analytics types          = 1
-requests_max_per_refresh = 10
-fetch_concurrency        = 4
+timestamp + history_interval_seconds <= as_of
 ```
 
-La policy n'augmente jamais automatiquement la limite ou la concurrence lorsque la couverture est lente. Le diagnostic expose ce problème explicitement.
+Cette règle conservatrice empêche l'utilisation du bucket courant non finalisé et est formalisée par l'ADR-335.
 
-Le snapshot bulk `/tickers` du Batch 47.1 reste mutualisé et n'est pas remplacé par des requêtes ticker individuelles.
+## Statistique Open Interest
 
-## Pool éligible et insertion pipeline
-
-L'Analytics OI est exécutée après le pipeline canonique de collecte/filtrage peu coûteux. La population est obtenue via `_fresh_activities(as_of)` puis limitée aux :
+Le Batch 47.2 réutilise les primitives Batch 46 :
 
 ```text
-market_type == PERPETUAL
-status == AVAILABLE
+baseline          = median(historique causal hors courant)
+MAD               = median(abs(x - baseline))
+robust dispersion = 1.4826 * MAD
+score OI          = (current - baseline) / robust dispersion
 ```
 
-`_fresh_activities()` applique déjà le scope courant, la capitalisation et, lorsqu'il est actif, le filtre volume.
-
-Le pipeline logique est :
-
-```text
-catalogue
--> scope
--> capitalisation
--> OHLCV
--> volume
--> activité adaptative / tendance / liquidité / microstructure
--> pool PERPETUAL Analytics éligible
--> rotation/cache Open Interest
--> Structure canonique
--> shortlist canonique
--> enrichissement OI des candidats déjà sélectionnés
-```
-
-Dans l'implémentation, le hook `_scan_structure()` du Radar Batch 47.2 déclenche la rotation OI immédiatement avant le scan Structure, une fois le cache d'activité filtré disponible. Le parent Batch 45 conserve ensuite seul la construction de la Structure et de la shortlist finale. Les résultats OI ne sont lus pour l'enrichissement qu'après cette shortlist : Structure et OI ne dépendent pas l'un de l'autre, et l'OI ne participe pas au ranking.
-
-## Rotation indépendante
-
-`PerpetualAnalyticsScanner` possède :
-
-```text
-_perpetual_analytics_cursor
-```
-
-Le tri est déterministe par `symbol` dans le pool PERPETUAL. Le curseur est indépendant :
-
-- des curseurs OHLCV SPOT/PERP ;
-- du curseur Structure.
-
-`market_limit_per_refresh` borne le nombre de marchés sélectionnés à chaque refresh.
-
-## Cache causal
-
-Le cache est indexé par `ExecutableMarket` et contient `PerpetualAnalyticsSnapshot`.
-
-Réutilisation uniquement si :
-
-```text
-cached.observed_at <= as_of
-AND
-as_of - cached.observed_at <= cache_ttl
-```
-
-Un snapshot dont `observed_at > as_of` n'est jamais réutilisé.
-
-Les statuts exposés sont :
-
-```text
-AVAILABLE
-PARTIAL
-NOT_APPLICABLE
-INSUFFICIENT_HISTORY
-STALE
-TECHNICAL_ERROR
-```
-
-SPOT => `NOT_APPLICABLE`. Un marché jamais couvert retourne un snapshot `PARTIAL`. Une erreur d'un marché produit `TECHNICAL_ERROR` pour ce marché sans arrêter les autres requêtes de la rotation.
-
-## Causalité et finalisation
-
-L'appel provider utilise toujours :
-
-```text
-since = as_of - history_lookback
-until = as_of
-```
-
-Kraken documente le timestamp en secondes et l'intervalle, mais le contrat public audité ne démontre pas une sémantique de clôture permettant d'affirmer qu'un point portant le timestamp `t` est finalisé à `t`.
-
-Le Batch 47.2 applique donc une règle conservatrice :
-
-```text
-point utilisable si point.timestamp + interval <= as_of
-```
-
-Conséquences :
-
-- aucun point futur ;
-- aucun point de l'intervalle courant ;
-- le point courant utilisé dans le score est lui-même finalisé selon cette règle ;
-- le point courant est exclu de sa propre baseline.
-
-Cette prudence peut induire un intervalle de retard mais évite le look-ahead tant que la sémantique fournisseur n'est pas démontrée plus précisément.
-
-## Statistiques Open Interest
-
-Le Batch 47.2 réutilise directement les primitives Batch 46 :
-
-```text
-_median_absolute_deviation()
-_robust_anomaly()
-ActivityAnomalyMethod
-```
-
-Formule :
-
-```text
-current  = dernier point causal finalisé
-previous = point causal précédent
-history  = points causaux avant current
-baseline = median(derniers baseline_periods de history)
-MAD      = median(abs(x - baseline))
-robust_dispersion = 1.4826 * MAD
-score = (current - baseline) / robust_dispersion
-```
-
-Le snapshot expose notamment :
-
-```text
-current_open_interest
-previous_open_interest
-baseline_open_interest
-baseline_open_interest_mad
-open_interest_change
-open_interest_change_ratio
-open_interest_anomaly_score
-open_interest_anomaly_method
-baseline_period_count
-history_point_count
-freshness_seconds
-```
-
-`open_interest_change_ratio` mesure la variation relative courant/précédent. Le score adaptatif mesure le **niveau** courant par rapport au régime historique. Les deux notions restent distinctes.
-
-### Seuil robuste
-
-Seuil symétrique :
-
-```text
-OPEN_INTEREST_EXPANSION   si score >= +2.5
-OPEN_INTEREST_CONTRACTION si score <= -2.5
-```
-
-Aucune asymétrie haussière/baisse n'est introduite.
-
-### MAD nul
-
-Si `MAD == 0`, `_robust_anomaly()` n'invente aucun score infini et renvoie `LEGACY_RATIO_FALLBACK` si le ratio courant/baseline est exploitable.
-
-Fallback 47.2 :
-
-```text
-current / baseline >= 1.10 -> OPEN_INTEREST_EXPANSION
-current / baseline <= 0.90 -> OPEN_INTEREST_CONTRACTION
-```
-
-Il s'agit d'un delta symétrique de ±10 % autour de 1.0, documenté comme fallback et non comme seuil optimal universel.
-
-## Couverture Analytics Futures
-
-Le diagnostic `perpetual_analytics_coverage` est distinct de :
-
-```text
-coverage              # OHLCV
-structure_coverage    # Structure
-```
-
-Il expose :
-
-```text
-eligible_market_count
-fresh_market_count
-expired_market_count
-unseen_market_count
-scanned_market_count
-coverage_ratio
-effective_market_limit
-estimated_refreshes_per_full_rotation
-estimated_full_rotation_seconds
-cache_ttl_seconds
-oldest_snapshot_age_seconds
-rotation_within_cache_ttl
-requests_attempted
-requests_failed
-status
-```
-
-Statuts :
-
-```text
-NO_MARKETS
-COVERED
-ROTATING
-TTL_EXPIRED
-CONFIGURATION_TOO_SLOW
-```
-
-`CONFIGURATION_TOO_SLOW` est purement diagnostique : aucun changement automatique de limites réseau n'est effectué.
-
-## Impact shortlist volontairement limité
-
-Le contrat v6 reste additif :
-
-```text
-candidate.perpetual_analytics
-perpetual_analytics_coverage
-```
-
-L'OI historique peut ajouter aux candidats déjà retenus :
+Caractéristiques :
 
 ```text
 OPEN_INTEREST_EXPANSION
 OPEN_INTEREST_CONTRACTION
-raison descriptive associée
 ```
 
-Mais Batch 47.2 ne modifie pas :
+Si `MAD == 0`, le fallback ratio historique reste explicite. Aucun score artificiel extrême n'est fabriqué.
+
+## Autorité fonctionnelle
+
+L'Open Interest historique :
 
 ```text
-interest_level
-candidate_limit
-ranking canonique
-ranking Structure
-MarketStructurePolicy
-MarketStructureScanPolicy
-baseline adaptative OHLCV Batch 46
+n'influence pas interest_level
+n'influence pas candidate_limit
+n'influence pas le ranking canonique
+ne peut pas créer seul un candidat
 ```
 
-Un marché normal ne peut donc pas entrer dans la shortlist uniquement à cause de l'OI.
+Le parent construit la shortlist canonique avant enrichissement Analytics. OI complète seulement `combined_characteristics`, `interest_reasons`, le détail candidat et les diagnostics de couverture.
 
-La route FastAPI inclut explicitement `MarketAttentionOverviewV6Analytics` en tête de l'union publique afin que les champs additifs ne soient pas supprimés par une sérialisation vers le modèle v6 Structure plus étroit.
+Aucune modification Agent, Risk Engine, Broker ou capacité d'exécution PERPETUAL.
 
 ## Cockpit
 
-La ligne principale des candidats reste inchangée.
+Le contrat reste `market-attention-radar-v6` avec champs additifs :
 
-Dans le détail `Futures Kraken`, une sous-partie `Open Interest historique` affiche :
+- `perpetual_analytics` sur un candidat PERPETUAL ;
+- `perpetual_analytics_coverage` au niveau overview ;
+- bloc `Open Interest historique` dans le détail Futures Kraken.
 
-```text
-OI courant historique
-OI précédent
-variation brute
-variation relative
-baseline médiane
-MAD
-score adaptatif
-méthode
-caractéristique
-fraîcheur
-point Kraken
-snapshot Analytics
-statut
-```
+Aucun filtre utilisateur OI n'est ajouté.
 
-Aucune unité OI non démontrée n'est affichée.
+## Validation observée avant intégration
 
-Un bloc global `Couverture Analytics Futures` affiche la rotation, la couverture, le TTL et les requêtes tentées/échouées afin de distinguer :
+Validation locale utilisateur :
 
 ```text
-aucune anomalie OI
+backend pytest -q       : PASS — suite arrivée à 100 %
+frontend pnpm typecheck : PASS
+frontend pnpm test      : PASS — 72/72
+git diff --check        : PASS — avertissements LF/CRLF uniquement
+smoke Kraken OI         : PASS — PF_XBTUSD, OHLC, more=false
 ```
 
-de :
+Le correctif parser déclenché par le smoke a également été validé dans l'environnement ChatGPT avec `py_compile` et tests ciblés parser/client.
+
+## Décisions
+
+### ADR-333 — Rotation/cache Analytics séparée
+
+**ADOPTÉ — intégré via `c09dd14`.**
+
+Les Analytics Futures historiques disposent d'une rotation/cache séparée de l'OHLCV et de Structure. Les extensions suivantes doivent réutiliser cette infrastructure.
+
+### ADR-334 — OI relatif à son propre historique, sans unité économique inventée
+
+**ADOPTÉ — intégré via `c09dd14`.**
+
+L'OI reste une valeur Kraken brute et est comparé à sa propre baseline robuste.
+
+### ADR-335 — Délai causal conservateur d'un intervalle
+
+**ADOPTÉ — intégré via `c09dd14`.**
+
+Seuls les points dont `timestamp + interval <= as_of` sont consommés.
+
+### ADR-336 — OI historique sans autorité de ranking
+
+**ADOPTÉ — intégré via `c09dd14`.**
+
+Le ranking et la shortlist sont déterminés avant l'enrichissement OI. Toute influence multi-analytics est réservée au Batch 47.5.
+
+## Suite
 
 ```text
-univers OI encore partiellement couvert
+47.3 : funding historique + liquidation-volume
+47.4 : CVD + aggressor-differential
+47.5 : éventuelle influence multi-analytics sur le ranking, à décider explicitement
 ```
-
-## Tests du patch
-
-### Client/parser Kraken
-
-```text
-endpoint /analytics/{venue_symbol}/open-interest
-venue_symbol
-interval
-since/to epoch secondes
-payload OHLC live valide
-close du bucket utilisé comme valeur historique
-historique vide
-forme scalaire / longueur OHLC inconnue rejetées
-OHLC incohérent rejeté
-payload/troncature/provider errors invalides
-timestamps invalides
-NaN / Infinity
-valeur négative
-ordre temporel incohérent
-HTTP error
-JSON invalide
-```
-
-### Statistiques et rotation/cache
-
-```text
-SPOT NOT_APPLICABLE
-baseline médiane
-MAD / score robuste
-MAD nul / fallback explicite
-historique insuffisant
-outlier historique
-expansion / contraction symétriques
-current exclu de baseline
-point futur/courant non finalisé exclu
-rotation déterministe
-market_limit_per_refresh
-fetch_concurrency
-cache frais
-cache expiré
-cache futur jamais réutilisé
-erreur isolée par marché
-requests_attempted / requests_failed
-coverage complète / rotation / CONFIGURATION_TOO_SLOW
-```
-
-### Frontend
-
-```text
-payload 47.1 sans analytics compatible
-snapshot OI complet
-historique insuffisant
-erreur technique
-SPOT N/A
-score positif/négatif
-méthode MAD/fallback
-coverage Analytics
-```
-
-## Validation réellement exécutée par ChatGPT
-
-Au moment de la préparation du patch :
-
-```text
-python -m py_compile des sources/tests Python Batch 47.2              : PASS
-pytest ciblé Batch 47.2 avec stubs du checkout partiel                  : PASS — 37/37
-node --test --experimental-strip-types market-attention.test.mjs        : PASS — 26/26
-tsc --noEmit --strict ciblé market-attention.ts                         : PASS
-typecheck ciblé lib + cockpit avec stubs React/UI                       : PASS
-transpile TypeScript ciblé market-attention-dock.tsx                    : PASS
-```
-
-Validation locale utilisateur de la première livraison 47.2 :
-
-```text
-pytest -q        : PASS — suite arrivée à 100 %
-pnpm typecheck   : PASS
-pnpm test        : PASS — 72/72
-git diff --check : PASS sans erreur ; avertissements LF/CRLF uniquement
-git status       : 16 fichiers Batch 47.2 attendus
-```
-
-Le smoke HTTP public read-only `PF_XBTUSD/open-interest` a également réussi côté transport et a retourné six buckets horaires, `more=false`, `errors=[]`. Il a surtout révélé que `data` est OHLC et non scalaire ; cette observation a déclenché le correctif pré-intégration documenté ci-dessus.
-
-Validation réellement exécutée par ChatGPT **après** correction du parser OHLC :
-
-```text
-python -m py_compile analytics.py + test parser/client : PASS
-pytest parser/client Batch 47.2 avec stubs ciblés       : PASS — 33/33
-```
-
-Le checkout complet n'étant pas disponible dans l'environnement ChatGPT, la suite backend complète doit être relancée localement après extraction de ce correctif. Le frontend n'est pas modifié par le correctif OHLC.
-
-## Hors périmètre 47.3+
-
-```text
-47.3 : funding historique, liquidation-volume
-47.4 : CVD, aggressor-differential
-47.5 : décision éventuelle sur l'influence multi-analytics du ranking
-long/short ratio
-microstructure Futures
-filtres OI utilisateur
-Agent utilisant l'OI
-Risk Engine utilisant l'OI
-exécution PERPETUAL
-```
-
-## Invariants préservés
-
-- un seul Agent IA stratégique ;
-- Radar strictement informatif ;
-- aucune décision BUY / SELL / HOLD ;
-- aucune décision long / short ;
-- Risk Engine autorité finale ;
-- exécution SPOT uniquement ;
-- aucune exécution PERPETUAL ;
-- aucun levier ni margin ;
-- PAPER ;
-- aucune donnée future ;
-- aucun look-ahead ;
-- aucune optimisation rétrospective ;
-- API Kraken publique uniquement ;
-- aucune clé Kraken privée ;
-- aucune modification Agent / Risk Engine / Broker ;
-- aucun secret ;
-- aucune promesse de rendement.

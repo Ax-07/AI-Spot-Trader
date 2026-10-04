@@ -171,6 +171,9 @@ function microLabel(value: string) {
 function analyticsCharacteristicLabel(value: string) {
   if (value === "OPEN_INTEREST_EXPANSION") return "Expansion OI";
   if (value === "OPEN_INTEREST_CONTRACTION") return "Contraction OI";
+  if (value === "FUNDING_POSITIVE_EXTREME") return "Funding + extrême";
+  if (value === "FUNDING_NEGATIVE_EXTREME") return "Funding − extrême";
+  if (value === "LIQUIDATION_VOLUME_SPIKE") return "Pic liquidations";
   return value.replaceAll("_", " ");
 }
 
@@ -180,6 +183,8 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
   const structure = marketStructure(item);
   const futures = perpetualTickerContext(item);
   const analytics = perpetualAnalyticsContext(item);
+  const funding = analytics?.funding ?? null;
+  const liquidations = analytics?.liquidation_volume ?? null;
   const h5 = attentionHorizon(item, "5m");
   const h15 = attentionHorizon(item, "15m");
   const h1 = attentionHorizon(item, "1h");
@@ -261,17 +266,17 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
                 <Fact label="Observation" value={shortTime(futures?.observed_at)} />
               </div>
               <p className="mt-3 text-[10px] text-muted-foreground">
-                Open Interest et funding sont affichés comme valeurs Kraken brutes tant que leur unité d’affichage n’est pas démontrée. Aucun format `%` n’est appliqué. Le funding prévu est une prévision publiée par Kraken, pas un funding futur réalisé.
+                Open Interest et funding instantanés restent des champs Kraken distincts. Le funding prévu est une prévision publiée par Kraken, jamais un funding réalisé.
               </p>
 
               <div className="mt-4 rounded-md border bg-background/50 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <p className="font-semibold">Open Interest historique</p>
-                    <p className="text-[10px] text-muted-foreground">Baseline propre au marché, cache/rotation Analytics séparés ; enrichissement descriptif uniquement.</p>
+                    <p className="text-[10px] text-muted-foreground">Baseline propre au marché, cache/rotation Analytics partagé ; enrichissement descriptif uniquement.</p>
                   </div>
-                  <Badge tone={analytics?.status === "AVAILABLE" ? "success" : analytics?.status === "TECHNICAL_ERROR" ? "danger" : "warning"}>
-                    {perpetualAnalyticsStatusLabel(analytics?.status)}
+                  <Badge tone={analytics?.open_interest_status === "AVAILABLE" ? "success" : analytics?.open_interest_status === "TECHNICAL_ERROR" ? "danger" : "warning"}>
+                    {perpetualAnalyticsStatusLabel(analytics?.open_interest_status)}
                   </Badge>
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
@@ -283,16 +288,74 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
                   <Fact label="MAD baseline" value={formatKrakenRawNumber(analytics?.baseline_open_interest_mad)} />
                   <Fact label="Score adaptatif" value={formatAdaptiveScore(analytics?.open_interest_anomaly_score)} />
                   <Fact label="Méthode" value={anomalyMethodLabel(analytics?.open_interest_anomaly_method)} />
-                  <Fact label="Caractéristique" value={analytics?.characteristics.length ? analytics.characteristics.map(analyticsCharacteristicLabel).join(" · ") : "Aucune"} />
                   <Fact label="Fraîcheur donnée" value={formatDurationSeconds(analytics?.freshness_seconds === null || analytics?.freshness_seconds === undefined ? null : Number(analytics.freshness_seconds))} />
                   <Fact label="Point Kraken" value={shortTime(analytics?.current_open_interest_observed_at)} />
                   <Fact label="Snapshot Analytics" value={shortTime(analytics?.observed_at)} />
                 </div>
                 {analytics?.error_type ? <p className="mt-2 text-[10px] text-destructive-subtle-foreground">{analytics.error_type}</p> : null}
                 <p className="mt-3 text-[10px] text-muted-foreground">
-                  Le score compare l’OI à sa propre baseline médiane. L’unité économique de l’OI n’est pas supposée ; aucune conversion USD n’est inventée. L’OI historique ne change ni le niveau d’intérêt ni le classement du candidat dans ce batch.
+                  Le score compare l’OI à sa propre baseline médiane. Aucune conversion USD n’est inventée et l’OI historique ne change ni le niveau d’intérêt ni le classement.
                 </p>
               </div>
+
+              <div className="mt-4 rounded-md border bg-background/50 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="font-semibold">Funding historique</p>
+                    <p className="text-[10px] text-muted-foreground">`rate` absolu Kraken et `relativeRate` restent séparés ; l’anomalie est calculée sur le taux relatif.</p>
+                  </div>
+                  <Badge tone={funding?.status === "AVAILABLE" ? "success" : funding?.status === "TECHNICAL_ERROR" ? "danger" : "warning"}>
+                    {perpetualAnalyticsStatusLabel(funding?.status)}
+                  </Badge>
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+                  <Fact label="Rate brut courant" value={formatKrakenSignedRawNumber(funding?.current_rate)} />
+                  <Fact label="Rate brut précédent" value={formatKrakenSignedRawNumber(funding?.previous_rate)} />
+                  <Fact label="Funding relatif courant" value={formatSignedPercent(funding?.current_relative_rate)} />
+                  <Fact label="Funding relatif précédent" value={formatSignedPercent(funding?.previous_relative_rate)} />
+                  <Fact label="Baseline relative" value={formatSignedPercent(funding?.baseline_relative_rate)} />
+                  <Fact label="MAD relatif" value={formatKrakenRawNumber(funding?.baseline_relative_rate_mad)} />
+                  <Fact label="Delta relatif" value={formatSignedPercent(funding?.relative_rate_change)} />
+                  <Fact label="Score adaptatif" value={formatAdaptiveScore(funding?.relative_rate_anomaly_score)} />
+                  <Fact label="Méthode" value={anomalyMethodLabel(funding?.relative_rate_anomaly_method)} />
+                  <Fact label="Point Kraken" value={shortTime(funding?.current_observed_at)} />
+                </div>
+                {funding?.error_type ? <p className="mt-2 text-[10px] text-destructive-subtle-foreground">{funding.error_type}</p> : null}
+                <p className="mt-3 text-[10px] text-muted-foreground">
+                  Positif : longs paient shorts ; négatif : shorts paient longs. Ce funding historique n’est ni `fundingRatePrediction`, ni un paiement de funding réalisé sur un compte.
+                </p>
+              </div>
+
+              <div className="mt-4 rounded-md border bg-background/50 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="font-semibold">Liquidation Volume</p>
+                    <p className="text-[10px] text-muted-foreground">Volume total Kraken par intervalle, sans split directionnel inventé.</p>
+                  </div>
+                  <Badge tone={liquidations?.status === "AVAILABLE" ? "success" : liquidations?.status === "TECHNICAL_ERROR" ? "danger" : "warning"}>
+                    {perpetualAnalyticsStatusLabel(liquidations?.status)}
+                  </Badge>
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+                  <Fact label="Volume courant" value={formatKrakenRawNumber(liquidations?.current_volume)} />
+                  <Fact label="Volume précédent" value={formatKrakenRawNumber(liquidations?.previous_volume)} />
+                  <Fact label="Variation brute" value={formatKrakenSignedRawNumber(liquidations?.volume_change)} />
+                  <Fact label="Variation relative" value={formatSignedPercent(liquidations?.volume_change_ratio)} />
+                  <Fact label="Baseline médiane" value={formatKrakenRawNumber(liquidations?.baseline_volume)} />
+                  <Fact label="MAD baseline" value={formatKrakenRawNumber(liquidations?.baseline_volume_mad)} />
+                  <Fact label="Score adaptatif" value={formatAdaptiveScore(liquidations?.volume_anomaly_score)} />
+                  <Fact label="Méthode" value={anomalyMethodLabel(liquidations?.volume_anomaly_method)} />
+                  <Fact label="Point Kraken" value={shortTime(liquidations?.current_observed_at)} />
+                </div>
+                {liquidations?.error_type ? <p className="mt-2 text-[10px] text-destructive-subtle-foreground">{liquidations.error_type}</p> : null}
+                <p className="mt-3 text-[10px] text-muted-foreground">
+                  La donnée reste agrégée et non directionnelle : aucun champ “liquidations long” ou “liquidations short” n’est déduit du payload.
+                </p>
+              </div>
+
+              {analytics?.characteristics.length ? (
+                <p className="mt-3 text-[10px] text-muted-foreground">Caractéristiques Analytics : {analytics.characteristics.map(analyticsCharacteristicLabel).join(" · ")}</p>
+              ) : null}
             </div>
           ) : null}
 
@@ -766,7 +829,7 @@ export function MarketAttentionDock() {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <p className="text-xs font-semibold">Couverture Analytics Futures</p>
-                        <p className="text-[10px] text-muted-foreground">Open Interest historique uniquement ; rotation et cache séparés de l’OHLCV et de la Market Structure.</p>
+                        <p className="text-[10px] text-muted-foreground">Open Interest, Funding et Liquidation Volume partagent une seule rotation/cache, séparée de l’OHLCV et de la Market Structure.</p>
                       </div>
                       <Badge tone={coverageTone(data.perpetual_analytics_coverage.status)}>{data.perpetual_analytics_coverage.status}</Badge>
                     </div>
@@ -786,7 +849,22 @@ export function MarketAttentionDock() {
                       <Fact label="Requêtes tentées" value={String(data.perpetual_analytics_coverage.requests_attempted)} />
                       <Fact label="Requêtes en échec" value={String(data.perpetual_analytics_coverage.requests_failed)} />
                     </div>
+                    <div className="mt-3 grid gap-2 md:grid-cols-3">
+                      {data.perpetual_analytics_coverage.series_coverage?.map((series) => (
+                        <div key={series.series} className="rounded-md border bg-muted/10 p-2.5">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide">{series.series}</p>
+                          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1">
+                            <CountLine label="AVAILABLE" value={series.available_market_count} />
+                            <CountLine label="INSUFF." value={series.insufficient_history_market_count} />
+                            <CountLine label="STALE" value={series.stale_market_count} />
+                            <CountLine label="ERROR" value={series.technical_error_market_count} />
+                            <CountLine label="UNAVAILABLE" value={series.unavailable_market_count} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                     <p className="mt-3 text-[11px] text-muted-foreground">{perpetualAnalyticsCoverageMessage(data.perpetual_analytics_coverage)}</p>
+                    <p className="mt-1 text-[10px] text-muted-foreground">Policy 47.3 : jusqu’à 3 requêtes publiques par marché sélectionné (OI + funding + liquidation-volume), concurrence globale bornée et aucun auto-tuning.</p>
                   </div>
                 ) : null}
 
@@ -888,7 +966,7 @@ export function MarketAttentionDock() {
                     {loading ? "Construction du snapshot du radar…" : data.status === "NOT_CONFIGURED" ? "Radar non configuré." : marketAttentionStatusMessage(data)}
                   </div>
                 )}
-                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · filtres pilotés par le backend · classement déterministe. Volume 24h SPOT = candles Kraken causales ; volume 24h PERP linear/USD = `volumeQuote` Kraken Futures uniquement lorsqu’il est validé ; Open Interest et funding instantanés = snapshot Futures public partagé. L’Open Interest historique utilise une rotation/cache séparée, une baseline robuste propre au marché et n’a aucun impact de ranking dans ce batch ; aucune unité économique OI n’est inventée. Capitalisation = {data.market_cap_metadata_provider ?? "provider externe indisponible"}. La Market Structure utilise uniquement des candles finalisées et des pivots confirmés ; UNKNOWN est fail-closed lorsqu’un filtre correspondant est actif.</p>
+                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · filtres pilotés par le backend · classement déterministe. Volume 24h SPOT = candles Kraken causales ; volume 24h PERP linear/USD = `volumeQuote` Kraken Futures uniquement lorsqu’il est validé. Analytics Futures historiques = OI + funding + liquidation-volume via une rotation/cache partagée et causale ; ces caractéristiques restent descriptives et n’ont aucun impact de ranking dans le Batch 47.3. Le funding absolu/raw, le funding relatif et la prévision ticker restent distincts ; Liquidation Volume reste agrégé sans split long/short inventé. Capitalisation = {data.market_cap_metadata_provider ?? "provider externe indisponible"}. La Market Structure utilise uniquement des candles finalisées et des pivots confirmés ; UNKNOWN est fail-closed lorsqu’un filtre correspondant est actif.</p>
               </div>
             ) : <p className="text-sm text-muted-foreground">{loading ? "Chargement du radar…" : "Aucun snapshot chargé."}</p>}
           </CardContent>
