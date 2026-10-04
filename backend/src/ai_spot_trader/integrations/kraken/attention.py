@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from decimal import Decimal, InvalidOperation
-from typing import Any
+from dataclasses import replace
+from decimal import Decimal
 
 from ai_spot_trader.domain.enums import MarketType
 from ai_spot_trader.domain.models import DerivativeInstrument, ExecutableMarket
 from ai_spot_trader.integrations.kraken.derivatives import (
     KrakenDerivativesPublicClient,
+    KrakenDerivativesTickerSnapshot,
     build_kraken_linear_perpetual_instrument_map,
+    parse_kraken_derivatives_tickers,
 )
-from ai_spot_trader.integrations.kraken.errors import KrakenPayloadError
 from ai_spot_trader.integrations.kraken.rest import KrakenPublicRestClient
 
 
@@ -55,38 +55,48 @@ class KrakenAttentionCatalogue:
             )
         return tuple(sorted(markets, key=lambda item: (item.market_type.value, item.symbol)))
 
-    async def volume_24h_usd_by_market(self) -> dict[ExecutableMarket, Decimal]:
-        """Return Kraken's public rolling 24h quote turnover for USD linear perpetuals.
-
-        Kraken Futures exposes ``volumeQuote`` in its bulk public ticker response. Because the
-        value is already denominated in the instrument quote asset, USD-quoted linear perpetuals
-        require no candle-volume unit assumption and no synthetic price conversion.
-        """
+    async def perpetual_ticker_snapshot_by_market(
+        self,
+    ) -> dict[ExecutableMarket, KrakenDerivativesTickerSnapshot]:
+        """Return one shared public bulk-ticker snapshot keyed by canonical PERPETUAL market."""
 
         if not self._perpetual_instruments:
             instruments = await self._derivatives.fetch_instruments()
             self._perpetual_instruments = build_kraken_linear_perpetual_instrument_map(instruments)
 
-        # The canonical derivatives client owns the public transport. A single bulk request keeps
-        # this read path bounded; it deliberately avoids one ticker request per market.
-        payload = await self._derivatives._get_json(  # noqa: SLF001
-            "/tickers",
-            "Kraken Derivatives tickers",
-        )
-        quote_volumes = parse_kraken_derivatives_quote_volumes(payload)
-        result: dict[ExecutableMarket, Decimal] = {}
+        tickers = await self._derivatives.fetch_tickers()
+        by_venue_symbol = {ticker.venue_symbol.upper(): ticker for ticker in tickers}
+        result: dict[ExecutableMarket, KrakenDerivativesTickerSnapshot] = {}
         for instrument in self._perpetual_instruments.values():
-            if instrument.quote_asset.upper() != "USD":
+            ticker = by_venue_symbol.get(instrument.venue_symbol.upper())
+            if ticker is None:
                 continue
-            value = quote_volumes.get(instrument.venue_symbol.upper())
-            if value is None:
-                continue
+            ticker = replace(
+                ticker,
+                funding_rate_relative=ticker.normalized_funding_rate(
+                    contract_size=instrument.contract_size
+                ),
+            )
             result[
                 ExecutableMarket(
                     symbol=instrument.symbol,
                     market_type=MarketType.PERPETUAL,
                 )
-            ] = value
+            ] = ticker
+        return result
+
+    async def volume_24h_usd_by_market(self) -> dict[ExecutableMarket, Decimal]:
+        """Return rolling USD quote turnover using the same canonical bulk ticker parser."""
+
+        snapshots = await self.perpetual_ticker_snapshot_by_market()
+        result: dict[ExecutableMarket, Decimal] = {}
+        for market, ticker in snapshots.items():
+            instrument = self._perpetual_instruments.get(market.symbol)
+            if instrument is None or instrument.quote_asset.upper() != "USD":
+                continue
+            if ticker.suspended is True or ticker.volume_quote is None:
+                continue
+            result[market] = ticker.volume_quote
         return result
 
     async def aclose(self) -> None:
@@ -95,41 +105,10 @@ class KrakenAttentionCatalogue:
 
 
 def parse_kraken_derivatives_quote_volumes(payload: object) -> dict[str, Decimal]:
-    """Parse public Futures ``/tickers`` into venue-symbol -> rolling quote volume."""
+    """Compatibility view over the canonical bulk parser: venue symbol -> quote volume."""
 
-    if not isinstance(payload, Mapping):
-        raise KrakenPayloadError("Kraken Derivatives tickers payload must be an object")
-    result = payload.get("result")
-    if result is not None and result != "success":
-        raise KrakenPayloadError("Kraken Derivatives tickers returned an API error")
-    rows = payload.get("tickers")
-    if not isinstance(rows, list):
-        raise KrakenPayloadError("Kraken Derivatives tickers must contain an array")
-
-    parsed: dict[str, Decimal] = {}
-    for raw in rows:
-        if not isinstance(raw, Mapping):
-            raise KrakenPayloadError("Kraken Derivatives tickers contain an invalid entry")
-        symbol = raw.get("symbol")
-        if not isinstance(symbol, str) or not symbol.strip():
-            raise KrakenPayloadError("Kraken Derivatives ticker symbol is invalid")
-        if raw.get("suspended") is True:
-            continue
-        value = raw.get("volumeQuote")
-        if value is None:
-            continue
-        number = _non_negative_decimal(value, "ticker volumeQuote")
-        parsed[symbol.strip().upper()] = number
-    return parsed
-
-
-def _non_negative_decimal(value: Any, label: str) -> Decimal:
-    if isinstance(value, bool) or value is None:
-        raise KrakenPayloadError(f"Kraken {label} is invalid")
-    try:
-        number = value if isinstance(value, Decimal) else Decimal(str(value))
-    except (InvalidOperation, ValueError, TypeError) as exc:
-        raise KrakenPayloadError(f"Kraken {label} is invalid") from exc
-    if not number.is_finite() or number < 0:
-        raise KrakenPayloadError(f"Kraken {label} must be a finite non-negative number")
-    return number
+    return {
+        ticker.venue_symbol: ticker.volume_quote
+        for ticker in parse_kraken_derivatives_tickers(payload)
+        if ticker.suspended is not True and ticker.volume_quote is not None
+    }

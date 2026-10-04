@@ -3,8 +3,10 @@
 from ai_spot_trader.integrations.kraken.derivatives import (
     KrakenDerivativesMarketDataSource,
     KrakenDerivativesPublicClient,
+    KrakenDerivativesTickerSnapshot,
     parse_kraken_derivatives_instruments,
     parse_kraken_derivatives_ticker,
+    parse_kraken_derivatives_tickers,
 )
 from ai_spot_trader.integrations.kraken.errors import (
     KrakenAPIError,
@@ -34,6 +36,7 @@ __all__ = [
     "KrakenConnectionError",
     "KrakenDerivativesMarketDataSource",
     "KrakenDerivativesPublicClient",
+    "KrakenDerivativesTickerSnapshot",
     "KrakenHTTPError",
     "KrakenMarketDataError",
     "KrakenMarketDataSource",
@@ -50,4 +53,5 @@ __all__ = [
     "build_kraken_market_data_source",
     "parse_kraken_derivatives_instruments",
     "parse_kraken_derivatives_ticker",
+    "parse_kraken_derivatives_tickers",
 ]

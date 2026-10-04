@@ -41,6 +41,26 @@ export type MicrostructureCharacteristic =
   | "SELL_PRESSURE"
   | "SLIPPAGE_RISK";
 
+export type PerpetualTickerStatus = "AVAILABLE" | "PARTIAL" | "NOT_APPLICABLE" | "TECHNICAL_ERROR";
+
+export type PerpetualTickerContext = {
+  status: PerpetualTickerStatus;
+  provider: string;
+  venue_symbol: string | null;
+  observed_at: string | null;
+  mark_price: string | null;
+  index_price: string | null;
+  volume_quote: string | null;
+  open_interest: string | null;
+  open_interest_unit: string | null;
+  funding_rate_raw: string | null;
+  funding_rate_relative: string | null;
+  funding_rate_prediction_raw: string | null;
+  funding_rate_raw_unit: string | null;
+  funding_rate_prediction_unit: string | null;
+  suspended: boolean | null;
+};
+
 export type AttentionMarket = {
   symbol: string;
   market_type: "SPOT" | "PERPETUAL";
@@ -286,6 +306,7 @@ export type MarketAttentionSnapshot = {
   circulating_supply?: string | null;
   market_cap_provider?: string | null;
   market_cap_observed_at?: string | null;
+  perpetual_ticker?: PerpetualTickerContext | null;
 };
 
 export type MarketAttentionOverview = {
@@ -411,6 +432,35 @@ export function slippageEstimate(
   return item.microstructure.slippage.find(
     (entry) => entry.side === side && Number(entry.notional_quote) === notionalQuote,
   ) ?? null;
+}
+
+export function perpetualTickerContext(
+  item: MarketAttentionSnapshot,
+): PerpetualTickerContext | null {
+  return item.perpetual_ticker ?? null;
+}
+
+export function perpetualTickerStatusLabel(
+  value: PerpetualTickerStatus | null | undefined,
+): string {
+  if (value === "AVAILABLE") return "Disponible";
+  if (value === "PARTIAL") return "Partiel";
+  if (value === "TECHNICAL_ERROR") return "Erreur technique";
+  if (value === "NOT_APPLICABLE") return "N/A";
+  return "Indisponible";
+}
+
+export function formatKrakenRawNumber(
+  value: string | number | null | undefined,
+): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "—";
+  const absolute = Math.abs(parsed);
+  if (absolute >= 1_000_000_000) return `${(parsed / 1_000_000_000).toFixed(3)} B`;
+  if (absolute >= 1_000_000) return `${(parsed / 1_000_000).toFixed(3)} M`;
+  if (absolute >= 1_000) return `${(parsed / 1_000).toFixed(3)} k`;
+  return parsed.toLocaleString("fr-FR", { maximumFractionDigits: 12 });
 }
 
 export function trendDirectionLabel(value: TrendDirection | null | undefined): string {

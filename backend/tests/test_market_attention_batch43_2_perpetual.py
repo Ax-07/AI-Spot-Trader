@@ -13,6 +13,7 @@ from ai_spot_trader.integrations.kraken.attention import (
     KrakenAttentionCatalogue,
     parse_kraken_derivatives_quote_volumes,
 )
+from ai_spot_trader.integrations.kraken.derivatives import KrakenDerivativesTickerSnapshot
 from ai_spot_trader.integrations.kraken.errors import KrakenPayloadError
 from ai_spot_trader.market.attention import MarketAttentionPolicy
 from ai_spot_trader.market.attention_filters import (
@@ -170,22 +171,29 @@ class FakeDerivativesCatalogueClient:
             market_type=MarketType.PERPETUAL,
             contract_kind=DerivativeContractKind.LINEAR,
             quote_asset="USD",
+            contract_size=Decimal("1"),
         )
         self.ticker_calls = 0
 
     async def fetch_instruments(self):
         return (self.instrument,)
 
-    async def _get_json(self, path: str, label: str):
-        assert path == "/tickers"
-        assert label == "Kraken Derivatives tickers"
+    async def fetch_tickers(self):
         self.ticker_calls += 1
-        return {
-            "result": "success",
-            "tickers": [
-                {"symbol": "PF_XBTUSD", "volumeQuote": "150000.25", "suspended": False}
-            ],
-        }
+        return (
+            KrakenDerivativesTickerSnapshot(
+                venue_symbol="PF_XBTUSD",
+                observed_at=NOW,
+                mark_price=Decimal("65000"),
+                index_price=Decimal("64990"),
+                volume_quote=Decimal("150000.25"),
+                open_interest=Decimal("1000"),
+                funding_rate_raw=Decimal("6.5"),
+                funding_rate_prediction_raw=Decimal("7.0"),
+                suspended=False,
+                post_only=False,
+            ),
+        )
 
     async def aclose(self) -> None:
         return None
@@ -209,10 +217,32 @@ def test_kraken_catalogue_discovers_linear_perpetual_and_maps_bulk_quote_volume(
     asyncio.run(scenario())
 
 
+
+def test_kraken_catalogue_maps_bulk_ticker_and_preserves_relative_funding_conversion() -> None:
+    async def scenario() -> None:
+        catalogue = KrakenAttentionCatalogue.__new__(KrakenAttentionCatalogue)
+        catalogue._spot = FakeSpotCatalogueClient()  # type: ignore[attr-defined]
+        derivatives = FakeDerivativesCatalogueClient()
+        catalogue._derivatives = derivatives  # type: ignore[attr-defined]
+        catalogue._perpetual_instruments = {}  # type: ignore[attr-defined]
+
+        snapshots = await catalogue.perpetual_ticker_snapshot_by_market()
+
+        assert derivatives.ticker_calls == 1
+        ticker = snapshots[PERP]
+        assert ticker.volume_quote == Decimal("150000.25")
+        assert ticker.open_interest == Decimal("1000")
+        assert ticker.funding_rate_raw == Decimal("6.5")
+        assert ticker.funding_rate_prediction_raw == Decimal("7.0")
+        assert ticker.funding_rate_relative == Decimal("0.0001")
+
+    asyncio.run(scenario())
+
 def test_bulk_ticker_quote_volume_parser_is_explicit_and_fail_closed() -> None:
     parsed = parse_kraken_derivatives_quote_volumes(
         {
             "result": "success",
+            "serverTime": "2026-10-04T12:00:00Z",
             "tickers": [
                 {"symbol": "PF_XBTUSD", "volumeQuote": "150000.25"},
                 {"symbol": "PF_ETHUSD", "volumeQuote": "99999.5"},

@@ -40,6 +40,32 @@ _MARGIN_LEVEL_KEYS = frozenset(
 
 
 @dataclass(frozen=True, slots=True)
+class KrakenDerivativesTickerSnapshot:
+    """One row from the public Kraken Futures bulk ``/tickers`` snapshot."""
+
+    venue_symbol: str
+    observed_at: datetime
+    mark_price: Decimal | None
+    index_price: Decimal | None
+    volume_quote: Decimal | None
+    open_interest: Decimal | None
+    funding_rate_raw: Decimal | None
+    funding_rate_prediction_raw: Decimal | None
+    suspended: bool | None
+    post_only: bool | None
+    funding_rate_relative: Decimal | None = None
+
+    def normalized_funding_rate(self, *, contract_size: Decimal) -> Decimal | None:
+        """Return the existing PAPER-compatible relative rate when inputs permit it."""
+
+        if self.funding_rate_raw is None or self.mark_price is None:
+            return None
+        if contract_size <= 0:
+            raise ValueError("contract_size must be positive")
+        return self.funding_rate_raw / (self.mark_price * contract_size)
+
+
+@dataclass(frozen=True, slots=True)
 class _ParsedMarginCurve:
     source: str
     tiers: tuple[DerivativeMarginTier, ...]
@@ -89,6 +115,12 @@ class KrakenDerivativesPublicClient:
     async def fetch_instruments(self) -> tuple[DerivativeInstrument, ...]:
         payload = await self._get_json("/instruments", "Kraken Derivatives instruments")
         return parse_kraken_derivatives_instruments(payload)
+
+    async def fetch_tickers(self) -> tuple[KrakenDerivativesTickerSnapshot, ...]:
+        """Fetch and parse the public bulk ticker exactly once for shared Radar use."""
+
+        payload = await self._get_json("/tickers", "Kraken Derivatives tickers")
+        return parse_kraken_derivatives_tickers(payload)
 
     async def fetch_ticker(
         self,
@@ -436,6 +468,78 @@ def parse_kraken_derivatives_instruments(payload: object) -> tuple[DerivativeIns
             )
     if not parsed:
         raise KrakenPayloadError("Kraken Derivatives returned no usable instruments")
+    return tuple(parsed)
+
+def parse_kraken_derivatives_tickers(
+    payload: object,
+) -> tuple[KrakenDerivativesTickerSnapshot, ...]:
+    """Parse the public Futures bulk ticker without inventing units or normalization."""
+
+    root = _mapping(payload, "Kraken Derivatives tickers payload")
+    result = root.get("result")
+    if result is not None and result != "success":
+        raise KrakenPayloadError("Kraken Derivatives tickers returned an API error")
+    observed_at = _datetime(root.get("serverTime"), "serverTime")
+    rows = root.get("tickers")
+    if not isinstance(rows, list):
+        raise KrakenPayloadError("Kraken Derivatives tickers must contain an array")
+
+    parsed: list[KrakenDerivativesTickerSnapshot] = []
+    seen_symbols: set[str] = set()
+    for raw in rows:
+        if not isinstance(raw, Mapping):
+            raise KrakenPayloadError("Kraken Derivatives tickers contain an invalid entry")
+        venue_symbol = _non_empty_text(raw.get("symbol"), "ticker symbol").upper()
+        if venue_symbol in seen_symbols:
+            raise KrakenPayloadError("Kraken Derivatives tickers contain a duplicate symbol")
+        seen_symbols.add(venue_symbol)
+
+        raw_mark_price = raw.get("markPrice") if "markPrice" in raw else raw.get("mark_price")
+        mark_price = _optional_number(
+            raw_mark_price,
+            "markPrice",
+            positive=True,
+        )
+        index_price = _optional_number(
+            raw.get("indexPrice", raw.get("index")),
+            "indexPrice",
+            positive=True,
+        )
+        volume_quote = _optional_number(
+            raw.get("volumeQuote"),
+            "volumeQuote",
+            non_negative=True,
+        )
+        open_interest = _optional_number(
+            raw.get("openInterest"),
+            "openInterest",
+            non_negative=True,
+        )
+        funding_rate_raw = _optional_number(raw.get("fundingRate"), "fundingRate")
+        funding_rate_prediction_raw = _optional_number(
+            raw.get("fundingRatePrediction"),
+            "fundingRatePrediction",
+        )
+        suspended = _optional_boolean_alias(raw, ("suspended",), "ticker suspended")
+        post_only = _optional_boolean_alias(
+            raw,
+            ("postOnly", "post_only"),
+            "ticker postOnly",
+        )
+        parsed.append(
+            KrakenDerivativesTickerSnapshot(
+                venue_symbol=venue_symbol,
+                observed_at=observed_at,
+                mark_price=mark_price,
+                index_price=index_price,
+                volume_quote=volume_quote,
+                open_interest=open_interest,
+                funding_rate_raw=funding_rate_raw,
+                funding_rate_prediction_raw=funding_rate_prediction_raw,
+                suspended=suspended,
+                post_only=post_only,
+            )
+        )
     return tuple(parsed)
 
 
@@ -808,6 +912,23 @@ def _positive_decimal(value: object, label: str) -> Decimal:
     number = _decimal(value, label)
     if number <= 0:
         raise KrakenPayloadError(f"{label} must be positive")
+    return number
+
+
+def _optional_number(
+    value: object,
+    label: str,
+    *,
+    positive: bool = False,
+    non_negative: bool = False,
+) -> Decimal | None:
+    if value is None:
+        return None
+    number = _decimal(value, label)
+    if positive and number <= 0:
+        raise KrakenPayloadError(f"{label} must be positive")
+    if non_negative and number < 0:
+        raise KrakenPayloadError(f"{label} must be non-negative")
     return number
 
 

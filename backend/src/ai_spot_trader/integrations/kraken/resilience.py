@@ -15,6 +15,7 @@ from ai_spot_trader.core.retry import (
     retry_async,
 )
 from ai_spot_trader.domain.models import DerivativeInstrument, MarketObservation
+from ai_spot_trader.integrations.kraken.derivatives import KrakenDerivativesTickerSnapshot
 from ai_spot_trader.integrations.kraken.errors import (
     KrakenConnectionError,
     KrakenHTTPError,
@@ -44,6 +45,8 @@ class SpotRestSource(Protocol):
 
 class DerivativesRestSource(Protocol):
     async def fetch_instruments(self) -> tuple[DerivativeInstrument, ...]: ...
+
+    async def fetch_tickers(self) -> tuple[KrakenDerivativesTickerSnapshot, ...]: ...
 
     async def fetch_ticker(
         self,
@@ -127,6 +130,12 @@ class RetryingKrakenDerivativesRestSource:
         return await self._call(
             "kraken_derivatives_instruments",
             self._delegate.fetch_instruments,
+        )
+
+    async def fetch_tickers(self) -> tuple[KrakenDerivativesTickerSnapshot, ...]:
+        return await self._call(
+            "kraken_derivatives_tickers",
+            self._delegate.fetch_tickers,
         )
 
     async def fetch_ticker(

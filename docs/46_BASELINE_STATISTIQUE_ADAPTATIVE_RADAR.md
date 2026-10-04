@@ -2,18 +2,26 @@
 
 ## Statut
 
-**Patch proposé, non intégré.**
+**Intégré dans `main` via `b219365` — `feat: add adaptive statistical radar baseline`.**
 
-Base auditée :
+Référence auditée pour la réconciliation Batch 47.1 :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 45d41b78c6aac6b4cf9ac3192d295e7a57411441
-Commit     : feat: move market structure before radar shortlist
+HEAD       : b2193654ed3ba9db890c6129545acd90e238b0f1
+Commit     : feat: add adaptive statistical radar baseline
 ```
 
-Le Batch 45 est bien intégré au HEAD. Les anciens statuts documentaires « proposé, non intégré » sont corrigés dans le même patch documentaire.
+Le commit contient la baseline adaptative Batch 46 ainsi que le correctif 46.1 de compatibilité H4. Les statuts documentaires antérieurs « patch proposé, non intégré » étaient obsolètes.
+
+Décisions intégrées :
+
+```text
+ADR-328 => ADOPTÉ
+ADR-329 => ADOPTÉ
+ADR-330 => ADOPTÉ
+```
 
 ## Objectif
 
@@ -55,13 +63,13 @@ Le Batch 46 retient donc **médiane + MAD normalisé**.
 
 ## Taille de baseline
 
-La valeur cible par défaut devient :
+La valeur cible par défaut est :
 
 ```text
 baseline_periods = 12
 ```
 
-Le correctif 46.1 conserve en plus un plancher de compatibilité centralisé :
+Le correctif 46.1 intégré conserve un plancher de compatibilité centralisé :
 
 ```text
 _MINIMUM_ADAPTIVE_BASELINE_PERIODS = 6
@@ -98,14 +106,15 @@ Le Radar reste donc `AVAILABLE` et exploitable au lieu de devenir `PARTIAL` uniq
 
 Cette résolution adaptative traite aussi proprement les cibles élevées : si `baseline_periods = 20` mais que le fetch ne permet que 18 périodes H4 complètes, 18 sont utilisées plutôt que de casser rétroactivement la configuration.
 
-
 ## Correctif 46.1 — compatibilité historique des fenêtres H4
 
 La première livraison du Batch 46 exigeait rigidement les 12 périodes cibles sur chaque horizon. Les suites historiques utilisent plusieurs fixtures de 404 à 420 candles M5, dimensionnées pour la baseline antérieure de 6 périodes H4. Cette rigidité rendait H4 `INSUFFICIENT_HISTORY`, puis le snapshot `PARTIAL`, ce qui supprimait les candidats avant l'enrichissement Structure.
 
 Le correctif ne revient pas à une baseline fixe de 6 : il garde 12 comme cible et n'utilise 6 que lorsque l'historique causal disponible ne permet pas davantage. Dès que 672 candles M5 ou plus sont disponibles, H4 utilise bien 12 périodes.
 
-Avant correctif, la validation locale utilisateur a observé 7 échecs backend, tous cohérents avec cette régression de disponibilité ; le frontend était vert à 65/65. Le correctif ajoute des tests dédiés pour 720 candles -> 12 périodes, 420 candles -> 6 périodes et historique inférieur au plancher -> `INSUFFICIENT_HISTORY`.
+Avant correctif, la validation locale utilisateur avait observé 7 échecs backend, tous cohérents avec cette régression de disponibilité ; le frontend était vert à 65/65. Le correctif ajoute des tests dédiés pour 720 candles -> 12 périodes, 420 candles -> 6 périodes et historique inférieur au plancher -> `INSUFFICIENT_HISTORY`.
+
+Le commit `b219365` confirme que ce correctif est présent dans `main`. Cette présence ne permet pas d'inventer une exécution locale complète post-intégration qui n'a pas été observée.
 
 ## Formule
 
@@ -306,6 +315,8 @@ Pour les PERP :
 - la liquidité PERP reste la décision Batch 44 ;
 - aucune capacité d'exécution PERP n'est créée.
 
+Le Batch 47.1, préparé ultérieurement, ajoute un contexte instantané Open Interest/funding sans modifier le scoring Batch 46 ni ces règles de causalité.
+
 ## Cockpit
 
 La ligne principale reste compacte.
@@ -341,7 +352,7 @@ frontend/src/lib/market-attention.test.mjs
 
 Ajouts : format du score adaptatif, libellé de méthode, lecture d'un payload v6 ancien sans champs Batch 46 et diagnostic sous-seuil adaptatif.
 
-## Validation exécutée par ChatGPT
+## Validation observée avant intégration
 
 ```text
 python -m py_compile backend/src/ai_spot_trader/market/attention.py \
@@ -358,22 +369,9 @@ parse TypeScript/TSX ciblé market-attention-dock.tsx
 => PASS
 ```
 
-Le repository complet et ses dépendances n'étaient pas présents dans le conteneur. ChatGPT n'a donc pas exécuté la suite globale `pytest -q` ni les commandes `pnpm typecheck` / `pnpm test` du projet entier.
+La validation locale utilisateur de la première livraison avait aussi observé `pnpm typecheck` PASS, `pnpm test` PASS 65/65 et `git diff --check` sans erreur, puis 7 échecs `pytest -q` traités par le correctif 46.1 désormais intégré.
 
-## Validation locale requise
-
-```powershell
-cd E:\AI-Spot-Trader\backend
-pytest -q
-
-cd E:\AI-Spot-Trader\frontend
-pnpm typecheck
-pnpm test
-
-cd E:\AI-Spot-Trader
-git diff --check
-git status --short
-```
+Aucune suite globale post-intégration supplémentaire n'est revendiquée sans exécution observée.
 
 ## Invariants préservés
 
@@ -396,11 +394,14 @@ git status --short
 - aucun secret ;
 - aucune promesse de rendement.
 
-## Hors périmètre
+## Hors périmètre du Batch 46
+
+Le Batch 46 lui-même n'implémente pas :
 
 ```text
-Open Interest
-Funding
+Open Interest / Funding instantanés (préparés ensuite par Batch 47.1)
+Open Interest historique
+Funding historique
 Liquidations
 CVD
 long/short ratio

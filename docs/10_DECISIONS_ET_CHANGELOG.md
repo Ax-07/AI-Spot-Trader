@@ -11,21 +11,97 @@ Market Attention Radar reste strictement observationnel et ne prend aucune déci
 ## Référence courante
 
 ```text
-HEAD GitHub observé : 45d41b7
-Commit HEAD         : feat: move market structure before radar shortlist
+HEAD GitHub observé : b2193654ed3ba9db890c6129545acd90e238b0f1
+Commit HEAD         : feat: add adaptive statistical radar baseline
 Batch 43.2          : intégré
 Batch 44            : intégré
 Batch 45            : intégré via 45d41b7
-Batch 46            : patch proposé, non intégré
+Batch 46 / 46.1     : intégré via b219365
+Batch 47.1          : patch préparé, non intégré
 ```
 
-## Changelog — 2026-10-04 — Correctif Batch 46.1 compatibilité baseline H4 — proposé
+## Changelog — 2026-10-04 — Batch 47.1 fondations Futures ticker — proposé
 
-Validation locale de la première livraison Batch 46 : `pytest -q` a révélé 7 échecs de non-régression, tandis que `pnpm typecheck`, `pnpm test` (65/65) et `git diff --check` étaient corrects.
+Base auditée : GitHub `main` au HEAD `b219365`.
 
-Cause : `baseline_periods = 12` était appliqué comme exigence rigide à chaque horizon. Les fixtures historiques de 404–420 candles M5 ne fournissent que 6 périodes historiques H4 après exclusion de `previous` et `current`, alors qu'elles étaient valides avant Batch 46. H4 devenait `INSUFFICIENT_HISTORY`, le snapshot `PARTIAL`, puis les candidats disparaissaient avant Structure.
+Audit de reprise :
 
-Correctif :
+- **confirmé** : `b219365` est le HEAD réel observé de `main` et contient la baseline adaptative Batch 46 ainsi que le plancher de compatibilité `_MINIMUM_ADAPTIVE_BASELINE_PERIODS = 6` ;
+- **obsolète** : les statuts documentaires présentant Batch 46 / 46.1 et ADR-328/329/330 comme proposés ;
+- **confirmé** : `KrakenAttentionCatalogue` récupère encore le `volumeQuote` PERP en appelant directement la méthode privée `_derivatives._get_json("/tickers", ...)` ;
+- **confirmé** : `KrakenDerivativesPublicClient` est le client Futures public canonique existant ; aucun second client n'est requis ;
+- **confirmé** : le chemin PAPER individuel normalise déjà `fundingRate` via `fundingRate / (mark_price * contract_size)` ;
+- **à décider ultérieurement** : toute utilisation historique/scorée d'Open Interest, funding, liquidations, CVD ou aggressor-differential.
+
+Patch Batch 47.1 :
+
+- ajout de `KrakenDerivativesPublicClient.fetch_tickers()` ;
+- ajout du modèle interne strict `KrakenDerivativesTickerSnapshot` ;
+- parser bulk commun de `serverTime`, `symbol`, `markPrice`, `indexPrice`, `volumeQuote`, `openInterest`, `fundingRate`, `fundingRatePrediction`, `suspended`, `postOnly` ;
+- suppression de la dépendance Radar à la méthode privée `_get_json` ;
+- conservation de `volumeQuote` comme volume 24h USD uniquement pour les linear perpetuals cotés USD ;
+- conservation séparée de `funding_rate_raw`, `funding_rate_relative` et `funding_rate_prediction_raw` ;
+- aucun suffixe `USD` inventé pour `openInterest` ;
+- aucun affichage `%` des valeurs funding brutes/prédites ;
+- ajout de `PerpetualTickerContext` avec statuts `AVAILABLE`, `PARTIAL`, `NOT_APPLICABLE`, `TECHNICAL_ERROR` ;
+- un même snapshot bulk alimente volume PERP, liquidité PERP et contexte Futures dans le refresh Radar ;
+- fallback conservé pour les providers de test/compatibilité n'exposant que `volume_24h_usd_by_market()` ;
+- panne ticker fail-soft sans filtre volume, fail-closed pour le volume PERP lorsqu'un seuil volume actif exige `volumeQuote` ;
+- ajout additif `perpetual_ticker` aux candidats v6 ;
+- aucune modification d'`interest_level`, `candidate_limit`, ranking canonique/Structure, percentiles de liquidité ou baseline adaptative ;
+- cockpit : section `Futures Kraken` uniquement dans le détail PERPETUAL ;
+- contrat public conservé en `market-attention-radar-v6` ;
+- aucune modification Agent / Risk Engine / Broker et aucune capacité d'exécution PERP.
+
+Validations exécutées par ChatGPT sur le patch :
+
+```text
+Python py_compile ciblé                              : PASS
+pytest parser/client bulk vrai module + stubs dépendances : PASS — 23/23
+smoke local catalogue partagé                        : PASS
+frontend market-attention.test.mjs ciblé             : PASS — 22/22
+typecheck ciblé market-attention.ts                  : PASS
+parse/transpile ciblé market-attention-dock.tsx : PASS
+```
+
+Le checkout complet n'était pas disponible ; aucune suite backend/frontend globale non exécutée n'est déclarée PASS.
+
+Validation locale utilisateur après extraction :
+
+```text
+pnpm typecheck     : PASS
+pnpm test          : PASS — 68/68
+git diff --check   : PASS (avertissements LF/CRLF uniquement)
+pytest -q          : 3 FAILURES Batch 47.1, suite arrivée à 100 %
+```
+
+Les trois échecs backend avaient une cause unique dans le test `test_market_attention_batch47_1_perpetual_ticker.py` : les scénarios passaient `MarketAttentionFilters` à `StructureAwareFilteredMarketAttentionRadar.set_filters()`, dont le contrat Batch 45 attend `StructureAwareMarketAttentionFilters`. Le correctif 47.1.1 aligne les fixtures de test sur le contrat existant sans modifier le Radar de production. Une relance complète `pytest -q` reste nécessaire après application.
+
+## ADR-331 — Le Radar réutilise un snapshot Futures bulk canonique
+
+**PROPOSÉ — Batch 47.1, non intégré.**
+
+Le client Futures public canonique expose `fetch_tickers()`. Le Radar ne doit pas multiplier les appels `/tickers` pour le volume, l'Open Interest et le funding. Dans un cycle logique, le snapshot partagé alimente les usages descriptifs et le `volumeQuote` déjà retenu par les Batches 43.2/44.
+
+Aucun second client Kraken Futures n'est créé.
+
+## ADR-332 — OI/funding instantanés restent descriptifs et leurs unités restent explicites
+
+**PROPOSÉ — Batch 47.1, non intégré.**
+
+`openInterest`, `fundingRate` et `fundingRatePrediction` sont conservés comme valeurs Kraken brutes lorsque leur unité d'affichage n'est pas démontrée. Le taux relatif normalisé existant est stocké séparément lorsqu'il peut être calculé. La prédiction est identifiée comme prévision Kraken, jamais comme funding futur réalisé.
+
+Ces champs n'entrent dans aucun ranking, aucun `interest_level` et aucun filtre de shortlist en 47.1.
+
+## Changelog — 2026-10-04 — Correctif Batch 46.1 compatibilité baseline H4 — intégré
+
+Le code du correctif est présent dans `main` via `b219365` avec le Batch 46.
+
+Validation locale de la première livraison Batch 46 : `pytest -q` avait révélé 7 échecs de non-régression, tandis que `pnpm typecheck`, `pnpm test` (65/65) et `git diff --check` étaient corrects.
+
+Cause : `baseline_periods = 12` était appliqué comme exigence rigide à chaque horizon. Les fixtures historiques de 404–420 candles M5 ne fournissaient que 6 périodes historiques H4 après exclusion de `previous` et `current`, alors qu'elles étaient valides avant Batch 46. H4 devenait `INSUFFICIENT_HISTORY`, le snapshot `PARTIAL`, puis les candidats disparaissaient avant Structure.
+
+Correctif intégré :
 
 - cible statistique par défaut maintenue à `12` périodes ;
 - plancher de compatibilité centralisé à `6` périodes ;
@@ -36,17 +112,17 @@ Correctif :
 - `baseline_period_count` continue d'exposer le nombre réellement utilisé ;
 - aucune modification du scoring MAD, des filtres, de Structure, des sources volume 24h ou de la liquidité PERP.
 
-Tests Batch 46 ajoutés pour couvrir explicitement les fenêtres 720/420/sous-plancher. La suite backend complète doit être relancée localement après application du correctif.
+L'intégration GitHub confirme la présence du code et des tests dédiés ; elle ne constitue pas une preuve d'une suite locale complète post-commit non observée.
 
 ## ADR-330 — La baseline adaptative distingue cible statistique et plancher de compatibilité
 
-**PROPOSÉ — Correctif Batch 46.1, non intégré.**
+**ADOPTÉ — Batch 46/46.1 intégré via `b219365`.**
 
 `baseline_periods` reste la cible maximale de l'analyse robuste. Le Radar peut utiliser moins de périodes uniquement lorsque l'historique causal disponible est insuffisant pour la cible mais atteint le plancher déterministe de 6 périodes. Cette dégradation est bornée, observable via `baseline_period_count` et ne réintroduit aucune donnée future.
 
-## Changelog — 2026-10-04 — Batch 46 baseline statistique adaptative — patch proposé
+## Changelog — 2026-10-04 — Batch 46 baseline statistique adaptative — intégré
 
-Base auditée : GitHub `main` au HEAD `45d41b7`.
+Commit intégré : `b219365` (`feat: add adaptive statistical radar baseline`).
 
 - audit confirmé : `MarketActivityAnalyzer` est le composant canonique unique de l'activité ; aucun analyseur parallèle n'est créé ;
 - baseline cible d'activité portée de `6` à `12` périodes historiques ; H4 utilise 12 périodes lorsque l'historique le permet et le correctif 46.1 conserve un plancher compatible à 6 périodes ;
@@ -65,21 +141,21 @@ Base auditée : GitHub `main` au HEAD `45d41b7`.
 - aucune modification des sources volume 24h SPOT/PERP ni de la liquidité Batch 44 ; aucune notionnalisation artificielle des chart candles PERP ;
 - aucune modification Agent / Risk Engine / Broker et aucune capacité LIVE ou PERP exécutable.
 
-Validations exécutées par ChatGPT sur le patch préparé :
+Validations observées sur le patch avant intégration :
 
 ```text
 Python py_compile backend ciblé                 : PASS
-exécution helpers robustes extraits du code       : PASS
-frontend market-attention.test.mjs ciblé       : PASS — 19/19
-typecheck TypeScript ciblé market-attention.ts : PASS
+exécution helpers robustes extraits du code     : PASS
+frontend market-attention.test.mjs ciblé        : PASS — 19/19
+typecheck TypeScript ciblé market-attention.ts  : PASS
 parse TypeScript/TSX ciblé cockpit              : PASS
 ```
 
-Validation locale utilisateur de la première livraison : `pnpm typecheck` PASS, `pnpm test` PASS 65/65, `git diff --check` sans erreur ; `pytest -q` a révélé 7 régressions de shortlist, traitées par le correctif 46.1 ci-dessus. La suite backend complète doit être relancée après application du correctif.
+Validation locale utilisateur de la première livraison : `pnpm typecheck` PASS, `pnpm test` PASS 65/65, `git diff --check` sans erreur ; `pytest -q` avait révélé 7 régressions de shortlist, traitées par le correctif 46.1 intégré dans `b219365`.
 
 ## ADR-328 — L'anomalie d'activité utilise une médiane et un MAD normalisé
 
-**PROPOSÉ — Batch 46, non intégré.**
+**ADOPTÉ — Batch 46 intégré via `b219365`.**
 
 Formule :
 
@@ -100,7 +176,7 @@ Les seuils du Batch 46 constituent une policy déterministe expérimentale et ex
 
 ## ADR-329 — Le ratio historique reste observable et le contrat v6 reste additif
 
-**PROPOSÉ — Batch 46, non intégré.**
+**ADOPTÉ — Batch 46 intégré via `b219365`.**
 
 Les champs historiques `volume_ratio`, `range_expansion_ratio`, `volatility_expansion_ratio`, `volume_change` et `volume_acceleration` restent exposés pour diagnostic, compatibilité et fallback.
 

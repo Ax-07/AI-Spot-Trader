@@ -100,6 +100,42 @@ class Volume24hStatusCounts(AttentionModel):
     UNKNOWN_TECHNICAL_ERROR: int = Field(default=0, ge=0)
 
 
+class PerpetualTickerStatus(StrEnum):
+    AVAILABLE = "AVAILABLE"
+    PARTIAL = "PARTIAL"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+    TECHNICAL_ERROR = "TECHNICAL_ERROR"
+
+
+class PerpetualTickerContext(AttentionModel):
+    """Additive, descriptive Futures context. Raw Kraken units stay explicit/unknown."""
+
+    status: PerpetualTickerStatus
+    provider: str = "KRAKEN_FUTURES"
+    venue_symbol: str | None = None
+    observed_at: datetime | None = None
+    mark_price: Decimal | None = Field(default=None, gt=0)
+    index_price: Decimal | None = Field(default=None, gt=0)
+    volume_quote: Decimal | None = Field(default=None, ge=0)
+    open_interest: Decimal | None = Field(default=None, ge=0)
+    open_interest_unit: str | None = None
+    funding_rate_raw: Decimal | None = None
+    funding_rate_relative: Decimal | None = None
+    funding_rate_prediction_raw: Decimal | None = None
+    funding_rate_raw_unit: str | None = None
+    funding_rate_prediction_unit: str | None = None
+    suspended: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_context(self) -> "PerpetualTickerContext":
+        if self.observed_at is not None:
+            if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
+                raise ValueError("perpetual ticker observed_at must be timezone-aware")
+        if self.venue_symbol is not None and not self.venue_symbol.strip():
+            raise ValueError("perpetual ticker venue_symbol cannot be blank")
+        return self
+
+
 class MarketAttentionCoverageStatus(StrEnum):
     NO_MARKETS = "NO_MARKETS"
     COVERED = "COVERED"
@@ -203,6 +239,7 @@ class MarketAttentionSnapshotV6(AttentionModel):
     circulating_supply: Decimal | None = Field(default=None, ge=0)
     market_cap_provider: str | None = None
     market_cap_observed_at: datetime | None = None
+    perpetual_ticker: PerpetualTickerContext | None = None
 
     @property
     def market(self) -> ExecutableMarket:
@@ -217,7 +254,6 @@ class MarketAttentionSnapshotV6(AttentionModel):
             ):
                 raise ValueError("market cap observed_at must be timezone-aware")
         return self
-
 
 class MarketAttentionOverviewV6(AttentionModel):
     protocol_version: str = "market-attention-radar-v6"
@@ -396,6 +432,43 @@ def _classify_perpetual_liquidity(
     return tuple(classified)
 
 
+def _perpetual_ticker_context_from_snapshot(snapshot: object) -> PerpetualTickerContext:
+    mark_price = getattr(snapshot, "mark_price", None)
+    index_price = getattr(snapshot, "index_price", None)
+    volume_quote = getattr(snapshot, "volume_quote", None)
+    open_interest = getattr(snapshot, "open_interest", None)
+    funding_rate_raw = getattr(snapshot, "funding_rate_raw", None)
+    funding_rate_prediction_raw = getattr(snapshot, "funding_rate_prediction_raw", None)
+    suspended = getattr(snapshot, "suspended", None)
+    complete = (
+        suspended is not True
+        and mark_price is not None
+        and index_price is not None
+        and volume_quote is not None
+        and open_interest is not None
+        and funding_rate_raw is not None
+        and funding_rate_prediction_raw is not None
+    )
+    return PerpetualTickerContext(
+        status=(
+            PerpetualTickerStatus.AVAILABLE
+            if complete
+            else PerpetualTickerStatus.PARTIAL
+        ),
+        venue_symbol=getattr(snapshot, "venue_symbol", None),
+        observed_at=getattr(snapshot, "observed_at", None),
+        mark_price=mark_price,
+        index_price=index_price,
+        volume_quote=volume_quote,
+        open_interest=open_interest,
+        # Raw funding fields are intentionally not labelled as percentages.
+        funding_rate_raw=funding_rate_raw,
+        funding_rate_relative=getattr(snapshot, "funding_rate_relative", None),
+        funding_rate_prediction_raw=funding_rate_prediction_raw,
+        suspended=suspended,
+    )
+
+
 def _coverage_diagnostics(
     *,
     eligible_markets: tuple[ExecutableMarket, ...],
@@ -496,10 +569,16 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
         self._metadata_provider_name: str | None = None
         self._volume_24h_by_market: dict[ExecutableMarket, Volume24hMeasurement] = {}
         self._perpetual_volume_24h_usd: dict[ExecutableMarket, Decimal] = {}
-        self._perpetual_volume_provider_configured = callable(
-            getattr(catalogue, "volume_24h_usd_by_market", None)
+        self._perpetual_ticker_by_market: dict[ExecutableMarket, PerpetualTickerContext] = {}
+        self._perpetual_ticker_provider_configured = callable(
+            getattr(catalogue, "perpetual_ticker_snapshot_by_market", None)
+        )
+        self._perpetual_volume_provider_configured = (
+            self._perpetual_ticker_provider_configured
+            or callable(getattr(catalogue, "volume_24h_usd_by_market", None))
         )
         self._perpetual_volume_refresh_failed = False
+        self._perpetual_ticker_refresh_failed = False
         self._v6_latest: MarketAttentionOverviewV6 | None = None
         self._v6_history: deque[MarketAttentionOverviewV6] = deque(
             maxlen=self._policy.history_limit
@@ -701,6 +780,8 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
         self,
         catalogue: tuple[ExecutableMarket, ...],
     ) -> None:
+        """Refresh PERP volume and Futures context from one bulk ticker whenever available."""
+
         relevant = tuple(
             market
             for market in catalogue
@@ -708,8 +789,55 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
         )
         if not relevant:
             self._perpetual_volume_24h_usd = {}
+            self._perpetual_ticker_by_market = {}
             self._perpetual_volume_refresh_failed = False
+            self._perpetual_ticker_refresh_failed = False
             return
+
+        ticker_provider = getattr(
+            self._catalogue_provider,
+            "perpetual_ticker_snapshot_by_market",
+            None,
+        )
+        if callable(ticker_provider):
+            try:
+                values = await ticker_provider()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self._perpetual_volume_24h_usd = {}
+                self._perpetual_ticker_by_market = {}
+                self._perpetual_volume_refresh_failed = True
+                self._perpetual_ticker_refresh_failed = True
+                return
+
+            relevant_set = set(relevant)
+            contexts: dict[ExecutableMarket, PerpetualTickerContext] = {}
+            volumes: dict[ExecutableMarket, Decimal] = {}
+            for market, snapshot in values.items():
+                if market not in relevant_set:
+                    continue
+                context = _perpetual_ticker_context_from_snapshot(snapshot)
+                contexts[market] = context
+                _base, quote = parse_canonical_symbol(market.symbol)
+                value = getattr(snapshot, "volume_quote", None)
+                suspended = getattr(snapshot, "suspended", None)
+                if (
+                    quote.upper() == "USD"
+                    and isinstance(value, Decimal)
+                    and value >= 0
+                    and suspended is not True
+                ):
+                    volumes[market] = value
+            self._perpetual_ticker_by_market = contexts
+            self._perpetual_volume_24h_usd = volumes
+            self._perpetual_volume_refresh_failed = False
+            self._perpetual_ticker_refresh_failed = False
+            return
+
+        # Compatibility for legacy/test catalogue providers that only expose Batch 43.2 volume.
+        self._perpetual_ticker_by_market = {}
+        self._perpetual_ticker_refresh_failed = False
         provider = getattr(self._catalogue_provider, "volume_24h_usd_by_market", None)
         if not callable(provider):
             self._perpetual_volume_24h_usd = {}
@@ -730,6 +858,19 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
             for market, value in values.items()
             if market in relevant_set and value >= 0
         }
+
+    def _perpetual_ticker_context(
+        self,
+        market: ExecutableMarket,
+    ) -> PerpetualTickerContext:
+        if market.market_type is not MarketType.PERPETUAL:
+            return PerpetualTickerContext(status=PerpetualTickerStatus.NOT_APPLICABLE)
+        if self._perpetual_ticker_refresh_failed:
+            return PerpetualTickerContext(status=PerpetualTickerStatus.TECHNICAL_ERROR)
+        context = self._perpetual_ticker_by_market.get(market)
+        if context is not None:
+            return context
+        return PerpetualTickerContext(status=PerpetualTickerStatus.PARTIAL)
 
     def _volume_24h_measurement(
         self,
@@ -808,6 +949,7 @@ class FilteredStructuredMarketAttentionRadar(StructuredMarketAttentionRadar):
             circulating_supply=(metadata.circulating_supply if metadata is not None else None),
             market_cap_provider=(metadata.provider if metadata is not None else None),
             market_cap_observed_at=(metadata.observed_at if metadata is not None else None),
+            perpetual_ticker=self._perpetual_ticker_context(market),
         )
 
     def _overview_v6(self, value: MarketAttentionOverviewV5) -> MarketAttentionOverviewV6:

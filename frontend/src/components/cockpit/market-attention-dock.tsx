@@ -17,6 +17,7 @@ import {
   formatCoverageRatio,
   formatDurationSeconds,
   formatImbalance,
+  formatKrakenRawNumber,
   formatQuoteCompact,
   formatRate,
   formatSignedPercent,
@@ -26,6 +27,8 @@ import {
   marketAttentionStatusMessage,
   marketCapCategoryLabel,
   marketStructureCoverageMessage,
+  perpetualTickerContext,
+  perpetualTickerStatusLabel,
   setMarketAttentionFilters,
   slippageEstimate,
   structureEventFilterLabel,
@@ -165,6 +168,7 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
   const activity = item.market_activity;
   const micro = item.microstructure;
   const structure = marketStructure(item);
+  const futures = perpetualTickerContext(item);
   const h5 = attentionHorizon(item, "5m");
   const h15 = attentionHorizon(item, "15m");
   const h1 = attentionHorizon(item, "1h");
@@ -225,6 +229,31 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
               </ul>
             ) : <p className="mt-1 text-muted-foreground">Aucune raison pondérée supplémentaire.</p>}
           </div>
+
+          {activity.market.market_type === "PERPETUAL" ? (
+            <div className="rounded-lg border bg-muted/10 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-semibold">Futures Kraken</p>
+                  <p className="text-[10px] text-muted-foreground">Snapshot public instantané partagé avec le volume 24h et la liquidité PERP.</p>
+                </div>
+                <Badge tone={futures?.status === "AVAILABLE" ? "success" : futures?.status === "TECHNICAL_ERROR" ? "danger" : "warning"}>
+                  {perpetualTickerStatusLabel(futures?.status)}
+                </Badge>
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+                <Fact label="Open Interest" value={formatKrakenRawNumber(futures?.open_interest)} />
+                <Fact label="Funding courant · brut Kraken" value={formatKrakenRawNumber(futures?.funding_rate_raw)} />
+                <Fact label="Funding prévu · prévision Kraken" value={formatKrakenRawNumber(futures?.funding_rate_prediction_raw)} />
+                <Fact label="Mark" value={formatKrakenRawNumber(futures?.mark_price)} />
+                <Fact label="Index" value={formatKrakenRawNumber(futures?.index_price)} />
+                <Fact label="Observation" value={shortTime(futures?.observed_at)} />
+              </div>
+              <p className="mt-3 text-[10px] text-muted-foreground">
+                Open Interest et funding sont affichés comme valeurs Kraken brutes tant que leur unité d’affichage n’est pas démontrée. Aucun format `%` n’est appliqué. Le funding prévu est une prévision publiée par Kraken, pas un funding futur réalisé.
+              </p>
+            </div>
+          ) : null}
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-lg border bg-muted/10 p-3">
@@ -788,7 +817,7 @@ export function MarketAttentionDock() {
                     {loading ? "Construction du snapshot du radar…" : data.status === "NOT_CONFIGURED" ? "Radar non configuré." : marketAttentionStatusMessage(data)}
                   </div>
                 )}
-                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · filtres pilotés par le backend · classement déterministe. Volume 24h SPOT = candles Kraken causales ; volume 24h PERP linear/USD = `volumeQuote` Kraken Futures uniquement lorsqu’il est validé ; capitalisation = {data.market_cap_metadata_provider ?? "provider externe indisponible"}. La Market Structure utilise uniquement des candles finalisées et des pivots confirmés ; UNKNOWN est fail-closed lorsqu’un filtre correspondant est actif.</p>
+                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · filtres pilotés par le backend · classement déterministe. Volume 24h SPOT = candles Kraken causales ; volume 24h PERP linear/USD = `volumeQuote` Kraken Futures uniquement lorsqu’il est validé ; Open Interest et funding du détail PERP = snapshot Futures public instantané, sans unité inventée ni impact sur le ranking ; capitalisation = {data.market_cap_metadata_provider ?? "provider externe indisponible"}. La Market Structure utilise uniquement des candles finalisées et des pivots confirmés ; UNKNOWN est fail-closed lorsqu’un filtre correspondant est actif.</p>
               </div>
             ) : <p className="text-sm text-muted-foreground">{loading ? "Chargement du radar…" : "Aucun snapshot chargé."}</p>}
           </CardContent>

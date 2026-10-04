@@ -12,6 +12,7 @@ import {
   formatCoverageRatio,
   formatDurationSeconds,
   formatImbalance,
+  formatKrakenRawNumber,
   formatSignedPercent,
   formatUsdCompact,
   formatVolumeRatio,
@@ -20,6 +21,8 @@ import {
   marketAttentionStatusMessage,
   marketCapCategoryLabel,
   marketStructureCoverageMessage,
+  perpetualTickerContext,
+  perpetualTickerStatusLabel,
   setMarketAttentionFilters,
   setMarketAttentionScope,
   slippageEstimate,
@@ -324,7 +327,6 @@ test("falls back to legacy scope with all Batch 45 filters disabled", () => {
 });
 
 
-
 test("formats Batch 46 adaptive anomaly diagnostics without hiding the historical ratio", () => {
   assert.equal(formatVolumeRatio("1.30"), "1.30×");
   assert.equal(formatAdaptiveScore("2.345"), "+2.35 MADσ");
@@ -355,6 +357,73 @@ test("exposes adaptive subthreshold diagnostics additively", () => {
   assert.equal(formatVolumeRatio(adaptive.peak_volume_ratio), "1.31×");
   assert.equal(formatAdaptiveScore(adaptive.peak_anomaly_score), "+2.80 MADσ");
   assert.equal(anomalyMethodLabel(adaptive.anomaly_method), "MAD robuste");
+});
+
+test("keeps legacy v6 candidate payloads readable when Futures context is absent", () => {
+  assert.equal(perpetualTickerContext(item), null);
+  assert.equal(perpetualTickerStatusLabel(undefined), "Indisponible");
+});
+
+test("exposes PERPETUAL Open Interest and raw funding fields without fake percent formatting", () => {
+  const perpetual = {
+    ...item,
+    market_activity: {
+      ...item.market_activity,
+      market: { symbol: "BTC/USD", market_type: "PERPETUAL" },
+    },
+    perpetual_ticker: {
+      status: "AVAILABLE",
+      provider: "KRAKEN_FUTURES",
+      venue_symbol: "PF_XBTUSD",
+      observed_at: "2026-10-04T12:00:00Z",
+      mark_price: "65000.5",
+      index_price: "64998.1",
+      volume_quote: "125000000",
+      open_interest: "8123.5",
+      open_interest_unit: null,
+      funding_rate_raw: "6.5",
+      funding_rate_relative: null,
+      funding_rate_prediction_raw: "7.1",
+      funding_rate_raw_unit: null,
+      funding_rate_prediction_unit: null,
+      suspended: false,
+    },
+  };
+  const futures = perpetualTickerContext(perpetual);
+  assert.equal(futures?.open_interest, "8123.5");
+  assert.equal(futures?.funding_rate_raw, "6.5");
+  assert.equal(futures?.funding_rate_prediction_raw, "7.1");
+  assert.equal(perpetualTickerStatusLabel(futures?.status), "Disponible");
+  assert.equal(formatKrakenRawNumber(futures?.open_interest), "8.123 k");
+  assert.doesNotMatch(formatKrakenRawNumber(futures?.funding_rate_raw), /%/);
+  assert.doesNotMatch(formatKrakenRawNumber(futures?.funding_rate_prediction_raw), /%/);
+});
+
+test("keeps Futures prediction distinct and tolerates partial or technical states", () => {
+  const partial = {
+    ...item,
+    perpetual_ticker: {
+      status: "PARTIAL",
+      provider: "KRAKEN_FUTURES",
+      venue_symbol: "PF_XBTUSD",
+      observed_at: "2026-10-04T12:00:00Z",
+      mark_price: "65000",
+      index_price: null,
+      volume_quote: "1000",
+      open_interest: null,
+      open_interest_unit: null,
+      funding_rate_raw: "5.2",
+      funding_rate_relative: null,
+      funding_rate_prediction_raw: null,
+      funding_rate_raw_unit: null,
+      funding_rate_prediction_unit: null,
+      suspended: false,
+    },
+  };
+  assert.equal(perpetualTickerStatusLabel(perpetualTickerContext(partial)?.status), "Partiel");
+  assert.equal(formatKrakenRawNumber(perpetualTickerContext(partial)?.funding_rate_prediction_raw), "—");
+  assert.equal(perpetualTickerStatusLabel("TECHNICAL_ERROR"), "Erreur technique");
+  assert.equal(perpetualTickerStatusLabel("NOT_APPLICABLE"), "N/A");
 });
 
 test("sends a backend scope change before replacing the radar snapshot", async () => {
