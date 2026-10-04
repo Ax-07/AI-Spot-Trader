@@ -5,7 +5,9 @@ import {
   DEFAULT_MARKET_ATTENTION_FILTERS,
   activeMarketAttentionFilters,
   activityErrorEntries,
+  anomalyMethodLabel,
   attentionHorizon,
+  formatAdaptiveScore,
   formatBps,
   formatCoverageRatio,
   formatDurationSeconds,
@@ -319,6 +321,40 @@ test("falls back to legacy scope with all Batch 45 filters disabled", () => {
     ...DEFAULT_MARKET_ATTENTION_FILTERS,
     market_scope: "SPOT",
   });
+});
+
+
+
+test("formats Batch 46 adaptive anomaly diagnostics without hiding the historical ratio", () => {
+  assert.equal(formatVolumeRatio("1.30"), "1.30×");
+  assert.equal(formatAdaptiveScore("2.345"), "+2.35 MADσ");
+  assert.equal(formatAdaptiveScore("-2.1"), "-2.10 MADσ");
+  assert.equal(formatAdaptiveScore(null), "—");
+  assert.equal(anomalyMethodLabel("ROBUST_MAD"), "MAD robuste");
+  assert.equal(anomalyMethodLabel("LEGACY_RATIO_FALLBACK"), "Fallback ratio");
+  assert.equal(anomalyMethodLabel("UNAVAILABLE"), "Indisponible");
+  assert.equal(anomalyMethodLabel(undefined), "Indisponible");
+});
+
+test("keeps legacy v6 horizon payloads readable when Batch 46 additive fields are absent", () => {
+  const horizon = attentionHorizon(item, "5m");
+  assert.equal(horizon?.volume_ratio, "2.8");
+  assert.equal(horizon?.volume_anomaly_score, undefined);
+  assert.equal(horizon?.volume_anomaly_method, undefined);
+  assert.equal(anomalyMethodLabel(horizon?.volume_anomaly_method), "Indisponible");
+});
+
+test("exposes adaptive subthreshold diagnostics additively", () => {
+  const adaptive = {
+    market: { symbol: "AAA/USD", market_type: "SPOT" },
+    peak_volume_ratio: "1.31",
+    peak_timeframe: "15m",
+    peak_anomaly_score: "2.8",
+    anomaly_method: "ROBUST_MAD",
+  };
+  assert.equal(formatVolumeRatio(adaptive.peak_volume_ratio), "1.31×");
+  assert.equal(formatAdaptiveScore(adaptive.peak_anomaly_score), "+2.80 MADσ");
+  assert.equal(anomalyMethodLabel(adaptive.anomaly_method), "MAD robuste");
 });
 
 test("sends a backend scope change before replacing the radar snapshot", async () => {

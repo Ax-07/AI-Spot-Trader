@@ -57,6 +57,12 @@ class ActivityDataQuality(StrEnum):
     TECHNICAL_ERROR = "TECHNICAL_ERROR"
 
 
+class ActivityAnomalyMethod(StrEnum):
+    ROBUST_MAD = "ROBUST_MAD"
+    LEGACY_RATIO_FALLBACK = "LEGACY_RATIO_FALLBACK"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
 class LiquidityRegime(StrEnum):
     UNKNOWN = "UNKNOWN"
     MICRO = "MICRO"
@@ -87,6 +93,23 @@ class RadarInterestLevel(StrEnum):
     VERY_HIGH = "VERY_HIGH"
 
 
+# Batch 46 robust activity policy. 1.4826 makes MAD comparable to a standard
+# deviation under a Gaussian reference while preserving median-based robustness.
+_ROBUST_MAD_NORMALIZATION = Decimal("1.4826")
+# Batch 46 targets a 12-period robust baseline by default, but keeps the
+# pre-Batch-46 six-period H4 history as a compatibility floor. The analyzer
+# always uses the largest causal full-period baseline available up to the
+# configured target, and remains INSUFFICIENT_HISTORY below this floor.
+_MINIMUM_ADAPTIVE_BASELINE_PERIODS = 6
+_ADAPTIVE_ELEVATED_SCORE = Decimal("2.0")
+_ADAPTIVE_ACCELERATING_SCORE = Decimal("3.5")
+_ADAPTIVE_VERY_HIGH_SCORE = Decimal("5.0")
+_ADAPTIVE_ACCELERATION_DELTA = Decimal("1.0")
+_ADAPTIVE_CONFIRMATION_SCORE = Decimal("1.5")
+_ADAPTIVE_CONTRACTION_SCORE = Decimal("-2.0")
+_ADAPTIVE_DIVERGENCE_HIGH_SCORE = Decimal("3.0")
+
+
 class AttentionModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -104,7 +127,7 @@ class MarketAttentionPolicy(AttentionModel):
     candidate_limit: int = Field(default=10, ge=1, le=30)
     diagnostic_market_limit: int = Field(default=10, ge=1, le=30)
     candle_limit: int = Field(default=720, ge=160, le=1000)
-    baseline_periods: int = Field(default=6, ge=3, le=20)
+    baseline_periods: int = Field(default=12, ge=3, le=20)
     history_limit: int = Field(default=96, ge=1, le=1000)
 
     @model_validator(mode="after")
@@ -122,6 +145,11 @@ class ActivityHorizonSnapshot(AttentionModel):
     volume_ratio: Decimal | None = None
     volume_change: Decimal | None = None
     volume_acceleration: Decimal | None = None
+    baseline_volume_mad: Decimal | None = Field(default=None, ge=0)
+    volume_anomaly_score: Decimal | None = None
+    previous_volume_anomaly_score: Decimal | None = None
+    volume_anomaly_acceleration: Decimal | None = None
+    volume_anomaly_method: ActivityAnomalyMethod = ActivityAnomalyMethod.UNAVAILABLE
     current_notional_usd: Decimal | None = Field(default=None, ge=0)
     baseline_notional_usd: Decimal | None = Field(default=None, ge=0)
     notional_delta_usd: Decimal | None = None
@@ -131,9 +159,15 @@ class ActivityHorizonSnapshot(AttentionModel):
     price_range: Decimal | None = None
     baseline_price_range: Decimal | None = None
     range_expansion_ratio: Decimal | None = None
+    baseline_range_mad: Decimal | None = Field(default=None, ge=0)
+    range_anomaly_score: Decimal | None = None
+    range_anomaly_method: ActivityAnomalyMethod = ActivityAnomalyMethod.UNAVAILABLE
     realized_volatility: Decimal | None = None
     baseline_realized_volatility: Decimal | None = None
     volatility_expansion_ratio: Decimal | None = None
+    baseline_volatility_mad: Decimal | None = Field(default=None, ge=0)
+    volatility_anomaly_score: Decimal | None = None
+    volatility_anomaly_method: ActivityAnomalyMethod = ActivityAnomalyMethod.UNAVAILABLE
     breakout_distance: Decimal | None = None
     observation_count: int = Field(ge=0)
     baseline_period_count: int = Field(ge=0)
@@ -239,6 +273,8 @@ class SubthresholdActivitySnapshot(AttentionModel):
     market: ExecutableMarket
     peak_volume_ratio: Decimal
     peak_timeframe: CandleTimeframe
+    peak_anomaly_score: Decimal | None = None
+    anomaly_method: ActivityAnomalyMethod = ActivityAnomalyMethod.UNAVAILABLE
 
 
 class MarketAttentionSnapshot(AttentionModel):
@@ -301,7 +337,7 @@ class MarketActivityAnalyzer:
         CandleTimeframe.H4,
     )
 
-    def __init__(self, *, baseline_periods: int = 6, stale_after: timedelta) -> None:
+    def __init__(self, *, baseline_periods: int = 12, stale_after: timedelta) -> None:
         if baseline_periods < 3:
             raise ValueError("baseline_periods must be at least 3")
         if stale_after.total_seconds() <= 0:
@@ -352,11 +388,7 @@ class MarketActivityAnalyzer:
             )
             for timeframe in self.HORIZONS
         )
-        complete_ratios = [item.volume_ratio if item.complete else None for item in horizons]
-        complete_accelerations = [
-            item.volume_acceleration if item.complete else None for item in horizons
-        ]
-        activity_state = _activity_state(complete_ratios, complete_accelerations)
+        activity_state = _adaptive_activity_state(horizons)
         if not all(item.complete for item in horizons):
             status = RadarStatus.PARTIAL
         elif freshness_seconds > Decimal(str(self._stale_after.total_seconds())):
@@ -415,7 +447,6 @@ class MarketActivityAnalyzer:
         missing_intervals_mean_no_trades: bool,
     ) -> ActivityHorizonSnapshot:
         bars = int(timeframe.duration / CandleTimeframe.M5.duration)
-        required = bars * (self._baseline_periods + 2)
         step = CandleTimeframe.M5.duration
         if not candles:
             return self._incomplete_horizon(
@@ -426,16 +457,27 @@ class MarketActivityAnalyzer:
             )
 
         end = candles[-1].close_time.astimezone(UTC)
-        start = end - (step * required)
         first_open = candles[0].open_time.astimezone(UTC)
-        if first_open > start:
+        available_slots = max(0, int((end - first_open) // step))
+        available_baseline_periods = max(0, (available_slots // bars) - 2)
+        minimum_baseline_periods = min(
+            self._baseline_periods,
+            _MINIMUM_ADAPTIVE_BASELINE_PERIODS,
+        )
+        resolved_baseline_periods = min(
+            self._baseline_periods,
+            available_baseline_periods,
+        )
+        if resolved_baseline_periods < minimum_baseline_periods:
             return self._incomplete_horizon(
                 timeframe,
                 observation_count=min(len(candles), bars),
-                baseline_period_count=max(0, (len(candles) // bars) - 2),
+                baseline_period_count=available_baseline_periods,
                 data_quality=ActivityDataQuality.INSUFFICIENT_HISTORY,
             )
 
+        required = bars * (resolved_baseline_periods + 2)
+        start = end - (step * required)
         window = tuple(
             candle
             for candle in candles
@@ -515,12 +557,34 @@ class MarketActivityAnalyzer:
         volume_ratio = _safe_ratio(current_volume, baseline_volume)
         current_vs_previous = _safe_ratio(current_volume, previous_volume)
         previous_vs_baseline = _safe_ratio(previous_volume, baseline_volume)
+        baseline_volume_mad = _median_absolute_deviation(
+            baseline_volumes,
+            center=baseline_volume,
+        )
+        volume_anomaly_score, volume_anomaly_method = _robust_anomaly(
+            current_volume,
+            baseline=baseline_volume,
+            mad=baseline_volume_mad,
+            fallback_ratio=volume_ratio,
+        )
+        previous_volume_anomaly_score, _previous_anomaly_method = _robust_anomaly(
+            previous_volume,
+            baseline=baseline_volume,
+            mad=baseline_volume_mad,
+            fallback_ratio=previous_vs_baseline,
+        )
         volume_change = (
             current_vs_previous - Decimal(1) if current_vs_previous is not None else None
         )
         volume_acceleration = (
             (current_vs_previous - Decimal(1)) - (previous_vs_baseline - Decimal(1))
             if current_vs_previous is not None and previous_vs_baseline is not None
+            else None
+        )
+        volume_anomaly_acceleration = (
+            volume_anomaly_score - previous_volume_anomaly_score
+            if volume_anomaly_score is not None
+            and previous_volume_anomaly_score is not None
             else None
         )
 
@@ -564,6 +628,16 @@ class MarketActivityAnalyzer:
             and baseline_price_range > 0
             else None
         )
+        baseline_range_mad = _median_absolute_deviation(
+            baseline_ranges,
+            center=baseline_price_range,
+        )
+        range_anomaly_score, range_anomaly_method = _robust_anomaly(
+            price_range,
+            baseline=baseline_price_range,
+            mad=baseline_range_mad,
+            fallback_ratio=range_expansion_ratio,
+        )
 
         baseline_volatilities = tuple(
             value
@@ -582,6 +656,16 @@ class MarketActivityAnalyzer:
             and baseline_realized_volatility is not None
             and baseline_realized_volatility > 0
             else None
+        )
+        baseline_volatility_mad = _median_absolute_deviation(
+            baseline_volatilities,
+            center=baseline_realized_volatility,
+        )
+        volatility_anomaly_score, volatility_anomaly_method = _robust_anomaly(
+            realized_volatility,
+            baseline=baseline_realized_volatility,
+            mad=baseline_volatility_mad,
+            fallback_ratio=volatility_expansion_ratio,
         )
 
         breakout_distance: Decimal | None = None
@@ -614,6 +698,11 @@ class MarketActivityAnalyzer:
             volume_ratio=volume_ratio,
             volume_change=volume_change,
             volume_acceleration=volume_acceleration,
+            baseline_volume_mad=baseline_volume_mad,
+            volume_anomaly_score=volume_anomaly_score,
+            previous_volume_anomaly_score=previous_volume_anomaly_score,
+            volume_anomaly_acceleration=volume_anomaly_acceleration,
+            volume_anomaly_method=volume_anomaly_method,
             current_notional_usd=current_notional_usd,
             baseline_notional_usd=baseline_notional_usd,
             notional_delta_usd=notional_delta_usd,
@@ -623,16 +712,22 @@ class MarketActivityAnalyzer:
             price_range=price_range,
             baseline_price_range=baseline_price_range,
             range_expansion_ratio=range_expansion_ratio,
+            baseline_range_mad=baseline_range_mad,
+            range_anomaly_score=range_anomaly_score,
+            range_anomaly_method=range_anomaly_method,
             realized_volatility=realized_volatility,
             baseline_realized_volatility=baseline_realized_volatility,
             volatility_expansion_ratio=volatility_expansion_ratio,
+            baseline_volatility_mad=baseline_volatility_mad,
+            volatility_anomaly_score=volatility_anomaly_score,
+            volatility_anomaly_method=volatility_anomaly_method,
             breakout_distance=breakout_distance,
             observation_count=len(current_real),
             baseline_period_count=len(baseline_groups),
             no_trade_interval_count=len(missing_opens) if missing_intervals_mean_no_trades else 0,
             unexplained_gap_count=0,
             data_quality=quality,
-            complete=volume_ratio is not None,
+            complete=volume_ratio is not None or volume_anomaly_score is not None,
         )
 
 
@@ -1013,6 +1108,8 @@ class MarketAttentionRadar:
                         market=snapshot.market,
                         peak_volume_ratio=best.volume_ratio,  # type: ignore[arg-type]
                         peak_timeframe=best.timeframe,
+                        peak_anomaly_score=best.volume_anomaly_score,
+                        anomaly_method=best.volume_anomaly_method,
                     ),
                 )
             )
@@ -1053,6 +1150,32 @@ def _interest_rank(level: RadarInterestLevel) -> int:
     }[level]
 
 
+def _expansion_detected(
+    *,
+    score: Decimal | None,
+    method: ActivityAnomalyMethod,
+    ratio: Decimal | None,
+    adaptive_threshold: Decimal,
+    legacy_threshold: Decimal,
+) -> bool:
+    if method is ActivityAnomalyMethod.ROBUST_MAD:
+        return score is not None and score >= adaptive_threshold
+    return ratio is not None and ratio >= legacy_threshold
+
+
+def _contraction_detected(
+    *,
+    score: Decimal | None,
+    method: ActivityAnomalyMethod,
+    ratio: Decimal | None,
+    legacy_threshold: Decimal,
+    adaptive_threshold: Decimal = _ADAPTIVE_CONTRACTION_SCORE,
+) -> bool:
+    if method is ActivityAnomalyMethod.ROBUST_MAD:
+        return score is not None and score <= adaptive_threshold
+    return ratio is not None and ratio <= legacy_threshold
+
+
 def _market_characteristics(snapshot: MarketActivitySnapshot) -> tuple[MarketCharacteristic, ...]:
     complete = tuple(item for item in snapshot.horizons if item.complete)
     if not complete:
@@ -1060,16 +1183,31 @@ def _market_characteristics(snapshot: MarketActivitySnapshot) -> tuple[MarketCha
     found: set[MarketCharacteristic] = set()
 
     if any(
-        item.volume_ratio is not None and item.volume_ratio >= Decimal("1.40")
+        _expansion_detected(
+            score=item.volume_anomaly_score,
+            method=item.volume_anomaly_method,
+            ratio=item.volume_ratio,
+            adaptive_threshold=_ADAPTIVE_ELEVATED_SCORE,
+            legacy_threshold=Decimal("1.40"),
+        )
         for item in complete
     ):
         found.add(MarketCharacteristic.VOLUME_ANOMALY)
 
     if any(
-        (item.range_expansion_ratio is not None and item.range_expansion_ratio >= Decimal("1.50"))
-        or (
-            item.volatility_expansion_ratio is not None
-            and item.volatility_expansion_ratio >= Decimal("1.50")
+        _expansion_detected(
+            score=item.range_anomaly_score,
+            method=item.range_anomaly_method,
+            ratio=item.range_expansion_ratio,
+            adaptive_threshold=_ADAPTIVE_ELEVATED_SCORE,
+            legacy_threshold=Decimal("1.50"),
+        )
+        or _expansion_detected(
+            score=item.volatility_anomaly_score,
+            method=item.volatility_anomaly_method,
+            ratio=item.volatility_expansion_ratio,
+            adaptive_threshold=_ADAPTIVE_ELEVATED_SCORE,
+            legacy_threshold=Decimal("1.50"),
         )
         for item in complete
     ):
@@ -1096,10 +1234,19 @@ def _market_characteristics(snapshot: MarketActivitySnapshot) -> tuple[MarketCha
         and item.price_return is not None
         and abs(item.price_return) >= _MATERIAL_RETURN.get(item.timeframe, Decimal("0.01"))
         and (
-            (item.volume_ratio is not None and item.volume_ratio >= Decimal("1.20"))
-            or (
-                item.range_expansion_ratio is not None
-                and item.range_expansion_ratio >= Decimal("1.20")
+            _expansion_detected(
+                score=item.volume_anomaly_score,
+                method=item.volume_anomaly_method,
+                ratio=item.volume_ratio,
+                adaptive_threshold=_ADAPTIVE_CONFIRMATION_SCORE,
+                legacy_threshold=Decimal("1.20"),
+            )
+            or _expansion_detected(
+                score=item.range_anomaly_score,
+                method=item.range_anomaly_method,
+                ratio=item.range_expansion_ratio,
+                adaptive_threshold=_ADAPTIVE_CONFIRMATION_SCORE,
+                legacy_threshold=Decimal("1.20"),
             )
         )
         for item in complete
@@ -1114,10 +1261,19 @@ def _market_characteristics(snapshot: MarketActivitySnapshot) -> tuple[MarketCha
         and abs(item.previous_price_return)
         >= _MATERIAL_RETURN.get(item.timeframe, Decimal("0.01"))
         and (
-            (item.volume_ratio is not None and item.volume_ratio >= Decimal("1.30"))
-            or (
-                item.range_expansion_ratio is not None
-                and item.range_expansion_ratio >= Decimal("1.30")
+            _expansion_detected(
+                score=item.volume_anomaly_score,
+                method=item.volume_anomaly_method,
+                ratio=item.volume_ratio,
+                adaptive_threshold=_ADAPTIVE_CONFIRMATION_SCORE,
+                legacy_threshold=Decimal("1.30"),
+            )
+            or _expansion_detected(
+                score=item.range_anomaly_score,
+                method=item.range_anomaly_method,
+                ratio=item.range_expansion_ratio,
+                adaptive_threshold=_ADAPTIVE_CONFIRMATION_SCORE,
+                legacy_threshold=Decimal("1.30"),
             )
         )
         for item in complete
@@ -1125,9 +1281,27 @@ def _market_characteristics(snapshot: MarketActivitySnapshot) -> tuple[MarketCha
         found.add(MarketCharacteristic.REVERSAL_WATCH)
 
     compressed = sum(
-        item.range_expansion_ratio is not None
-        and item.range_expansion_ratio <= Decimal("0.70")
-        and (item.volume_ratio is None or item.volume_ratio <= Decimal("1.20"))
+        (
+            _contraction_detected(
+                score=item.range_anomaly_score,
+                method=item.range_anomaly_method,
+                ratio=item.range_expansion_ratio,
+                legacy_threshold=Decimal("0.70"),
+            )
+            or _contraction_detected(
+                score=item.volatility_anomaly_score,
+                method=item.volatility_anomaly_method,
+                ratio=item.volatility_expansion_ratio,
+                legacy_threshold=Decimal("0.70"),
+            )
+        )
+        and not _expansion_detected(
+            score=item.volume_anomaly_score,
+            method=item.volume_anomaly_method,
+            ratio=item.volume_ratio,
+            adaptive_threshold=_ADAPTIVE_CONFIRMATION_SCORE,
+            legacy_threshold=Decimal("1.20"),
+        )
         for item in complete
     )
     if compressed >= 2:
@@ -1137,12 +1311,21 @@ def _market_characteristics(snapshot: MarketActivitySnapshot) -> tuple[MarketCha
         (
             item.price_return is not None
             and abs(item.price_return) >= _MATERIAL_RETURN.get(item.timeframe, Decimal("0.01"))
-            and item.volume_ratio is not None
-            and item.volume_ratio <= Decimal("0.75")
+            and _contraction_detected(
+                score=item.volume_anomaly_score,
+                method=item.volume_anomaly_method,
+                ratio=item.volume_ratio,
+                legacy_threshold=Decimal("0.75"),
+            )
         )
         or (
-            item.volume_ratio is not None
-            and item.volume_ratio >= Decimal("2.00")
+            _expansion_detected(
+                score=item.volume_anomaly_score,
+                method=item.volume_anomaly_method,
+                ratio=item.volume_ratio,
+                adaptive_threshold=_ADAPTIVE_DIVERGENCE_HIGH_SCORE,
+                legacy_threshold=Decimal("2.00"),
+            )
             and item.price_return is not None
             and abs(item.price_return)
             < _MATERIAL_RETURN.get(item.timeframe, Decimal("0.01")) / Decimal(2)
@@ -1259,6 +1442,50 @@ def _deterministic_radar_sort_key(
     )
 
 
+def _adaptive_activity_state(
+    horizons: Iterable[ActivityHorizonSnapshot],
+) -> MarketActivityState:
+    rank = {
+        MarketActivityState.UNKNOWN: 0,
+        MarketActivityState.NORMAL: 1,
+        MarketActivityState.ELEVATED: 2,
+        MarketActivityState.ACCELERATING: 3,
+        MarketActivityState.VERY_HIGH: 4,
+    }
+    states: list[MarketActivityState] = []
+    for item in horizons:
+        if not item.complete:
+            continue
+        if (
+            item.volume_anomaly_method is ActivityAnomalyMethod.ROBUST_MAD
+            and item.volume_anomaly_score is not None
+        ):
+            score = item.volume_anomaly_score
+            if score >= _ADAPTIVE_VERY_HIGH_SCORE:
+                state = MarketActivityState.VERY_HIGH
+            elif (
+                score >= _ADAPTIVE_ACCELERATING_SCORE
+                and item.volume_anomaly_acceleration is not None
+                and item.volume_anomaly_acceleration >= _ADAPTIVE_ACCELERATION_DELTA
+            ):
+                state = MarketActivityState.ACCELERATING
+            elif score >= _ADAPTIVE_ELEVATED_SCORE:
+                state = MarketActivityState.ELEVATED
+            else:
+                state = MarketActivityState.NORMAL
+            states.append(state)
+        else:
+            states.append(
+                _activity_state(
+                    (item.volume_ratio,),
+                    (item.volume_acceleration,),
+                )
+            )
+    if not states:
+        return MarketActivityState.UNKNOWN
+    return max(states, key=lambda state: rank[state])
+
+
 def _activity_state(
     ratios: Iterable[Decimal | None],
     accelerations: Iterable[Decimal | None],
@@ -1296,15 +1523,23 @@ def _activity_state(
 
 
 def _activity_sort_key(snapshot: MarketActivitySnapshot) -> tuple[Decimal, Decimal, Decimal]:
-    ratios = [item.volume_ratio for item in snapshot.horizons if item.volume_ratio is not None]
-    accelerations = [
-        item.volume_acceleration
-        for item in snapshot.horizons
-        if item.volume_acceleration is not None
-    ]
+    intensities: list[Decimal] = []
+    accelerations: list[Decimal] = []
+    for item in snapshot.horizons:
+        if (
+            item.volume_anomaly_method is ActivityAnomalyMethod.ROBUST_MAD
+            and item.volume_anomaly_score is not None
+        ):
+            intensities.append(max(item.volume_anomaly_score, Decimal(0)))
+            if item.volume_anomaly_acceleration is not None:
+                accelerations.append(item.volume_anomaly_acceleration)
+        elif item.volume_ratio is not None:
+            intensities.append(item.volume_ratio)
+            if item.volume_acceleration is not None:
+                accelerations.append(item.volume_acceleration)
     moves = [abs(item.price_return) for item in snapshot.horizons if item.price_return is not None]
     return (
-        max(ratios, default=Decimal(0)),
+        max(intensities, default=Decimal(0)),
         max(accelerations, default=Decimal(0)),
         max(moves, default=Decimal(0)),
     )
@@ -1321,8 +1556,17 @@ def _best_ratio_horizon(snapshot: MarketActivitySnapshot) -> ActivityHorizonSnap
     return max(
         eligible,
         key=lambda item: (
-            item.volume_ratio or Decimal(0),
-            item.volume_acceleration or Decimal(0),
+            (
+                item.volume_anomaly_score
+                if item.volume_anomaly_method is ActivityAnomalyMethod.ROBUST_MAD
+                and item.volume_anomaly_score is not None
+                else item.volume_ratio or Decimal(0)
+            ),
+            (
+                item.volume_anomaly_acceleration
+                if item.volume_anomaly_acceleration is not None
+                else item.volume_acceleration or Decimal(0)
+            ),
             abs(item.price_return) if item.price_return is not None else Decimal(0),
         ),
     )
@@ -1623,6 +1867,37 @@ def _liquidity_regime(
     if percentile < Decimal("0.80"):
         return LiquidityRegime.HIGH
     return LiquidityRegime.VERY_HIGH
+
+
+def _median_absolute_deviation(
+    values: Iterable[Decimal],
+    *,
+    center: Decimal | None = None,
+) -> Decimal | None:
+    population = tuple(values)
+    if not population:
+        return None
+    resolved_center = Decimal(median(population)) if center is None else center
+    return Decimal(median(tuple(abs(value - resolved_center) for value in population)))
+
+
+def _robust_anomaly(
+    current: Decimal | None,
+    *,
+    baseline: Decimal | None,
+    mad: Decimal | None,
+    fallback_ratio: Decimal | None,
+) -> tuple[Decimal | None, ActivityAnomalyMethod]:
+    if current is None or baseline is None:
+        return None, ActivityAnomalyMethod.UNAVAILABLE
+    if mad is not None and mad > 0:
+        dispersion = mad * _ROBUST_MAD_NORMALIZATION
+        score = _safe_ratio(current - baseline, dispersion)
+        if score is not None:
+            return score, ActivityAnomalyMethod.ROBUST_MAD
+    if fallback_ratio is not None:
+        return None, ActivityAnomalyMethod.LEGACY_RATIO_FALLBACK
+    return None, ActivityAnomalyMethod.UNAVAILABLE
 
 
 def _safe_ratio(numerator: Decimal, denominator: Decimal) -> Decimal | None:

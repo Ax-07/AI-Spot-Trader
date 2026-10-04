@@ -5,77 +5,71 @@
 ```text
 Repository          : Ax-07/AI-Spot-Trader
 Branche             : main
-HEAD GitHub observé : c4f474c
-Commit              : docs: close batch 44
+HEAD GitHub observé : 45d41b7
+Commit              : feat: move market structure before radar shortlist
 ```
 
-Le dernier commit **fonctionnel** du Radar reste `c262d54` (`feat: add perpetual liquidity and radar coverage diagnostics`). Le commit `c4f474c` clôt uniquement la documentation du Batch 44.
+Le **Batch 45 est intégré** dans `main` via `45d41b7`. Les documents qui le présentaient encore comme un patch proposé étaient obsolètes et sont réconciliés par le Batch 46.
 
-## État intégré — Batch 44
+## État intégré — Batch 45
 
 Le Market Attention Radar reste `market-attention-radar-v6`, strictement informatif, déterministe, causal et read-only.
 
-Éléments intégrés :
-
-- scope runtime `SPOT / PERPETUAL / ALL` ;
-- activité OHLCV, tendances et Market Structure native `5m / 15m / 1h / 4h` ;
-- microstructure SPOT ;
-- filtres runtime volume 24h et capitalisation ;
-- volume 24h `SPOT/USD` calculé causalement sur les candles Kraken 5m finalisées ;
-- volume 24h des linear perpetuals cotés USD via le `volumeQuote` public Kraken Futures bulk ;
-- liquidité PERPETUAL basée sur ce `volumeQuote` validé ;
-- diagnostics de couverture/rotation OHLCV ;
-- aucune capacité d'exécution PERP, aucune modification Agent / Risk Engine / Broker.
-
-## Batch 45 — patch proposé, non intégré
-
-Le patch Batch 45 préparé à partir du HEAD `c4f474c` déplace la Market Structure **avant la shortlist finale** sans la calculer sur tout le catalogue :
+Pipeline intégré :
 
 ```text
-catalogue
--> scope
--> capitalisation
--> rotation OHLCV
--> volume
+catalogue Kraken
+-> scope SPOT / PERPETUAL / ALL
+-> métadonnées / filtre capitalisation
+-> rotation OHLCV et volume 24h
 -> activité / tendance / liquidité / microstructure canonique
 -> pool Structure borné et rotatif
--> cache Structure frais
+-> cache Structure causal
 -> filtres tendance / Structure
 -> shortlist finale bornée
+-> cockpit
 ```
 
-Le patch ajoute :
+La Market Structure utilise toujours les timeframes natives `5m / 15m / 1h / 4h`, des candles finalisées et des pivots confirmés. Les événements `BOS / CHOCH` peuvent compléter l'attention sans devenir une décision de trading. Les filtres Structure restent fail-closed pour les données `UNKNOWN` ou non couvertes.
 
-- une rotation/cache Market Structure séparée de la rotation OHLCV ;
-- un diagnostic de couverture Structure distinct ;
-- une attention structurelle basée sur événements confirmés `BOS / CHOCH`, symétrique haussier/baissier ;
-- des filtres runtime de tendance, structure globale, états et événements par `5m / 15m / 1h / 4h` ;
-- `UNKNOWN` fail-closed lorsqu'un filtre correspondant est actif ;
-- cockpit repliable pour ces filtres et diagnostics ;
-- conservation additive du protocole public `market-attention-radar-v6`.
+## Batch 46 — patch proposé, non intégré
 
-Un état persistant `BULLISH` ou `BEARISH` ne force pas à lui seul un marché dans la shortlist par défaut. Il reste néanmoins recherchable lorsqu'un filtre Structure explicite est activé.
+Le Batch 46 remplace la dépendance principale aux seuils universels de ratio d'activité par une baseline robuste propre à chaque marché et horizon :
 
-Voir `docs/45_STRUCTURE_EN_AMONT_ET_FILTRES_RADAR.md`.
+```text
+baseline = médiane des périodes historiques causales
+MAD      = médiane(|x - baseline|)
+dispersion robuste = 1,4826 * MAD
+score adaptatif = (courant - baseline) / dispersion robuste
+```
+
+La baseline cible par défaut passe de `6` à `12` périodes. Sur H4, le défaut utilise 12 périodes avec `48 * (12 + 2) = 672` candles M5. Le correctif 46.1 conserve toutefois un plancher de compatibilité à 6 périodes : les anciennes configurations/fixtures autour de 420 candles M5 restent exploitables avec 6 périodes H4 au lieu de basculer artificiellement en `PARTIAL`.
+
+Si `MAD == 0`, aucun pseudo-score infini n'est produit : la méthode devient explicitement `LEGACY_RATIO_FALLBACK` lorsque le ratio historique est exploitable, sinon `UNAVAILABLE`.
+
+Le patch reste additif au contrat v6 et ne modifie ni Agent, ni Risk Engine, ni Broker, ni exécution PERP, ni Market Structure Batch 45.
 
 ## Validation connue
 
-Batch 44 validé localement avant intégration :
-
-```text
-backend pytest -q       : PASS
-frontend pnpm typecheck : PASS
-frontend pnpm test      : PASS — 59/59
-git diff --check        : PASS (avertissements LF/CRLF uniquement)
-```
-
-Batch 45 — validations exécutées par ChatGPT sur le patch préparé :
+Batch 45 — validations connues du patch avant intégration :
 
 ```text
 Python py_compile des fichiers Python modifiés : PASS
-frontend market-attention.test.mjs ciblé           : PASS — 16/16
-typecheck TypeScript ciblé market-attention.ts     : PASS
-typecheck ciblé cockpit avec stubs de dépendances  : PASS
+frontend market-attention.test.mjs ciblé       : PASS — 16/16
+typecheck TypeScript ciblé market-attention.ts : PASS
+typecheck cockpit ciblé avec stubs              : PASS
 ```
 
-La suite complète backend/frontend et `git diff --check` restent à exécuter localement après extraction du ZIP.
+L'intégration GitHub `45d41b7` confirme la présence du code, mais ne permet pas d'inventer une validation complète non observée.
+
+Batch 46 — validations exécutées par ChatGPT sur le patch préparé :
+
+```text
+Python py_compile backend ciblé                 : PASS
+exécution helpers robustes extraits du code       : PASS
+frontend market-attention.test.mjs ciblé       : PASS — 19/19
+typecheck TypeScript ciblé market-attention.ts : PASS
+parse TypeScript/TSX ciblé cockpit              : PASS
+```
+
+Validation locale de la première livraison Batch 46 : frontend `pnpm typecheck` PASS, `pnpm test` PASS 65/65, `git diff --check` sans erreur ; backend `pytest -q` a révélé 7 régressions de shortlist liées à l'exigence rigide de 12 périodes H4 sur des fixtures historiques de 404–420 candles. Le correctif 46.1 traite cette compatibilité ; la suite backend complète doit être relancée après extraction du ZIP correctif.

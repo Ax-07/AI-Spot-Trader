@@ -1,6 +1,7 @@
 export type RadarStatus = "AVAILABLE" | "PARTIAL" | "NOT_CONFIGURED" | "STALE" | "ERROR";
 export type MarketActivityState = "UNKNOWN" | "NORMAL" | "ELEVATED" | "ACCELERATING" | "VERY_HIGH";
 export type ActivityDataQuality = "COMPLETE" | "NO_TRADE_GAPS" | "INSUFFICIENT_HISTORY" | "DISCONTINUOUS_HISTORY" | "TECHNICAL_ERROR";
+export type ActivityAnomalyMethod = "ROBUST_MAD" | "LEGACY_RATIO_FALLBACK" | "UNAVAILABLE";
 export type LiquidityRegime = "UNKNOWN" | "MICRO" | "LOW" | "MEDIUM" | "HIGH" | "VERY_HIGH";
 export type MarketScope = "SPOT" | "PERPETUAL" | "ALL";
 export type MarketCapCategory = "UNKNOWN" | "MICRO" | "SMALL" | "MID" | "LARGE";
@@ -73,6 +74,11 @@ export type ActivityHorizonSnapshot = {
   volume_ratio: string | null;
   volume_change: string | null;
   volume_acceleration: string | null;
+  baseline_volume_mad?: string | null;
+  volume_anomaly_score?: string | null;
+  previous_volume_anomaly_score?: string | null;
+  volume_anomaly_acceleration?: string | null;
+  volume_anomaly_method?: ActivityAnomalyMethod;
   current_notional_usd: string | null;
   baseline_notional_usd: string | null;
   notional_delta_usd: string | null;
@@ -82,9 +88,15 @@ export type ActivityHorizonSnapshot = {
   price_range: string | null;
   baseline_price_range: string | null;
   range_expansion_ratio: string | null;
+  baseline_range_mad?: string | null;
+  range_anomaly_score?: string | null;
+  range_anomaly_method?: ActivityAnomalyMethod;
   realized_volatility: string | null;
   baseline_realized_volatility: string | null;
   volatility_expansion_ratio: string | null;
+  baseline_volatility_mad?: string | null;
+  volatility_anomaly_score?: string | null;
+  volatility_anomaly_method?: ActivityAnomalyMethod;
   breakout_distance: string | null;
   observation_count: number;
   baseline_period_count: number;
@@ -257,6 +269,8 @@ export type SubthresholdActivitySnapshot = {
   market: AttentionMarket;
   peak_volume_ratio: string;
   peak_timeframe: AttentionTimeframe;
+  peak_anomaly_score?: string | null;
+  anomaly_method?: ActivityAnomalyMethod;
 };
 
 export type MarketAttentionSnapshot = {
@@ -439,6 +453,21 @@ export function formatVolumeRatio(value: string | null | undefined): string {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return "—";
   return `${parsed.toFixed(parsed >= 10 ? 1 : 2)}×`;
+}
+
+export function formatAdaptiveScore(value: string | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "—";
+  return `${parsed > 0 ? "+" : ""}${parsed.toFixed(2)} MADσ`;
+}
+
+export function anomalyMethodLabel(
+  value: ActivityAnomalyMethod | null | undefined,
+): string {
+  if (value === "ROBUST_MAD") return "MAD robuste";
+  if (value === "LEGACY_RATIO_FALLBACK") return "Fallback ratio";
+  return "Indisponible";
 }
 
 export function formatSignedPercent(value: string | null | undefined): string {

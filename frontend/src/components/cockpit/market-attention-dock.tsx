@@ -9,8 +9,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import {
   activeMarketAttentionFilters,
   activityErrorEntries,
+  anomalyMethodLabel,
   attentionHorizon,
   fetchMarketAttention,
+  formatAdaptiveScore,
   formatBps,
   formatCoverageRatio,
   formatDurationSeconds,
@@ -280,9 +282,13 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
                 <div className="mt-2 space-y-1.5">
                   <Fact label="Tendance récente" value={trendDirectionLabel(horizon?.trend_direction)} />
                   <Fact label="Volume relatif" value={formatVolumeRatio(horizon?.volume_ratio)} />
+                  <Fact label="Score volume adaptatif" value={formatAdaptiveScore(horizon?.volume_anomaly_score)} />
+                  <Fact label="Méthode volume" value={anomalyMethodLabel(horizon?.volume_anomaly_method)} />
                   <Fact label="Variation prix" value={formatSignedPercent(horizon?.price_return)} />
                   <Fact label="Expansion range" value={formatVolumeRatio(horizon?.range_expansion_ratio)} />
                   <Fact label="Expansion volatilité" value={formatVolumeRatio(horizon?.volatility_expansion_ratio)} />
+                  <Fact label="Score volatilité adaptatif" value={formatAdaptiveScore(horizon?.volatility_anomaly_score)} />
+                  <Fact label="Méthode volatilité" value={anomalyMethodLabel(horizon?.volatility_anomaly_method)} />
                   <Fact label="Distance breakout" value={formatSignedPercent(horizon?.breakout_distance)} />
                 </div>
               </div>
@@ -761,7 +767,9 @@ export function MarketAttentionDock() {
                       {data.subthreshold_activity.map((item) => (
                         <div key={`${item.market.market_type}:${item.market.symbol}`} className="flex items-center justify-between gap-3 rounded-md bg-muted/15 px-2.5 py-2 text-xs">
                           <div className="min-w-0"><span className="truncate font-semibold">{item.market.symbol}</span><span className="ml-1.5 text-[10px] text-muted-foreground">{item.market.market_type}</span></div>
-                          <span className="shrink-0 font-mono font-semibold tabular-nums">{formatVolumeRatio(item.peak_volume_ratio)} · {item.peak_timeframe}</span>
+                          <span className="shrink-0 font-mono font-semibold tabular-nums">
+                            {formatVolumeRatio(item.peak_volume_ratio)} · {formatAdaptiveScore(item.peak_anomaly_score)} · {anomalyMethodLabel(item.anomaly_method)} · {item.peak_timeframe}
+                          </span>
                         </div>
                       ))}
                     </div>
