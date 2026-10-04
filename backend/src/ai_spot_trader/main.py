@@ -36,12 +36,13 @@ from ai_spot_trader.integrations.kraken.attention import KrakenAttentionCatalogu
 from ai_spot_trader.integrations.kraken.candles import KrakenCandleProvider
 from ai_spot_trader.integrations.kraken.microstructure import KrakenSpotMicrostructureProvider
 from ai_spot_trader.market.attention import MarketAttentionPolicy, MarketAttentionRadar
-from ai_spot_trader.market.attention_structure_prefilter import (
-    MarketStructureScanPolicy,
-    StructureAwareFilteredMarketAttentionRadar,
+from ai_spot_trader.market.attention_perpetual_analytics import (
+    PerpetualAnalyticsMarketAttentionRadar,
 )
+from ai_spot_trader.market.attention_structure_prefilter import MarketStructureScanPolicy
 from ai_spot_trader.market.candles import CandleCache, CandleStreamService
 from ai_spot_trader.market.microstructure import MicrostructurePolicy
+from ai_spot_trader.market.perpetual_analytics import PerpetualAnalyticsPolicy
 from ai_spot_trader.market.structure import MarketStructurePolicy
 from ai_spot_trader.persistence.analytics import (
     PaperAnalyticsReader,
@@ -108,13 +109,15 @@ def create_app(
         )
 
     def build_market_attention(candles: CandleStreamService) -> MarketAttentionRadar:
-        return StructureAwareFilteredMarketAttentionRadar(
+        catalogue = KrakenAttentionCatalogue(
+            spot_rest_url=resolved_settings.kraken_rest_url,
+            derivatives_rest_url=resolved_settings.kraken_derivatives_rest_url,
+            timeout_seconds=resolved_settings.kraken_rest_timeout_seconds,
+        )
+        return PerpetualAnalyticsMarketAttentionRadar(
             candle_service=candles,
-            catalogue=KrakenAttentionCatalogue(
-                spot_rest_url=resolved_settings.kraken_rest_url,
-                derivatives_rest_url=resolved_settings.kraken_derivatives_rest_url,
-                timeout_seconds=resolved_settings.kraken_rest_timeout_seconds,
-            ),
+            catalogue=catalogue,
+            analytics_provider=catalogue,
             microstructure_provider=KrakenSpotMicrostructureProvider(
                 resolved_settings.kraken_rest_url,
                 timeout_seconds=resolved_settings.kraken_rest_timeout_seconds,
@@ -126,6 +129,7 @@ def create_app(
             microstructure_policy=MicrostructurePolicy(),
             structure_policy=MarketStructurePolicy(),
             structure_scan_policy=MarketStructureScanPolicy(),
+            analytics_policy=PerpetualAnalyticsPolicy(),
         )
 
     @asynccontextmanager

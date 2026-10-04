@@ -13,6 +13,7 @@ import {
   formatDurationSeconds,
   formatImbalance,
   formatKrakenRawNumber,
+  formatKrakenSignedRawNumber,
   formatSignedPercent,
   formatUsdCompact,
   formatVolumeRatio,
@@ -21,6 +22,9 @@ import {
   marketAttentionStatusMessage,
   marketCapCategoryLabel,
   marketStructureCoverageMessage,
+  perpetualAnalyticsContext,
+  perpetualAnalyticsCoverageMessage,
+  perpetualAnalyticsStatusLabel,
   perpetualTickerContext,
   perpetualTickerStatusLabel,
   setMarketAttentionFilters,
@@ -424,6 +428,100 @@ test("keeps Futures prediction distinct and tolerates partial or technical state
   assert.equal(formatKrakenRawNumber(perpetualTickerContext(partial)?.funding_rate_prediction_raw), "—");
   assert.equal(perpetualTickerStatusLabel("TECHNICAL_ERROR"), "Erreur technique");
   assert.equal(perpetualTickerStatusLabel("NOT_APPLICABLE"), "N/A");
+});
+
+test("keeps Batch 47.1 payloads compatible when historical analytics are absent", () => {
+  const legacyPerp = {
+    ...item,
+    market_activity: {
+      ...item.market_activity,
+      market: { symbol: "BTC/USD", market_type: "PERPETUAL" },
+    },
+  };
+  assert.equal(perpetualAnalyticsContext(legacyPerp), null);
+  assert.equal(perpetualAnalyticsStatusLabel(undefined), "Indisponible");
+});
+
+test("exposes complete historical Open Interest analytics without inventing units", () => {
+  const analytics = {
+    market: { symbol: "BTC/USD", market_type: "PERPETUAL" },
+    status: "AVAILABLE",
+    provider: "KRAKEN_FUTURES",
+    observed_at: "2026-10-04T12:00:00Z",
+    current_open_interest_observed_at: "2026-10-04T11:00:00Z",
+    current_open_interest: "130",
+    previous_open_interest: "100",
+    baseline_open_interest: "100",
+    baseline_open_interest_mad: "1",
+    open_interest_change: "30",
+    open_interest_change_ratio: "0.3",
+    open_interest_anomaly_score: "20.23",
+    open_interest_anomaly_method: "ROBUST_MAD",
+    baseline_period_count: 12,
+    history_point_count: 13,
+    characteristics: ["OPEN_INTEREST_EXPANSION"],
+    error_type: null,
+  };
+  const perpetual = { ...item, perpetual_analytics: analytics };
+  const value = perpetualAnalyticsContext(perpetual);
+  assert.equal(value?.current_open_interest, "130");
+  assert.equal(value?.previous_open_interest, "100");
+  assert.equal(value?.baseline_open_interest, "100");
+  assert.equal(formatKrakenSignedRawNumber(value?.open_interest_change), "+30");
+  assert.equal(formatSignedPercent(value?.open_interest_change_ratio), "+30.00 %");
+  assert.equal(formatAdaptiveScore(value?.open_interest_anomaly_score), "+20.23 MADσ");
+  assert.equal(anomalyMethodLabel(value?.open_interest_anomaly_method), "MAD robuste");
+  assert.equal(perpetualAnalyticsStatusLabel(value?.status), "Disponible");
+  assert.doesNotMatch(formatKrakenRawNumber(value?.current_open_interest), /\$/);
+});
+
+test("distinguishes insufficient, technical, spot N/A, positive and negative OI states", () => {
+  assert.equal(perpetualAnalyticsStatusLabel("INSUFFICIENT_HISTORY"), "Historique insuffisant");
+  assert.equal(perpetualAnalyticsStatusLabel("TECHNICAL_ERROR"), "Erreur technique");
+  assert.equal(perpetualAnalyticsStatusLabel("NOT_APPLICABLE"), "N/A");
+  assert.equal(formatAdaptiveScore("2.5"), "+2.50 MADσ");
+  assert.equal(formatAdaptiveScore("-2.5"), "-2.50 MADσ");
+  assert.equal(anomalyMethodLabel("LEGACY_RATIO_FALLBACK"), "Fallback ratio");
+});
+
+test("formats Futures Analytics coverage separately from OHLCV and Structure", () => {
+  const rotating = {
+    eligible_market_count: 30,
+    fresh_market_count: 10,
+    expired_market_count: 0,
+    unseen_market_count: 20,
+    scanned_market_count: 5,
+    coverage_ratio: 1 / 3,
+    effective_market_limit: 10,
+    estimated_refreshes_per_full_rotation: 3,
+    estimated_full_rotation_seconds: 900,
+    cache_ttl_seconds: 3600,
+    oldest_snapshot_age_seconds: 120,
+    rotation_within_cache_ttl: true,
+    requests_attempted: 5,
+    requests_failed: 1,
+    status: "ROTATING",
+  };
+  assert.match(perpetualAnalyticsCoverageMessage(rotating), /rotation Analytics Futures en cours/i);
+  assert.match(
+    perpetualAnalyticsCoverageMessage({
+      ...rotating,
+      status: "CONFIGURATION_TOO_SLOW",
+      estimated_full_rotation_seconds: 7200,
+      rotation_within_cache_ttl: false,
+    }),
+    /trop lente/i,
+  );
+  assert.match(
+    perpetualAnalyticsCoverageMessage({
+      ...rotating,
+      fresh_market_count: 30,
+      unseen_market_count: 0,
+      coverage_ratio: 1,
+      status: "COVERED",
+    }),
+    /complète/i,
+  );
 });
 
 test("sends a backend scope change before replacing the radar snapshot", async () => {

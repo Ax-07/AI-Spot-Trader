@@ -11,29 +11,114 @@ Market Attention Radar reste strictement observationnel et ne prend aucune déci
 ## Référence courante
 
 ```text
-HEAD GitHub observé : b2193654ed3ba9db890c6129545acd90e238b0f1
-Commit HEAD         : feat: add adaptive statistical radar baseline
+HEAD GitHub observé : 842e6bd7f005f1f57bd9b2131d201777020d1d24
+Commit HEAD         : feat: add futures ticker analytics foundations
 Batch 43.2          : intégré
 Batch 44            : intégré
 Batch 45            : intégré via 45d41b7
 Batch 46 / 46.1     : intégré via b219365
-Batch 47.1          : patch préparé, non intégré
+Batch 47.1          : intégré via 842e6bd7
+Batch 47.2          : patch préparé, non intégré
 ```
 
-## Changelog — 2026-10-04 — Batch 47.1 fondations Futures ticker — proposé
+## Changelog — 2026-10-04 — Batch 47.2 historique Open Interest — proposé
 
-Base auditée : GitHub `main` au HEAD `b219365`.
+Base auditée : GitHub `main` au HEAD `842e6bd7`.
 
 Audit de reprise :
 
-- **confirmé** : `b219365` est le HEAD réel observé de `main` et contient la baseline adaptative Batch 46 ainsi que le plancher de compatibilité `_MINIMUM_ADAPTIVE_BASELINE_PERIODS = 6` ;
-- **obsolète** : les statuts documentaires présentant Batch 46 / 46.1 et ADR-328/329/330 comme proposés ;
-- **confirmé** : `KrakenAttentionCatalogue` récupère encore le `volumeQuote` PERP en appelant directement la méthode privée `_derivatives._get_json("/tickers", ...)` ;
-- **confirmé** : `KrakenDerivativesPublicClient` est le client Futures public canonique existant ; aucun second client n'est requis ;
-- **confirmé** : le chemin PAPER individuel normalise déjà `fundingRate` via `fundingRate / (mark_price * contract_size)` ;
-- **à décider ultérieurement** : toute utilisation historique/scorée d'Open Interest, funding, liquidations, CVD ou aggressor-differential.
+- **confirmé** : `842e6bd7` est le HEAD réel observé de `main` et intègre les fondations Futures ticker du Batch 47.1 ;
+- **obsolète** : les statuts documentaires présentant Batch 47.1 et ADR-331/332 comme proposés/non intégrés ;
+- **confirmé** : `fetch_tickers()` reste le chemin bulk canonique pour le volume PERP, la liquidité PERP et les données Futures instantanées ;
+- **confirmé** : la rotation/cache Structure Batch 45 est indépendante et ne doit pas être détournée pour les Analytics Futures ;
+- **confirmé** : les helpers Batch 46 `_median_absolute_deviation()` et `_robust_anomaly()` constituent la primitive statistique canonique à réutiliser ;
+- **confirmé** : le pipeline filtré expose déjà via `_fresh_activities(...)` la population ayant passé scope, capitalisation et filtre volume ;
+- **confirmé via documentation Kraken publique** : la Market Analytics Open Interest utilise `GET /api/charts/v1/analytics/{symbol}/open-interest`, `since`/`to` en epoch secondes et `interval` en secondes ; le schéma générique expose `timestamp[]`, `data[]` et `more` ;
+- **confirmé par smoke public local PF_XBTUSD** : `data` est une série de buckets OHLC `[open, high, low, close]`, `more=false` et `errors=[]` sur l'échantillon observé ;
+- **manquant dans le contrat public audité** : une unité économique explicite permettant de nommer l'OI `USD`, ainsi qu'une garantie de rétention exploitable ; aucune n'est inventée ;
+- **à décider ultérieurement** : pagination multi-requêtes lorsque `more=true`, historique funding/liquidations/CVD/aggressor et influence multi-analytics sur le ranking.
 
-Patch Batch 47.1 :
+Patch Batch 47.2 :
+
+- ajout d'une extension Market Analytics du client Futures public canonique, réutilisée par le même `KrakenAttentionCatalogue` ; aucun second transport HTTP Futures n'est créé ;
+- ajout d'un parser strict `timestamp[] + data[] + more` pour `open-interest` ; après le smoke live, le parser exige des buckets OHLC `[open, high, low, close]`, valide leurs bornes et utilise `close` comme valeur historique du bucket ;
+- validation des timestamps epoch secondes, valeurs finies/non négatives, ordre temporel strict et formes de payload ;
+- `more=true` rejeté explicitement afin de ne pas utiliser silencieusement une page tronquée ni dépasser le budget réseau du batch ;
+- ajout de `PerpetualAnalyticsProvider`, `PerpetualAnalyticsPolicy`, `PerpetualAnalyticsScanner`, `PerpetualAnalyticsSnapshot` et d'un diagnostic de couverture séparé ;
+- curseur Analytics indépendant des curseurs OHLCV et Structure ;
+- cache causal : un snapshot futur relativement à `as_of` n'est jamais réutilisé ;
+- pool OI limité aux PERPETUAL `AVAILABLE` ayant déjà passé les filtres moins coûteux ;
+- policy par défaut : 10 marchés/refresh, TTL 1h, intervalle OI 1h, lookback 48h, concurrence 4, baseline 12 périodes ;
+- coût réseau maximal par défaut : 10 requêtes historiques OI par refresh ;
+- causalité conservatrice : `to <= as_of` et utilisation d'un point historique seulement après un intervalle complet suivant son timestamp, faute de sémantique de clôture plus précise démontrée dans le contrat public audité ;
+- réutilisation directe du MAD Batch 46 : `baseline=median`, `MAD`, dispersion `1.4826*MAD`, score signé ;
+- seuil robuste symétrique `±2.5` ; fallback MAD nul basé sur un delta relatif de `±10 %` autour de la baseline (`ratio >= 1.10` / `<= 0.90`) ;
+- caractéristiques descriptives uniquement `OPEN_INTEREST_EXPANSION` et `OPEN_INTEREST_CONTRACTION` ;
+- aucune conversion USD de l'OI et aucun suffixe d'unité inventé ;
+- shortlist canonique calculée avant enrichissement OI : aucune modification de `interest_level`, `candidate_limit`, ranking canonique/Structure ou baseline OHLCV ;
+- OI historique visible uniquement comme enrichissement des candidats déjà retenus et dans le cockpit ;
+- ajout `perpetual_analytics_coverage` au payload v6 additif et prise en charge explicite par la route FastAPI afin d'éviter une sérialisation vers le modèle v6 Structure plus étroit ;
+- aucune modification Agent / Risk Engine / Broker et aucune capacité d'exécution PERP.
+
+Validation réellement exécutée dans l'environnement ChatGPT au moment de la préparation :
+
+```text
+python -m py_compile sources/tests Python Batch 47.2              : PASS
+pytest ciblé Batch 47.2 avec stubs du checkout partiel            : PASS — 37/37
+node --test --experimental-strip-types market-attention.test.mjs  : PASS — 26/26
+tsc --noEmit --strict ciblé market-attention.ts                   : PASS
+typecheck ciblé lib + cockpit avec stubs React/UI                 : PASS
+transpile TypeScript ciblé market-attention-dock.tsx              : PASS
+```
+
+Validation locale utilisateur de la première livraison 47.2 :
+
+```text
+pytest -q        : PASS — suite arrivée à 100 %
+pnpm typecheck   : PASS
+pnpm test        : PASS — 72/72
+git diff --check : PASS sans erreur ; avertissements LF/CRLF uniquement
+smoke PF_XBTUSD  : transport PASS, OHLC confirmé, more=false
+```
+
+Le smoke a invalidé l'hypothèse préparatoire d'une série scalaire et déclenché un correctif pré-intégration du parser uniquement. Validation ChatGPT du correctif : `python -m py_compile` PASS et **33/33 tests parser/client ciblés PASS** avec stubs minimaux. Une relance locale de `pytest -q` est requise après extraction de ce correctif avant intégration.
+
+## ADR-333 — Les Analytics Futures historiques utilisent une rotation/cache séparée
+
+**PROPOSÉ — Batch 47.2, non intégré.**
+
+Les séries Analytics Futures historiques ne réutilisent ni le curseur OHLCV ni le curseur Structure. `PerpetualAnalyticsScanner` possède un curseur déterministe, un cache causal, une concurrence bornée et un diagnostic de couverture séparé. Les futures séries 47.3/47.4 doivent réutiliser cette infrastructure plutôt que créer des rotations parallèles non coordonnées.
+
+## ADR-334 — L'Open Interest est analysé relativement à son propre historique sans unité économique inventée
+
+**PROPOSÉ — Batch 47.2, non intégré.**
+
+`openInterest` reste une valeur Kraken brute. Aucun `open_interest_usd` n'est créé. L'analyse compare le point courant à une baseline médiane propre au marché et réutilise le MAD normalisé Batch 46. Cette approche permet une détection relative sans supposer une unité économique absente du contrat public audité.
+
+## ADR-335 — La causalité Analytics applique un délai conservateur d'un intervalle
+
+**PROPOSÉ — Batch 47.2, non intégré.**
+
+Le contrat Market Analytics documente les timestamps en epoch secondes et l'intervalle, mais le document audité ne démontre pas une sémantique de clôture suffisamment précise pour consommer le timestamp courant comme point finalisé. Le Batch 47.2 accepte donc uniquement les points dont `timestamp + interval <= as_of`. Cette règle peut être assouplie ultérieurement uniquement sur preuve fournisseur explicite et testée.
+
+## ADR-336 — L'OI historique n'a pas d'autorité de ranking en Batch 47.2
+
+**PROPOSÉ — Batch 47.2, non intégré.**
+
+Le ranking canonique et la shortlist finale sont construits avant l'enrichissement OI. Les caractéristiques OI peuvent compléter `combined_characteristics` et `interest_reasons` d'un candidat déjà retenu, mais ne modifient ni `interest_level`, ni `candidate_limit`, ni la clé de tri. Une influence multi-analytics éventuelle est réservée au Batch 47.5.
+
+## Changelog — 2026-10-04 — Batch 47.1 fondations Futures ticker — intégré
+
+Commit intégré : `842e6bd7` (`feat: add futures ticker analytics foundations`).
+
+Audit de préparation historique :
+
+- `b219365` était la base pré-47.1 et contenait la baseline adaptative Batch 46 ainsi que le plancher `_MINIMUM_ADAPTIVE_BASELINE_PERIODS = 6` ;
+- `KrakenDerivativesPublicClient` était déjà le client Futures public canonique ;
+- le chemin PAPER individuel normalisait déjà `fundingRate` via `fundingRate / (mark_price * contract_size)` ;
+- l'utilisation historique/scorée d'Open Interest, funding, liquidations, CVD ou aggressor-differential restait hors 47.1.
+
+Batch 47.1 intégré :
 
 - ajout de `KrakenDerivativesPublicClient.fetch_tickers()` ;
 - ajout du modèle interne strict `KrakenDerivativesTickerSnapshot` ;
@@ -53,41 +138,34 @@ Patch Batch 47.1 :
 - contrat public conservé en `market-attention-radar-v6` ;
 - aucune modification Agent / Risk Engine / Broker et aucune capacité d'exécution PERP.
 
-Validations exécutées par ChatGPT sur le patch :
+Validations connues de la première livraison 47.1 :
 
 ```text
-Python py_compile ciblé                              : PASS
-pytest parser/client bulk vrai module + stubs dépendances : PASS — 23/23
-smoke local catalogue partagé                        : PASS
-frontend market-attention.test.mjs ciblé             : PASS — 22/22
-typecheck ciblé market-attention.ts                  : PASS
-parse/transpile ciblé market-attention-dock.tsx : PASS
+ChatGPT : Python py_compile ciblé                         PASS
+ChatGPT : pytest parser/client bulk avec stubs           PASS — 23/23
+ChatGPT : smoke local catalogue partagé                  PASS
+ChatGPT : frontend market-attention.test.mjs ciblé       PASS — 22/22
+ChatGPT : typecheck ciblé market-attention.ts            PASS
+ChatGPT : parse/transpile ciblé market-attention-dock    PASS
+Utilisateur : pnpm typecheck                             PASS
+Utilisateur : pnpm test                                  PASS — 68/68
+Utilisateur : git diff --check                           PASS (LF/CRLF uniquement)
+Utilisateur : pytest -q première livraison               3 FAILURES de fixtures Batch 47.1
 ```
 
-Le checkout complet n'était pas disponible ; aucune suite backend/frontend globale non exécutée n'est déclarée PASS.
-
-Validation locale utilisateur après extraction :
-
-```text
-pnpm typecheck     : PASS
-pnpm test          : PASS — 68/68
-git diff --check   : PASS (avertissements LF/CRLF uniquement)
-pytest -q          : 3 FAILURES Batch 47.1, suite arrivée à 100 %
-```
-
-Les trois échecs backend avaient une cause unique dans le test `test_market_attention_batch47_1_perpetual_ticker.py` : les scénarios passaient `MarketAttentionFilters` à `StructureAwareFilteredMarketAttentionRadar.set_filters()`, dont le contrat Batch 45 attend `StructureAwareMarketAttentionFilters`. Le correctif 47.1.1 aligne les fixtures de test sur le contrat existant sans modifier le Radar de production. Une relance complète `pytest -q` reste nécessaire après application.
+Le correctif 47.1.1 aligne les fixtures de test sur `StructureAwareMarketAttentionFilters` sans modifier la logique de production. Une relance complète backend post-correctif n'est pas documentée comme PASS et n'est pas inventée.
 
 ## ADR-331 — Le Radar réutilise un snapshot Futures bulk canonique
 
-**PROPOSÉ — Batch 47.1, non intégré.**
+**ADOPTÉ — Batch 47.1 intégré via `842e6bd7`.**
 
-Le client Futures public canonique expose `fetch_tickers()`. Le Radar ne doit pas multiplier les appels `/tickers` pour le volume, l'Open Interest et le funding. Dans un cycle logique, le snapshot partagé alimente les usages descriptifs et le `volumeQuote` déjà retenu par les Batches 43.2/44.
+Le client Futures public canonique expose `fetch_tickers()`. Le Radar ne multiplie pas les appels `/tickers` pour le volume, l'Open Interest et le funding. Dans un cycle logique, le snapshot partagé alimente les usages descriptifs et le `volumeQuote` déjà retenu par les Batches 43.2/44.
 
-Aucun second client Kraken Futures n'est créé.
+Aucun second client Kraken Futures n'est créé pour ce snapshot bulk.
 
 ## ADR-332 — OI/funding instantanés restent descriptifs et leurs unités restent explicites
 
-**PROPOSÉ — Batch 47.1, non intégré.**
+**ADOPTÉ — Batch 47.1 intégré via `842e6bd7`.**
 
 `openInterest`, `fundingRate` et `fundingRatePrediction` sont conservés comme valeurs Kraken brutes lorsque leur unité d'affichage n'est pas démontrée. Le taux relatif normalisé existant est stocké séparément lorsqu'il peut être calculé. La prédiction est identifiée comme prévision Kraken, jamais comme funding futur réalisé.
 

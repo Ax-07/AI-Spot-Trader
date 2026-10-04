@@ -5,8 +5,8 @@
 ```text
 Repository              : Ax-07/AI-Spot-Trader
 Branche                 : main
-HEAD GitHub observé     : b2193654ed3ba9db890c6129545acd90e238b0f1
-Commit HEAD             : feat: add adaptive statistical radar baseline
+HEAD GitHub observé     : 842e6bd7f005f1f57bd9b2131d201777020d1d24
+Commit HEAD             : feat: add futures ticker analytics foundations
 Batch 42                : intégré
 Batch 43                : intégré
 Batch 43.1              : intégré
@@ -14,7 +14,8 @@ Batch 43.2              : intégré
 Batch 44                : intégré
 Batch 45                : intégré via 45d41b7
 Batch 46 / 46.1         : intégré via b219365
-Batch 47.1              : patch préparé, non intégré
+Batch 47.1              : intégré via 842e6bd7
+Batch 47.2              : patch préparé, non intégré
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -25,9 +26,9 @@ AI Spot Trader conserve un seul Agent IA stratégique, Kraken comme exchange ini
 
 Les capacités PERPETUAL du Radar restent observationnelles uniquement. L'exécution demeure SPOT.
 
-## État intégré jusqu'au Batch 46
+## État intégré jusqu'au Batch 47.1
 
-Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et les caractéristiques descriptives. Le Batch 39 a supprimé la couche Web/IA du Radar. Le Batch 40 a ajouté la microstructure Kraken SPOT et le contrat Radar v3. Le Batch 41 a ajouté le scope `SPOT / PERPETUAL / ALL`, les directions récentes et le contrat v4. Le Batch 42 a ajouté la Market Structure multi-timeframe et le contrat v5. Le Batch 43 a ajouté les filtres de volume 24h et de capitalisation réelle avec le contrat v6. Les correctifs 43.1 et 43.2 ont fiabilisé le volume SPOT et PERPETUAL. Le Batch 44 a ajouté la liquidité PERPETUAL et les diagnostics de couverture OHLCV. Le Batch 45 a déplacé la Structure en amont de la shortlist finale avec une rotation/cache dédiés et des filtres tendance/Structure. Le Batch 46 a introduit une baseline statistique adaptative médiane/MAD, avec cible 12 périodes et plancher de compatibilité à 6 périodes.
+Les Batches 28 à 35 ont construit et durci Market Attention. Le Batch 36 a amélioré la terminologie financière. Le Batch 37 a aligné la cadence stratégique sur les clôtures de bougies. Le Batch 38 a ajouté le préfiltrage Kraken et les caractéristiques descriptives. Le Batch 39 a supprimé la couche Web/IA du Radar. Le Batch 40 a ajouté la microstructure Kraken SPOT et le contrat Radar v3. Le Batch 41 a ajouté le scope `SPOT / PERPETUAL / ALL`, les directions récentes et le contrat v4. Le Batch 42 a ajouté la Market Structure multi-timeframe et le contrat v5. Le Batch 43 a ajouté les filtres de volume 24h et de capitalisation réelle avec le contrat v6. Les correctifs 43.1 et 43.2 ont fiabilisé le volume SPOT et PERPETUAL. Le Batch 44 a ajouté la liquidité PERPETUAL et les diagnostics de couverture OHLCV. Le Batch 45 a déplacé la Structure en amont de la shortlist finale avec une rotation/cache dédiés et des filtres tendance/Structure. Le Batch 46 a introduit une baseline statistique adaptative médiane/MAD, avec cible 12 périodes et plancher de compatibilité à 6 périodes. Le Batch 47.1 a intégré un snapshot Futures public bulk canonique partagé pour le volume PERP, la liquidité PERP et le contexte instantané OI/funding/mark/index.
 
 ## Batch 42 — Market Structure multi-timeframe
 
@@ -144,7 +145,7 @@ Voir `docs/46_BASELINE_STATISTIQUE_ADAPTATIVE_RADAR.md`.
 
 ## Batch 47.1 — fondations Futures ticker
 
-**État : patch préparé, non intégré.**
+**État : intégré via `842e6bd7`.**
 
 Objectif : disposer d'un snapshot Futures public canonique et partagé avant toute série Analytics historique.
 
@@ -169,7 +170,7 @@ postOnly
 serverTime
 ```
 
-Décisions :
+Décisions intégrées :
 
 - un seul appel bulk `/tickers` dans le chemin Radar pour volume, liquidité et contexte Futures ;
 - `volumeQuote` conserve la sémantique Batch 43.2/44 ;
@@ -183,23 +184,100 @@ Décisions :
 
 Voir `docs/47_1_FONDATIONS_FUTURES_TICKER.md`.
 
-## Batches 47.2 à 47.5 — Analytics Futures historiques
+## Batch 47.2 — historique Open Interest + infrastructure Analytics Futures
 
-**État : à décider / non implémenté dans 47.1.**
+**État : patch préparé, non intégré.**
+
+Périmètre strict : une seule série historique, `open-interest`.
+
+Source publique auditée :
+
+```text
+GET https://futures.kraken.com/api/charts/v1/analytics/{venue_symbol}/open-interest
+since    : epoch secondes
+interval : secondes
+[to]     : epoch secondes
+```
+
+Granularités documentées : `60 / 300 / 900 / 1800 / 3600 / 14400 / 43200 / 86400 / 604800` secondes. Le smoke public local PF_XBTUSD a confirmé `result.timestamp[]`, `result.more=false` et une série `result.data[]` de buckets OHLC `[open, high, low, close]`. Le parser 47.2 utilise le `close` de chaque bucket finalisé et rejette les formes scalaires/inconnues.
+
+Architecture du patch :
+
+```text
+Radar
+-> PerpetualAnalyticsProvider
+-> KrakenAttentionCatalogue
+-> extension du client Futures public canonique
+-> Market Analytics public Open Interest
+```
+
+Le Radar utilise un scanner dédié :
+
+```text
+PerpetualAnalyticsScanner
+_perpetual_analytics_cursor
+cache[ExecutableMarket]
+perpetual_analytics_coverage
+```
+
+La rotation Analytics est indépendante des curseurs OHLCV et Structure. Les analytics ne sont demandées que pour les PERPETUAL dont l'activité est `AVAILABLE` après scope, capitalisation et filtre volume déjà appliqués. Structure et OI restent indépendants.
+
+Policy proposée :
+
+```text
+market_limit_per_refresh = 10
+cache_ttl_seconds        = 3600
+history_interval_seconds = 3600
+history_lookback_seconds = 172800
+fetch_concurrency        = 4
+baseline_periods         = 12
+data_stale_after_seconds = 7200
+anomaly_score_threshold = ±2.5
+fallback                 = ±10 % autour de la baseline
+```
+
+Coût réseau maximal par défaut : **10 appels OI historiques par refresh**. `more=true` est rejeté explicitement dans 47.2 afin de ne pas masquer une page tronquée ni dépasser silencieusement ce budget ; une stratégie de pagination bornée pourra être décidée si elle devient nécessaire.
+
+Causalité : l'appel utilise `to <= as_of`. Comme le contrat public audité ne documente pas explicitement la sémantique de clôture des timestamps Analytics, le scanner applique volontairement un délai conservateur d'un intervalle avant d'utiliser un point dans la baseline.
+
+Baseline OI : réutilisation des helpers Batch 46, aucune deuxième implémentation MAD.
+
+```text
+baseline OI          = median(historique causal hors point courant)
+MAD                  = median(abs(x - baseline))
+robust dispersion    = 1.4826 * MAD
+score OI             = (current - baseline) / robust dispersion
+expansion robuste    = score >= +2.5
+contraction robuste  = score <= -2.5
+fallback MAD nul     = current / baseline >= 1.10 ou <= 0.90
+```
+
+Les caractéristiques 47.2 sont uniquement :
+
+```text
+OPEN_INTEREST_EXPANSION
+OPEN_INTEREST_CONTRACTION
+```
+
+Impact shortlist volontairement limité : la rotation OI est insérée juste avant le scan Structure, mais le parent calcule seul la shortlist canonique et l'OI n'est lu qu'après cette sélection pour enrichir les candidats déjà présents. Il ne change pas `interest_level`, `candidate_limit` ni la clé de ranking et ne force jamais seul un marché normal dans la shortlist.
+
+Cockpit : sous-partie `Open Interest historique` dans `Futures Kraken` et bloc global `Couverture Analytics Futures`. Aucun filtre utilisateur OI n'est ajouté.
+
+Voir `docs/47_2_OPEN_INTEREST_HISTORIQUE.md`.
+
+## Batches 47.3 à 47.5 — Analytics Futures historiques suivants
+
+**État : réservé / non implémenté dans 47.2.**
 
 Périmètres réservés :
 
 ```text
-open-interest historique
-funding historique
-liquidation-volume
-CVD / aggressor-differential
-rotation/cache/coverage Analytics historique
-scores MAD OI/funding historique
-éventuelle influence déterministe sur le ranking
+47.3 : funding historique, liquidation-volume
+47.4 : CVD, aggressor-differential
+47.5 : évaluation d'une éventuelle influence déterministe multi-analytics sur le ranking
 ```
 
-Toute influence de ces données sur l'attention devra être décidée après disponibilité de séries causales et testables. Aucune donnée instantanée Batch 47.1 ne doit être transformée silencieusement en score stratégique.
+Toute influence future devra réutiliser l'infrastructure de rotation/cache/coverage du Batch 47.2 plutôt que créer des scanners parallèles indépendants.
 
 ## Validation connue
 
@@ -222,22 +300,26 @@ typecheck TypeScript ciblé market-attention.ts  : PASS
 parse TypeScript/TSX ciblé cockpit              : PASS
 ```
 
-Batch 47.1 — validations exécutées par ChatGPT sur le patch :
+Batch 47.1 — validations connues : frontend local `pnpm typecheck` PASS, `pnpm test` PASS 68/68 et `git diff --check` PASS ; la première suite backend complète avait 3 échecs de fixtures Batch 47.1, corrigés par 47.1.1. Aucune relance backend complète post-correctif n'est inventée.
+
+Batch 47.2 — validations réellement exécutées par ChatGPT au moment de la préparation :
 
 ```text
-Python py_compile ciblé                         : PASS
-pytest parser/client bulk avec vrai module modifié : PASS — 23/23
-smoke local catalogue partagé                   : PASS
-frontend market-attention.test.mjs ciblé        : PASS — 22/22
-typecheck ciblé market-attention.ts             : PASS
-parse/transpile ciblé market-attention-dock.tsx : PASS
+Python py_compile des sources/tests Python modifiés                  : PASS
+pytest ciblé Batch 47.2 avec stubs du checkout partiel              : PASS — 37/37
+frontend market-attention.test.mjs ciblé                            : PASS — 26/26
+typecheck strict ciblé market-attention.ts                          : PASS
+typecheck ciblé lib + cockpit avec stubs React/UI                   : PASS
+transpile TypeScript ciblé market-attention-dock.tsx                : PASS
 ```
 
-À exécuter localement après extraction : suite backend `pytest -q`, `pnpm typecheck`, `pnpm test`, `git diff --check`, `git status --short`.
+Validation locale utilisateur de la première livraison 47.2 : backend `pytest -q` PASS à 100 %, `pnpm typecheck` PASS, `pnpm test` PASS **72/72**, `git diff --check` sans erreur hors avertissements LF/CRLF. Le smoke public PF_XBTUSD a confirmé le transport et `more=false`, mais a révélé la forme OHLC réelle de `data`.
+
+Le correctif pré-intégration parse désormais strictement `[open, high, low, close]` et utilise le `close` comme valeur historique. Validation ChatGPT du correctif : `py_compile` PASS et test parser/client ciblé **33/33 PASS** avec stubs minimaux du checkout partiel. Après extraction du correctif, relancer au minimum `pytest -q`, `git diff --check` et `git status --short` avant commit. Le frontend n'étant pas modifié par le correctif, les résultats locaux `pnpm typecheck` / `pnpm test` restent ceux de la première livraison.
 
 ## Périmètres ultérieurs possibles
 
-- Analytics Futures historiques Batches 47.2+ ;
+- Analytics Futures historiques Batches 47.3+ ;
 - conversion multi-devise du volume derrière une source FX explicite et testée ;
 - microstructure Futures si un besoin est démontré ;
 - éventuelle utilisation explicite du Radar comme contexte Agent après décision architecturale ;

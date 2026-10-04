@@ -9,6 +9,9 @@ from pydantic import BaseModel, ConfigDict
 from ai_spot_trader.market.attention import MarketAttentionOverview, RadarStatus
 from ai_spot_trader.market.attention_filters import MarketAttentionOverviewV6
 from ai_spot_trader.market.attention_microstructure import MarketAttentionOverviewV3
+from ai_spot_trader.market.attention_perpetual_analytics import (
+    MarketAttentionOverviewV6Analytics,
+)
 from ai_spot_trader.market.attention_scope_trend import (
     MarketAttentionOverviewV4,
     MarketScope,
@@ -22,7 +25,8 @@ from ai_spot_trader.market.attention_structure_prefilter import (
 router = APIRouter(prefix="/api/v1/market-attention", tags=["market-attention"])
 
 MarketAttentionPublicOverview = (
-    MarketAttentionOverviewV6Structure
+    MarketAttentionOverviewV6Analytics
+    | MarketAttentionOverviewV6Structure
     | MarketAttentionOverviewV6
     | MarketAttentionOverviewV5
     | MarketAttentionOverviewV4
@@ -143,8 +147,11 @@ def _as_public(
     | MarketAttentionOverviewV4
     | MarketAttentionOverviewV5
     | MarketAttentionOverviewV6
-    | MarketAttentionOverviewV6Structure,
+    | MarketAttentionOverviewV6Structure
+    | MarketAttentionOverviewV6Analytics,
 ) -> MarketAttentionPublicOverview:
+    if isinstance(value, MarketAttentionOverviewV6Analytics):
+        return value
     if isinstance(value, MarketAttentionOverviewV6Structure):
         return value
     if isinstance(value, MarketAttentionOverviewV6):

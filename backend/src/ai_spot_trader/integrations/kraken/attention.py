@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 from decimal import Decimal
 
 from ai_spot_trader.domain.enums import MarketType
 from ai_spot_trader.domain.models import DerivativeInstrument, ExecutableMarket
+from ai_spot_trader.integrations.kraken.analytics import KrakenDerivativesAnalyticsClient
 from ai_spot_trader.integrations.kraken.derivatives import (
-    KrakenDerivativesPublicClient,
     KrakenDerivativesTickerSnapshot,
     build_kraken_linear_perpetual_instrument_map,
     parse_kraken_derivatives_tickers,
 )
+from ai_spot_trader.integrations.kraken.errors import UnknownKrakenSymbolError
 from ai_spot_trader.integrations.kraken.rest import KrakenPublicRestClient
+from ai_spot_trader.market.perpetual_analytics import PerpetualAnalyticsPoint
 
 
 class KrakenAttentionCatalogue:
@@ -28,7 +31,9 @@ class KrakenAttentionCatalogue:
             spot_rest_url,
             timeout_seconds=timeout_seconds,
         )
-        self._derivatives = KrakenDerivativesPublicClient(
+        # One canonical Futures public-client instance. Batch 47.2 extends the existing client
+        # surface for Market Analytics; it does not add another Futures transport.
+        self._derivatives = KrakenDerivativesAnalyticsClient(
             derivatives_rest_url,
             timeout_seconds=timeout_seconds,
         )
@@ -84,6 +89,37 @@ class KrakenAttentionCatalogue:
                 )
             ] = ticker
         return result
+
+    async def open_interest_history(
+        self,
+        market: ExecutableMarket,
+        *,
+        since: datetime,
+        until: datetime,
+        interval_seconds: int,
+    ) -> tuple[PerpetualAnalyticsPoint, ...]:
+        """Provider-neutral historical OI view over the canonical Kraken Futures client."""
+
+        if market.market_type is not MarketType.PERPETUAL:
+            return ()
+        if not self._perpetual_instruments:
+            instruments = await self._derivatives.fetch_instruments()
+            self._perpetual_instruments = build_kraken_linear_perpetual_instrument_map(instruments)
+        instrument = self._perpetual_instruments.get(market.symbol)
+        if instrument is None:
+            raise UnknownKrakenSymbolError(
+                f"no Kraken linear perpetual instrument mapped to {market.symbol}"
+            )
+        points = await self._derivatives.fetch_open_interest_history(
+            instrument,
+            since=since,
+            until=until,
+            interval_seconds=interval_seconds,
+        )
+        return tuple(
+            PerpetualAnalyticsPoint(observed_at=point.observed_at, value=point.value)
+            for point in points
+        )
 
     async def volume_24h_usd_by_market(self) -> dict[ExecutableMarket, Decimal]:
         """Return rolling USD quote turnover using the same canonical bulk ticker parser."""

@@ -18,6 +18,7 @@ import {
   formatDurationSeconds,
   formatImbalance,
   formatKrakenRawNumber,
+  formatKrakenSignedRawNumber,
   formatQuoteCompact,
   formatRate,
   formatSignedPercent,
@@ -27,6 +28,9 @@ import {
   marketAttentionStatusMessage,
   marketCapCategoryLabel,
   marketStructureCoverageMessage,
+  perpetualAnalyticsContext,
+  perpetualAnalyticsCoverageMessage,
+  perpetualAnalyticsStatusLabel,
   perpetualTickerContext,
   perpetualTickerStatusLabel,
   setMarketAttentionFilters,
@@ -164,11 +168,18 @@ function microLabel(value: string) {
   return MICRO_LABELS[value as MicrostructureCharacteristic] ?? value.replaceAll("_", " ");
 }
 
+function analyticsCharacteristicLabel(value: string) {
+  if (value === "OPEN_INTEREST_EXPANSION") return "Expansion OI";
+  if (value === "OPEN_INTEREST_CONTRACTION") return "Contraction OI";
+  return value.replaceAll("_", " ");
+}
+
 function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot; expanded: boolean; onToggle: () => void }) {
   const activity = item.market_activity;
   const micro = item.microstructure;
   const structure = marketStructure(item);
   const futures = perpetualTickerContext(item);
+  const analytics = perpetualAnalyticsContext(item);
   const h5 = attentionHorizon(item, "5m");
   const h15 = attentionHorizon(item, "15m");
   const h1 = attentionHorizon(item, "1h");
@@ -252,6 +263,36 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
               <p className="mt-3 text-[10px] text-muted-foreground">
                 Open Interest et funding sont affichés comme valeurs Kraken brutes tant que leur unité d’affichage n’est pas démontrée. Aucun format `%` n’est appliqué. Le funding prévu est une prévision publiée par Kraken, pas un funding futur réalisé.
               </p>
+
+              <div className="mt-4 rounded-md border bg-background/50 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="font-semibold">Open Interest historique</p>
+                    <p className="text-[10px] text-muted-foreground">Baseline propre au marché, cache/rotation Analytics séparés ; enrichissement descriptif uniquement.</p>
+                  </div>
+                  <Badge tone={analytics?.status === "AVAILABLE" ? "success" : analytics?.status === "TECHNICAL_ERROR" ? "danger" : "warning"}>
+                    {perpetualAnalyticsStatusLabel(analytics?.status)}
+                  </Badge>
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+                  <Fact label="OI historique courant" value={formatKrakenRawNumber(analytics?.current_open_interest)} />
+                  <Fact label="OI précédent" value={formatKrakenRawNumber(analytics?.previous_open_interest)} />
+                  <Fact label="Variation brute" value={formatKrakenSignedRawNumber(analytics?.open_interest_change)} />
+                  <Fact label="Variation relative" value={formatSignedPercent(analytics?.open_interest_change_ratio)} />
+                  <Fact label="Baseline médiane" value={formatKrakenRawNumber(analytics?.baseline_open_interest)} />
+                  <Fact label="MAD baseline" value={formatKrakenRawNumber(analytics?.baseline_open_interest_mad)} />
+                  <Fact label="Score adaptatif" value={formatAdaptiveScore(analytics?.open_interest_anomaly_score)} />
+                  <Fact label="Méthode" value={anomalyMethodLabel(analytics?.open_interest_anomaly_method)} />
+                  <Fact label="Caractéristique" value={analytics?.characteristics.length ? analytics.characteristics.map(analyticsCharacteristicLabel).join(" · ") : "Aucune"} />
+                  <Fact label="Fraîcheur donnée" value={formatDurationSeconds(analytics?.freshness_seconds === null || analytics?.freshness_seconds === undefined ? null : Number(analytics.freshness_seconds))} />
+                  <Fact label="Point Kraken" value={shortTime(analytics?.current_open_interest_observed_at)} />
+                  <Fact label="Snapshot Analytics" value={shortTime(analytics?.observed_at)} />
+                </div>
+                {analytics?.error_type ? <p className="mt-2 text-[10px] text-destructive-subtle-foreground">{analytics.error_type}</p> : null}
+                <p className="mt-3 text-[10px] text-muted-foreground">
+                  Le score compare l’OI à sa propre baseline médiane. L’unité économique de l’OI n’est pas supposée ; aucune conversion USD n’est inventée. L’OI historique ne change ni le niveau d’intérêt ni le classement du candidat dans ce batch.
+                </p>
+              </div>
             </div>
           ) : null}
 
@@ -361,7 +402,7 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
           ) : null}
 
           <p className="rounded-lg border bg-muted/10 p-3 text-muted-foreground">
-            Prix, OHLCV, structure de marché, carnet L2 et trades récents proviennent de Kraken. La capitalisation est une métadonnée externe read-only ; elle n’autorise aucune décision ni aucun ordre.
+            Prix, OHLCV, structure de marché, Analytics Futures, carnet L2 et trades récents proviennent de données publiques Kraken. La capitalisation est une métadonnée externe read-only ; elle n’autorise aucune décision ni aucun ordre.
           </p>
         </div>
       ) : null}
@@ -680,12 +721,13 @@ export function MarketAttentionDock() {
                   </div>
                 </details>
 
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-8">
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-9">
                   <Fact label="Catalogue filtré" value={String(data.catalogue_market_count)} />
                   <Fact label="Marchés frais OHLCV" value={String(data.cached_activity_market_count)} />
                   <Fact label="Scannés OHLCV" value={String(data.scanned_market_count)} />
                   <Fact label="Scannés micro" value={String(data.microstructure_scanned_market_count)} />
                   <Fact label="Cache micro" value={String(data.microstructure_cached_market_count)} />
+                  <Fact label="Scannés Analytics" value={String(data.perpetual_analytics_coverage?.scanned_market_count ?? 0)} />
                   <Fact label="Scannés Structure" value={String(data.structure_coverage?.scanned_market_count ?? 0)} />
                   <Fact label="Candidats" value={String(data.candidate_market_count)} />
                   <Fact label="Metadata cap." value={data.market_cap_metadata_status ?? "—"} />
@@ -716,6 +758,35 @@ export function MarketAttentionDock() {
                       <Fact label="Rotation ≤ TTL" value={data.coverage.rotation_within_activity_ttl ? "OUI" : "NON"} />
                     </div>
                     <p className="mt-3 text-[11px] text-muted-foreground">{marketAttentionCoverageMessage(data.coverage)}</p>
+                  </div>
+                ) : null}
+
+                {data.perpetual_analytics_coverage ? (
+                  <div className="rounded-lg border p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-semibold">Couverture Analytics Futures</p>
+                        <p className="text-[10px] text-muted-foreground">Open Interest historique uniquement ; rotation et cache séparés de l’OHLCV et de la Market Structure.</p>
+                      </div>
+                      <Badge tone={coverageTone(data.perpetual_analytics_coverage.status)}>{data.perpetual_analytics_coverage.status}</Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+                      <Fact label="Éligibles PERP" value={String(data.perpetual_analytics_coverage.eligible_market_count)} />
+                      <Fact label="Snapshots frais" value={String(data.perpetual_analytics_coverage.fresh_market_count)} />
+                      <Fact label="Snapshots expirés" value={String(data.perpetual_analytics_coverage.expired_market_count)} />
+                      <Fact label="Jamais analysés" value={String(data.perpetual_analytics_coverage.unseen_market_count)} />
+                      <Fact label="Scannés ce refresh" value={String(data.perpetual_analytics_coverage.scanned_market_count)} />
+                      <Fact label="Couverture" value={formatCoverageRatio(data.perpetual_analytics_coverage.coverage_ratio)} />
+                      <Fact label="Limite / refresh" value={String(data.perpetual_analytics_coverage.effective_market_limit)} />
+                      <Fact label="Cycles / rotation" value={String(data.perpetual_analytics_coverage.estimated_refreshes_per_full_rotation)} />
+                      <Fact label="Rotation estimée" value={formatDurationSeconds(data.perpetual_analytics_coverage.estimated_full_rotation_seconds)} />
+                      <Fact label="TTL Analytics" value={formatDurationSeconds(data.perpetual_analytics_coverage.cache_ttl_seconds)} />
+                      <Fact label="Plus vieux snapshot" value={formatDurationSeconds(data.perpetual_analytics_coverage.oldest_snapshot_age_seconds)} />
+                      <Fact label="Rotation ≤ TTL" value={data.perpetual_analytics_coverage.rotation_within_cache_ttl ? "OUI" : "NON"} />
+                      <Fact label="Requêtes tentées" value={String(data.perpetual_analytics_coverage.requests_attempted)} />
+                      <Fact label="Requêtes en échec" value={String(data.perpetual_analytics_coverage.requests_failed)} />
+                    </div>
+                    <p className="mt-3 text-[11px] text-muted-foreground">{perpetualAnalyticsCoverageMessage(data.perpetual_analytics_coverage)}</p>
                   </div>
                 ) : null}
 
@@ -817,7 +888,7 @@ export function MarketAttentionDock() {
                     {loading ? "Construction du snapshot du radar…" : data.status === "NOT_CONFIGURED" ? "Radar non configuré." : marketAttentionStatusMessage(data)}
                   </div>
                 )}
-                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · filtres pilotés par le backend · classement déterministe. Volume 24h SPOT = candles Kraken causales ; volume 24h PERP linear/USD = `volumeQuote` Kraken Futures uniquement lorsqu’il est validé ; Open Interest et funding du détail PERP = snapshot Futures public instantané, sans unité inventée ni impact sur le ranking ; capitalisation = {data.market_cap_metadata_provider ?? "provider externe indisponible"}. La Market Structure utilise uniquement des candles finalisées et des pivots confirmés ; UNKNOWN est fail-closed lorsqu’un filtre correspondant est actif.</p>
+                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · filtres pilotés par le backend · classement déterministe. Volume 24h SPOT = candles Kraken causales ; volume 24h PERP linear/USD = `volumeQuote` Kraken Futures uniquement lorsqu’il est validé ; Open Interest et funding instantanés = snapshot Futures public partagé. L’Open Interest historique utilise une rotation/cache séparée, une baseline robuste propre au marché et n’a aucun impact de ranking dans ce batch ; aucune unité économique OI n’est inventée. Capitalisation = {data.market_cap_metadata_provider ?? "provider externe indisponible"}. La Market Structure utilise uniquement des candles finalisées et des pivots confirmés ; UNKNOWN est fail-closed lorsqu’un filtre correspondant est actif.</p>
               </div>
             ) : <p className="text-sm text-muted-foreground">{loading ? "Chargement du radar…" : "Aucun snapshot chargé."}</p>}
           </CardContent>

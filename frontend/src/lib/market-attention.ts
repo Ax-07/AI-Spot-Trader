@@ -61,6 +61,57 @@ export type PerpetualTickerContext = {
   suspended: boolean | null;
 };
 
+export type PerpetualAnalyticsStatus =
+  | "AVAILABLE"
+  | "PARTIAL"
+  | "NOT_APPLICABLE"
+  | "INSUFFICIENT_HISTORY"
+  | "STALE"
+  | "TECHNICAL_ERROR";
+
+export type PerpetualAnalyticsCharacteristic =
+  | "OPEN_INTEREST_EXPANSION"
+  | "OPEN_INTEREST_CONTRACTION";
+
+export type PerpetualAnalyticsSnapshot = {
+  market: AttentionMarket;
+  status: PerpetualAnalyticsStatus;
+  provider: string;
+  observed_at: string;
+  current_open_interest_observed_at: string | null;
+  freshness_seconds: string | null;
+  current_open_interest: string | null;
+  previous_open_interest: string | null;
+  baseline_open_interest: string | null;
+  baseline_open_interest_mad: string | null;
+  open_interest_change: string | null;
+  open_interest_change_ratio: string | null;
+  open_interest_anomaly_score: string | null;
+  open_interest_anomaly_method: ActivityAnomalyMethod;
+  baseline_period_count: number;
+  history_point_count: number;
+  characteristics: PerpetualAnalyticsCharacteristic[];
+  error_type: string | null;
+};
+
+export type PerpetualAnalyticsCoverageDiagnostics = {
+  eligible_market_count: number;
+  fresh_market_count: number;
+  expired_market_count: number;
+  unseen_market_count: number;
+  scanned_market_count: number;
+  coverage_ratio: number | null;
+  effective_market_limit: number;
+  estimated_refreshes_per_full_rotation: number;
+  estimated_full_rotation_seconds: number;
+  cache_ttl_seconds: number;
+  oldest_snapshot_age_seconds: number | null;
+  rotation_within_cache_ttl: boolean;
+  requests_attempted: number;
+  requests_failed: number;
+  status: MarketAttentionCoverageStatus;
+};
+
 export type AttentionMarket = {
   symbol: string;
   market_type: "SPOT" | "PERPETUAL";
@@ -307,6 +358,7 @@ export type MarketAttentionSnapshot = {
   market_cap_provider?: string | null;
   market_cap_observed_at?: string | null;
   perpetual_ticker?: PerpetualTickerContext | null;
+  perpetual_analytics?: PerpetualAnalyticsSnapshot | null;
 };
 
 export type MarketAttentionOverview = {
@@ -339,6 +391,7 @@ export type MarketAttentionOverview = {
   volume_24h_status_counts?: Volume24hStatusCounts;
   coverage?: MarketAttentionCoverageDiagnostics;
   structure_coverage?: MarketStructureCoverageDiagnostics;
+  perpetual_analytics_coverage?: PerpetualAnalyticsCoverageDiagnostics;
   subthreshold_activity: SubthresholdActivitySnapshot[];
   shortlist: MarketAttentionSnapshot[];
   error_type: string | null;
@@ -440,11 +493,29 @@ export function perpetualTickerContext(
   return item.perpetual_ticker ?? null;
 }
 
+export function perpetualAnalyticsContext(
+  item: MarketAttentionSnapshot,
+): PerpetualAnalyticsSnapshot | null {
+  return item.perpetual_analytics ?? null;
+}
+
 export function perpetualTickerStatusLabel(
   value: PerpetualTickerStatus | null | undefined,
 ): string {
   if (value === "AVAILABLE") return "Disponible";
   if (value === "PARTIAL") return "Partiel";
+  if (value === "TECHNICAL_ERROR") return "Erreur technique";
+  if (value === "NOT_APPLICABLE") return "N/A";
+  return "Indisponible";
+}
+
+export function perpetualAnalyticsStatusLabel(
+  value: PerpetualAnalyticsStatus | null | undefined,
+): string {
+  if (value === "AVAILABLE") return "Disponible";
+  if (value === "PARTIAL") return "Rotation en attente";
+  if (value === "INSUFFICIENT_HISTORY") return "Historique insuffisant";
+  if (value === "STALE") return "Périmé";
   if (value === "TECHNICAL_ERROR") return "Erreur technique";
   if (value === "NOT_APPLICABLE") return "N/A";
   return "Indisponible";
@@ -461,6 +532,16 @@ export function formatKrakenRawNumber(
   if (absolute >= 1_000_000) return `${(parsed / 1_000_000).toFixed(3)} M`;
   if (absolute >= 1_000) return `${(parsed / 1_000).toFixed(3)} k`;
   return parsed.toLocaleString("fr-FR", { maximumFractionDigits: 12 });
+}
+
+export function formatKrakenSignedRawNumber(
+  value: string | number | null | undefined,
+): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "—";
+  const formatted = formatKrakenRawNumber(parsed);
+  return parsed > 0 ? `+${formatted}` : formatted;
 }
 
 export function trendDirectionLabel(value: TrendDirection | null | undefined): string {
@@ -628,6 +709,23 @@ export function marketStructureCoverageMessage(
     return `Rotation Structure en cours : ${coverage.fresh_market_count}/${coverage.eligible_market_count} marchés couverts, ${coverage.unseen_market_count} jamais analysé${coverage.unseen_market_count > 1 ? "s" : ""}.`;
   }
   return `Couverture Structure complète : ${coverage.fresh_market_count}/${coverage.eligible_market_count} marchés frais.`;
+}
+
+export function perpetualAnalyticsCoverageMessage(
+  coverage: PerpetualAnalyticsCoverageDiagnostics | null | undefined,
+): string {
+  if (!coverage) return "Diagnostic Analytics Futures non exposé par cette version du Radar.";
+  if (coverage.status === "NO_MARKETS") return "Aucun PERPETUAL éligible aux Analytics Futures.";
+  if (coverage.status === "CONFIGURATION_TOO_SLOW") {
+    return `Rotation Analytics estimée à ${formatDurationSeconds(coverage.estimated_full_rotation_seconds)} pour un TTL de ${formatDurationSeconds(coverage.cache_ttl_seconds)} : la configuration est trop lente pour maintenir toute la couverture fraîche.`;
+  }
+  if (coverage.status === "TTL_EXPIRED") {
+    return `${coverage.expired_market_count} snapshot${coverage.expired_market_count > 1 ? "s" : ""} Analytics expiré${coverage.expired_market_count > 1 ? "s" : ""} ; la rotation continue.`;
+  }
+  if (coverage.status === "ROTATING") {
+    return `Rotation Analytics Futures en cours : ${coverage.fresh_market_count}/${coverage.eligible_market_count} marchés couverts, ${coverage.unseen_market_count} jamais analysé${coverage.unseen_market_count > 1 ? "s" : ""}.`;
+  }
+  return `Couverture Analytics Futures complète : ${coverage.fresh_market_count}/${coverage.eligible_market_count} marchés frais.`;
 }
 
 export function marketAttentionStatusMessage(overview: MarketAttentionOverview): string {
