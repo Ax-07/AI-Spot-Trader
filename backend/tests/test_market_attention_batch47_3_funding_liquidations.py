@@ -198,7 +198,7 @@ def test_scanner_reuses_one_rotation_and_bounds_total_http_concurrency() -> None
         )
         markets = tuple(_market(index) for index in range(4))
         await scanner.scan(markets, as_of=NOW)
-        assert len(provider.calls) == 6  # 2 selected markets × 3 series
+        assert len(provider.calls) == 6  # 2 selected markets × 3 implemented series
         assert provider.max_active <= 2
         coverage = scanner.coverage(markets, as_of=NOW)
         assert coverage.scanned_market_count == 2
@@ -208,11 +208,15 @@ def test_scanner_reuses_one_rotation_and_bounds_total_http_concurrency() -> None
             "open-interest",
             "funding",
             "liquidation-volume",
+            "cvd",
+            "aggressor-differential",
         ]
         assert coverage.series_coverage[0].available_market_count == 2
         assert coverage.series_coverage[1].available_market_count == 2
         assert coverage.series_coverage[2].available_market_count == 2
         assert coverage.series_coverage[0].unavailable_market_count == 2
+        assert coverage.series_coverage[3].unavailable_market_count == 4
+        assert coverage.series_coverage[4].unavailable_market_count == 4
 
     asyncio.run(scenario())
 

@@ -74,7 +74,11 @@ export type PerpetualAnalyticsCharacteristic =
   | "OPEN_INTEREST_CONTRACTION"
   | "FUNDING_POSITIVE_EXTREME"
   | "FUNDING_NEGATIVE_EXTREME"
-  | "LIQUIDATION_VOLUME_SPIKE";
+  | "LIQUIDATION_VOLUME_SPIKE"
+  | "CVD_POSITIVE_IMPULSE"
+  | "CVD_NEGATIVE_IMPULSE"
+  | "AGGRESSOR_BUY_DOMINANCE"
+  | "AGGRESSOR_SELL_DOMINANCE";
 
 export type PerpetualFundingAnalyticsSnapshot = {
   status: PerpetualAnalyticsStatus;
@@ -114,6 +118,43 @@ export type PerpetualLiquidationVolumeAnalyticsSnapshot = {
   error_type: string | null;
 };
 
+export type PerpetualCvdAnalyticsSnapshot = {
+  status: PerpetualAnalyticsStatus;
+  observed_at: string;
+  current_observed_at: string | null;
+  freshness_seconds: string | null;
+  current_cvd: string | null;
+  previous_cvd: string | null;
+  current_cvd_change: string | null;
+  previous_cvd_change: string | null;
+  baseline_cvd_change: string | null;
+  baseline_cvd_change_mad: string | null;
+  cvd_change_anomaly_score: string | null;
+  cvd_change_anomaly_method: ActivityAnomalyMethod;
+  buy_volume: string | null;
+  sell_volume: string | null;
+  baseline_period_count: number;
+  history_point_count: number;
+  error_type: string | null;
+};
+
+export type PerpetualAggressorAnalyticsSnapshot = {
+  status: PerpetualAnalyticsStatus;
+  observed_at: string;
+  current_observed_at: string | null;
+  freshness_seconds: string | null;
+  current_value: string | null;
+  previous_value: string | null;
+  baseline_value: string | null;
+  baseline_value_mad: string | null;
+  value_change: string | null;
+  anomaly_score: string | null;
+  anomaly_method: ActivityAnomalyMethod;
+  baseline_period_count: number;
+  history_point_count: number;
+  error_type: string | null;
+};
+
 export type PerpetualAnalyticsSnapshot = {
   market: AttentionMarket;
   status: PerpetualAnalyticsStatus;
@@ -132,14 +173,22 @@ export type PerpetualAnalyticsSnapshot = {
   open_interest_anomaly_method: ActivityAnomalyMethod;
   baseline_period_count: number;
   history_point_count: number;
-  funding: PerpetualFundingAnalyticsSnapshot | null;
-  liquidation_volume: PerpetualLiquidationVolumeAnalyticsSnapshot | null;
+  funding?: PerpetualFundingAnalyticsSnapshot | null;
+  liquidation_volume?: PerpetualLiquidationVolumeAnalyticsSnapshot | null;
+  cvd?: PerpetualCvdAnalyticsSnapshot | null;
+  aggressor_differential?: PerpetualAggressorAnalyticsSnapshot | null;
   characteristics: PerpetualAnalyticsCharacteristic[];
   error_type: string | null;
 };
 
 export type PerpetualAnalyticsSeriesCoverageDiagnostics = {
-  series: "open-interest" | "funding" | "liquidation-volume" | string;
+  series:
+    | "open-interest"
+    | "funding"
+    | "liquidation-volume"
+    | "cvd"
+    | "aggressor-differential"
+    | string;
   available_market_count: number;
   insufficient_history_market_count: number;
   stale_market_count: number;

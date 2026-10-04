@@ -15,7 +15,9 @@ from ai_spot_trader.integrations.kraken.derivatives import (
 from ai_spot_trader.integrations.kraken.errors import UnknownKrakenSymbolError
 from ai_spot_trader.integrations.kraken.rest import KrakenPublicRestClient
 from ai_spot_trader.market.perpetual_analytics import (
+    PerpetualAggressorDifferentialPoint,
     PerpetualAnalyticsPoint,
+    PerpetualCvdPoint,
     PerpetualFundingPoint,
 )
 
@@ -34,8 +36,8 @@ class KrakenAttentionCatalogue:
             spot_rest_url,
             timeout_seconds=timeout_seconds,
         )
-        # One canonical Futures public-client instance. Market Analytics extends this existing
-        # transport; OI, funding and liquidation-volume never create parallel HTTP clients.
+        # One canonical Futures public-client instance. All Market Analytics series reuse this
+        # transport; no per-series HTTP client is created.
         self._derivatives = KrakenDerivativesAnalyticsClient(
             derivatives_rest_url,
             timeout_seconds=timeout_seconds,
@@ -163,6 +165,62 @@ class KrakenAttentionCatalogue:
         )
         return tuple(
             PerpetualAnalyticsPoint(observed_at=point.observed_at, value=point.value)
+            for point in points
+        )
+
+    async def cvd_history(
+        self,
+        market: ExecutableMarket,
+        *,
+        since: datetime,
+        until: datetime,
+        interval_seconds: int,
+    ) -> tuple[PerpetualCvdPoint, ...]:
+        """Provider-neutral cumulative-volume-delta history over the shared Analytics client."""
+
+        instrument = await self._analytics_instrument(market)
+        if instrument is None:
+            return ()
+        points = await self._derivatives.fetch_cvd_history(
+            instrument,
+            since=since,
+            until=until,
+            interval_seconds=interval_seconds,
+        )
+        return tuple(
+            PerpetualCvdPoint(
+                observed_at=point.observed_at,
+                buy_volume=point.buy_volume,
+                sell_volume=point.sell_volume,
+                cvd=point.cvd,
+            )
+            for point in points
+        )
+
+    async def aggressor_differential_history(
+        self,
+        market: ExecutableMarket,
+        *,
+        since: datetime,
+        until: datetime,
+        interval_seconds: int,
+    ) -> tuple[PerpetualAggressorDifferentialPoint, ...]:
+        """Provider-neutral signed taker-buy minus taker-sell differential history."""
+
+        instrument = await self._analytics_instrument(market)
+        if instrument is None:
+            return ()
+        points = await self._derivatives.fetch_aggressor_differential_history(
+            instrument,
+            since=since,
+            until=until,
+            interval_seconds=interval_seconds,
+        )
+        return tuple(
+            PerpetualAggressorDifferentialPoint(
+                observed_at=point.observed_at,
+                value=point.value,
+            )
             for point in points
         )
 

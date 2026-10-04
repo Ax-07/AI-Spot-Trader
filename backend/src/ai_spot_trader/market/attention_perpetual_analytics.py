@@ -193,6 +193,22 @@ class PerpetualAnalyticsMarketAttentionRadar(StructureAwareFilteredMarketAttenti
                 "LIQUIDATION_VOLUME_SPIKE",
                 "Volume total de liquidations inhabituellement élevé vs historique propre au marché",
             ),
+            PerpetualAnalyticsCharacteristic.CVD_POSITIVE_IMPULSE: (
+                "CVD_POSITIVE_IMPULSE",
+                "Impulsion CVD positive inhabituelle vs historique propre au marché",
+            ),
+            PerpetualAnalyticsCharacteristic.CVD_NEGATIVE_IMPULSE: (
+                "CVD_NEGATIVE_IMPULSE",
+                "Impulsion CVD négative inhabituelle vs historique propre au marché",
+            ),
+            PerpetualAnalyticsCharacteristic.AGGRESSOR_BUY_DOMINANCE: (
+                "AGGRESSOR_BUY_DOMINANCE",
+                "Pression agressive acheteuse inhabituellement forte vs historique propre au marché",
+            ),
+            PerpetualAnalyticsCharacteristic.AGGRESSOR_SELL_DOMINANCE: (
+                "AGGRESSOR_SELL_DOMINANCE",
+                "Pression agressive vendeuse inhabituellement forte vs historique propre au marché",
+            ),
         }
         for characteristic in analytics.characteristics:
             mapped = labels.get(characteristic)

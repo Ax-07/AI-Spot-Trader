@@ -35,6 +35,10 @@ class PerpetualAnalyticsCharacteristic(StrEnum):
     FUNDING_POSITIVE_EXTREME = "FUNDING_POSITIVE_EXTREME"
     FUNDING_NEGATIVE_EXTREME = "FUNDING_NEGATIVE_EXTREME"
     LIQUIDATION_VOLUME_SPIKE = "LIQUIDATION_VOLUME_SPIKE"
+    CVD_POSITIVE_IMPULSE = "CVD_POSITIVE_IMPULSE"
+    CVD_NEGATIVE_IMPULSE = "CVD_NEGATIVE_IMPULSE"
+    AGGRESSOR_BUY_DOMINANCE = "AGGRESSOR_BUY_DOMINANCE"
+    AGGRESSOR_SELL_DOMINANCE = "AGGRESSOR_SELL_DOMINANCE"
 
 
 class PerpetualAnalyticsCoverageStatus(StrEnum):
@@ -72,8 +76,36 @@ class PerpetualFundingPoint(AttentionModel):
         return self
 
 
+class PerpetualCvdPoint(AttentionModel):
+    """Provider-neutral CVD point; side volumes are optional when Kraken cannot align them."""
+
+    observed_at: datetime
+    cvd: Decimal
+    buy_volume: Decimal | None = Field(default=None, ge=0)
+    sell_volume: Decimal | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_point(self) -> "PerpetualCvdPoint":
+        if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
+            raise ValueError("perpetual CVD point observed_at must be timezone-aware")
+        return self
+
+
+class PerpetualAggressorDifferentialPoint(AttentionModel):
+    """Provider-neutral signed taker-buy minus taker-sell volume differential."""
+
+    observed_at: datetime
+    value: Decimal
+
+    @model_validator(mode="after")
+    def validate_point(self) -> "PerpetualAggressorDifferentialPoint":
+        if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
+            raise ValueError("perpetual aggressor point observed_at must be timezone-aware")
+        return self
+
+
 class PerpetualAnalyticsPolicy(AttentionModel):
-    """Bounded historical Futures analytics policy shared by OI, funding and liquidations."""
+    """Bounded historical Futures analytics policy shared by all supported series."""
 
     market_limit_per_refresh: int = Field(default=10, ge=1, le=100)
     cache_ttl_seconds: float = Field(default=3600.0, ge=60.0, le=86_400.0)
@@ -88,6 +120,8 @@ class PerpetualAnalyticsPolicy(AttentionModel):
     funding_anomaly_score_threshold: Decimal = Field(default=Decimal("2.5"), gt=0)
     liquidation_anomaly_score_threshold: Decimal = Field(default=Decimal("3.0"), gt=0)
     liquidation_fallback_spike_ratio: Decimal = Field(default=Decimal("2.0"), gt=1)
+    cvd_anomaly_score_threshold: Decimal = Field(default=Decimal("2.5"), gt=0)
+    aggressor_anomaly_score_threshold: Decimal = Field(default=Decimal("2.5"), gt=0)
 
     @model_validator(mode="after")
     def validate_policy(self) -> "PerpetualAnalyticsPolicy":
@@ -138,6 +172,43 @@ class PerpetualLiquidationVolumeAnalyticsSnapshot(AttentionModel):
     error_type: str | None = None
 
 
+class PerpetualCvdAnalyticsSnapshot(AttentionModel):
+    status: PerpetualAnalyticsStatus
+    observed_at: datetime
+    current_observed_at: datetime | None = None
+    freshness_seconds: Decimal | None = Field(default=None, ge=0)
+    current_cvd: Decimal | None = None
+    previous_cvd: Decimal | None = None
+    current_cvd_change: Decimal | None = None
+    previous_cvd_change: Decimal | None = None
+    baseline_cvd_change: Decimal | None = None
+    baseline_cvd_change_mad: Decimal | None = Field(default=None, ge=0)
+    cvd_change_anomaly_score: Decimal | None = None
+    cvd_change_anomaly_method: ActivityAnomalyMethod = ActivityAnomalyMethod.UNAVAILABLE
+    buy_volume: Decimal | None = Field(default=None, ge=0)
+    sell_volume: Decimal | None = Field(default=None, ge=0)
+    baseline_period_count: int = Field(default=0, ge=0)
+    history_point_count: int = Field(default=0, ge=0)
+    error_type: str | None = None
+
+
+class PerpetualAggressorAnalyticsSnapshot(AttentionModel):
+    status: PerpetualAnalyticsStatus
+    observed_at: datetime
+    current_observed_at: datetime | None = None
+    freshness_seconds: Decimal | None = Field(default=None, ge=0)
+    current_value: Decimal | None = None
+    previous_value: Decimal | None = None
+    baseline_value: Decimal | None = None
+    baseline_value_mad: Decimal | None = Field(default=None, ge=0)
+    value_change: Decimal | None = None
+    anomaly_score: Decimal | None = None
+    anomaly_method: ActivityAnomalyMethod = ActivityAnomalyMethod.UNAVAILABLE
+    baseline_period_count: int = Field(default=0, ge=0)
+    history_point_count: int = Field(default=0, ge=0)
+    error_type: str | None = None
+
+
 class PerpetualAnalyticsSnapshot(AttentionModel):
     market: ExecutableMarket
     status: PerpetualAnalyticsStatus
@@ -158,6 +229,8 @@ class PerpetualAnalyticsSnapshot(AttentionModel):
     history_point_count: int = Field(default=0, ge=0)
     funding: PerpetualFundingAnalyticsSnapshot | None = None
     liquidation_volume: PerpetualLiquidationVolumeAnalyticsSnapshot | None = None
+    cvd: PerpetualCvdAnalyticsSnapshot | None = None
+    aggressor_differential: PerpetualAggressorAnalyticsSnapshot | None = None
     characteristics: tuple[PerpetualAnalyticsCharacteristic, ...] = ()
     error_type: str | None = None
 
@@ -255,6 +328,24 @@ class PerpetualAnalyticsProvider(Protocol):
         until: datetime,
         interval_seconds: int,
     ) -> tuple[PerpetualAnalyticsPoint, ...]: ...
+
+    async def cvd_history(
+        self,
+        market: ExecutableMarket,
+        *,
+        since: datetime,
+        until: datetime,
+        interval_seconds: int,
+    ) -> tuple[PerpetualCvdPoint, ...]: ...
+
+    async def aggressor_differential_history(
+        self,
+        market: ExecutableMarket,
+        *,
+        since: datetime,
+        until: datetime,
+        interval_seconds: int,
+    ) -> tuple[PerpetualAggressorDifferentialPoint, ...]: ...
 
 
 def analyze_open_interest_history(
@@ -535,6 +626,171 @@ def analyze_liquidation_volume_history(
     )
 
 
+def analyze_cvd_history(
+    *,
+    points: tuple[PerpetualCvdPoint, ...],
+    as_of: datetime,
+    policy: PerpetualAnalyticsPolicy,
+) -> tuple[PerpetualCvdAnalyticsSnapshot, tuple[PerpetualAnalyticsCharacteristic, ...]]:
+    """Analyze CVD on causal interval-to-interval changes, never on the cumulative level alone."""
+
+    as_of = _utc(as_of)
+    _validate_chronology(points)
+    finalized = _finalized(points, as_of=as_of, policy=policy)
+    current = finalized[-1] if finalized else None
+    if current is None:
+        return (
+            PerpetualCvdAnalyticsSnapshot(
+                status=PerpetualAnalyticsStatus.INSUFFICIENT_HISTORY,
+                observed_at=as_of,
+            ),
+            (),
+        )
+
+    current_at, freshness, is_stale = _freshness(current.observed_at, as_of=as_of, policy=policy)
+    previous = finalized[-2] if len(finalized) >= 2 else None
+    changes = tuple(
+        right.cvd - left.cvd for left, right in zip(finalized, finalized[1:])
+    )
+    current_change = changes[-1] if changes else None
+    previous_change = changes[-2] if len(changes) >= 2 else None
+    baseline_changes = changes[:-1][-policy.baseline_periods :] if changes else ()
+
+    if current_change is None or len(baseline_changes) < policy.baseline_periods:
+        return (
+            PerpetualCvdAnalyticsSnapshot(
+                status=PerpetualAnalyticsStatus.INSUFFICIENT_HISTORY,
+                observed_at=as_of,
+                current_observed_at=current_at,
+                freshness_seconds=freshness,
+                current_cvd=current.cvd,
+                previous_cvd=(previous.cvd if previous is not None else None),
+                current_cvd_change=current_change,
+                previous_cvd_change=previous_change,
+                buy_volume=current.buy_volume,
+                sell_volume=current.sell_volume,
+                baseline_period_count=len(baseline_changes),
+                history_point_count=len(finalized),
+            ),
+            (),
+        )
+
+    baseline = Decimal(median(baseline_changes))
+    mad = _median_absolute_deviation(baseline_changes, center=baseline)
+    score, method = _robust_anomaly(
+        current_change,
+        baseline=baseline,
+        mad=mad,
+        fallback_ratio=None,
+    )
+    characteristics: list[PerpetualAnalyticsCharacteristic] = []
+    if score is not None and method is ActivityAnomalyMethod.ROBUST_MAD:
+        if current_change > 0 and score >= policy.cvd_anomaly_score_threshold:
+            characteristics.append(PerpetualAnalyticsCharacteristic.CVD_POSITIVE_IMPULSE)
+        elif current_change < 0 and score <= -policy.cvd_anomaly_score_threshold:
+            characteristics.append(PerpetualAnalyticsCharacteristic.CVD_NEGATIVE_IMPULSE)
+
+    status = PerpetualAnalyticsStatus.STALE if is_stale else PerpetualAnalyticsStatus.AVAILABLE
+    return (
+        PerpetualCvdAnalyticsSnapshot(
+            status=status,
+            observed_at=as_of,
+            current_observed_at=current_at,
+            freshness_seconds=freshness,
+            current_cvd=current.cvd,
+            previous_cvd=(previous.cvd if previous is not None else None),
+            current_cvd_change=current_change,
+            previous_cvd_change=previous_change,
+            baseline_cvd_change=baseline,
+            baseline_cvd_change_mad=mad,
+            cvd_change_anomaly_score=score,
+            cvd_change_anomaly_method=method,
+            buy_volume=current.buy_volume,
+            sell_volume=current.sell_volume,
+            baseline_period_count=len(baseline_changes),
+            history_point_count=len(finalized),
+        ),
+        tuple(characteristics),
+    )
+
+
+def analyze_aggressor_differential_history(
+    *,
+    points: tuple[PerpetualAggressorDifferentialPoint, ...],
+    as_of: datetime,
+    policy: PerpetualAnalyticsPolicy,
+) -> tuple[PerpetualAggressorAnalyticsSnapshot, tuple[PerpetualAnalyticsCharacteristic, ...]]:
+    """Analyze signed taker-buy minus taker-sell differential with a robust symmetric baseline."""
+
+    as_of = _utc(as_of)
+    _validate_chronology(points)
+    finalized = _finalized(points, as_of=as_of, policy=policy)
+    current = finalized[-1] if finalized else None
+    if current is None:
+        return (
+            PerpetualAggressorAnalyticsSnapshot(
+                status=PerpetualAnalyticsStatus.INSUFFICIENT_HISTORY,
+                observed_at=as_of,
+            ),
+            (),
+        )
+
+    current_at, freshness, is_stale = _freshness(current.observed_at, as_of=as_of, policy=policy)
+    previous = finalized[-2] if len(finalized) >= 2 else None
+    baseline_points = finalized[:-1][-policy.baseline_periods :]
+    if len(baseline_points) < policy.baseline_periods:
+        return (
+            PerpetualAggressorAnalyticsSnapshot(
+                status=PerpetualAnalyticsStatus.INSUFFICIENT_HISTORY,
+                observed_at=as_of,
+                current_observed_at=current_at,
+                freshness_seconds=freshness,
+                current_value=current.value,
+                previous_value=(previous.value if previous is not None else None),
+                value_change=(current.value - previous.value if previous is not None else None),
+                baseline_period_count=len(baseline_points),
+                history_point_count=len(finalized),
+            ),
+            (),
+        )
+
+    values = tuple(point.value for point in baseline_points)
+    baseline = Decimal(median(values))
+    mad = _median_absolute_deviation(values, center=baseline)
+    score, method = _robust_anomaly(
+        current.value,
+        baseline=baseline,
+        mad=mad,
+        fallback_ratio=None,
+    )
+    characteristics: list[PerpetualAnalyticsCharacteristic] = []
+    if score is not None and method is ActivityAnomalyMethod.ROBUST_MAD:
+        if current.value > 0 and score >= policy.aggressor_anomaly_score_threshold:
+            characteristics.append(PerpetualAnalyticsCharacteristic.AGGRESSOR_BUY_DOMINANCE)
+        elif current.value < 0 and score <= -policy.aggressor_anomaly_score_threshold:
+            characteristics.append(PerpetualAnalyticsCharacteristic.AGGRESSOR_SELL_DOMINANCE)
+
+    status = PerpetualAnalyticsStatus.STALE if is_stale else PerpetualAnalyticsStatus.AVAILABLE
+    return (
+        PerpetualAggressorAnalyticsSnapshot(
+            status=status,
+            observed_at=as_of,
+            current_observed_at=current_at,
+            freshness_seconds=freshness,
+            current_value=current.value,
+            previous_value=(previous.value if previous is not None else None),
+            baseline_value=baseline,
+            baseline_value_mad=mad,
+            value_change=(current.value - previous.value if previous is not None else None),
+            anomaly_score=score,
+            anomaly_method=method,
+            baseline_period_count=len(baseline_points),
+            history_point_count=len(finalized),
+        ),
+        tuple(characteristics),
+    )
+
+
 class PerpetualAnalyticsScanner:
     """Single deterministic rotation/cache shared by all historical Futures analytics series."""
 
@@ -687,24 +943,71 @@ class PerpetualAnalyticsScanner:
                         error_type=type(liquidation_result).__name__,
                     )
                 else:
-                    (
-                        liquidation_snapshot,
-                        liquidation_characteristics,
-                    ) = analyze_liquidation_volume_history(
-                        points=liquidation_result,
+                    liquidation_snapshot, liquidation_characteristics = (
+                        analyze_liquidation_volume_history(
+                            points=liquidation_result,
+                            as_of=as_of,
+                            policy=self._policy,
+                        )
+                    )
+
+            cvd_result, cvd_expected = await call("cvd_history", market)
+            cvd_snapshot: PerpetualCvdAnalyticsSnapshot | None = None
+            cvd_characteristics: tuple[PerpetualAnalyticsCharacteristic, ...] = ()
+            if cvd_expected:
+                if isinstance(cvd_result, Exception):
+                    cvd_snapshot = PerpetualCvdAnalyticsSnapshot(
+                        status=PerpetualAnalyticsStatus.TECHNICAL_ERROR,
+                        observed_at=as_of,
+                        error_type=type(cvd_result).__name__,
+                    )
+                else:
+                    cvd_snapshot, cvd_characteristics = analyze_cvd_history(
+                        points=cvd_result,
                         as_of=as_of,
                         policy=self._policy,
                     )
 
+            aggressor_result, aggressor_expected = await call(
+                "aggressor_differential_history", market
+            )
+            aggressor_snapshot: PerpetualAggressorAnalyticsSnapshot | None = None
+            aggressor_characteristics: tuple[PerpetualAnalyticsCharacteristic, ...] = ()
+            if aggressor_expected:
+                if isinstance(aggressor_result, Exception):
+                    aggressor_snapshot = PerpetualAggressorAnalyticsSnapshot(
+                        status=PerpetualAnalyticsStatus.TECHNICAL_ERROR,
+                        observed_at=as_of,
+                        error_type=type(aggressor_result).__name__,
+                    )
+                else:
+                    aggressor_snapshot, aggressor_characteristics = (
+                        analyze_aggressor_differential_history(
+                            points=aggressor_result,
+                            as_of=as_of,
+                            policy=self._policy,
+                        )
+                    )
+
             statuses = [oi_snapshot.open_interest_status]
-            if funding_expected and funding_snapshot is not None:
-                statuses.append(funding_snapshot.status)
-            if liquidation_expected and liquidation_snapshot is not None:
-                statuses.append(liquidation_snapshot.status)
+            for expected, nested in (
+                (funding_expected, funding_snapshot),
+                (liquidation_expected, liquidation_snapshot),
+                (cvd_expected, cvd_snapshot),
+                (aggressor_expected, aggressor_snapshot),
+            ):
+                if expected and nested is not None:
+                    statuses.append(nested.status)
             combined_status = _combine_statuses(tuple(statuses))
             combined_characteristics = tuple(
                 dict.fromkeys(
-                    (*oi_snapshot.characteristics, *funding_characteristics, *liquidation_characteristics)
+                    (
+                        *oi_snapshot.characteristics,
+                        *funding_characteristics,
+                        *liquidation_characteristics,
+                        *cvd_characteristics,
+                        *aggressor_characteristics,
+                    )
                 )
             )
             self._cache[market] = oi_snapshot.model_copy(
@@ -712,6 +1015,8 @@ class PerpetualAnalyticsScanner:
                     "status": combined_status,
                     "funding": funding_snapshot,
                     "liquidation_volume": liquidation_snapshot,
+                    "cvd": cvd_snapshot,
+                    "aggressor_differential": aggressor_snapshot,
                     "characteristics": combined_characteristics,
                 }
             )
@@ -746,15 +1051,56 @@ class PerpetualAnalyticsScanner:
             )
         age = (as_of - snapshot.observed_at.astimezone(UTC)).total_seconds()
         updates: dict[str, object] = {}
+        open_interest_status = snapshot.open_interest_status
         point_at = snapshot.current_open_interest_observed_at
         if point_at is not None:
-            _, freshness, _ = _freshness(point_at, as_of=as_of, policy=self._policy)
+            _, freshness, is_stale = _freshness(
+                point_at,
+                as_of=as_of,
+                policy=self._policy,
+            )
             updates["freshness_seconds"] = freshness
-        if age > self._policy.cache_ttl_seconds and snapshot.status not in (
+            if is_stale and open_interest_status is PerpetualAnalyticsStatus.AVAILABLE:
+                open_interest_status = PerpetualAnalyticsStatus.STALE
+                updates["open_interest_status"] = open_interest_status
+
+        nested_statuses: list[PerpetualAnalyticsStatus] = [open_interest_status]
+        for field_name in (
+            "funding",
+            "liquidation_volume",
+            "cvd",
+            "aggressor_differential",
+        ):
+            nested = getattr(snapshot, field_name)
+            if nested is None:
+                continue
+            nested_updates: dict[str, object] = {}
+            nested_status = nested.status
+            if nested.current_observed_at is not None:
+                _, nested_freshness, nested_is_stale = _freshness(
+                    nested.current_observed_at,
+                    as_of=as_of,
+                    policy=self._policy,
+                )
+                nested_updates["freshness_seconds"] = nested_freshness
+                if (
+                    nested_is_stale
+                    and nested_status is PerpetualAnalyticsStatus.AVAILABLE
+                ):
+                    nested_status = PerpetualAnalyticsStatus.STALE
+                    nested_updates["status"] = nested_status
+            nested_statuses.append(nested_status)
+            if nested_updates:
+                updates[field_name] = nested.model_copy(update=nested_updates)
+
+        combined_status = _combine_statuses(tuple(nested_statuses))
+        if age > self._policy.cache_ttl_seconds and combined_status not in (
             PerpetualAnalyticsStatus.NOT_APPLICABLE,
             PerpetualAnalyticsStatus.TECHNICAL_ERROR,
         ):
-            updates["status"] = PerpetualAnalyticsStatus.STALE
+            combined_status = PerpetualAnalyticsStatus.STALE
+        if combined_status is not snapshot.status:
+            updates["status"] = combined_status
         return snapshot.model_copy(update=updates) if updates else snapshot
 
     def coverage(
@@ -813,7 +1159,13 @@ class PerpetualAnalyticsScanner:
 
         series_coverage = tuple(
             self._series_coverage(eligible, series)
-            for series in ("open-interest", "funding", "liquidation-volume")
+            for series in (
+                "open-interest",
+                "funding",
+                "liquidation-volume",
+                "cvd",
+                "aggressor-differential",
+            )
         )
         return PerpetualAnalyticsCoverageDiagnostics(
             eligible_market_count=count,
@@ -856,6 +1208,10 @@ class PerpetualAnalyticsScanner:
                     status = snapshot.funding.status
                 elif series == "liquidation-volume" and snapshot.liquidation_volume is not None:
                     status = snapshot.liquidation_volume.status
+                elif series == "cvd" and snapshot.cvd is not None:
+                    status = snapshot.cvd.status
+                elif series == "aggressor-differential" and snapshot.aggressor_differential is not None:
+                    status = snapshot.aggressor_differential.status
             if status in counts:
                 counts[status] += 1
             else:
@@ -890,7 +1246,10 @@ def _combine_statuses(statuses: tuple[PerpetualAnalyticsStatus, ...]) -> Perpetu
         return PerpetualAnalyticsStatus.PARTIAL
     if len(set(statuses)) == 1:
         return statuses[0]
-    if all(status in (PerpetualAnalyticsStatus.STALE, PerpetualAnalyticsStatus.AVAILABLE) for status in statuses):
+    if all(
+        status in (PerpetualAnalyticsStatus.STALE, PerpetualAnalyticsStatus.AVAILABLE)
+        for status in statuses
+    ):
         return PerpetualAnalyticsStatus.PARTIAL
     if all(status is PerpetualAnalyticsStatus.TECHNICAL_ERROR for status in statuses):
         return PerpetualAnalyticsStatus.TECHNICAL_ERROR

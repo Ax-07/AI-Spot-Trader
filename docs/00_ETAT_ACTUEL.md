@@ -1,17 +1,17 @@
 # 00 — État actuel
 
-## Référence de clôture Batch 47.3
+## Référence de reprise Batch 47.4
 
 ```text
 Repository                    : Ax-07/AI-Spot-Trader
 Branche                       : main
-Référence GitHub auditée       : 21cac8f24a06ec997a0e70730309b9541ae04544
-Base Batch 47.3 auditée       : c09dd14cab31233f635ff535cbf0298ba3f2bd51
+HEAD GitHub audité            : ec1cd5dc576c8638bff7c7110aa9a0a2292f71ff
 Commit fonctionnel Batch 47.3 : 12051a7
-Clôture documentaire initiale : 21cac8f
+Clôture Batch 47.3 observée    : ec1cd5d — docs: mark batch 47.3 integrated
+Batch 47.4                    : VALIDÉ LOCALEMENT, prêt à intégrer ; GitHub main reste à ec1cd5d avant commit
 ```
 
-Le **Batch 47.3 est intégré sur GitHub `main` via le commit fonctionnel `12051a7`**, avec première clôture documentaire `21cac8f`. Le Batch 47.2 reste intégré via `c09dd14`.
+Le **Batch 47.3 est intégré**. Le Batch 47.4 est **validé localement et prêt à intégrer** : les deux smokes Kraken réels sont confirmés, le test de régression 47.3 obsolète a été corrigé, puis la suite backend complète a été relancée avec succès. GitHub `main` reste toutefois à la clôture 47.3 tant que le commit 47.4 n’a pas été poussé.
 
 Décisions intégrées récentes :
 
@@ -20,17 +20,15 @@ Batch 45        => intégré via 45d41b7
 Batch 46 / 46.1 => intégré via b219365
 Batch 47.1      => intégré via 842e6bd7
 Batch 47.2      => intégré via c09dd14
-Batch 47.3      => intégré via 12051a7, première clôture documentaire 21cac8f
+Batch 47.3      => intégré via 12051a7
 ADR-328..339    => ADOPTÉES selon leur batch intégré/validé
 ```
-
-L'intégration GitHub confirme la présence du code. Elle ne constitue pas une preuve de tests locaux non observés.
 
 ## Radar intégré jusqu'au Batch 47.3
 
 Le Market Attention Radar reste `market-attention-radar-v6`, strictement informatif, déterministe, causal et read-only. L'exécution de trading demeure SPOT uniquement.
 
-Pipeline intégré :
+Pipeline canonique :
 
 ```text
 catalogue Kraken
@@ -46,7 +44,7 @@ catalogue Kraken
 -> cockpit
 ```
 
-Le Batch 47.2 ajoute l'historique **Open Interest** et l'infrastructure Analytics Futures générique :
+Infrastructure Analytics canonique à préserver :
 
 ```text
 KrakenDerivativesAnalyticsClient
@@ -57,7 +55,7 @@ PerpetualAnalyticsSnapshot
 perpetual_analytics_coverage
 ```
 
-Policy intégrée 47.2 :
+Policy :
 
 ```text
 market_limit_per_refresh = 10
@@ -68,83 +66,33 @@ fetch_concurrency        = 4
 baseline_periods         = 12
 ```
 
-Le smoke Kraken réel du Batch 47.2 a confirmé pour `PF_XBTUSD/open-interest` :
+Les séries intégrées avant 47.4 sont `open-interest`, `funding` et `liquidation-volume`. Les smokes locaux Batch 47.3 ont confirmé : Funding en timestamps millisecondes, Liquidation Volume en secondes.
+
+## Batch 47.4 — validé localement, prêt à intégrer
+
+Le patch ajoute exactement `cvd` et `aggressor-differential` dans la rotation/cache Analytics unique. Le budget reste 10 marchés, concurrence 4, plafond théorique 50 appels/refresh.
+
+Smokes locaux utilisateur confirmés le 2026-10-05 :
 
 ```text
-result.timestamp[]
-result.data[] = [[open, high, low, close], ...]
-result.more = false
+CVD        : timestamp epoch secondes ; data.buy_volume[], data.sell_volume[], data.cvd[] ; more=false ; errors=[]
+Aggressor  : timestamp epoch secondes ; data[] scalaire signé ; more=false ; errors=[]
 ```
 
-Le parser utilise strictement le `close` d'un bucket OHLC finalisé. L'OI historique reste brut, n'est pas converti implicitement en USD et n'a aucune autorité de ranking.
+Le payload CVD réel a montré `6` timestamps, `6` buy volumes, `4` sell volumes et `6` valeurs CVD. Le contrat applicatif est donc corrigé : `timestamp[] + cvd[]` doivent être alignés 1:1 ; les side volumes ne sont exposés que si **les deux** tableaux sont complets et alignés. Sinon ils restent `None`, sans padding ni réindexation. Les clés live sont `buy_volume` / `sell_volume`; la variante camelCase reste tolérée pour compatibilité documentaire.
 
-## Batch 47.3 — intégré via `12051a7`
+Statistiques conservées : CVD sur `cvd_change`, Aggressor directement, médiane + MAD signé, aucun fallback ratio, seuils descriptifs ±2.5. Aucun impact ranking/shortlist/Agent/Risk/Broker.
 
-Objectif : ajouter exactement deux séries historiques en réutilisant **la même rotation/cache Analytics** :
+Validation locale finale observée après correctif : backend `python -m pytest -q` PASS à 100 %, frontend `pnpm typecheck` PASS, frontend `pnpm test` PASS 82/82, `git diff --check` PASS hors avertissements LF/CRLF, smokes CVD/Aggressor PASS. Le Batch 47.4 est donc prêt à être commité puis poussé ; son statut GitHub reste non intégré jusqu’à cette opération.
 
-```text
-funding
-liquidation-volume
-```
-
-Audit Kraken retenu :
-
-- `funding` possède un schéma dédié `data.rate[]` + `data.relativeRate[]`, chaque série étant composée de buckets OHLC ;
-- `rate` et `relativeRate` restent séparés ; aucun champ n'est confondu avec `fundingRatePrediction` du ticker ni présenté comme funding futur réalisé ;
-- `liquidation-volume` représente un volume total agrégé de positions liquidées par intervalle ; aucun split LONG/SHORT n'est inventé ;
-- le schéma générique Analytics autorise scalaire ou OHLC ; le parser 47.3 accepte seulement ces formes démontrées, avec valeurs finies et non négatives pour les liquidations ;
-- `more=true` reste fail-closed afin de ne pas masquer une page tronquée ni dépasser silencieusement le budget réseau.
-
-Statistiques descriptives ajoutées :
-
-```text
-Funding relatif    : médiane + MAD + score robuste signé
-Liquidation volume : médiane + MAD + score robuste, spike uniquement
-```
-
-Caractéristiques additives :
-
-```text
-FUNDING_POSITIVE_EXTREME
-FUNDING_NEGATIVE_EXTREME
-LIQUIDATION_VOLUME_SPIKE
-```
-
-Elles n'influencent pas `interest_level`, `candidate_limit`, la shortlist canonique ni le ranking. Elles ne peuvent pas créer seules un candidat.
-
-La rotation reste `10` marchés maximum par refresh. Avec trois séries historiques (`open-interest`, `funding`, `liquidation-volume`), le plafond théorique devient **30 requêtes publiques Analytics par refresh**, avec concurrence globale toujours bornée à `4` par défaut.
-
-Le cockpit expose les trois séries ainsi qu'une couverture par série. Aucun filtre utilisateur Funding/Liquidation n'est ajouté.
-
-Voir `docs/47_3_FUNDING_LIQUIDATION_VOLUME.md`.
+Voir `docs/47_4_CVD_AGGRESSOR_DIFFERENTIAL.md`.
 
 ## Validations connues
 
-Batch 47.2 avant intégration, observées localement par l'utilisateur :
+Batch 47.3 local utilisateur avant intégration :
 
 ```text
-backend pytest -q       : PASS — suite arrivée à 100 %
-frontend pnpm typecheck : PASS
-frontend pnpm test      : PASS — 72/72
-git diff --check        : PASS — avertissements LF/CRLF uniquement
-smoke Kraken OI         : PASS — PF_XBTUSD, OHLC, more=false
-```
-
-Batch 47.3 dans l'environnement ChatGPT de préparation :
-
-```text
-python -m py_compile backend ciblé                         : PASS
-pytest ciblé Batch 47.3 avec stubs du checkout partiel     : PASS — 23/23 après correctif timestamp Funding
-smoke compatibilité logique Batch 47.2 OI                 : PASS
-tsc --noEmit --strict ciblé market-attention.ts           : PASS
-typecheck ciblé cockpit avec stubs React/UI               : PASS
-node --test market-attention-batch47_3.test.mjs           : PASS — 4/4
-```
-
-Validations locales utilisateur Batch 47.3 avant intégration :
-
-```text
-backend python -m pytest -q : PASS — suite complète à 100 % sous le .venv Python >= 3.12
+backend python -m pytest -q : PASS — suite complète à 100 %
 frontend pnpm typecheck     : PASS
 frontend pnpm test          : PASS — 76/76
 git diff --check            : PASS — avertissements LF/CRLF uniquement
@@ -152,4 +100,4 @@ smoke Kraken Funding        : PASS — PF_XBTUSD, rate/relativeRate OHLC, timest
 smoke Kraken Liquidation    : PASS — PF_XBTUSD, scalaires non négatifs, timestamps secondes, more=false
 ```
 
-Le smoke Funding a mis en évidence l'unité milliseconde de `result.timestamp[]`; le correctif parser + test de régression est inclus dans le commit fonctionnel `12051a7`. La suite backend complète a été relancée ensuite avec succès sous le `.venv` Python >= 3.12.
+Batch 47.4 : smokes live locaux CVD/Aggressor PASS ; backend local `python -m pytest -q` PASS à 100 % après correctif ; frontend local typecheck PASS et tests 82/82 PASS ; `git diff --check` PASS hors avertissements LF/CRLF. Correctif ChatGPT : py_compile PASS, pytest ciblé 47/47 PASS, frontend 47.4 6/6 PASS. Prêt à intégrer sur `main`.

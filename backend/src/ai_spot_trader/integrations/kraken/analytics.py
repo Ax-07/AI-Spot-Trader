@@ -55,6 +55,24 @@ class KrakenLiquidationVolumeAnalyticsPoint:
     close: Decimal | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class KrakenCvdAnalyticsPoint:
+    """One Kraken CVD bucket. Side volumes are exposed only when safely timestamp-aligned."""
+
+    observed_at: datetime
+    cvd: Decimal
+    buy_volume: Decimal | None = None
+    sell_volume: Decimal | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class KrakenAggressorDifferentialAnalyticsPoint:
+    """Signed taker-buy minus taker-sell differential for one Kraken analytics bucket."""
+
+    observed_at: datetime
+    value: Decimal
+
+
 class KrakenDerivativesAnalyticsClient(KrakenDerivativesPublicClient):
     """Canonical public Futures client extended with Kraken Market Analytics."""
 
@@ -112,6 +130,42 @@ class KrakenDerivativesAnalyticsClient(KrakenDerivativesPublicClient):
         )
         return parse_kraken_liquidation_volume_history(payload)
 
+    async def fetch_cvd_history(
+        self,
+        instrument: DerivativeInstrument,
+        *,
+        since: datetime,
+        until: datetime,
+        interval_seconds: int,
+    ) -> tuple[KrakenCvdAnalyticsPoint, ...]:
+        payload = await self._fetch_market_analytics(
+            instrument,
+            analytics_type="cvd",
+            label="Kraken Futures CVD analytics",
+            since=since,
+            until=until,
+            interval_seconds=interval_seconds,
+        )
+        return parse_kraken_cvd_history(payload)
+
+    async def fetch_aggressor_differential_history(
+        self,
+        instrument: DerivativeInstrument,
+        *,
+        since: datetime,
+        until: datetime,
+        interval_seconds: int,
+    ) -> tuple[KrakenAggressorDifferentialAnalyticsPoint, ...]:
+        payload = await self._fetch_market_analytics(
+            instrument,
+            analytics_type="aggressor-differential",
+            label="Kraken Futures Aggressor Differential analytics",
+            since=since,
+            until=until,
+            interval_seconds=interval_seconds,
+        )
+        return parse_kraken_aggressor_differential_history(payload)
+
     async def _fetch_market_analytics(
         self,
         instrument: DerivativeInstrument,
@@ -166,15 +220,9 @@ def parse_kraken_open_interest_history(
 def parse_kraken_funding_history(
     payload: object,
 ) -> tuple[KrakenFundingAnalyticsPoint, ...]:
-    """Parse the dedicated Kraken funding schema without conflating its two rates.
+    """Parse the dedicated Kraken funding schema without conflating its two rates."""
 
-    Kraken documents ``data.rate`` and ``data.relativeRate`` as separate OHLC arrays.  Both are
-    signed. ``rate`` is retained as the absolute/raw funding-rate series and ``relativeRate`` as
-    the relative funding-rate series; this parser never maps either field to ticker prediction or
-    realized account funding.
-    """
-
-    root, result = _analytics_result(payload)
+    _, result = _analytics_result(payload)
     timestamps = result.get("timestamp")
     data = result.get("data")
     if not isinstance(timestamps, list):
@@ -238,15 +286,7 @@ def parse_kraken_funding_history(
 def parse_kraken_liquidation_volume_history(
     payload: object,
 ) -> tuple[KrakenLiquidationVolumeAnalyticsPoint, ...]:
-    """Parse aggregate liquidation volume without inventing liquidation direction.
-
-    Kraken's public Analytics schema permits a scalar or generic OHLC bucket for array-valued
-    analytics.  Kraken Pro documents Liquidation Volume as the *total* value force-closed in an
-    interval, not a long/short split.  Scalars are therefore retained directly.  If Kraken emits
-    the documented generic OHLC variant, the fourth (close) component is the representative value
-    just as for the generic Analytics OHLC convention; no component is assigned a directional
-    meaning.
-    """
+    """Parse aggregate liquidation volume without inventing liquidation direction."""
 
     timestamps, values = _analytics_arrays(payload, analytics_name="Liquidation Volume")
     parsed: list[KrakenLiquidationVolumeAnalyticsPoint] = []
@@ -280,6 +320,99 @@ def parse_kraken_liquidation_volume_history(
                 observed_at=observed_at,
                 value=value,
                 bucket_kind="SCALAR",
+            )
+        )
+    return tuple(parsed)
+
+
+def parse_kraken_cvd_history(payload: object) -> tuple[KrakenCvdAnalyticsPoint, ...]:
+    """Parse live Kraken CVD while refusing to invent alignment for side-volume arrays.
+
+    The live PF_XBTUSD smoke confirmed epoch-second ``timestamp[]`` and a signed ``cvd[]``
+    series aligned one-to-one with timestamps. Kraken currently serves side arrays as
+    ``buy_volume`` / ``sell_volume`` and they can be shorter than ``timestamp[]``. Because
+    those shorter arrays carry no independent timestamps, they cannot be safely mapped to
+    buckets by position. They are therefore exposed only when *both* side arrays are complete
+    and aligned with ``timestamp[]``; otherwise CVD remains usable and side volumes stay None.
+
+    The older documented camelCase keys remain accepted for compatibility, but the same
+    alignment rule applies. No padding, forward-fill or inferred timestamps are used.
+    """
+
+    _, result = _analytics_result(payload)
+    timestamps = result.get("timestamp")
+    data = result.get("data")
+    if not isinstance(timestamps, list):
+        raise KrakenPayloadError("Kraken Market Analytics timestamp must be an array")
+    if not isinstance(data, Mapping):
+        raise KrakenPayloadError("Kraken CVD analytics data must be an object")
+
+    keys = set(data.keys())
+    snake_keys = {"buy_volume", "sell_volume", "cvd"}
+    camel_keys = {"buyVolume", "sellVolume", "cvd"}
+    if keys == snake_keys:
+        buy_values = data.get("buy_volume")
+        sell_values = data.get("sell_volume")
+    elif keys == camel_keys:
+        buy_values = data.get("buyVolume")
+        sell_values = data.get("sellVolume")
+    else:
+        raise KrakenPayloadError(
+            "Kraken CVD analytics data must contain buy_volume/sell_volume/cvd "
+            "or buyVolume/sellVolume/cvd"
+        )
+    cvd_values = data.get("cvd")
+    if not isinstance(buy_values, list) or not isinstance(sell_values, list) or not isinstance(cvd_values, list):
+        raise KrakenPayloadError("Kraken CVD analytics series must be arrays")
+    if len(timestamps) != len(cvd_values):
+        raise KrakenPayloadError("Kraken CVD timestamp/cvd lengths differ")
+    if len(buy_values) > len(timestamps) or len(sell_values) > len(timestamps):
+        raise KrakenPayloadError("Kraken CVD side-volume series cannot exceed timestamp length")
+    _require_complete_page(result)
+
+    parsed_buy = tuple(_decimal(value, "CVD buy volume") for value in buy_values)
+    parsed_sell = tuple(_decimal(value, "CVD sell volume") for value in sell_values)
+    if any(value < 0 for value in (*parsed_buy, *parsed_sell)):
+        raise KrakenPayloadError("CVD buy/sell volumes must be non-negative")
+    side_volumes_aligned = (
+        len(parsed_buy) == len(timestamps)
+        and len(parsed_sell) == len(timestamps)
+    )
+
+    parsed: list[KrakenCvdAnalyticsPoint] = []
+    previous: datetime | None = None
+    for index, (raw_timestamp, raw_cvd) in enumerate(zip(timestamps, cvd_values, strict=True)):
+        observed_at = _ordered_timestamp(raw_timestamp, previous, unit="seconds")
+        previous = observed_at
+        parsed.append(
+            KrakenCvdAnalyticsPoint(
+                observed_at=observed_at,
+                cvd=_decimal(raw_cvd, "CVD value"),
+                buy_volume=(parsed_buy[index] if side_volumes_aligned else None),
+                sell_volume=(parsed_sell[index] if side_volumes_aligned else None),
+            )
+        )
+    return tuple(parsed)
+
+
+def parse_kraken_aggressor_differential_history(
+    payload: object,
+) -> tuple[KrakenAggressorDifferentialAnalyticsPoint, ...]:
+    """Parse the documented signed scalar Aggressor Differential series."""
+
+    timestamps, values = _analytics_arrays(payload, analytics_name="Aggressor Differential")
+    parsed: list[KrakenAggressorDifferentialAnalyticsPoint] = []
+    previous: datetime | None = None
+    for raw_timestamp, raw_value in zip(timestamps, values, strict=True):
+        # Provisional explicit unit pending the mandatory live smoke; no heuristic detection.
+        observed_at = _ordered_timestamp(raw_timestamp, previous, unit="seconds")
+        previous = observed_at
+        if isinstance(raw_value, (list, tuple, Mapping)):
+            raise KrakenPayloadError("Kraken aggressor differential value must be a scalar")
+        parsed.append(
+            KrakenAggressorDifferentialAnalyticsPoint(
+                observed_at=observed_at,
+                value=_decimal(raw_value, "aggressor differential"),
             )
         )
     return tuple(parsed)
@@ -322,8 +455,6 @@ def _require_complete_page(result: Mapping[str, Any]) -> None:
     if not isinstance(more, bool):
         raise KrakenPayloadError("Kraken Market Analytics more must be a boolean")
     if more:
-        # Rotation cost is intentionally bounded to one request per series and market.  A partial
-        # page is never silently accepted because it would make historical baselines inconsistent.
         raise KrakenPayloadError("Kraken Market Analytics response is truncated (more=true)")
 
 

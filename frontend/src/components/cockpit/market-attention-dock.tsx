@@ -174,6 +174,10 @@ function analyticsCharacteristicLabel(value: string) {
   if (value === "FUNDING_POSITIVE_EXTREME") return "Funding + extrême";
   if (value === "FUNDING_NEGATIVE_EXTREME") return "Funding − extrême";
   if (value === "LIQUIDATION_VOLUME_SPIKE") return "Pic liquidations";
+  if (value === "CVD_POSITIVE_IMPULSE") return "Impulsion CVD positive";
+  if (value === "CVD_NEGATIVE_IMPULSE") return "Impulsion CVD négative";
+  if (value === "AGGRESSOR_BUY_DOMINANCE") return "Pression agressive acheteuse";
+  if (value === "AGGRESSOR_SELL_DOMINANCE") return "Pression agressive vendeuse";
   return value.replaceAll("_", " ");
 }
 
@@ -185,6 +189,8 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
   const analytics = perpetualAnalyticsContext(item);
   const funding = analytics?.funding ?? null;
   const liquidations = analytics?.liquidation_volume ?? null;
+  const cvd = analytics?.cvd ?? null;
+  const aggressor = analytics?.aggressor_differential ?? null;
   const h5 = attentionHorizon(item, "5m");
   const h15 = attentionHorizon(item, "15m");
   const h1 = attentionHorizon(item, "1h");
@@ -350,6 +356,62 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
                 {liquidations?.error_type ? <p className="mt-2 text-[10px] text-destructive-subtle-foreground">{liquidations.error_type}</p> : null}
                 <p className="mt-3 text-[10px] text-muted-foreground">
                   La donnée reste agrégée et non directionnelle : aucun champ “liquidations long” ou “liquidations short” n’est déduit du payload.
+                </p>
+              </div>
+
+              <div className="mt-4 rounded-md border bg-background/50 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="font-semibold">CVD</p>
+                    <p className="text-[10px] text-muted-foreground">Le niveau cumulatif reste observable ; l’anomalie porte sur la variation CVD causale de l’intervalle.</p>
+                  </div>
+                  <Badge tone={cvd?.status === "AVAILABLE" ? "success" : cvd?.status === "TECHNICAL_ERROR" ? "danger" : "warning"}>
+                    {perpetualAnalyticsStatusLabel(cvd?.status)}
+                  </Badge>
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+                  <Fact label="CVD courant" value={formatKrakenSignedRawNumber(cvd?.current_cvd)} />
+                  <Fact label="Variation CVD" value={formatKrakenSignedRawNumber(cvd?.current_cvd_change)} />
+                  <Fact label="Variation précédente" value={formatKrakenSignedRawNumber(cvd?.previous_cvd_change)} />
+                  <Fact label="Baseline variation" value={formatKrakenSignedRawNumber(cvd?.baseline_cvd_change)} />
+                  <Fact label="MAD variation" value={formatKrakenRawNumber(cvd?.baseline_cvd_change_mad)} />
+                  <Fact label="Score adaptatif" value={formatAdaptiveScore(cvd?.cvd_change_anomaly_score)} />
+                  <Fact label="Méthode" value={anomalyMethodLabel(cvd?.cvd_change_anomaly_method)} />
+                  <Fact label="Buy volume" value={formatKrakenRawNumber(cvd?.buy_volume)} />
+                  <Fact label="Sell volume" value={formatKrakenRawNumber(cvd?.sell_volume)} />
+                  <Fact label="Fraîcheur" value={formatDurationSeconds(cvd?.freshness_seconds === null || cvd?.freshness_seconds === undefined ? null : Number(cvd.freshness_seconds))} />
+                  <Fact label="Point Kraken" value={shortTime(cvd?.current_observed_at)} />
+                </div>
+                {cvd?.error_type ? <p className="mt-2 text-[10px] text-destructive-subtle-foreground">{cvd.error_type}</p> : null}
+                <p className="mt-3 text-[10px] text-muted-foreground">
+                  Impulsion positive ou négative = description d’un écart statistique de variation CVD, jamais une instruction de trading. Les volumes buy/sell ne sont affichés que si Kraken fournit deux séries complètes alignables sur les timestamps ; sinon ils restent indisponibles plutôt que d’être réindexés artificiellement.
+                </p>
+              </div>
+
+              <div className="mt-4 rounded-md border bg-background/50 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="font-semibold">Aggressor Differential</p>
+                    <p className="text-[10px] text-muted-foreground">Volume taker buy − volume taker sell par intervalle ; valeur signée en unité de devise de base selon Kraken.</p>
+                  </div>
+                  <Badge tone={aggressor?.status === "AVAILABLE" ? "success" : aggressor?.status === "TECHNICAL_ERROR" ? "danger" : "warning"}>
+                    {perpetualAnalyticsStatusLabel(aggressor?.status)}
+                  </Badge>
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+                  <Fact label="Différentiel courant" value={formatKrakenSignedRawNumber(aggressor?.current_value)} />
+                  <Fact label="Différentiel précédent" value={formatKrakenSignedRawNumber(aggressor?.previous_value)} />
+                  <Fact label="Baseline médiane" value={formatKrakenSignedRawNumber(aggressor?.baseline_value)} />
+                  <Fact label="MAD baseline" value={formatKrakenRawNumber(aggressor?.baseline_value_mad)} />
+                  <Fact label="Variation" value={formatKrakenSignedRawNumber(aggressor?.value_change)} />
+                  <Fact label="Score adaptatif" value={formatAdaptiveScore(aggressor?.anomaly_score)} />
+                  <Fact label="Méthode" value={anomalyMethodLabel(aggressor?.anomaly_method)} />
+                  <Fact label="Fraîcheur" value={formatDurationSeconds(aggressor?.freshness_seconds === null || aggressor?.freshness_seconds === undefined ? null : Number(aggressor.freshness_seconds))} />
+                  <Fact label="Point Kraken" value={shortTime(aggressor?.current_observed_at)} />
+                </div>
+                {aggressor?.error_type ? <p className="mt-2 text-[10px] text-destructive-subtle-foreground">{aggressor.error_type}</p> : null}
+                <p className="mt-3 text-[10px] text-muted-foreground">
+                  Positif = pression agressive acheteuse sur l’intervalle ; négatif = pression agressive vendeuse. Cette dominance reste descriptive et n’a aucune autorité de ranking.
                 </p>
               </div>
 
@@ -829,7 +891,7 @@ export function MarketAttentionDock() {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <p className="text-xs font-semibold">Couverture Analytics Futures</p>
-                        <p className="text-[10px] text-muted-foreground">Open Interest, Funding et Liquidation Volume partagent une seule rotation/cache, séparée de l’OHLCV et de la Market Structure.</p>
+                        <p className="text-[10px] text-muted-foreground">Open Interest, Funding, Liquidation Volume, CVD et Aggressor Differential partagent une seule rotation/cache, séparée de l’OHLCV et de la Market Structure.</p>
                       </div>
                       <Badge tone={coverageTone(data.perpetual_analytics_coverage.status)}>{data.perpetual_analytics_coverage.status}</Badge>
                     </div>
@@ -849,7 +911,7 @@ export function MarketAttentionDock() {
                       <Fact label="Requêtes tentées" value={String(data.perpetual_analytics_coverage.requests_attempted)} />
                       <Fact label="Requêtes en échec" value={String(data.perpetual_analytics_coverage.requests_failed)} />
                     </div>
-                    <div className="mt-3 grid gap-2 md:grid-cols-3">
+                    <div className="mt-3 grid gap-2 md:grid-cols-5">
                       {data.perpetual_analytics_coverage.series_coverage?.map((series) => (
                         <div key={series.series} className="rounded-md border bg-muted/10 p-2.5">
                           <p className="text-[10px] font-semibold uppercase tracking-wide">{series.series}</p>
@@ -864,7 +926,7 @@ export function MarketAttentionDock() {
                       ))}
                     </div>
                     <p className="mt-3 text-[11px] text-muted-foreground">{perpetualAnalyticsCoverageMessage(data.perpetual_analytics_coverage)}</p>
-                    <p className="mt-1 text-[10px] text-muted-foreground">Policy 47.3 : jusqu’à 3 requêtes publiques par marché sélectionné (OI + funding + liquidation-volume), concurrence globale bornée et aucun auto-tuning.</p>
+                    <p className="mt-1 text-[10px] text-muted-foreground">Policy 47.4 : jusqu’à 5 requêtes publiques par marché sélectionné (OI + funding + liquidation-volume + CVD + aggressor-differential), soit 50 max/refresh avec la limite par défaut de 10 marchés ; concurrence globale toujours bornée à 4 et aucun auto-tuning.</p>
                   </div>
                 ) : null}
 
@@ -966,7 +1028,7 @@ export function MarketAttentionDock() {
                     {loading ? "Construction du snapshot du radar…" : data.status === "NOT_CONFIGURED" ? "Radar non configuré." : marketAttentionStatusMessage(data)}
                   </div>
                 )}
-                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · filtres pilotés par le backend · classement déterministe. Volume 24h SPOT = candles Kraken causales ; volume 24h PERP linear/USD = `volumeQuote` Kraken Futures uniquement lorsqu’il est validé. Analytics Futures historiques = OI + funding + liquidation-volume via une rotation/cache partagée et causale ; ces caractéristiques restent descriptives et n’ont aucun impact de ranking dans le Batch 47.3. Le funding absolu/raw, le funding relatif et la prévision ticker restent distincts ; Liquidation Volume reste agrégé sans split long/short inventé. Capitalisation = {data.market_cap_metadata_provider ?? "provider externe indisponible"}. La Market Structure utilise uniquement des candles finalisées et des pivots confirmés ; UNKNOWN est fail-closed lorsqu’un filtre correspondant est actif.</p>
+                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · filtres pilotés par le backend · classement déterministe. Volume 24h SPOT = candles Kraken causales ; volume 24h PERP linear/USD = `volumeQuote` Kraken Futures uniquement lorsqu’il est validé. Analytics Futures historiques = OI + funding + liquidation-volume + CVD + aggressor-differential via une rotation/cache partagée et causale ; ces caractéristiques restent descriptives et n’ont aucun impact de ranking dans le Batch 47.4. Le funding absolu/raw, le funding relatif et la prévision ticker restent distincts ; Liquidation Volume reste agrégé sans split long/short inventé ; le CVD est analysé sur sa variation et l’Aggressor Differential décrit l’écart taker buy − taker sell. Capitalisation = {data.market_cap_metadata_provider ?? "provider externe indisponible"}. La Market Structure utilise uniquement des candles finalisées et des pivots confirmés ; UNKNOWN est fail-closed lorsqu’un filtre correspondant est actif.</p>
               </div>
             ) : <p className="text-sm text-muted-foreground">{loading ? "Chargement du radar…" : "Aucun snapshot chargé."}</p>}
           </CardContent>

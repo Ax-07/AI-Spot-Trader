@@ -11,16 +11,124 @@ Le Market Attention Radar reste strictement observationnel et ne prend aucune d�
 ## Référence courante
 
 ```text
-Référence GitHub auditée   : 21cac8f24a06ec997a0e70730309b9541ae04544
-Base Batch 47.3 auditée  : c09dd14cab31233f635ff535cbf0298ba3f2bd51
-Commit fonctionnel 47.3  : 12051a7 — feat: add historical funding and liquidation analytics
-Clôture documentaire initiale : 21cac8f — docs: close batch 47.3
-Batch 45            : intégré via 45d41b7
-Batch 46 / 46.1     : intégré via b219365
-Batch 47.1          : intégré via 842e6bd7
-Batch 47.2          : intégré via c09dd14
-Batch 47.3          : intégré via 12051a7, première clôture documentaire 21cac8f
+HEAD GitHub audité      : ec1cd5dc576c8638bff7c7110aa9a0a2292f71ff
+Commit fonctionnel 47.3 : 12051a7 — feat: add historical funding and liquidation analytics
+Clôture 47.3 observée   : ec1cd5d — docs: mark batch 47.3 integrated
+Batch 45                : intégré via 45d41b7
+Batch 46 / 46.1         : intégré via b219365
+Batch 47.1              : intégré via 842e6bd7
+Batch 47.2              : intégré via c09dd14
+Batch 47.3              : intégré via 12051a7
+Batch 47.4              : VALIDÉ LOCALEMENT, prêt à intégrer ; non encore poussé sur main
 ```
+
+## Changelog — 2026-10-05 — Batch 47.4 CVD + Aggressor Differential — validation locale finale
+
+Base auditée : GitHub `main` au HEAD `ec1cd5dc576c8638bff7c7110aa9a0a2292f71ff` (`docs: mark batch 47.3 integrated`). Commit fonctionnel Batch 47.3 intégré : `12051a7`.
+
+Audit de reprise :
+
+- **confirmé** : `PerpetualAnalyticsScanner` est l'unique scanner historique Futures ;
+- **confirmé** : il possède un seul `_cache`, un seul `_perpetual_analytics_cursor` et un sémaphore global construit par refresh ;
+- **confirmé** : les méthodes provider additionnelles sont déjà fail-soft via `getattr`, ce qui permet la compatibilité des providers legacy ;
+- **confirmé** : le ranking et la shortlist canoniques sont construits avant l'enrichissement Analytics ;
+- **confirmé par contrat public Kraken** : `cvd` utilise un schéma dédié `buyVolume[]`, `sellVolume[]`, `cvd[]` ;
+- **confirmé par documentation Kraken** : Aggressor Differential décrit `taker buy volume - taker sell volume`, en unité de devise de base ;
+- **confirmé par smoke live local utilisateur** : CVD sert des timestamps epoch secondes et les clés `buy_volume`, `sell_volume`, `cvd` ; les side arrays peuvent avoir des longueurs différentes ;
+- **confirmé par smoke live local utilisateur** : Aggressor Differential sert des timestamps epoch secondes et `data[]` scalaire signé ;
+- **manquant avant patch** : parsers CVD/Aggressor, modèles provider-neutral, snapshots dédiés, statistiques, coverage, cockpit et tests ;
+- **à décider en 47.5** : éventuelle influence multi-analytics sur ranking et déduplication/pondération CVD-Aggressor ;
+- **non confirmé depuis l'environnement ChatGPT** : payload live exact et unité réelle de timestamp de `cvd` et `aggressor-differential`, car les endpoints live Kraken n'étaient pas accessibles depuis cet environnement.
+
+Patch 47.4 :
+
+- `KrakenDerivativesAnalyticsClient` étendu avec `fetch_cvd_history()` et `fetch_aggressor_differential_history()`, toujours via `_fetch_market_analytics()` ;
+- parser CVD corrigé sur le payload live snake_case `buy_volume/sell_volume/cvd` avec compatibilité camelCase ; `timestamp[] + cvd[]` restent obligatoirement alignés ; side volumes uniquement exposés si les deux séries sont complètes, sinon `None` sans inférence ;
+- parser Aggressor strict sur valeurs scalaires signées finies, sans accepter silencieusement OHLC/objet ;
+- pas de client HTTP supplémentaire ;
+- provider Kraken canonique étendu avec `cvd_history()` et `aggressor_differential_history()` ;
+- modèles provider-neutral dédiés `PerpetualCvdPoint` et `PerpetualAggressorDifferentialPoint` afin de ne pas détourner le modèle non négatif OI/Liquidation ;
+- snapshots dédiés CVD/Aggressor ajoutés additivement à `PerpetualAnalyticsSnapshot` ;
+- CVD analysé sur `cvd_change`, niveau cumulatif conservé uniquement comme observable ;
+- Aggressor analysé directement comme série signée ;
+- médiane/MAD robuste partagé, aucun second moteur statistique ;
+- séries signées : aucun fallback ratio lorsque MAD=0 ; la méthode devient `UNAVAILABLE` ;
+- seuils descriptifs symétriques centralisés : ±2.5 pour CVD et Aggressor ;
+- caractéristiques additives : `CVD_POSITIVE_IMPULSE`, `CVD_NEGATIVE_IMPULSE`, `AGGRESSOR_BUY_DOMINANCE`, `AGGRESSOR_SELL_DOMINANCE` ;
+- cinq séries dans le **même** scanner/cache/cursor/sémaphore ;
+- plafond théorique par défaut : 10 marchés × 5 séries = 50 appels Analytics par refresh ; `market_limit_per_refresh=10`, `fetch_concurrency=4` et cadence inchangés ;
+- coverage par série étendue aux cinq séries ; `requests_attempted` compte uniquement les méthodes réellement appelées ;
+- providers legacy OI seul ou OI+Funding+Liquidation restent compatibles ;
+- cockpit : blocs CVD et Aggressor, couverture cinq séries, libellés descriptifs uniquement ;
+- contrat API `market-attention-radar-v6` conservé ; aucune nouvelle route REST ;
+- aucun filtre utilisateur CVD/Aggressor ;
+- aucune modification Agent / Risk Engine / Broker, aucune exécution PERP ;
+- aucun impact sur `interest_level`, `candidate_limit`, sort key, shortlist ou ranking.
+
+### Validation de préparation réellement exécutée
+
+```text
+python -m py_compile backend patch                       : PASS
+pytest statistiques/scanner 47.4 via harnais isolé     : PASS — 16/16
+pytest parsers/routes Kraken 47.4 via harnais isolé     : PASS — 22/22
+régression logique OI/Funding/Liquidation 47.3          : PASS
+frontend test 47.4                                      : PASS — 6/6
+TypeScript market-attention.ts strict ciblé             : PASS
+parsing TypeScript cockpit/lib                          : PASS
+```
+
+Ces validations ciblées ne remplacent pas la suite complète du repository.
+
+### Validation finale avant intégration
+
+Smokes publics exécutés localement par l'utilisateur :
+
+```text
+PF_XBTUSD/cvd                    : PASS — epoch secondes, buy_volume/sell_volume/cvd, side arrays non alignées possibles, more=false, errors=[]
+PF_XBTUSD/aggressor-differential: PASS — epoch secondes, scalaires signés, more=false, errors=[]
+```
+
+L'unique échec de la première suite backend complète provenait du test Batch 47.3 qui attendait exactement 3 séries de coverage. Le scanner 47.4 expose désormais 5 séries tout en ne tentant que les méthodes réellement présentes chez un provider legacy. Le test a été corrigé, puis la suite backend complète a été relancée localement avec succès jusqu'à 100 %.
+
+Validation finale locale après correctif : backend `python -m pytest -q` PASS à 100 %, frontend `pnpm typecheck` PASS, frontend `pnpm test` PASS **82/82**, `git diff --check` PASS hors avertissements LF/CRLF. Les smokes CVD et Aggressor restent PASS. Les validations ciblées ChatGPT (`47/47`, frontend 47.4 `6/6`, `py_compile`) complètent cette validation du repository.
+
+## ADR-344 — CVD utilise timestamp + cvd comme contrat historique obligatoire ; side volumes fail-soft
+
+**VALIDÉ — Batch 47.4 ; adoption effective lors de son intégration sur GitHub `main`.**
+
+Le smoke live démontre que `buy_volume[]` et `sell_volume[]` peuvent avoir des longueurs différentes de `timestamp[]`. Comme ces tableaux n'ont pas de timestamps propres, aucune correspondance par index n'est inventée. `timestamp[] + cvd[]` forment la série historique canonique ; buy/sell ne sont exposés que si les deux tableaux sont intégralement alignés.
+
+## ADR-340 — CVD et Aggressor Differential réutilisent la rotation/cache Analytics unique
+
+**VALIDÉ — Batch 47.4 ; adoption effective lors de son intégration sur GitHub `main`.**
+
+OI, Funding, Liquidation Volume, CVD et Aggressor Differential utilisent le même `PerpetualAnalyticsScanner`, le même curseur marché, le même cache et le même sémaphore global. Aucun `_cvd_cursor`, `_aggressor_cursor`, `_cvd_cache` ou `_aggressor_cache` n'est créé.
+
+Avec la policy actuelle, le budget maximal devient 50 requêtes publiques Analytics par refresh. La limite de marchés, la concurrence et la cadence restent inchangées ; aucun auto-tuning n'est introduit.
+
+## ADR-341 — L'anomalie CVD porte sur la variation et non sur le niveau cumulatif
+
+**VALIDÉ — Batch 47.4 ; adoption effective lors de son intégration sur GitHub `main`.**
+
+Le niveau `current_cvd` reste observable mais n'est pas utilisé directement pour qualifier une anomalie. La série statistique est `cvd_change = current_cvd - previous_cvd`, avec baseline médiane et MAD sur les changements historiques antérieurs au point courant.
+
+Cette règle évite de confondre un niveau cumulatif naturellement élevé/faible avec une impulsion inhabituelle.
+
+## ADR-342 — Les séries order-flow signées utilisent MAD sans fallback ratio
+
+**VALIDÉ — Batch 47.4 ; adoption effective lors de son intégration sur GitHub `main`.**
+
+CVD change et Aggressor Differential sont signés et peuvent être proches de zéro. Lorsque MAD=0, aucun ratio `current / baseline` n'est utilisé : `anomaly_method=UNAVAILABLE` et aucun score extrême artificiel n'est créé.
+
+Les seuils ±2.5 sont symétriques, expérimentaux, descriptifs et non optimisés sur le P&L.
+
+## ADR-343 — CVD et Aggressor restent descriptifs sans autorité de ranking jusqu'au Batch 47.5
+
+**VALIDÉ — Batch 47.4 ; adoption effective lors de son intégration sur GitHub `main`.**
+
+Les deux séries peuvent enrichir `combined_characteristics`, `interest_reasons` et le cockpit d'un candidat déjà retenu. Elles ne peuvent ni modifier `interest_level`, ni changer la clé de tri, ni augmenter `candidate_limit`, ni créer/admettre un candidat.
+
+CVD et Aggressor provenant tous deux de l'order flow agressif, aucune addition de bonus n'est introduite dans ce batch. Leur redondance/complémentarité éventuelle sera décidée explicitement en 47.5.
 
 ## Changelog — 2026-10-04 — Batch 47.3 Funding historique + Liquidation Volume — adopté
 
@@ -66,7 +174,7 @@ pytest ciblé Batch 47.3 avec stubs du checkout partiel           : PASS — 23/
 smoke logique compatibilité parser/analyse OI Batch 47.2         : PASS
 tsc --noEmit --strict market-attention.ts                       : PASS
 typecheck ciblé cockpit avec stubs React/UI                     : PASS
-node --test market-attention-batch47_3.test.mjs                 : PASS — 4/4
+node --test market-attention-batch47_3.test.mjs                 : PASS — 6/6
 smoke HTTP Kraken Funding                                       : PASS local utilisateur — OHLC + timestamps ms
 smoke HTTP Kraken Liquidation Volume                            : PASS local utilisateur — scalaires + timestamps s
 backend suite complète après correctif timestamp Funding         : PASS local utilisateur — 100 %
@@ -139,7 +247,7 @@ smoke PF_XBTUSD  : PASS — OHLC confirmé, more=false
 
 **ADOPTÉ — Batch 47.2 intégré via `c09dd14`.**
 
-Un point Analytics n'est consommé qu'après `timestamp + interval <= as_of`. Cette règle s'applique aux extensions 47.3 tant qu'une sémantique fournisseur plus précise n'est pas démontrée et testée.
+Un point Analytics n'est consommé qu'après `timestamp + interval <= as_of`. Cette règle s'applique aux extensions 47.3 et 47.4 tant qu'une sémantique fournisseur plus précise n'est pas démontrée et testée.
 
 ## ADR-336 — L'OI historique n'a pas d'autorité de ranking
 
