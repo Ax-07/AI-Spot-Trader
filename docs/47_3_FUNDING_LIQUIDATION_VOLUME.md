@@ -2,16 +2,17 @@
 
 ## Statut
 
-**VALIDÉ LOCALEMENT — COMMIT FONCTIONNEL `12051a7`.**
+**INTÉGRÉ SUR GITHUB `main` — COMMIT FONCTIONNEL `12051a7`.** La première clôture documentaire a été publiée via `21cac8f`.
 
 Base et commit fonctionnel :
 
 ```text
 Repository                    : Ax-07/AI-Spot-Trader
 Branche                       : main
-Base GitHub auditée           : c09dd14cab31233f635ff535cbf0298ba3f2bd51
+Référence GitHub auditée       : 21cac8f24a06ec997a0e70730309b9541ae04544
+Base Batch 47.3 auditée       : c09dd14cab31233f635ff535cbf0298ba3f2bd51
 Commit fonctionnel Batch 47.3 : 12051a7
-Commit                        : feat: add historical funding and liquidation analytics
+Clôture documentaire initiale : 21cac8f
 ```
 
 Le Batch 47.2 est intégré via `c09dd14`. Les ADR-333 à ADR-336 sont donc considérées ADOPTÉES.

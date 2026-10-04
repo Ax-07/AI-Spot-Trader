@@ -5,12 +5,13 @@
 ```text
 Repository                    : Ax-07/AI-Spot-Trader
 Branche                       : main
-Base GitHub auditée           : c09dd14cab31233f635ff535cbf0298ba3f2bd51
+Référence GitHub auditée       : 21cac8f24a06ec997a0e70730309b9541ae04544
+Base Batch 47.3 auditée       : c09dd14cab31233f635ff535cbf0298ba3f2bd51
 Commit fonctionnel Batch 47.3 : 12051a7
-Commit                        : feat: add historical funding and liquidation analytics
+Clôture documentaire initiale : 21cac8f
 ```
 
-Le **Batch 47.3 est validé localement et commité via `12051a7`**. La clôture documentaire présente dans ce fichier accompagne le push final vers `main`. Le Batch 47.2 reste intégré via `c09dd14`.
+Le **Batch 47.3 est intégré sur GitHub `main` via le commit fonctionnel `12051a7`**, avec première clôture documentaire `21cac8f`. Le Batch 47.2 reste intégré via `c09dd14`.
 
 Décisions intégrées récentes :
 
@@ -19,13 +20,13 @@ Batch 45        => intégré via 45d41b7
 Batch 46 / 46.1 => intégré via b219365
 Batch 47.1      => intégré via 842e6bd7
 Batch 47.2      => intégré via c09dd14
-Batch 47.3      => commit fonctionnel 12051a7, validé localement
+Batch 47.3      => intégré via 12051a7, première clôture documentaire 21cac8f
 ADR-328..339    => ADOPTÉES selon leur batch intégré/validé
 ```
 
 L'intégration GitHub confirme la présence du code. Elle ne constitue pas une preuve de tests locaux non observés.
 
-## Radar intégré jusqu'au Batch 47.2
+## Radar intégré jusqu'au Batch 47.3
 
 Le Market Attention Radar reste `market-attention-radar-v6`, strictement informatif, déterministe, causal et read-only. L'exécution de trading demeure SPOT uniquement.
 
@@ -77,7 +78,7 @@ result.more = false
 
 Le parser utilise strictement le `close` d'un bucket OHLC finalisé. L'OI historique reste brut, n'est pas converti implicitement en USD et n'a aucune autorité de ranking.
 
-## Batch 47.3 — validé, commit fonctionnel `12051a7`
+## Batch 47.3 — intégré via `12051a7`
 
 Objectif : ajouter exactement deux séries historiques en réutilisant **la même rotation/cache Analytics** :
 

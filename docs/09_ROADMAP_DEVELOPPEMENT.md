@@ -5,18 +5,20 @@
 ```text
 Repository              : Ax-07/AI-Spot-Trader
 Branche                 : main
-Base GitHub auditée     : c09dd14cab31233f635ff535cbf0298ba3f2bd51
-Commit fonctionnel 47.3 : 12051a7 — feat: add historical funding and liquidation analytics
+Référence GitHub auditée   : 21cac8f24a06ec997a0e70730309b9541ae04544
+Base Batch 47.3 auditée  : c09dd14cab31233f635ff535cbf0298ba3f2bd51
+Commit fonctionnel 47.3  : 12051a7 — feat: add historical funding and liquidation analytics
+Clôture documentaire initiale : 21cac8f — docs: close batch 47.3
 Batch 43.2              : intégré
 Batch 44                : intégré
 Batch 45                : intégré via 45d41b7
 Batch 46 / 46.1         : intégré via b219365
 Batch 47.1              : intégré via 842e6bd7
 Batch 47.2              : intégré via c09dd14
-Batch 47.3              : validé localement, commit fonctionnel 12051a7
+Batch 47.3              : intégré via 12051a7, première clôture documentaire 21cac8f
 ```
 
-Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch ; `12051a7` est le commit fonctionnel de référence du Batch 47.3.
+Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch ; la référence GitHub auditée est `21cac8f`, et `12051a7` reste le commit fonctionnel intégré du Batch 47.3.
 
 ## Invariants de roadmap
 
@@ -68,7 +70,7 @@ Voir `docs/47_2_OPEN_INTEREST_HISTORIQUE.md`.
 
 ## Batch 47.3 — Funding historique + Liquidation Volume
 
-**État : validé localement, commit fonctionnel `12051a7`, clôture documentaire prête pour le push final.**
+**État : intégré sur GitHub `main` via le commit fonctionnel `12051a7`, première clôture documentaire `21cac8f`.**
 
 Périmètre strict :
 

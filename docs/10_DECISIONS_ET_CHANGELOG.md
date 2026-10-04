@@ -11,18 +11,20 @@ Le Market Attention Radar reste strictement observationnel et ne prend aucune d�
 ## Référence courante
 
 ```text
-Base GitHub auditée : c09dd14cab31233f635ff535cbf0298ba3f2bd51
-Commit fonctionnel 47.3 : 12051a7 — feat: add historical funding and liquidation analytics
+Référence GitHub auditée   : 21cac8f24a06ec997a0e70730309b9541ae04544
+Base Batch 47.3 auditée  : c09dd14cab31233f635ff535cbf0298ba3f2bd51
+Commit fonctionnel 47.3  : 12051a7 — feat: add historical funding and liquidation analytics
+Clôture documentaire initiale : 21cac8f — docs: close batch 47.3
 Batch 45            : intégré via 45d41b7
 Batch 46 / 46.1     : intégré via b219365
 Batch 47.1          : intégré via 842e6bd7
 Batch 47.2          : intégré via c09dd14
-Batch 47.3          : validé localement, commit fonctionnel 12051a7
+Batch 47.3          : intégré via 12051a7, première clôture documentaire 21cac8f
 ```
 
 ## Changelog — 2026-10-04 — Batch 47.3 Funding historique + Liquidation Volume — adopté
 
-Base auditée : GitHub `main` au HEAD `c09dd14`. Commit fonctionnel Batch 47.3 : `12051a7`.
+Base de développement auditée : GitHub `main` au HEAD `c09dd14`. Commit fonctionnel Batch 47.3 intégré : `12051a7`. Première clôture documentaire sur `main` : `21cac8f`.
 
 Audit de reprise :
 
