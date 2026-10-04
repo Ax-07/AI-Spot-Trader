@@ -5,18 +5,18 @@
 ```text
 Repository              : Ax-07/AI-Spot-Trader
 Branche                 : main
-HEAD GitHub observé     : c09dd14cab31233f635ff535cbf0298ba3f2bd51
-Commit HEAD             : feat: add historical open interest analytics
+Base GitHub auditée     : c09dd14cab31233f635ff535cbf0298ba3f2bd51
+Commit fonctionnel 47.3 : 12051a7 — feat: add historical funding and liquidation analytics
 Batch 43.2              : intégré
 Batch 44                : intégré
 Batch 45                : intégré via 45d41b7
 Batch 46 / 46.1         : intégré via b219365
 Batch 47.1              : intégré via 842e6bd7
 Batch 47.2              : intégré via c09dd14
-Batch 47.3              : patch préparé, non intégré
+Batch 47.3              : validé localement, commit fonctionnel 12051a7
 ```
 
-Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
+Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch ; `12051a7` est le commit fonctionnel de référence du Batch 47.3.
 
 ## Invariants de roadmap
 
@@ -68,7 +68,7 @@ Voir `docs/47_2_OPEN_INTEREST_HISTORIQUE.md`.
 
 ## Batch 47.3 — Funding historique + Liquidation Volume
 
-**État : patch préparé, non intégré.**
+**État : validé localement, commit fonctionnel `12051a7`, clôture documentaire prête pour le push final.**
 
 Périmètre strict :
 
@@ -88,7 +88,7 @@ Audit fournisseur retenu :
 - formes acceptées pour `liquidation-volume` : scalaire ou OHLC générique, valeurs finies/non négatives ;
 - `more=true` reste rejeté explicitement.
 
-Statistiques proposées :
+Statistiques intégrées :
 
 ```text
 Funding relatif    : baseline médiane + MAD + score signé, seuil ±2.5
@@ -133,19 +133,20 @@ git diff --check        : PASS hors avertissements LF/CRLF
 smoke PF_XBTUSD OI      : PASS — OHLC, more=false
 ```
 
-Batch 47.3 — préparation ChatGPT :
+Batch 47.3 — validation finale :
 
 ```text
-Python py_compile ciblé                           : PASS
-pytest ciblé avec stubs du checkout partiel       : PASS — 22/22
-compatibilité OI 47.2 ciblée                      : PASS
-typecheck strict market-attention.ts              : PASS
-typecheck cockpit ciblé avec stubs                : PASS
-frontend test Batch 47.3                          : PASS — 4/4
-smokes HTTP Kraken Funding/Liquidation            : NON EXÉCUTÉS — réseau environnement indisponible
+python -m py_compile ciblé                         : PASS
+pytest ciblé Batch 47.3                            : PASS — 23/23 après correctif timestamp Funding
+backend python -m pytest -q                        : PASS — suite complète à 100 %
+frontend pnpm typecheck                            : PASS
+frontend pnpm test                                 : PASS — 76/76
+git diff --check                                   : PASS — avertissements LF/CRLF uniquement
+smoke Kraken Funding PF_XBTUSD                     : PASS — rate/relativeRate OHLC, timestamp ms
+smoke Kraken Liquidation Volume PF_XBTUSD          : PASS — data[] scalaire, timestamp s
 ```
 
-Les suites complètes `pytest -q`, `pnpm typecheck`, `pnpm test` et `git diff --check` doivent être relancées localement après extraction avant intégration.
+Le correctif d'unité du timestamp Funding est inclus dans le commit fonctionnel `12051a7`.
 
 ## Périmètres ultérieurs possibles
 

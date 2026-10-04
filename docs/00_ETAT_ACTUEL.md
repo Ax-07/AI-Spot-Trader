@@ -1,15 +1,16 @@
 # 00 — État actuel
 
-## Référence intégrée GitHub
+## Référence de clôture Batch 47.3
 
 ```text
-Repository          : Ax-07/AI-Spot-Trader
-Branche             : main
-HEAD GitHub observé : c09dd14cab31233f635ff535cbf0298ba3f2bd51
-Commit              : feat: add historical open interest analytics
+Repository                    : Ax-07/AI-Spot-Trader
+Branche                       : main
+Base GitHub auditée           : c09dd14cab31233f635ff535cbf0298ba3f2bd51
+Commit fonctionnel Batch 47.3 : 12051a7
+Commit                        : feat: add historical funding and liquidation analytics
 ```
 
-Le **Batch 47.2 est intégré** dans `main` via `c09dd14`. Le Batch 47.3 décrit ci-dessous un patch préparé à partir de ce HEAD ; il n'est pas encore intégré tant que l'utilisateur ne l'a pas validé, commité et poussé.
+Le **Batch 47.3 est validé localement et commité via `12051a7`**. La clôture documentaire présente dans ce fichier accompagne le push final vers `main`. Le Batch 47.2 reste intégré via `c09dd14`.
 
 Décisions intégrées récentes :
 
@@ -18,7 +19,8 @@ Batch 45        => intégré via 45d41b7
 Batch 46 / 46.1 => intégré via b219365
 Batch 47.1      => intégré via 842e6bd7
 Batch 47.2      => intégré via c09dd14
-ADR-328..336    => ADOPTÉES selon leur batch intégré
+Batch 47.3      => commit fonctionnel 12051a7, validé localement
+ADR-328..339    => ADOPTÉES selon leur batch intégré/validé
 ```
 
 L'intégration GitHub confirme la présence du code. Elle ne constitue pas une preuve de tests locaux non observés.
@@ -75,7 +77,7 @@ result.more = false
 
 Le parser utilise strictement le `close` d'un bucket OHLC finalisé. L'OI historique reste brut, n'est pas converti implicitement en USD et n'a aucune autorité de ranking.
 
-## Batch 47.3 — patch préparé, non intégré
+## Batch 47.3 — validé, commit fonctionnel `12051a7`
 
 Objectif : ajouter exactement deux séries historiques en réutilisant **la même rotation/cache Analytics** :
 
@@ -149,4 +151,4 @@ smoke Kraken Funding        : PASS — PF_XBTUSD, rate/relativeRate OHLC, timest
 smoke Kraken Liquidation    : PASS — PF_XBTUSD, scalaires non négatifs, timestamps secondes, more=false
 ```
 
-Le smoke Funding a mis en évidence l'unité milliseconde de `result.timestamp[]`; un correctif parser + test de régression est préparé dans le patch 47.3. La suite backend complète doit être relancée après extraction de ce correctif avant commit.
+Le smoke Funding a mis en évidence l'unité milliseconde de `result.timestamp[]`; le correctif parser + test de régression est inclus dans le commit fonctionnel `12051a7`. La suite backend complète a été relancée ensuite avec succès sous le `.venv` Python >= 3.12.

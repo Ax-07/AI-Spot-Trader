@@ -11,18 +11,18 @@ Le Market Attention Radar reste strictement observationnel et ne prend aucune d�
 ## Référence courante
 
 ```text
-HEAD GitHub observé : c09dd14cab31233f635ff535cbf0298ba3f2bd51
-Commit HEAD         : feat: add historical open interest analytics
+Base GitHub auditée : c09dd14cab31233f635ff535cbf0298ba3f2bd51
+Commit fonctionnel 47.3 : 12051a7 — feat: add historical funding and liquidation analytics
 Batch 45            : intégré via 45d41b7
 Batch 46 / 46.1     : intégré via b219365
 Batch 47.1          : intégré via 842e6bd7
 Batch 47.2          : intégré via c09dd14
-Batch 47.3          : patch préparé, non intégré
+Batch 47.3          : validé localement, commit fonctionnel 12051a7
 ```
 
-## Changelog — 2026-10-04 — Batch 47.3 Funding historique + Liquidation Volume — proposé
+## Changelog — 2026-10-04 — Batch 47.3 Funding historique + Liquidation Volume — adopté
 
-Base auditée : GitHub `main` au HEAD `c09dd14`.
+Base auditée : GitHub `main` au HEAD `c09dd14`. Commit fonctionnel Batch 47.3 : `12051a7`.
 
 Audit de reprise :
 
@@ -67,12 +67,12 @@ typecheck ciblé cockpit avec stubs React/UI                     : PASS
 node --test market-attention-batch47_3.test.mjs                 : PASS — 4/4
 smoke HTTP Kraken Funding                                       : PASS local utilisateur — OHLC + timestamps ms
 smoke HTTP Kraken Liquidation Volume                            : PASS local utilisateur — scalaires + timestamps s
-backend suite complète avant correctif timestamp Funding         : PASS local utilisateur — 100 %
+backend suite complète après correctif timestamp Funding         : PASS local utilisateur — 100 %
 ```
 
 ## ADR-337 — OI, Funding et Liquidation Volume partagent une seule rotation/cache Analytics
 
-**PROPOSÉ — Batch 47.3, non intégré.**
+**ADOPTÉ — Batch 47.3, commit fonctionnel `12051a7`.**
 
 Le Batch 47.3 étend `PerpetualAnalyticsScanner` au lieu de créer un scanner Funding et un scanner Liquidation séparés. Un même marché sélectionné par la rotation peut déclencher les trois séries, sous un sémaphore global. Cette décision conserve un coût explicable et évite des populations de couverture divergentes.
 
@@ -80,7 +80,7 @@ Avec la policy actuelle, le budget théorique maximal devient 30 appels par refr
 
 ## ADR-338 — Le Funding historique conserve séparément rate, relativeRate et prédiction ticker
 
-**PROPOSÉ — Batch 47.3, non intégré.**
+**ADOPTÉ — Batch 47.3, commit fonctionnel `12051a7`.**
 
 `rate` et `relativeRate` du flux historique Kraken sont stockés séparément. La statistique adaptative porte sur `relativeRate`, tandis que le `rate` absolu/raw reste observable. `fundingRatePrediction` du snapshot ticker reste une prévision Kraken distincte et n'est jamais mélangée à l'historique.
 
@@ -88,7 +88,7 @@ La série étant signée, le Batch 47.3 n'applique pas le fallback de ratio MAD 
 
 ## ADR-339 — Liquidation Volume reste agrégé, non directionnel et sans autorité de ranking
 
-**PROPOSÉ — Batch 47.3, non intégré.**
+**ADOPTÉ — Batch 47.3, commit fonctionnel `12051a7`.**
 
 Kraken décrit `liquidation-volume` comme un total par intervalle sans démontrer une composante LONG/SHORT. Le modèle conserve donc une métrique agrégée et ne crée aucun champ `long_liquidations` ou `short_liquidations`.
 

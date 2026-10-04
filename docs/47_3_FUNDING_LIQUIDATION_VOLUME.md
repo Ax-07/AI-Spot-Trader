@@ -2,15 +2,16 @@
 
 ## Statut
 
-**PATCH PRÉPARÉ, NON INTÉGRÉ.**
+**VALIDÉ LOCALEMENT — COMMIT FONCTIONNEL `12051a7`.**
 
-Base GitHub auditée :
+Base et commit fonctionnel :
 
 ```text
-Repository : Ax-07/AI-Spot-Trader
-Branche    : main
-HEAD       : c09dd14cab31233f635ff535cbf0298ba3f2bd51
-Commit     : feat: add historical open interest analytics
+Repository                    : Ax-07/AI-Spot-Trader
+Branche                       : main
+Base GitHub auditée           : c09dd14cab31233f635ff535cbf0298ba3f2bd51
+Commit fonctionnel Batch 47.3 : 12051a7
+Commit                        : feat: add historical funding and liquidation analytics
 ```
 
 Le Batch 47.2 est intégré via `c09dd14`. Les ADR-333 à ADR-336 sont donc considérées ADOPTÉES.
@@ -345,19 +346,25 @@ smoke Kraken Funding        : PASS — PF_XBTUSD, OHLC, timestamp ms, more=false
 smoke Kraken Liquidation    : PASS — PF_XBTUSD, scalaire, timestamp s, more=false
 ```
 
-Après extraction du ZIP correctif, seule la revalidation backend complète et `git diff --check` restent obligatoires avant commit/push ; aucun fichier frontend n'est modifié par le correctif.
+Après extraction du ZIP correctif, la revalidation backend complète et `git diff --check` ont été exécutés avec succès. Le frontend avait déjà passé `pnpm typecheck` et `pnpm test` à 76/76.
 
-## Décisions proposées
+## Décisions adoptées
 
 ### ADR-337 — Rotation/cache Analytics unique
+
+**ADOPTÉE — Batch 47.3, commit fonctionnel `12051a7`.**
 
 OI, Funding et Liquidation Volume partagent une seule rotation/cache, avec un sémaphore commun.
 
 ### ADR-338 — Funding absolu/raw, relatif et prédiction restent distincts
 
+**ADOPTÉE — Batch 47.3, commit fonctionnel `12051a7`.**
+
 La statistique porte sur `relativeRate`. Le raw historique et la prédiction ticker restent séparés et observables.
 
 ### ADR-339 — Liquidation Volume reste agrégé et descriptif
+
+**ADOPTÉE — Batch 47.3, commit fonctionnel `12051a7`.**
 
 Aucune direction LONG/SHORT n'est inventée et aucune autorité de ranking n'est introduite.
 
