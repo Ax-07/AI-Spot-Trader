@@ -5,10 +5,10 @@
 ```text
 Repository                  : Ax-07/AI-Spot-Trader
 Branche                     : main
-HEAD GitHub réel audité 49.4: e7d605aa2b6393516c0ccd391cd4d11193c18671
+HEAD GitHub clôture 49.4     : 2e552cbaf1b8ffcae9244c1fb472f1ee8fb0f193
 Batch 49.3 fonctionnel      : intégré via d08cd31
 Clôture documentaire 49.3   : e7d605a
-Batch 49.4                  : patch proposé, non intégré
+Batch 49.4                  : intégré via 2e552cb
 Batch 49.1                  : intégré via 3194fce
 Batch 49.2                  : intégré via f0d4f94
 Batch 48 fonctionnel        : intégré via ebb664c
@@ -248,9 +248,9 @@ push GitHub main            : PASS — d08cd31
 
 ## Batch 49.4 — observabilité décisions et performances PAPER SPOT/PERP
 
-**Patch proposé sur `e7d605a`, non intégré à GitHub dans cette livraison.**
+**Intégré via `2e552cb`.**
 
-Décision architecturale proposée : **projection read-only dédiée au-dessus de `EconomicHistoryReport` et des audits persistés**, attachée à l'endpoint économique existant.
+Décision architecturale intégrée : **projection read-only dédiée au-dessus de `EconomicHistoryReport` et des audits persistés**, attachée à l'endpoint économique existant.
 
 ```text
 faits PAPER persistés
@@ -261,7 +261,7 @@ faits PAPER persistés
 -> cockpit Historique
 ```
 
-Objectifs du patch :
+État intégré :
 
 - vue TOTAL / SPOT / PERPETUAL ;
 - funnel Agent -> Risk -> exécution ;
@@ -276,15 +276,19 @@ Aucune nouvelle persistence, aucun nouvel endpoint, aucun changement Agent/Risk/
 
 Voir `docs/49_4_OBSERVABILITE_DECISIONS_PERFORMANCES_PAPER.md`.
 
-## Validation du patch 49.4 dans le sandbox de livraison
+## Validation intégrée du Batch 49.4
 
 ```text
-backend py_compile ciblé     : PASS
-frontend test ciblé 49.4    : PASS — 3/3
-backend pytest ciblé        : non collectable dans le sandbox partiel (repo complet absent)
-validation complète         : à exécuter localement après extraction
+backend python -m pytest -q : PASS — 1195 passed, 2 warnings
+frontend pnpm typecheck     : PASS
+frontend pnpm test          : PASS — 89/89
+git diff --check            : PASS — avertissements LF/CRLF uniquement
+git status --short          : PASS — working tree propre après push
+push GitHub main            : PASS — 2e552cb
 ```
 
-## Suite après validation et intégration de 49.4
+Les warnings Node `MODULE_TYPELESS_PACKAGE_JSON` sont non bloquants et ne changent pas le statut de validation.
+
+## Suite après intégration de 49.4
 
 La suite devra être décidée à partir des métriques observées sans adaptation rétroactive. Le LIVE, l'authentification Kraken Futures privée et l'exécution réelle restent des décisions séparées et ultérieures.

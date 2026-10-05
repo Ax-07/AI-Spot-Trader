@@ -2,21 +2,21 @@
 
 ## Statut
 
-Patch proposé sur le HEAD GitHub `main` audité au démarrage :
+Batch intégré sur GitHub `main` via :
+
+```text
+2e552cbaf1b8ffcae9244c1fb472f1ee8fb0f193
+feat: add paper trading observability
+```
+
+Base GitHub auditée au démarrage du Batch 49.4 :
 
 ```text
 e7d605aa2b6393516c0ccd391cd4d11193c18671
 docs: close batch 49.3 integration
 ```
 
-Le parent fonctionnel de cette clôture documentaire est :
-
-```text
-d08cd31e6a795a8beb09530c2bc9a3f32f94fe35
-feat: expose causal radar analytics context to agent
-```
-
-Le Batch 49.4 n'est pas intégré à GitHub dans cette livraison.
+Le Batch 49.4 est intégré, validé dans le repository complet et conserve l'observabilité strictement read-only.
 
 ## Objectif
 
@@ -288,34 +288,20 @@ Frontend :
 - clé de marché distincte par `market_type` ;
 - compatibilité avec une réponse historique sans projection 49.4.
 
-## Validation réalisée dans l'environnement de livraison
+## Validation intégrée
+
+Validation finale réellement exécutée dans le repository complet :
 
 ```text
-python -m py_compile des fichiers backend 49.4 : PASS
-node --test --experimental-strip-types src/lib/economic-history.test.mjs : PASS — 3/3
+backend python -m pytest -q : PASS — 1195 passed, 2 warnings
+frontend pnpm typecheck     : PASS
+frontend pnpm test          : PASS — 89/89
+git diff --check            : PASS — avertissements LF/CRLF uniquement
+git status --short          : PASS — working tree propre après push
+push GitHub main            : PASS — 2e552cb
 ```
 
-Le test backend ciblé a été lancé mais sa collecte est impossible dans ce sandbox de patch isolé, qui ne contient pas le repository complet :
-
-```text
-ModuleNotFoundError: No module named 'ai_spot_trader.api.schemas'
-```
-
-Ce résultat n'est pas compté comme un échec fonctionnel ni comme un PASS. La validation doit être rejouée après extraction dans le repository complet.
-
-## Validation locale attendue
-
-```powershell
-python -m pytest -q
-
-Push-Location frontend
-pnpm typecheck
-pnpm test
-Pop-Location
-
-git diff --check
-git status --short
-```
+Les trois tests frontend spécifiques 49.4 sont inclus dans les `89/89` et passent. Les warnings Node `MODULE_TYPELESS_PACKAGE_JSON` observés lors des tests sont non bloquants ; aucun changement global de module type n'est nécessaire pour cette clôture.
 
 ## Hors périmètre
 

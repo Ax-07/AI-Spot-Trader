@@ -20,19 +20,19 @@ L'observabilité 49.4 est strictement read-only : elle mesure les faits PAPER pe
 ## Référence courante
 
 ```text
-HEAD GitHub réel audité 49.4 : e7d605aa2b6393516c0ccd391cd4d11193c18671
+HEAD GitHub clôture 49.4     : 2e552cbaf1b8ffcae9244c1fb472f1ee8fb0f193
+Batch 49.4 intégré           : 2e552cb — feat: add paper trading observability
 Clôture documentaire 49.3    : e7d605a — docs: close batch 49.3 integration
 Batch 49.3 fonctionnel       : d08cd31 — feat: expose causal radar analytics context to agent
 Batch 49.2 intégré           : f0d4f94 — feat: feed radar shortlist into agent universe
 Batch 49.1 intégré           : 3194fce — feat: activate perpetual paper trading
-Batch 49.4                    : patch proposé, non intégré
 ```
 
-## Changelog — 2026-10-05 — Batch 49.4 observabilité décisions/performance PAPER — patch proposé
+## Changelog — 2026-10-05 — Batch 49.4 observabilité décisions/performance PAPER — intégré
 
 Base GitHub auditée au démarrage : `e7d605aa2b6393516c0ccd391cd4d11193c18671` (`docs: close batch 49.3 integration`).
 
-Le commit `e7d605a` est uniquement documentaire ; l'état fonctionnel 49.3 est intégré via `d08cd31e6a795a8beb09530c2bc9a3f32f94fe35`.
+Commit intégré : `2e552cbaf1b8ffcae9244c1fb472f1ee8fb0f193` (`feat: add paper trading observability`).
 
 ### Audit confirmé
 
@@ -43,7 +43,7 @@ Le commit `e7d605a` est uniquement documentaire ; l'état fonctionnel 49.3 est i
 - le cockpit Historique consomme déjà `/api/v1/economic-history` ;
 - aucune nouvelle persistence n'est nécessaire.
 
-### Architecture proposée 49.4
+### Architecture intégrée 49.4
 
 Une projection dédiée `PaperObservabilityReport` est ajoutée au-dessus de l'historique économique canonique et des audits persistés :
 
@@ -55,7 +55,7 @@ PaperAnalyticsReport
 
 La projection est attachée additivement à `EconomicHistoryResponse.observability`. Aucun nouvel endpoint n'est créé.
 
-### Métriques proposées
+### Métriques intégrées
 
 - breakdowns `TOTAL`, `SPOT`, `PERPETUAL` ;
 - funnel Agent -> Risk -> exécution ;
@@ -70,11 +70,11 @@ La projection est attachée additivement à `EconomicHistoryResponse.observabili
 
 Le P&L brut/net global est copié du rapport canonique et ne change pas.
 
-Le patch **n'attribue pas** `gross_pnl` ou `net_pnl` entre SPOT et PERPETUAL car la persistence actuelle ne fournit pas une décomposition historique exacte des variations d'equity par type de marché. Ces champs restent `null` pour les breakdowns SPOT/PERP.
+Le Batch 49.4 **n'attribue pas** `gross_pnl` ou `net_pnl` entre SPOT et PERPETUAL car la persistence actuelle ne fournit pas une décomposition historique exacte des variations d'equity par type de marché. Ces champs restent `null` pour les breakdowns SPOT/PERP.
 
 Le funding conserve la convention existante : négatif = coût, positif = bénéfice. La ventilation PERPETUAL réutilise le funding canonique global ; la ventilation par marché combine funding réalisé des fills et `cumulative_funding` terminal lorsque cette attribution est disponible. Un funding SPOT non nul est rejeté comme incohérence de données.
 
-### UI proposée
+### UI intégrée
 
 Le cockpit Historique ajoute :
 
@@ -85,19 +85,22 @@ Le cockpit Historique ajoute :
 
 Le frontend ne recalcule aucun P&L ni coût.
 
-### Validation réalisée dans le sandbox de livraison
+### Validation intégrée
 
 ```text
-python -m py_compile des fichiers backend 49.4 : PASS
-frontend node test ciblé 49.4                 : PASS — 3/3
-backend pytest ciblé 49.4                     : collecte impossible dans le sandbox partiel
+backend python -m pytest -q : PASS — 1195 passed, 2 warnings
+frontend pnpm typecheck     : PASS
+frontend pnpm test          : PASS — 89/89
+git diff --check            : PASS — avertissements LF/CRLF uniquement
+git status --short          : PASS — working tree propre après push
+push GitHub main            : PASS — 2e552cb
 ```
 
-La suite complète backend et les validations frontend `pnpm` restent à exécuter après extraction dans le repository complet.
+Les warnings Node `MODULE_TYPELESS_PACKAGE_JSON` restent non bloquants.
 
 ## ADR-366 — L'observabilité 49.4 est une projection dédiée au-dessus des sources canoniques
 
-**PROPOSÉ DANS LE PATCH 49.4 — NON INTÉGRÉ À LA LIVRAISON.**
+**ADOPTÉ — Batch 49.4 intégré via `2e552cb`.**
 
 Options comparées :
 
@@ -110,7 +113,7 @@ Motifs : aucune duplication du ledger, aucune migration, source de vérité inch
 
 ## ADR-367 — Le P&L brut/net par type reste indisponible sans attribution causale exacte
 
-**PROPOSÉ DANS LE PATCH 49.4 — NON INTÉGRÉ À LA LIVRAISON.**
+**ADOPTÉ — Batch 49.4 intégré via `2e552cb`.**
 
 `TOTAL.gross_pnl` et `TOTAL.net_pnl` restent canoniques. `SPOT` et `PERPETUAL` exposent `null` pour ces deux champs tant qu'une attribution exacte n'est pas disponible dans les faits durables.
 
@@ -118,19 +121,19 @@ Aucune répartition résiduelle, proportionnelle au notionnel, aux coûts ou à 
 
 ## ADR-368 — Décisions, intents, fills et trades sont des compteurs distincts
 
-**PROPOSÉ DANS LE PATCH 49.4 — NON INTÉGRÉ À LA LIVRAISON.**
+**ADOPTÉ — Batch 49.4 intégré via `2e552cb`.**
 
 Un HOLD ou un REJECT reste une décision. Un intent sans fill n'est pas un trade. Plusieurs fills d'un intent restent distincts du nombre d'opérations économiques. Les cycles FAILED ne contribuent pas aux fills économiquement engagés.
 
 ## ADR-369 — L'identité d'observabilité est `(symbol, market_type)`
 
-**PROPOSÉ DANS LE PATCH 49.4 — NON INTÉGRÉ À LA LIVRAISON.**
+**ADOPTÉ — Batch 49.4 intégré via `2e552cb`.**
 
 `BTC/USD SPOT` et `BTC/USD PERPETUAL` ne sont jamais fusionnés dans une même ligne de marché.
 
 ## ADR-370 — L'observabilité 49.4 ne peut pas modifier la stratégie
 
-**PROPOSÉ DANS LE PATCH 49.4 — NON INTÉGRÉ À LA LIVRAISON.**
+**ADOPTÉ — Batch 49.4 intégré via `2e552cb`.**
 
 Les résultats 49.4 ne modifient aucun poids Radar/Analytics, aucune décision Agent, aucun paramètre Risk et aucun ordre Broker. Une adaptation future éventuelle devra faire l'objet d'une décision et d'un batch séparés.
 

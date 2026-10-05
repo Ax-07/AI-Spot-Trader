@@ -1,19 +1,20 @@
 # 00 — État actuel
 
-## Référence de reprise — Batch 49.4 préparé
+## Référence de reprise — Batch 49.4 intégré
 
 ```text
 Repository                         : Ax-07/AI-Spot-Trader
 Branche                            : main
-HEAD GitHub audité 49.4            : e7d605aa2b6393516c0ccd391cd4d11193c18671
-Commit HEAD                        : docs: close batch 49.3 integration
-Batch 49.3 fonctionnel             : d08cd31e6a795a8beb09530c2bc9a3f32f94fe35
-Batch 49.4                         : PATCH PROPOSÉ — NON INTÉGRÉ À GITHUB
+Base auditée au démarrage 49.4      : e7d605aa2b6393516c0ccd391cd4d11193c18671
+HEAD GitHub vérifié à la clôture   : 2e552cbaf1b8ffcae9244c1fb472f1ee8fb0f193
+Commit HEAD                        : feat: add paper trading observability
+Batch 49.3                         : INTÉGRÉ SUR GITHUB main via d08cd31
+Batch 49.4                         : INTÉGRÉ SUR GITHUB main via 2e552cb
 ```
 
-Le commit `e7d605a` ne change que la clôture documentaire de 49.3 ; l'état fonctionnel intégré reste celui de `d08cd31`.
+Le Batch 49.4 est intégré sur `main` via `2e552cb`. La documentation de reprise est alignée sur cet état fonctionnel intégré.
 
-## État proposé par le Batch 49.4
+## État fonctionnel intégré par le Batch 49.4
 
 Le pipeline de trading reste inchangé :
 
@@ -64,14 +65,15 @@ Les P&L réalisés, coûts, funding, notionnels et expositions attribuables rest
 - aucun look-ahead ni recalibration post-hoc ;
 - aucun secret versionné.
 
-## Validation du patch 49.4 dans cette livraison
+## Validation intégrée du Batch 49.4
 
 ```text
-python -m py_compile des fichiers backend 49.4 : PASS
-frontend test ciblé 49.4                         : PASS — 3/3
-backend pytest ciblé 49.4                        : NON VALIDÉ — collecte impossible dans le sandbox partiel
-suite backend complète                           : À EXÉCUTER LOCALEMENT
-frontend pnpm typecheck / test complet           : À EXÉCUTER LOCALEMENT
+backend python -m pytest -q : PASS — 1195 passed, 2 warnings
+frontend pnpm typecheck     : PASS
+frontend pnpm test          : PASS — 89/89
+git diff --check            : PASS — avertissements LF/CRLF uniquement
+git status --short          : PASS — working tree propre après push
+push GitHub main            : PASS — 2e552cb
 ```
 
-Le Batch 49.4 reste un patch local proposé tant qu'il n'a pas été extrait, validé dans le repository complet puis commité/poussé explicitement par l'utilisateur.
+Les warnings Node `MODULE_TYPELESS_PACKAGE_JSON` observés pendant `pnpm test` sont non bloquants. Aucun changement global de `package.json` n'est requis pour la clôture 49.4.
