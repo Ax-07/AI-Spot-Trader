@@ -1,18 +1,18 @@
 # 00 — État actuel
 
-## Référence de reprise — Batch 47.5 intégré
+## Référence de reprise — Batch 48 préparé sur Batch 47.5 intégré
 
 ```text
-Repository                       : Ax-07/AI-Spot-Trader
-Branche                          : main
-Base GitHub auditée pour clôture : d988de42dd684b597a78a6ce1d6d32a86147bf37
-Batch 47.4 fonctionnel           : 472f3ad — feat: add CVD and aggressor analytics
-Clôture documentaire Batch 47.4 : e972fd9 — docs: mark batch 47.4 integrated
-Batch 47.5 fonctionnel           : d988de4 — feat: add bounded multi-analytics radar ranking
-Batch 47.5                       : INTÉGRÉ ET VALIDÉ LOCALEMENT
+Repository                         : Ax-07/AI-Spot-Trader
+Branche                            : main
+HEAD GitHub audité au démarrage    : 4278a5c732b9636b06144ff58e8485b3350a2c0d
+HEAD GitHub                        : docs: mark batch 47.5 integrated
+Batch 47.5 fonctionnel             : d988de4 — feat: add bounded multi-analytics radar ranking
+Batch 47.5                         : INTÉGRÉ ET VALIDÉ LOCALEMENT
+Batch 48                           : PATCH PROPOSÉ — NON INTÉGRÉ À GITHUB À LA LIVRAISON
 ```
 
-Le **Batch 47.5 est intégré sur GitHub `main` via `d988de4`**. L'arbre local utilisateur était propre immédiatement après le push (`git status --short` vide) et `origin/main` pointait sur le même commit.
+Le HEAD GitHub réel a été revérifié avant le Batch 48 et correspondait exactement à `4278a5c732b9636b06144ff58e8485b3350a2c0d`.
 
 ## Radar intégré jusqu'au Batch 47.5
 
@@ -37,46 +37,9 @@ catalogue Kraken
 -> cockpit
 ```
 
-## Infrastructure Analytics canonique
+## Ranking Analytics intégré — Batch 47.5
 
-Les cinq séries historiques restent :
-
-```text
-open-interest
-funding
-liquidation-volume
-cvd
-aggressor-differential
-```
-
-Elles partagent toujours exactement :
-
-```text
-1 PerpetualAnalyticsScanner
-1 _perpetual_analytics_cursor
-1 _cache
-1 sémaphore global
-1 PerpetualAnalyticsPolicy
-```
-
-Policy réseau inchangée :
-
-```text
-market_limit_per_refresh = 10
-cache_ttl_seconds        = 3600
-history_interval_seconds = 3600
-history_lookback_seconds = 172800
-fetch_concurrency        = 4
-baseline_periods         = 12
-```
-
-Budget théorique maximal : **5 séries × 10 marchés = 50 appels Analytics par refresh**.
-
-## Batch 47.5 — décision intégrée
-
-La famille retenue est un **score multi-analytics séparé, plafonné et explicable**, et non un bonus injecté dans `interest_level`.
-
-Score :
+Score inchangé dans le Batch 48 :
 
 ```text
 OPEN_INTEREST       : 0 ou +1
@@ -86,20 +49,9 @@ ORDER_FLOW          : 0 ou +1
 TOTAL               : 0..4
 ```
 
-Règles intégrées :
+CVD + Aggressor Differential restent une seule famille `ORDER_FLOW`.
 
-- disponibilité seule ne rapporte aucun point ;
-- seules les caractéristiques déjà validées par 47.2–47.4 peuvent contribuer ;
-- séries absentes, `PARTIAL`, `INSUFFICIENT_HISTORY`, `STALE`, `TECHNICAL_ERROR` ou `NOT_APPLICABLE` = 0 sans pénalité ;
-- les anomalies signées positives/négatives sont symétriques pour **l'attention**, jamais interprétées comme BUY/SELL ;
-- CVD + Aggressor Differential appartiennent à une seule famille `ORDER_FLOW` ;
-- concordance CVD/Aggressor = +1 maximum et déduplication diagnostiquée ;
-- opposition simultanée = 0 pour `ORDER_FLOW` et conflit diagnostiqué ;
-- aucun changement de `interest_level` ;
-- aucun changement de `candidate_limit` ;
-- aucune création ou suppression de candidat par Analytics.
-
-Hiérarchie PERPETUAL :
+Hiérarchie PERPETUAL inchangée :
 
 ```text
 interest_level
@@ -109,13 +61,56 @@ interest_level
 -> symbole déterministe
 ```
 
-Scopes :
+Scopes inchangés :
 
 - `SPOT` : classement inchangé ;
-- `PERPETUAL` : réordonnancement possible entre PERP déjà retenus ;
-- `ALL` : positions SPOT figées ; seuls les slots PERP peuvent être réordonnés entre eux.
+- `PERPETUAL` : réordonnancement possible uniquement entre PERP déjà retenus ;
+- `ALL` : positions SPOT figées, seuls les slots PERP peuvent être réordonnés entre eux.
 
-Le diagnostic additif `analytics_ranking` expose notamment le score `0..4`, les composantes, les séries retenues/non retenues, la déduplication/conflit order-flow, le rang avant/après et `rank_change`.
+## Batch 48 — observabilité du comportement réel
+
+Le patch Batch 48 ajoute une agrégation **read-only, descriptive et causale** du ranking Analytics sans toucher à sa logique.
+
+Décision architecturale : réutiliser l'historique Radar process-local déjà borné, au lieu d'ajouter une seconde `deque` ou une nouvelle persistence.
+
+Avec la policy par défaut :
+
+```text
+refresh_seconds = 300
+history_limit   = 96
+```
+
+la profondeur nominale maximale est d'environ huit heures tant que le backend reste actif.
+
+Nouvelle route additive :
+
+```text
+GET /api/v1/market-attention/observability?limit=96
+```
+
+Schéma :
+
+```text
+analytics-ranking-observability-v1
+```
+
+Métriques principales :
+
+- distribution score `0..4` ;
+- contribution réelle des quatre familles ;
+- santé des cinq séries par statut ;
+- snapshots où le reranking est applicable/effectif/sans mouvement ;
+- candidats montés/descendus/inchangés ;
+- distribution exacte de `rank_change` et moyenne/max de `abs(rank_change)` ;
+- déduplications et conflits CVD/Aggressor ;
+- PERP sans aucune série `AVAILABLE` ;
+- ventilation SPOT/PERPETUAL/ALL ;
+- couverture descriptive par marché ;
+- fenêtre temporelle et taille d'échantillon explicites.
+
+Le cockpit reçoit un dock compact séparé qui lit uniquement cette route backend. Fermer le frontend n'affecte pas le moteur ni l'historique backend.
+
+Limite assumée : l'historique Radar n'est pas durable. Un redémarrage backend remet la fenêtre d'observation à zéro. Aucune nouvelle base/table n'est ajoutée silencieusement.
 
 ## Invariants préservés
 
@@ -126,30 +121,30 @@ Le diagnostic additif `analytics_ranking` expose notamment le score `0..4`, les 
 - PAPER ;
 - exécution SPOT uniquement ;
 - aucune exécution PERPETUAL ;
-- frais/spread/slippage conservés ;
-- journalisation des décisions ;
+- score Analytics `0..4` inchangé ;
+- aucun changement de `interest_level` ;
+- aucun changement de `candidate_limit` ;
+- aucune création/suppression de candidat par Analytics ;
 - aucun secret versionné ;
 - aucun look-ahead ;
 - aucune optimisation post-hoc sur le P&L.
 
-## Validation finale Batch 47.5
+## Validation Batch 48 à la livraison du patch
 
-Validation locale utilisateur exécutée après extraction du patch et avant intégration :
+Exécuté par ChatGPT sur le sous-ensemble autonome du nouveau module :
 
 ```text
-git diff --check       : PASS — aucun défaut whitespace ; avertissements LF -> CRLF uniquement
-python -m pytest -q    : PASS — suite backend complète à 100 %
-pnpm typecheck         : PASS
-pnpm test              : PASS — 86/86
-git status --short     : propre après push
-git log -1 --oneline   : d988de4 feat: add bounded multi-analytics radar ranking
+python -m pytest -q tests/test_market_attention_batch48_analytics_observability.py
+12 passed
 ```
 
-Warnings observés mais non bloquants :
+Les validations repository complètes restent à exécuter après extraction dans le clone utilisateur :
 
-- dépréciations `fastapi/starlette` dans les dépendances de test ;
-- `MODULE_TYPELESS_PACKAGE_JSON` côté Node lors des tests TypeScript.
+```text
+python -m pytest -q
+pnpm typecheck
+pnpm test
+git diff --check
+```
 
-Aucun de ces warnings n'a provoqué d'échec et aucun correctif hors périmètre n'a été ajouté silencieusement.
-
-Voir `docs/47_5_MULTI_ANALYTICS_RANKING.md`.
+Voir `docs/48_OBSERVABILITE_RANKING_ANALYTICS.md`.

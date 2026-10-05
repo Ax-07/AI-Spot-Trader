@@ -7,6 +7,10 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
 
 from ai_spot_trader.market.attention import MarketAttentionOverview, RadarStatus
+from ai_spot_trader.market.attention_analytics_observability import (
+    AnalyticsRankingObservability,
+    build_analytics_ranking_observability,
+)
 from ai_spot_trader.market.attention_filters import MarketAttentionOverviewV6
 from ai_spot_trader.market.attention_microstructure import MarketAttentionOverviewV3
 from ai_spot_trader.market.attention_perpetual_analytics import (
@@ -139,6 +143,18 @@ async def market_attention_history(
     return MarketAttentionHistoryResponse(
         items=tuple(_as_public(item) for item in service.history(limit=limit))
     )
+
+
+@router.get("/observability", response_model=AnalyticsRankingObservability)
+async def market_attention_analytics_observability(
+    request: Request,
+    limit: int = Query(default=96, ge=1, le=96),
+) -> AnalyticsRankingObservability:
+    """Describe recent Analytics ranking behavior from the Radar's bounded causal history."""
+
+    service = _service(request)
+    history = () if service is None else service.history(limit=limit)
+    return build_analytics_ranking_observability(history, requested_limit=limit)
 
 
 def _as_public(
