@@ -118,6 +118,7 @@ class CycleAuditDetail:
     decision_plan_input: JsonObject | None = None
     decision_plan: JsonObject | None = None
     decision_results: tuple[DecisionExecutionAuditItem, ...] = ()
+    strategic_thesis_state: tuple[JsonObject, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -504,6 +505,18 @@ def _json_list(value: list[dict[str, object]] | None) -> tuple[JsonObject, ...]:
     return tuple(dict(item) for item in value)
 
 
+def _optional_json_list(
+    value: list[dict[str, object]] | None,
+    *,
+    field: str,
+) -> tuple[JsonObject, ...] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise AuditDataIntegrityError(f"{field} must be an array of objects")
+    return tuple(dict(item) for item in value)
+
+
 def _failure(record: CycleRecord) -> CycleFailureView | None:
     if record.failure_stage is None and record.failure_error_type is None:
         return None
@@ -631,6 +644,10 @@ def _cycle_detail(record: CycleRecord) -> CycleAuditDetail:
         decision_plan_input=_json(record.decision_plan_input_payload),
         decision_plan=_json(record.decision_plan_payload),
         decision_results=decision_results,
+        strategic_thesis_state=_optional_json_list(
+            record.strategic_thesis_state_payload,
+            field="strategic thesis state payload",
+        ),
     )
 
 

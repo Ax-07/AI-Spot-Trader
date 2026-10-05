@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from ai_spot_trader.api.economic_history_schemas import EconomicHistoryResponse
 from ai_spot_trader.api.paper_observability_schemas import PaperObservabilityResponse
 from ai_spot_trader.api.schemas import PaperAnalyticsResponse
+from ai_spot_trader.api.strategic_thesis_schemas import StrategicThesisObservabilityResponse
 from ai_spot_trader.core.runtime import AppRuntime
 from ai_spot_trader.economic_history import (
     EconomicHistoryDataError,
@@ -23,12 +24,18 @@ from ai_spot_trader.persistence.query import (
     AuditDataIntegrityError,
     AuditSortOrder,
     AuditStoreUnavailableError,
+    CycleAuditDetail,
+    CycleAuditSummary,
     RunScopedCycleAuditReader,
 )
 from ai_spot_trader.persistence.runs import (
     PaperRunNotFoundError,
     PaperRunStoreUnavailableError,
     PaperRunView,
+)
+from ai_spot_trader.strategic_thesis_observability import (
+    StrategicThesisObservabilityDataError,
+    project_strategic_thesis_observability,
 )
 
 router = APIRouter(prefix="/api/v1", tags=["analytics"])
@@ -143,6 +150,47 @@ async def economic_history(
         ) from exc
 
 
+@router.get("/strategic-theses", response_model=StrategicThesisObservabilityResponse)
+async def strategic_theses(
+    request: Request,
+    paper_run_id: Annotated[UUID | None, Query()] = None,
+    history_limit: Annotated[int, Query(ge=0, le=200)] = 100,
+) -> StrategicThesisObservabilityResponse:
+    """Expose the persisted 50.1 thesis memory without changing trading behavior."""
+
+    resolved_run_id = _resolved_run_id(request, paper_run_id)
+    try:
+        lineage, _summaries, details = await _lineage_audit_history(
+            request,
+            resolved_run_id,
+        )
+        report = project_strategic_thesis_observability(
+            paper_run_id=resolved_run_id,
+            cycles=details,
+            lineage=lineage,
+            history_limit=history_limit,
+        )
+        return StrategicThesisObservabilityResponse.model_validate(
+            report,
+            from_attributes=True,
+        )
+    except PaperRunNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="PAPER run not found",
+        ) from exc
+    except (AuditStoreUnavailableError, PaperRunStoreUnavailableError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="strategic thesis store is unavailable",
+        ) from exc
+    except (AuditDataIntegrityError, StrategicThesisObservabilityDataError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="strategic thesis data is unavailable",
+        ) from exc
+
+
 @router.get("/economic-history/export")
 async def export_economic_history(
     request: Request,
@@ -161,6 +209,39 @@ async def _economic_history_response(
     request: Request,
     paper_run_id: UUID,
 ) -> EconomicHistoryResponse:
+    analytics = await _analytics_report(request, paper_run_id)
+    lineage, summaries, details = await _lineage_audit_history(request, paper_run_id)
+
+    report = project_economic_history(
+        paper_run_id=paper_run_id,
+        analytics=analytics,
+        cycles=details,
+        cycle_summaries=summaries,
+        lineage=lineage,
+    )
+    observability = project_paper_observability(
+        history=report,
+        cycles=details,
+    )
+    response = EconomicHistoryResponse.model_validate(report, from_attributes=True)
+    return response.model_copy(
+        update={
+            "observability": PaperObservabilityResponse.model_validate(
+                observability,
+                from_attributes=True,
+            )
+        }
+    )
+
+
+async def _lineage_audit_history(
+    request: Request,
+    paper_run_id: UUID,
+) -> tuple[
+    tuple[PaperRunView, ...],
+    tuple[CycleAuditSummary, ...],
+    tuple[CycleAuditDetail, ...],
+]:
     runtime = _runtime(request)
     audit_reader = runtime.audit_reader
     paper_run_reader = runtime.paper_run_reader
@@ -175,11 +256,9 @@ async def _economic_history_response(
             detail="PAPER run store is not configured",
         )
 
-    analytics = await _analytics_report(request, paper_run_id)
     lineage = await _paper_run_lineage(paper_run_reader, paper_run_id)
-
-    summaries = []
-    details = []
+    summaries: list[CycleAuditSummary] = []
+    details: list[CycleAuditDetail] = []
     for run in lineage:
         offset = 0
         while True:
@@ -200,27 +279,7 @@ async def _economic_history_response(
             offset += len(page.items)
             if offset >= page.total or not page.items:
                 break
-
-    report = project_economic_history(
-        paper_run_id=paper_run_id,
-        analytics=analytics,
-        cycles=tuple(details),
-        cycle_summaries=tuple(summaries),
-        lineage=lineage,
-    )
-    observability = project_paper_observability(
-        history=report,
-        cycles=tuple(details),
-    )
-    response = EconomicHistoryResponse.model_validate(report, from_attributes=True)
-    return response.model_copy(
-        update={
-            "observability": PaperObservabilityResponse.model_validate(
-                observability,
-                from_attributes=True,
-            )
-        }
-    )
+    return lineage, tuple(summaries), tuple(details)
 
 
 async def _paper_run_lineage(

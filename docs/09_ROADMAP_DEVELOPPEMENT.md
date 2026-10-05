@@ -5,16 +5,18 @@
 ```text
 Repository                  : Ax-07/AI-Spot-Trader
 Branche                     : main
-HEAD GitHub de base 50.1    : 8a0054091c39079dfc5d2c5a9504470b2fbf9493
-Clôture documentaire 49.4   : 8a005409
-Batch 49.4 fonctionnel      : intégré via 2e552cb
-Batch 49.3 fonctionnel      : intégré via d08cd31
-Batch 49.2                  : intégré via f0d4f94
+HEAD GitHub vérifié 50.2    : ebb859c4ed83aada1c0bf3edf17ece85336849b9
 Batch 49.1                  : intégré via 3194fce
-Batch 50.1                  : patch livré, validation/intégration à faire
+Batch 49.2                  : intégré via f0d4f94
+Batch 49.3                  : intégré via d08cd31
+Batch 49.4                  : intégré via 2e552cb
+Batch 50.1                  : intégré via ebb859c4
+Batch 50.2                  : patch livré, validation/intégration à faire
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
+
+État intégré 50.1 communiqué lors de sa clôture : `1217 passed, 2 warnings`, migration PostgreSQL `0008_strategic_thesis_state` appliquée, working tree propre après push.
 
 ## Invariants de roadmap
 
@@ -22,7 +24,7 @@ AI Spot Trader conserve :
 
 - un seul Agent IA stratégique ;
 - Kraken comme exchange initial ;
-- Risk Engine comme autorité finale ;
+- Risk Engine déterministe comme autorité finale ;
 - backend indépendant du frontend ;
 - PAPER avant tout LIVE ;
 - exécution PAPER SPOT + PERPETUAL Kraken linéaire ;
@@ -30,25 +32,27 @@ AI Spot Trader conserve :
 - LONG/SHORT PERPETUAL autorisés sous contrôle Risk ;
 - FUTURE daté non exécutable ;
 - aucune sortie LLM directement exécutable ;
+- aucune seconde décision LLM pour la mémoire ou l'observabilité ;
 - aucun secret versionné ;
-- aucune optimisation post-hoc ;
-- aucune mémoire stratégique opaque du LLM : les continuités de position doivent être des faits applicatifs typés et auditables.
+- aucun look-ahead ni adaptation post-hoc ;
+- mémoire stratégique typée, causale et durable, jamais opaque ;
+- observabilité strictement read-only, sans rétroaction sur Agent/Risk/Broker.
 
-Le Market Attention Radar est un **outil de priorisation d'attention** : depuis 49.2 il choisit l'univers candidat ; depuis 49.3 il peut fournir des faits descriptifs causaux au même Agent. Il n'est jamais un moteur BUY/SELL/HOLD ni une autorité Risk.
+Le Market Attention Radar reste un **outil de priorisation d'attention**. Il choisit l'univers candidat et fournit des faits descriptifs causaux au même Agent, sans devenir un moteur BUY/SELL/HOLD ni une autorité Risk.
 
 ## État intégré récent
 
 ### Batch 45 — Structure en amont
 
-**Intégré via `45d41b7`.** Rotation/cache Structure séparés, événements BOS/CHOCH, filtres tendance/Structure et `UNKNOWN` fail-closed. Contrat `market-attention-radar-v6` conservé.
+**Intégré via `45d41b7`.** Rotation/cache Structure séparés, BOS/CHOCH, filtres tendance/Structure et `UNKNOWN` fail-closed.
 
 ### Batch 46 / 46.1 — baseline adaptative
 
-**Intégré via `b219365`.** Médiane + MAD normalisé, cible 12 périodes et fallback ratio uniquement pour les métriques où cette sémantique est justifiée.
+**Intégré via `b219365`.** Médiane + MAD normalisé, cible 12 périodes et fallback ratio uniquement lorsque cette sémantique est valide.
 
 ### Batch 47.1 — fondations Futures ticker
 
-**Intégré via `842e6bd7`.** Snapshot bulk `/tickers` partagé pour volume/liquidité/contexte Futures, sans impact stratégique à ce stade historique.
+**Intégré via `842e6bd7`.** Snapshot bulk `/tickers` partagé pour volume/liquidité/contexte Futures.
 
 ### Batch 47.2 — historique Open Interest
 
@@ -56,244 +60,73 @@ Le Market Attention Radar est un **outil de priorisation d'attention** : depuis 
 
 ### Batch 47.3 — Funding historique + Liquidation Volume
 
-**Intégré via `12051a7`.** Funding relatif signé et Liquidation Volume agrégé réutilisent le même scanner Analytics.
+**Intégré via `12051a7`.** Funding relatif signé et Liquidation Volume agrégé sur le scanner Analytics commun.
 
 ### Batch 47.4 — CVD + Aggressor Differential
 
-**Intégré via `472f3ad`, clôturé documentairement via `e972fd9`.** CVD sur variation, Aggressor signé, MAD robuste, aucun fallback ratio pour les séries signées. Cinq séries partagent le même scanner/cache/cursor/sémaphore.
+**Intégré via `472f3ad`, clôturé via `e972fd9`.** CVD/Aggressor signés, MAD robuste, aucun fallback ratio pour séries signées.
 
-### Batch 47.5 — influence multi-analytics bornée sur le ranking
+### Batch 47.5 — influence multi-analytics bornée
 
-**Intégré via `d988de4`, clôturé documentairement via `4278a5c`.**
-
-Décision architecturale :
-
-```text
-score séparé 0..4
-= OI 0/1
-+ Funding 0/1
-+ Liquidations 0/1
-+ Order Flow 0/1
-```
-
-CVD et Aggressor Differential forment une seule composante `ORDER_FLOW`. Ils ne peuvent jamais fournir +2.
-
-Règles intégrées :
-
-- score calculé uniquement sur les PERP déjà retenus ;
-- `interest_level` inchangé ;
-- `candidate_limit` inchangé ;
-- aucune création/suppression de candidat ;
-- données absentes/dégradées neutres ;
-- signes positifs/négatifs symétriques pour l'attention ;
-- priorité : intérêt -> Structure -> Analytics -> reste de la clé ;
-- `SPOT` inchangé ;
-- en `ALL`, positions SPOT figées ;
-- contrat API v6 étendu additivement ;
-- diagnostics cockpit explicites ;
-- aucun impact direct Agent/Risk/Broker dans ce batch historique.
-
-Voir `docs/47_5_MULTI_ANALYTICS_RANKING.md`.
+**Intégré via `d988de4`, clôturé via `4278a5c`.** Score d'attention `0..4` avec quatre familles OI/Funding/Liquidations/Order Flow ; aucune création de candidat ni autorité directionnelle.
 
 ### Batch 48 — observabilité du ranking Analytics
 
-**Intégré fonctionnellement via `ebb664c`, clôturé documentairement via `8704eec`.**
+**Intégré via `ebb664c`, clôturé via `8704eec`.** Agrégation read-only à la demande, aucun nouveau store et aucune rétroaction sur le ranking.
 
-Objectif : mesurer le comportement réel du ranking 47.5 avant toute nouvelle pondération ou toute exposition à l'Agent.
-
-Décision architecturale intégrée :
-
-```text
-historique Radar borné existant
--> agrégation read-only à la demande
--> endpoint observability dédié
--> cockpit compact
-```
-
-Pas de nouvelle persistence et pas de second buffer. La persistence SQL actuelle reste réservée à ses responsabilités PAPER/audit économique.
-
-Mesures intégrées :
-
-- distribution score `0..4` ;
-- contribution des quatre familles ;
-- statuts des cinq séries ;
-- fréquence de reranking applicable/effectif ;
-- snapshots applicables sans mouvement ;
-- distribution exacte de `rank_change`, moyenne et maximum de `abs(rank_change)` ;
-- candidats montés/descendus/inchangés ;
-- déduplications et conflits CVD/Aggressor ;
-- PERP sans Analytics exploitable ;
-- ventilation par scope ;
-- couverture descriptive par marché ;
-- fenêtre et taille d'échantillon explicites.
-
-Route additive :
+Route intégrée :
 
 ```text
 GET /api/v1/market-attention/observability?limit=96
 ```
 
-Le score, l'admission, `interest_level`, `candidate_limit`, Agent, Risk et Broker n'ont pas été modifiés par le Batch 48.
+### Batch 49.1 — activation officielle du PERPETUAL PAPER
 
-Voir `docs/48_OBSERVABILITE_RANKING_ANALYTICS.md`.
+**Intégré via `3194fce`.** Univers PAPER SPOT + PERPETUAL linéaire, LONG/SHORT dérivés, levier/marge/exposition contrôlés par Risk, `DerivativePosition`, funding et P&L.
 
-## Batch 49.1 — activation officielle du PERPETUAL PAPER
+Règle critique : aucun retournement direct ne contourne `reduce_only`/Risk.
 
-**Intégré via `3194fce`.**
+### Batch 49.2 — Radar shortlist -> univers Agent
 
-La majorité de la capacité était déjà présente et testée avant le batch :
-
-- univers `ExecutableMarket` typé SPOT/PERPETUAL ;
-- routage marché exécutable SPOT/derivatives ;
-- JSON Schema Agent conservant `market_type` ;
-- `RiskEngine` dérivés linéaires ;
-- levier/marge/caps/buffer liquidation déterministes ;
-- `PaperBroker` PERPETUAL ;
-- ledger LONG/SHORT, funding, P&L et liquidation théorique ;
-- Market Discovery capable de conserver `PERPETUAL` ;
-- configuration/cockpit capables de représenter les paramètres dérivés.
-
-Le batch a officialisé l'invariant PAPER SPOT + PERPETUAL linéaire, aligné le contrat opérateur et ajouté la preuve d'intégration Agent -> Risk -> Broker -> `DerivativePosition`.
-
-### Règle de retournement 49.1
+**Intégré via `f0d4f94`.** Le Radar alimente la frontière canonique `MarketDiscoveryCoordinator`; le chemin de production n'effectue plus une deuxième sélection LLM de watchlist.
 
 ```text
-LONG + SELL surdimensionné  -> clamp/reject à la fermeture, jamais SHORT direct
-SHORT + BUY surdimensionné  -> clamp/reject à la fermeture, jamais LONG direct
-```
-
-Avec `risk_allow_quantity_reduction=true`, Risk borne la quantité à la position courante et émet `reduce_only=true`. Sinon l'ordre opposé surdimensionné est rejeté.
-
-## Batch 49.2 — Radar shortlist -> univers Agent SPOT + PERPETUAL
-
-**Intégré via `f0d4f94`.**
-
-Décision architecturale : **le Radar alimente la frontière canonique de Market Discovery**. Aucun second système de discovery et aucune deuxième shortlist ne sont créés.
-
-```text
-Market Attention Radar
--> shortlist finale bornée
--> extraction {symbol, market_type}
--> validation catalogue public Kraken + Campaign/Risk
--> DynamicMarketTradingCycleRunner
--> MultiMarketTradingCycleRunner canonique
+Radar
+-> shortlist bornée
+-> validation catalogue/configuration
+-> univers dynamique canonique
 -> même Agent stratégique
--> Risk
--> PaperBroker
 ```
 
-Le chemin dynamique de production n'appelle plus `OpenAIWatchlistSelector`. Le seul appel stratégique reste `generate_decision_plan(...)`.
+Les nouvelles ouvertures sont fail-closed si le Radar est indisponible/stale/vide/inexploitable. Les positions existantes restent gérables en MANAGEMENT.
 
-Règles 49.2 :
+### Batch 49.3 — contexte Radar / Analytics causal fourni à l'Agent
 
-- `BTC/USD SPOT` et `BTC/USD PERPETUAL` restent deux identités distinctes ;
-- seuls les marchés présents dans la shortlist Radar peuvent devenir de nouveaux candidats ;
-- quote incompatible, statut non tradable, marché absent du catalogue, type non activé, PERP non linéaire ou whitelist Risk incompatible => candidat rejeté ;
-- `FUTURE` reste rejeté par les contrats de domaine/policy ;
-- la frontière Discovery/audit persiste uniquement les identités Radar, pas les Analytics ;
-- aucune modification des poids Analytics ou recalibration ;
-- Radar ne touche ni Risk ni Broker.
+**Intégré via `d08cd31`, clôturé via `e7d605a`.** `RadarAnalyticsStrategicContext` strict, borné et causal ; même snapshot que Discovery ; aucun second appel Agent ; aucun changement Risk/Broker.
 
-### Mode dégradé 49.2
+Validation intégrée : `1189 passed, 2 warnings`, frontend typecheck/test PASS.
 
-Les nouvelles ouvertures sont **fail-closed** si le Radar est `ERROR`, `NOT_CONFIGURED`, `STALE`, trop ancien, si sa shortlist est vide ou si aucun candidat n'est exécutable. Le bootstrap n'est pas utilisé comme faux signal de remplacement.
+### Batch 49.4 — observabilité décisions et performances PAPER
 
-S'il existe des positions ouvertes, elles restent gérables en mode MANAGEMENT par la chaîne canonique, sans nouvelle exposition.
+**Intégré via `2e552cb`.** Projection read-only `PaperObservabilityReport` au-dessus de l'historique économique canonique : TOTAL/SPOT/PERP, funnel Agent/Risk/exécution, ventilation stricte `(symbol, market_type)` et métriques attribuables.
 
-Voir `docs/49_2_RADAR_AGENT_UNIVERSE.md`.
+Aucun P&L brut/net par type n'est fabriqué lorsque la persistence ne permet pas l'attribution causale exacte.
 
-## Batch 49.3 — contexte Radar / Analytics causal fourni à l'Agent
-
-**Intégré fonctionnellement via `d08cd31`, clôturé documentairement via `e7d605a`.**
-
-Décision architecturale : **contexte typé dédié C**.
-
-```text
-univers 49.2
--> vérification du même snapshot Radar
--> projection RadarAnalyticsStrategicContext bornée
--> filtrage final sur les market_states du plan
--> même appel generate_decision_plan(...)
--> Agent BUY / SELL / HOLD
--> Risk
--> PaperBroker
-```
-
-Faits retenus : activité/tendance/liquidité, microstructure SPOT compacte, Market Structure compacte, score Analytics 47.5 et faits OI/Funding/Liquidations/CVD/Aggressor pour PERPETUAL. Les statuts dégradés restent explicites ; SPOT reçoit `NOT_APPLICABLE` pour les Analytics Futures.
-
-Règles causales :
-
-- le snapshot utilisé pour la projection doit porter exactement le `radar_observed_at` de Discovery ;
-- tout timestamp imbriqué postérieur au snapshot est rejeté ;
-- le contexte ne peut pas postdater `CycleDecisionPlanInput.created_at` ;
-- un marché hors `market_states` est rejeté/filtré ;
-- aucun résultat futur, P&L futur ou recalibration post-hoc.
-
-Le score 47.5 reste `0..4` avec quatre familles. CVD et Aggressor restent une seule famille `ORDER_FLOW`.
-
-Aucune modification Risk/Broker, aucune seconde décision LLM et aucune migration.
-
-Voir `docs/49_3_AGENT_RADAR_ANALYTICS_CONTEXT.md`.
-
-## Validation intégrée du Batch 49.3
-
-```text
-backend python -m pytest -q : PASS — 1189 passed, 2 warnings
-frontend pnpm typecheck     : PASS
-frontend pnpm test          : PASS — 86/86
-git diff --check            : PASS — avertissements LF/CRLF uniquement
-git status --short          : PASS — working tree propre après push
-push GitHub main            : PASS — d08cd31
-```
-
-## Batch 49.4 — observabilité décisions et performances PAPER SPOT/PERP
-
-**Intégré via `2e552cb`.**
-
-Décision architecturale intégrée : **projection read-only dédiée au-dessus de `EconomicHistoryReport` et des audits persistés**, attachée à l'endpoint économique existant.
-
-```text
-faits PAPER persistés
--> PaperAnalyticsReport canonique
--> EconomicHistoryReport canonique
--> PaperObservabilityReport
--> /api/v1/economic-history
--> cockpit Historique
-```
-
-État intégré :
-
-- vue TOTAL / SPOT / PERPETUAL ;
-- funnel Agent -> Risk -> exécution ;
-- distinction décisions / intents / fills / trades ;
-- ventilation stricte `(symbol, market_type)` ;
-- coûts, funding, notionnel, P&L réalisé et exposition attribués uniquement lorsqu'ils sont déterminables ;
-- métriques indisponibles laissées à `null` au lieu d'être fabriquées.
-
-Le P&L brut/net par type de marché n'est volontairement pas attribué : les faits durables actuels ne permettent pas une décomposition exacte de l'equity globale entre SPOT et PERPETUAL. Le P&L global reste canonique et inchangé.
-
-Aucune nouvelle persistence, aucun nouvel endpoint, aucun changement Agent/Risk/Broker, aucun LIVE et aucune recalibration Analytics/Radar.
-
-Voir `docs/49_4_OBSERVABILITE_DECISIONS_PERFORMANCES_PAPER.md`.
-
-## Validation intégrée du Batch 49.4
-
-```text
-backend python -m pytest -q : PASS — 1195 passed, 2 warnings
-frontend pnpm typecheck     : PASS
-frontend pnpm test          : PASS — 89/89
-git diff --check            : PASS — avertissements LF/CRLF uniquement
-git status --short          : PASS — working tree propre après push
-push GitHub main            : PASS — 2e552cb
-```
+Validation intégrée : `1195 passed, 2 warnings`, frontend typecheck/test PASS.
 
 ## Batch 50.1 — mémoire de thèse stratégique des positions
 
-**Patch livré sur base `8a005409`; validation locale puis intégration à faire.**
+**Intégré via `ebb859c4ed83aada1c0bf3edf17ece85336849b9` (`feat: add persistent strategic thesis memory`).**
 
-Objectif : corriger le manque de continuité stratégique entre cycles sans ajouter de second Agent ni d'automatisme de trading.
+Validation intégrée communiquée :
 
-Architecture retenue : **Option C — extension additive des faits de cycle + projection canonique**.
+```text
+backend python -m pytest -q : PASS — 1217 passed, 2 warnings
+migration PostgreSQL        : 0008 strategic_thesis_state appliquée
+working tree après push     : propre
+```
+
+Architecture : extension additive des faits de cycle + projection canonique.
 
 ```text
 positions ouvertes
@@ -304,7 +137,7 @@ StrategicThesisContextDecisionProvider
         ↓
 même generate_decision_plan(...)
         ↓
-BUY / SELL / HOLD + thesis_update structurée
+BUY / SELL / HOLD + thesis_update
         ↓
 Risk -> PaperBroker
         ↓
@@ -313,32 +146,88 @@ commit cycle + portefeuille
 audit_cycles.strategic_thesis_state_payload
 ```
 
-Livrables 50.1 :
-
-- contrat de domaine `StrategicThesis*` ;
-- `strategic_position_context` dans `CycleDecisionPlanInput` ;
-- `thesis_updates` alignées avec les décisions du plan ;
-- schéma Structured Outputs enrichi dans le même appel Agent ;
-- snapshot actif persisté uniquement après cycle `COMPLETED` ;
-- recovery par lineage `paper_run` ;
-- état `UNAVAILABLE_LEGACY` sans reconstruction de rationale ;
-- migration `0008_strategic_thesis_state` ;
-- tests dédiés Batch 50.1 ;
-- documentation dédiée `docs/50_1_MEMOIRE_THESE_STRATEGIQUE.md`.
-
-Règles critiques :
+Règles intégrées :
 
 - nouvelle entrée sans fill / Risk REJECT => aucune thèse active ;
 - réduction partielle => thèse maintenue ;
-- fermeture complète => thèse retirée du snapshot actif mais audit conservé ;
+- fermeture complète => thèse retirée du snapshot actif, révision auditée ;
 - `INVALIDATED`/`COMPLETED` ne signifient jamais `SELL` automatique ;
-- un cycle `FAILED` ne corrompt pas le snapshot durable ;
-- aucun changement Risk/Broker ;
-- aucun frontend ajouté dans 50.1 ;
-- aucun Prompt Cache OpenAI dans ce batch.
+- cycle `FAILED` => aucun snapshot promu ;
+- legacy => `UNAVAILABLE_LEGACY`, sans reconstruction de rationale ;
+- recovery par lineage `paper_run` ;
+- aucun second Agent, aucun changement Risk/Broker.
 
-### Suite prévue
+Voir `docs/50_1_MEMOIRE_THESE_STRATEGIQUE.md`.
 
-Le Batch 50.2 reste séparé et **n'est pas démarré ici**. Il pourra traiter l'UI détaillée/historique des thèses après validation et intégration de 50.1.
+## Batch 50.2 — observabilité et cockpit des thèses stratégiques
 
-Le LIVE, l'authentification Kraken Futures privée et l'exécution réelle restent des décisions séparées et ultérieures.
+**Patch livré sur HEAD intégré `ebb859c4`; validation repository réelle puis intégration à faire.**
+
+Objectif : rendre visible la continuité stratégique de chaque position PAPER sans modifier le comportement de trading.
+
+Architecture retenue : **endpoint dédié read-only dans le routeur Analytics existant**.
+
+```text
+audit_cycles.strategic_thesis_state_payload
++ decision_plan_payload.thesis_updates
++ lineage paper_run
++ portefeuille durable
+        ↓
+StrategicThesisObservabilityReport
+        ↓
+GET /api/v1/strategic-theses
+        ↓
+cockpit Historique
+```
+
+Livrables 50.2 :
+
+- exposition active avec identité `(symbol, market_type, side)` ;
+- état `UNAVAILABLE_LEGACY` explicite ;
+- historique borné des révisions réellement persistées ;
+- distinction proposition Agent / Risk / fill / état actif commit ;
+- `PROPOSED_NOT_ACTIVATED` pour proposition durable non activée lorsque déterminable ;
+- `FAILED_CYCLE` visible sans promotion ;
+- conservation de la révision finale après fermeture ;
+- endpoint `/api/v1/strategic-theses` ;
+- section dédiée dans le cockpit Historique ;
+- aucun second store, aucune migration, aucun second LLM, aucune dépendance Risk/Broker dans le projecteur.
+
+Causalité : chaque révision est interprétée uniquement avec le snapshot précédent et celui du même cycle. Aucun état futur n'est utilisé pour requalifier une révision passée.
+
+Validation ChatGPT exécutée sur le patch :
+
+```text
+python -m py_compile                                          : PASS
+pytest ciblé projection 50.2 (contrats minimaux)             : PASS — 9 passed
+node --test strategic-theses.test.mjs                        : PASS — 3 passed
+tsc ciblé src/lib/strategic-theses.ts                        : PASS
+```
+
+À valider dans le repository réel avant intégration :
+
+```text
+python -m pytest -q
+cd frontend
+pnpm typecheck
+pnpm test
+cd ..
+git diff --check
+git status --short
+```
+
+Voir `docs/50_2_OBSERVABILITE_THESES_STRATEGIQUES.md`.
+
+## Suite après intégration 50.2
+
+Ne pas ouvrir automatiquement un nouveau chantier de stratégie. Observer d'abord le comportement réel des thèses dans des runs PAPER : qualité de continuité, fréquence des révisions, cohérence des invalidations, propositions non activées, fermetures et recovery.
+
+Les sujets suivants restent séparés et nécessitent une décision explicite :
+
+- Prompt Cache OpenAI / optimisation coûts LLM ;
+- nouvelle stratégie ou auto-tuning ;
+- recalibration Radar/Analytics ;
+- alertes automatiques liées aux statuts de thèse ;
+- stop-loss/take-profit algorithmique ;
+- LIVE ;
+- API Kraken Futures privée.

@@ -1,71 +1,75 @@
 # 00 — État actuel
 
-## Référence de reprise — Batch 50.1 livré, intégration à valider
+## Référence de reprise — Batch 50.2 patch livré, intégration locale à valider
 
 ```text
 Repository                         : Ax-07/AI-Spot-Trader
 Branche                            : main
-HEAD GitHub de base vérifié        : 8a0054091c39079dfc5d2c5a9504470b2fbf9493
-Commit HEAD de base                : docs: close batch 49.4 integration
-Dernier commit fonctionnel 49.4    : 2e552cbaf1b8ffcae9244c1fb472f1ee8fb0f193
-Batch 50.1                         : PATCH LIVRÉ — validation locale / intégration GitHub à faire
+HEAD GitHub vérifié                : ebb859c4ed83aada1c0bf3edf17ece85336849b9
+Commit HEAD                        : feat: add persistent strategic thesis memory
+Batch 50.1                         : INTÉGRÉ ET VALIDÉ
+Validation intégrée 50.1           : 1217 passed, 2 warnings
+Migration PostgreSQL 50.1          : 0008 strategic_thesis_state appliquée
+Batch 50.2                         : PATCH LIVRÉ — intégration/validation repository à faire
 ```
 
-Le Batch 50.1 part exclusivement de l'état intégré GitHub `main` ci-dessus. Il introduit une mémoire de thèse stratégique structurée pour les positions PAPER ouvertes, sans second Agent et sans modifier l'autorité du Risk Engine.
+Le Batch 50.1 est désormais la base intégrée. La mention précédente « patch livré / intégration à faire » était obsolète et est supprimée.
 
-## État fonctionnel cible après intégration 50.1
+## Batch 50.2 — observabilité des thèses stratégiques
+
+Le patch 50.2 ajoute une projection **read-only** de la mémoire stratégique existante, sans nouvelle persistence et sans modifier le pipeline de trading.
 
 ```text
-Radar / Analytics causal
-+ contexte multi-timeframes
-+ positions courantes
-+ mémoire de thèse active / état legacy explicite
+audit_cycles.strategic_thesis_state_payload
++ decision_plan_payload / thesis_updates
++ lineage paper_run
++ faits de cycle persistés
         ↓
-Agent stratégique unique — un seul generate_decision_plan(...)
+projection stratégique read-only
         ↓
-BUY / SELL / HOLD + création/révision structurée de thèse
+GET /api/v1/strategic-theses
         ↓
-Risk Engine déterministe
-        ↓
-PaperBroker
-        ↓
-cycle audité + portefeuille commités atomiquement
-        ↓
-projection durable des thèses encore actives
+cockpit Historique
 ```
 
-La source durable retenue est additive : `audit_cycles.strategic_thesis_state_payload` contient le snapshot canonique des thèses actives après chaque cycle `COMPLETED`. Les révisions proposées restent auditées dans `decision_plan_payload`. Un cycle `FAILED` ne promeut aucun nouvel état stratégique.
+Choix architectural : endpoint dédié dans le routeur Analytics existant. Le snapshot actif provient uniquement du dernier cycle `COMPLETED`; les révisions proviennent uniquement des `thesis_updates` persistées et sont évaluées contre l'état précédent et l'état du même cycle, jamais contre un futur snapshot.
 
-## Sémantique 50.1
+Sémantique opérateur :
 
-- statuts : `NEW`, `CONFIRMED`, `WEAKENING`, `INVALIDATED`, `COMPLETED` ;
-- `INVALIDATED` et `COMPLETED` ne déclenchent jamais automatiquement un `SELL` ;
-- une nouvelle thèse n'est activée qu'après exposition économique réellement ouverte par fill ;
-- `REJECT` Risk ou absence de fill sur une entrée => aucune thèse active ;
-- réduction partielle => thèse active conservée/révisée ;
-- fermeture complète => thèse retirée du snapshot actif mais historique d'audit conservé ;
-- position historique sans mémoire 50.1 => `UNAVAILABLE_LEGACY`, sans reconstruction depuis une ancienne rationale ;
-- recovery : lecture du dernier snapshot `COMPLETED`, puis suivi de `resumed_from_paper_run_id` si nécessaire.
+- `SPOT` / `PERPETUAL` et `LONG` / `SHORT` restent des identités distinctes ;
+- une position sans mémoire durable reste `UNAVAILABLE_LEGACY` ;
+- aucune ancienne `rationale` n'est reconstruite en thèse ;
+- une proposition rejetée peut apparaître en audit comme `PROPOSED_NOT_ACTIVATED`, jamais comme thèse active ;
+- `HOLD` peut être une revue sans exécution ;
+- une réduction partielle conserve la thèse si elle reste active ;
+- une fermeture complète retire la thèse active mais conserve la révision durable ;
+- un cycle `FAILED` n'est jamais promu comme état actif ;
+- `INVALIDATED`, `COMPLETED` et `WEAKENING` restent des qualifications de l'Agent et ne déclenchent aucune action automatique ;
+- Risk Engine déterministe reste l'autorité finale.
+
+## Validation du patch 50.2 dans l'environnement ChatGPT
+
+Exécuté réellement :
+
+```text
+python -m py_compile (fichiers Python du patch)                          : PASS
+pytest ciblé projection 50.2, environnement de contrats minimal         : PASS — 9 passed
+node --test --experimental-strip-types strategic-theses.test.mjs        : PASS — 3 passed
+tsc ciblé src/lib/strategic-theses.ts                                   : PASS
+```
+
+À exécuter dans le repository réel après extraction :
+
+```text
+python -m pytest -q
+cd frontend
+pnpm typecheck
+pnpm test
+cd ..
+git diff --check
+git status --short
+```
 
 ## Invariants inchangés
 
-- un seul Agent IA stratégique ;
-- PAPER uniquement ;
-- Kraken ;
-- SPOT + PERPETUAL linéaire ;
-- SPOT sans short, levier ni marge ;
-- PERPETUAL LONG/SHORT sous contrôle Risk ;
-- FUTURE daté non exécutable ;
-- aucun LIVE ni API Kraken Futures privée ;
-- Risk Engine déterministe = autorité finale ;
-- aucune sortie LLM directement exécutable ;
-- Radar = sélection/priorisation d'attention, jamais action ;
-- aucune règle déterministe d'entrée/sortie ajoutée ;
-- aucun hidden chain-of-thought ni transcript LLM persisté ;
-- aucun look-ahead ;
-- aucun secret versionné ;
-- frontend non requis par le moteur.
-
-## Validation du patch 50.1
-
-Dans l'environnement de livraison ChatGPT, les fichiers Python du patch sont compilés avec succès via `python -m py_compile`. La suite complète `python -m pytest -q`, Alembic sur la base locale et `git diff --check` doivent être exécutés après extraction dans le repository réel avant intégration.
+Un seul Agent IA stratégique ; Kraken ; PAPER uniquement ; SPOT + PERPETUAL linéaire ; SPOT sans short/levier/marge ; PERPETUAL LONG/SHORT sous contrôle Risk ; FUTURE daté non exécutable ; aucun LIVE ; aucune sortie LLM directement exécutable ; Radar informatif/priorisation uniquement ; aucun second Agent mémoire ; aucun second appel LLM d'observabilité ; aucun hidden chain-of-thought ; aucun secret versionné ; frontend non requis par le moteur.

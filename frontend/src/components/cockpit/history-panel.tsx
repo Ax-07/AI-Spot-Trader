@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { StrategicThesisSection } from "@/components/cockpit/strategic-thesis-section";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -577,6 +578,8 @@ export function HistoryPanel() {
       {reference.kind === "error" ? <div className="rounded-xl border border-destructive/30 bg-destructive-subtle p-4 text-sm text-destructive-subtle-foreground">{reference.message}</div> : null}
       {historyError ? <div className="rounded-xl border border-destructive/30 bg-destructive-subtle p-4 text-sm text-destructive-subtle-foreground">{historyError}</div> : null}
       {historyLoading ? <Card><CardContent className="py-10 text-center text-sm text-muted-foreground">Reconstruction de l’historique économique depuis les faits persistés…</CardContent></Card> : null}
+
+      <StrategicThesisSection paperRunId={effectiveRunId} refreshNonce={refreshNonce} />
 
       {summary && report ? (
         <>

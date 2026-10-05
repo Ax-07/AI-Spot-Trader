@@ -13,55 +13,187 @@ L'exécution courante est **PAPER uniquement** :
 - FUTURE daté non exécutable ;
 - LIVE indisponible tant qu'un batch séparé ne l'active pas explicitement.
 
-Le Market Attention Radar priorise **l'attention**. Depuis le Batch 49.2 intégré, il fournit l'univers candidat au même Agent stratégique. Le Batch 49.3 ajoute une projection de faits Radar/Analytics causaux et bornés pour cet univers. Le Radar ne décide jamais BUY/SELL/HOLD et ne possède aucune autorité Risk ou Broker.
+Le Market Attention Radar priorise **l'attention**. Depuis 49.2 il fournit l'univers candidat au même Agent ; depuis 49.3 il fournit aussi un contexte causal borné. Le Radar ne décide jamais BUY/SELL/HOLD et n'a aucune autorité Risk/Broker.
 
-L'observabilité 49.4 est strictement read-only : elle mesure les faits PAPER persistés et ne revient jamais dans le pipeline Agent/Risk/Broker.
+L'observabilité 49.4 et l'observabilité stratégique 50.2 sont strictement read-only : elles lisent les faits PAPER persistés et ne reviennent jamais dans le pipeline Agent/Risk/Broker.
 
-Le Batch 50.1 ajoute une mémoire stratégique structurée des positions ouvertes. Cette mémoire n'est ni une conversation LLM, ni une chaîne de pensée cachée. Elle est causale, bornée, durable et remise au **même** appel stratégique.
+Le Batch 50.1 fournit la mémoire stratégique structurée des positions ouvertes. Cette mémoire n'est ni une conversation LLM ni une chaîne de pensée cachée. Elle est causale, bornée, durable et remise au **même** appel stratégique.
 
 ## Référence courante
 
 ```text
-HEAD GitHub de base 50.1     : 8a0054091c39079dfc5d2c5a9504470b2fbf9493
-Clôture documentaire 49.4    : 8a005409 — docs: close batch 49.4 integration
-Batch 49.4 intégré            : 2e552cb — feat: add paper trading observability
-Batch 49.3 intégré            : d08cd31 — feat: expose causal radar analytics context to agent
-Batch 49.2 intégré            : f0d4f94 — feat: feed radar shortlist into agent universe
-Batch 49.1 intégré            : 3194fce — feat: activate perpetual paper trading
-Batch 50.1                    : patch livré — validation/intégration à faire
+HEAD GitHub vérifié 50.2      : ebb859c4ed83aada1c0bf3edf17ece85336849b9
+Commit                         : feat: add persistent strategic thesis memory
+Batch 49.4 intégré             : 2e552cb — feat: add paper trading observability
+Batch 49.3 intégré             : d08cd31 — feat: expose causal radar analytics context to agent
+Batch 49.2 intégré             : f0d4f94 — feat: feed radar shortlist into agent universe
+Batch 49.1 intégré             : 3194fce — feat: activate perpetual paper trading
+Batch 50.1 intégré             : ebb859c4 — feat: add persistent strategic thesis memory
+Batch 50.2                     : patch livré — validation/intégration à faire
 ```
 
-## Changelog — 2026-10-05 — Batch 50.1 mémoire de thèse stratégique — patch livré
+État intégré 50.1 communiqué à la clôture : `1217 passed, 2 warnings`, migration PostgreSQL `0008 strategic_thesis_state` appliquée, working tree propre après push.
 
-Base GitHub auditée : `8a0054091c39079dfc5d2c5a9504470b2fbf9493` (`docs: close batch 49.4 integration`).
+---
+
+## Changelog — 2026-10-05 — Batch 50.2 observabilité et cockpit des thèses stratégiques — patch livré
+
+Base GitHub auditée : `ebb859c4ed83aada1c0bf3edf17ece85336849b9` (`feat: add persistent strategic thesis memory`).
 
 ### Audit confirmé
 
-- `CycleDecisionPlanInput` contient déjà portefeuille, marchés, agressivité, coûts, multi-timeframes et contexte Radar/Analytics ;
-- `CycleDecisionPlan` est produit par un seul appel `generate_decision_plan(...)` ;
-- les décorateurs MTF et Radar enrichissent l'entrée puis délèguent une seule fois ;
-- `AuditedTradingCycleRunner` restaure le ledger lors d'un cycle `FAILED` puis persiste l'audit ;
-- `SqlAlchemyCycleAuditRepository.record(...)` commit déjà atomiquement le cycle et `paper_runs.current_portfolio_payload` ;
-- le recovery PAPER relie explicitement les runs via `resumed_from_paper_run_id` ;
-- les anciennes `rationale` ne constituent pas une source fiable de thèse historique.
+- `audit_cycles.strategic_thesis_state_payload` est déjà le snapshot canonique des thèses actives après cycle `COMPLETED` ;
+- `decision_plan_payload.thesis_updates` conserve déjà les propositions/révisions de l'Agent ;
+- `CycleAuditDetail` exposait les plans et trajectoires économiques, mais pas encore le snapshot de thèses ;
+- le routeur `analytics.py` possède déjà la résolution de lineage `paper_run` et le parcours ordonné des cycles ;
+- le cockpit Historique est le point opérateur canonique pour les faits Agent/Risk/PAPER ;
+- aucune nouvelle table ni migration n'est nécessaire ;
+- aucune dépendance Risk/Broker/LLM n'est nécessaire à la projection.
 
 ### Architecture retenue
 
-**Option C — extension additive des faits de cycle + projection canonique.**
+**Option B — endpoint read-only dédié, implémenté dans le routeur Analytics existant.**
 
-La nouvelle colonne nullable `audit_cycles.strategic_thesis_state_payload` contient le snapshot des thèses encore actives après chaque cycle `COMPLETED`. Les révisions proposées par l'Agent sont conservées dans `decision_plan_payload` via `CycleDecisionPlan.thesis_updates`.
+```text
+audit_cycles.strategic_thesis_state_payload
++ decision_plan_payload.thesis_updates
++ paper_run lineage
++ états de portefeuille persistés
+        ↓
+StrategicThesisObservabilityReport
+        ↓
+GET /api/v1/strategic-theses
+        ↓
+cockpit Historique
+```
 
-Ce choix évite une table métier parallèle tout en conservant :
+Le choix d'un endpoint dédié évite de surcharger davantage `EconomicHistoryResponse` avec une responsabilité stratégique distincte, tout en réutilisant la même infrastructure de lecture et la même lineage PAPER.
 
-- lecture rapide de l'état actif ;
-- historique immuable des revues ;
-- atomicité avec le cycle/portefeuille ;
-- recovery déterministe par lineage ;
-- compatibilité des anciens cycles avec colonne `NULL`.
+### Projection active
 
-### Contrat Agent 50.1
+La vue active est dérivée uniquement de faits persistés :
 
-Le schéma Structured Outputs du **même appel** contient, par décision, `thesis_update` :
+- dernier `strategic_thesis_state_payload` d'un cycle `COMPLETED` dans la lineage ;
+- dernier portefeuille durable d'un cycle `COMPLETED` ;
+- identité stricte `(symbol, market_type, side)` ;
+- SPOT reste `LONG` uniquement ;
+- une exposition ouverte sans thèse correspondante reste `UNAVAILABLE_LEGACY` ;
+- aucune ancienne `rationale` n'est utilisée.
+
+Une fermeture économique retire donc la thèse de la vue active si le snapshot du cycle ne la contient plus.
+
+### Historique causal
+
+Les révisions proviennent uniquement des `thesis_updates` persistées. Pour chaque révision, la projection consulte :
+
+1. le snapshot durable précédent ;
+2. le snapshot du **même cycle** s'il est `COMPLETED` ;
+3. les faits Risk/fills de la décision alignée.
+
+Aucun snapshot futur n'est utilisé pour requalifier une révision passée.
+
+États d'audit exposés :
+
+```text
+ACTIVE_COMMITTED
+RETIRED_COMMITTED
+PROPOSED_NOT_ACTIVATED
+FAILED_CYCLE
+UNAVAILABLE_LEGACY
+```
+
+Ces états décrivent uniquement la relation entre proposition, cycle et mémoire durable. Ils ne constituent aucune règle de trading.
+
+### Sémantique opérateur
+
+- `HOLD` peut apparaître comme revue avec zéro fill ;
+- un `Risk REJECT` de nouvelle entrée peut apparaître comme `PROPOSED_NOT_ACTIVATED`, jamais comme thèse active ;
+- une réduction partielle conserve la thèse si le snapshot actif la conserve ;
+- une fermeture complète retire la thèse active mais conserve la révision finale ;
+- un cycle `FAILED` reste visible comme audit et ne remplace jamais l'état actif ;
+- `INVALIDATED` et `COMPLETED` ne signifient jamais `SELL` ;
+- `WEAKENING` n'impose aucune réduction ;
+- Risk reste l'autorité finale sur l'exécution.
+
+### API et cockpit
+
+Nouvel endpoint :
+
+```text
+GET /api/v1/strategic-theses?paper_run_id=<uuid>&history_limit=100
+```
+
+Le contrat expose les positions/thèses actives, la lineage consultée, un `as_of`, l'historique borné et le nombre total de révisions.
+
+Le cockpit Historique ajoute une section indépendante avec :
+
+- loading / error / empty ;
+- carte active par position ;
+- SPOT/PERPETUAL et LONG/SHORT explicites ;
+- statut, horizon, création, activation, dernière revue ;
+- résumé de thèse, faits de support, conditions d'invalidation ;
+- message legacy explicite ;
+- historique causal des révisions ;
+- rappel permanent de l'autorité finale du Risk Engine.
+
+Le frontend ne reconstruit aucune thèse et ne recalcule aucune règle stratégique.
+
+### Validation exécutée dans l'environnement ChatGPT
+
+```text
+python -m py_compile (fichiers Python du patch)                  : PASS
+pytest ciblé projection 50.2 avec contrats minimaux              : PASS — 9 passed
+node --test --experimental-strip-types strategic-theses.test.mjs : PASS — 3 passed
+tsc ciblé src/lib/strategic-theses.ts                            : PASS
+```
+
+La suite complète du repository, `pnpm typecheck`, le test frontend complet et `git diff --check` restent à exécuter après extraction dans le checkout réel.
+
+## ADR-377 — 50.2 utilise un endpoint dédié, sans nouvelle persistence
+
+**ADOPTÉ — patch Batch 50.2, intégration à valider.**
+
+Options comparées :
+
+1. étendre `/api/v1/economic-history` : simple côté cockpit mais mélange économie/P&L et continuité stratégique ;
+2. **endpoint `/api/v1/strategic-theses` dans le routeur Analytics existant : retenu** ;
+3. détourner un endpoint d'audit générique : contrat moins explicite pour l'opérateur.
+
+Aucune table d'historique supplémentaire n'est créée.
+
+## ADR-378 — L'historique de thèse est causal et local au cycle
+
+**ADOPTÉ — patch Batch 50.2, intégration à valider.**
+
+Une révision est comparée uniquement au snapshot précédent et au snapshot du même cycle. Les états futurs ne peuvent pas rétroagir sur son classement historique.
+
+## ADR-379 — Une proposition non activée reste distincte d'une thèse active
+
+**ADOPTÉ — patch Batch 50.2, intégration à valider.**
+
+Un `thesis_update` associé à une entrée rejetée ou non remplie peut rester visible comme audit `PROPOSED_NOT_ACTIVATED` lorsque les faits le déterminent sans ambiguïté. Il n'apparaît jamais dans les positions/thèses actives.
+
+## ADR-380 — Le cockpit est une fenêtre read-only sur la mémoire 50.1
+
+**ADOPTÉ — patch Batch 50.2, intégration à valider.**
+
+Le frontend formate les données du backend et ne reconstitue ni thèse, ni règle BUY/SELL/HOLD, ni relation économique absente. `UNAVAILABLE_LEGACY` reste explicitement inconnu.
+
+---
+
+## Changelog — 2026-10-05 — Batch 50.1 mémoire de thèse stratégique — intégré
+
+Commit intégré : `ebb859c4ed83aada1c0bf3edf17ece85336849b9` (`feat: add persistent strategic thesis memory`).
+
+Validation intégrée communiquée : `1217 passed, 2 warnings`; migration PostgreSQL `0008_strategic_thesis_state` appliquée.
+
+### Architecture 50.1
+
+**Extension additive des faits de cycle + projection canonique.**
+
+La colonne nullable `audit_cycles.strategic_thesis_state_payload` contient le snapshot des thèses encore actives après chaque cycle `COMPLETED`. Les révisions proposées par l'Agent sont conservées dans `decision_plan_payload` via `CycleDecisionPlan.thesis_updates`.
+
+Contrat Agent du même appel :
 
 ```text
 status
@@ -72,292 +204,90 @@ invalidation_conditions[]
 review_summary
 ```
 
-Statuts :
+Statuts : `NEW / CONFIRMED / WEAKENING / INVALIDATED / COMPLETED`.
 
-```text
-NEW / CONFIRMED / WEAKENING / INVALIDATED / COMPLETED
-```
+Règles de lifecycle :
 
-`BUY`/`SELL` requièrent une révision structurée. Un `HOLD` sur une position ouverte requiert une revue structurée ; un `HOLD` sans position peut laisser `thesis_update=null`.
+- exposition inexistante -> entrée Agent -> Risk -> fill réel -> thèse active ;
+- Risk REJECT ou absence de fill sur ouverture -> aucune thèse active ;
+- position existante + HOLD/augmentation/réduction partielle -> thèse révisée/conservée ;
+- fermeture complète -> suppression du snapshot actif, révision finale auditée ;
+- legacy -> `UNAVAILABLE_LEGACY`, jamais reconstruit depuis `rationale` ;
+- cycle `FAILED` -> aucun état stratégique promu ;
+- recovery -> lineage explicite `resumed_from_paper_run_id`.
 
-`INVALIDATED` et `COMPLETED` sont descriptifs. Ils ne sont jamais traduits en `SELL` automatique.
+## ADR-371 — La source de vérité 50.1 est portée par les cycles
 
-### Activation et lifecycle
-
-- exposition inexistante -> entrée Agent proposée -> Risk -> fill réel -> thèse active ;
-- Risk REJECT ou intent sans fill et aucune exposition économique -> aucune thèse active ;
-- position existante + HOLD/augmentation/réduction partielle -> thèse révisée et conservée si l'exposition reste du même côté ;
-- fermeture complète -> suppression du snapshot actif ; la révision finale reste dans l'audit du plan ;
-- position historique sans mémoire -> `UNAVAILABLE_LEGACY` ; aucune ancienne `rationale` n'est transformée en thèse fictive ;
-- adoption legacy éventuelle -> nouvelle thèse de gestion créée à partir du cycle courant uniquement ;
-- cycle `FAILED` -> aucun nouvel état stratégique promu.
-
-### Recovery et causalité
-
-Le contexte du prochain cycle lit le dernier cycle `COMPLETED` du run courant. Si aucun n'existe, il remonte exclusivement `resumed_from_paper_run_id` jusqu'au premier snapshot disponible ou à un état legacy.
-
-Les timestamps d'une thèse/revue doivent être `<=` à la frontière du contexte puis `<= CycleDecisionPlanInput.created_at`. `BTC/USD SPOT`, `BTC/USD PERPETUAL LONG` et `BTC/USD PERPETUAL SHORT` restent des identités distinctes.
-
-### Invariants préservés
-
-- aucun second Agent ;
-- aucun second appel stratégique ;
-- aucun changement Risk/Broker ;
-- aucune exécution directe depuis la thèse ;
-- aucune règle déterministe stop-loss/take-profit/temps/P&L/score ;
-- aucun look-ahead ;
-- aucun hidden chain-of-thought persisté ;
-- PAPER uniquement ;
-- frontend non modifié dans 50.1 ;
-- Prompt Cache OpenAI hors périmètre.
-
-## ADR-371 — La source de vérité 50.1 est une projection additive portée par les cycles
-
-**ADOPTÉ — patch Batch 50.1, intégration à valider.**
-
-Options comparées :
-
-1. table dédiée de thèses : contrat clair mais nouvelle responsabilité persistante parallèle ;
-2. reconstruction intégrale depuis les rationales/audits : rejetée, implicite et incapable de distinguer proprement état actif/historique ;
-3. **snapshot canonique additif dans `audit_cycles` + revues dans le plan : retenu**.
-
-Motifs : atomicité avec le cycle existant, recovery simple, compatibilité legacy et absence de second store métier.
+**ADOPTÉ — intégré via `ebb859c4`.** Snapshot canonique dans `audit_cycles` + révisions dans le plan. Pas de table parallèle.
 
 ## ADR-372 — La thèse est produite dans le même appel Agent
 
-**ADOPTÉ — patch Batch 50.1, intégration à valider.**
-
-`StrategicThesisContextDecisionProvider` lit le contexte durable, l'attache à `CycleDecisionPlanInput`, revalide puis délègue une seule fois. Il n'existe aucun `Agent trading -> Agent mémoire`.
+**ADOPTÉ — intégré via `ebb859c4`.** Aucun Agent mémoire et aucun second appel stratégique.
 
 ## ADR-373 — Une thèse proposée n'est active qu'après exposition économique réelle
 
-**ADOPTÉ — patch Batch 50.1, intégration à valider.**
-
-Un REJECT Risk ou une absence de fill sur une ouverture n'active rien. L'activation est corrélée au portefeuille effectivement engagé après exécution.
+**ADOPTÉ — intégré via `ebb859c4`.** REJECT/absence de fill sur ouverture n'active rien.
 
 ## ADR-374 — Legacy reste explicitement inconnu
 
-**ADOPTÉ — patch Batch 50.1, intégration à valider.**
-
-Une position ouverte antérieure à 50.1 sans snapshot correspondant est exposée comme `UNAVAILABLE_LEGACY`. Aucune ancienne rationale n'est utilisée pour fabriquer une motivation historique.
+**ADOPTÉ — intégré via `ebb859c4`.** `UNAVAILABLE_LEGACY`, sans reconstruction des rationales.
 
 ## ADR-375 — INVALIDATED/COMPLETED n'ont aucune sémantique d'ordre automatique
 
-**ADOPTÉ — patch Batch 50.1, intégration à valider.**
-
-Les statuts sont des descriptions de la thèse. La sortie stratégique reste `BUY / SELL / HOLD`, ensuite contrôlée par Risk.
+**ADOPTÉ — intégré via `ebb859c4`.** La sortie stratégique reste BUY/SELL/HOLD, ensuite contrôlée par Risk.
 
 ## ADR-376 — Les cycles FAILED ne promeuvent jamais la mémoire stratégique
 
-**ADOPTÉ — patch Batch 50.1, intégration à valider.**
-
-La projection active est écrite uniquement sur un cycle `COMPLETED`. Les cycles `FAILED` conservent leur audit mais ne remplacent pas le dernier snapshot durable.
+**ADOPTÉ — intégré via `ebb859c4`.** Seuls les cycles `COMPLETED` peuvent remplacer le snapshot actif.
 
 ---
 
-## Changelog — 2026-10-05 — Batch 49.4 observabilité décisions/performance PAPER — intégré
+## Changelog — Batch 49.4 observabilité décisions/performance PAPER — intégré
 
-Base GitHub auditée au démarrage : `e7d605aa2b6393516c0ccd391cd4d11193c18671` (`docs: close batch 49.3 integration`).
+Commit : `2e552cbaf1b8ffcae9244c1fb472f1ee8fb0f193`.
 
-Commit intégré : `2e552cbaf1b8ffcae9244c1fb472f1ee8fb0f193` (`feat: add paper trading observability`).
+Décisions actives :
 
-### Audit confirmé
+- `PaperAnalyticsReport` reste la source canonique de l'equity/P&L/coûts/drawdown/exposition ;
+- `PaperObservabilityReport` est une projection opérateur read-only ;
+- décisions, intents, fills et trades restent des compteurs distincts ;
+- identité `(symbol, market_type)` ;
+- P&L brut/net SPOT/PERP reste `null` sans attribution causale exacte ;
+- aucune rétroaction sur Agent/Risk/Broker.
 
-- `PaperAnalyticsReport` est la source canonique de l'equity, du P&L brut/net, des coûts d'exécution, du funding, du drawdown et de l'exposition globale ;
-- `EconomicHistoryReport` réutilise ces métriques et ajoute P&L réalisé/latent, opérations, turnover, coûts, cadence et effets économiques ;
-- `CycleAuditDetail.decision_results` conserve déjà les trajectoires multi-décisions ;
-- `CycleAuditSummary` expose déjà les compteurs BUY/SELL/HOLD, ALLOW/MODIFY/REJECT, intents/fills ;
-- le cockpit Historique consomme déjà `/api/v1/economic-history` ;
-- aucune nouvelle persistence n'est nécessaire.
+Validation intégrée : `1195 passed, 2 warnings`, frontend typecheck/test PASS.
 
-### Architecture intégrée 49.4
-
-Une projection dédiée `PaperObservabilityReport` est ajoutée au-dessus de l'historique économique canonique et des audits persistés :
-
-```text
-PaperAnalyticsReport
--> EconomicHistoryReport
--> PaperObservabilityReport
-```
-
-La projection est attachée additivement à `EconomicHistoryResponse.observability`. Aucun nouvel endpoint n'est créé.
-
-### Métriques intégrées
-
-- breakdowns `TOTAL`, `SPOT`, `PERPETUAL` ;
-- funnel Agent -> Risk -> exécution ;
-- décisions avec/sans fill ;
-- fills et trades économiques distincts ;
-- ventilation stricte par `(symbol, market_type)` ;
-- notionnel, frais, spread, slippage, funding, coûts, P&L réalisé ;
-- exposition et P&L latent terminaux lorsque la persistence permet une attribution exacte ;
-- liste explicite des métriques indisponibles.
-
-### Honnêteté économique
-
-Le P&L brut/net global est copié du rapport canonique et ne change pas.
-
-Le Batch 49.4 **n'attribue pas** `gross_pnl` ou `net_pnl` entre SPOT et PERPETUAL car la persistence actuelle ne fournit pas une décomposition historique exacte des variations d'equity par type de marché. Ces champs restent `null` pour les breakdowns SPOT/PERP.
-
-Le funding conserve la convention existante : négatif = coût, positif = bénéfice. La ventilation PERPETUAL réutilise le funding canonique global ; la ventilation par marché combine funding réalisé des fills et `cumulative_funding` terminal lorsque cette attribution est disponible. Un funding SPOT non nul est rejeté comme incohérence de données.
-
-### UI intégrée
-
-Le cockpit Historique ajoute :
-
-- cartes TOTAL/SPOT/PERP ;
-- funnel Agent/Risk/exécution ;
-- table par identité `(symbol, market_type)` ;
-- indication des métriques volontairement non attribuées.
-
-Le frontend ne recalcule aucun P&L ni coût.
-
-### Validation intégrée
-
-```text
-backend python -m pytest -q : PASS — 1195 passed, 2 warnings
-frontend pnpm typecheck     : PASS
-frontend pnpm test          : PASS — 89/89
-git diff --check            : PASS — avertissements LF/CRLF uniquement
-git status --short          : PASS — working tree propre après push
-push GitHub main            : PASS — 2e552cb
-```
-
-Les warnings Node `MODULE_TYPELESS_PACKAGE_JSON` restent non bloquants.
-
-## ADR-366 — L'observabilité 49.4 est une projection dédiée au-dessus des sources canoniques
-
-**ADOPTÉ — Batch 49.4 intégré via `2e552cb`.**
-
-Options comparées :
-
-1. étendre directement `PaperAnalyticsReport` : rejeté, mélange du moteur économique canonique et de la projection opérateur ;
-2. charger toutes les nouvelles vues dans `EconomicHistorySummary` : possible mais contrat trop chargé ;
-3. **projection `PaperObservabilityReport` dédiée, attachée à Economic History : retenue** ;
-4. nouvelle persistence/pipeline : rejeté, inutile.
-
-Motifs : aucune duplication du ledger, aucune migration, source de vérité inchangée, contrat additif et testable.
-
-## ADR-367 — Le P&L brut/net par type reste indisponible sans attribution causale exacte
-
-**ADOPTÉ — Batch 49.4 intégré via `2e552cb`.**
-
-`TOTAL.gross_pnl` et `TOTAL.net_pnl` restent canoniques. `SPOT` et `PERPETUAL` exposent `null` pour ces deux champs tant qu'une attribution exacte n'est pas disponible dans les faits durables.
-
-Aucune répartition résiduelle, proportionnelle au notionnel, aux coûts ou à l'exposition n'est autorisée.
-
-## ADR-368 — Décisions, intents, fills et trades sont des compteurs distincts
-
-**ADOPTÉ — Batch 49.4 intégré via `2e552cb`.**
-
-Un HOLD ou un REJECT reste une décision. Un intent sans fill n'est pas un trade. Plusieurs fills d'un intent restent distincts du nombre d'opérations économiques. Les cycles FAILED ne contribuent pas aux fills économiquement engagés.
-
-## ADR-369 — L'identité d'observabilité est `(symbol, market_type)`
-
-**ADOPTÉ — Batch 49.4 intégré via `2e552cb`.**
-
-`BTC/USD SPOT` et `BTC/USD PERPETUAL` ne sont jamais fusionnés dans une même ligne de marché.
-
-## ADR-370 — L'observabilité 49.4 ne peut pas modifier la stratégie
-
-**ADOPTÉ — Batch 49.4 intégré via `2e552cb`.**
-
-Les résultats 49.4 ne modifient aucun poids Radar/Analytics, aucune décision Agent, aucun paramètre Risk et aucun ordre Broker. Une adaptation future éventuelle devra faire l'objet d'une décision et d'un batch séparés.
+ADR actifs : `ADR-366` à `ADR-370`.
 
 ---
 
-## Changelog — 2026-10-05 — Batch 49.3 contexte Radar / Analytics causal — intégré
+## Changelog — Batch 49.3 contexte Radar / Analytics causal — intégré
 
-Base GitHub auditée au démarrage : `f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b` (`feat: feed radar shortlist into agent universe`).
+Commit : `d08cd31e6a795a8beb09530c2bc9a3f32f94fe35`.
 
-Commit intégré : `d08cd31e6a795a8beb09530c2bc9a3f32f94fe35` (`feat: expose causal radar analytics context to agent`).
+`RadarAnalyticsStrategicContext` reste strict, borné et causal ; même snapshot que Discovery ; score 47.5 descriptif ; données dégradées explicites ; aucun second appel Agent.
 
-Décision active : `RadarAnalyticsStrategicContext` est un contrat dédié strict, borné et causal ; le snapshot doit correspondre exactement à celui de Discovery ; le score 47.5 reste descriptif ; les données dégradées restent explicitement dégradées ; `FrozenRadarContextDecisionProvider` ne crée aucun second appel Agent.
-
-## ADR-361 — Le contexte 49.3 utilise un contrat dédié référencé par `CycleDecisionPlanInput`
-
-**ADOPTÉ — Batch 49.3 intégré via `d08cd31`.**
-
-## ADR-362 — Le contexte doit être figé sur le snapshot exact de Discovery
-
-**ADOPTÉ — Batch 49.3 intégré via `d08cd31`.**
-
-## ADR-363 — Le score 47.5 reste descriptif et inchangé
-
-**ADOPTÉ — Batch 49.3 intégré via `d08cd31`.**
-
-## ADR-364 — Les données dégradées restent des données dégradées
-
-**ADOPTÉ — Batch 49.3 intégré via `d08cd31`.**
-
-## ADR-365 — Un seul appel stratégique est conservé
-
-**ADOPTÉ — Batch 49.3 intégré via `d08cd31`.**
+ADR actifs : `ADR-361` à `ADR-365`.
 
 ---
 
 ## Changelog — Batch 49.2 Radar shortlist vers univers Agent — intégré
 
-Commit intégré : `f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b` (`feat: feed radar shortlist into agent universe`).
+Commit : `f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b`.
 
-Décisions actives :
+`MarketDiscoveryCoordinator` reste la frontière canonique. Les Campaigns dynamiques utilisent `RADAR_SHORTLIST`, revalident catalogue/scope/whitelist, échouent fermées pour les nouvelles ouvertures si Radar indisponible et préservent la gestion des positions existantes.
 
-- `MarketDiscoveryCoordinator` accepte `LEGACY_AGENT` ou `RADAR_SHORTLIST` ;
-- les Campaigns dynamiques de production utilisent `RADAR_SHORTLIST` ;
-- la frontière Discovery reste identité-only `{symbol, market_type}` ;
-- chaque candidat est revalidé contre le catalogue public Kraken, le scope Campaign et la whitelist Risk éventuelle ;
-- `BTC/USD SPOT` et `BTC/USD PERPETUAL` restent distincts ;
-- nouvelles ouvertures fail-closed si Radar indisponible/stale/vide/sans candidat exécutable ;
-- positions ouvertes toujours gérables en MANAGEMENT ;
-- bootstrap non utilisé comme faux signal ;
-- aucun chemin direct Radar -> Risk/Broker.
-
-### ADR-357 — Radar derrière la frontière canonique Market Discovery
-
-**ADOPTÉ — Batch 49.2 intégré via `f0d4f94`.**
-
-### ADR-358 — La frontière d'univers 49.2 reste identité-only
-
-**ADOPTÉ — Batch 49.2 intégré via `f0d4f94`.**
-
-### ADR-359 — Panne Radar fail-closed pour les nouvelles ouvertures
-
-**ADOPTÉ — Batch 49.2 intégré via `f0d4f94`.**
-
-### ADR-360 — Revalidation de l'exécutabilité Kraken/Campaign
-
-**ADOPTÉ — Batch 49.2 intégré via `f0d4f94`.**
+ADR actifs : `ADR-357` à `ADR-360`.
 
 ---
 
-## Changelog — Batch 49.1 activation officielle PERPETUAL PAPER — intégré
+## Changelog — Batch 49.1 PERPETUAL PAPER — intégré
 
-Commit intégré : `3194fce620f5e31672c6b52ef8986daddeea3a25` (`feat: activate perpetual paper trading`).
+Commit : `3194fce620f5e31672c6b52ef8986daddeea3a25`.
 
-Décisions actives :
+PAPER officiel SPOT + PERPETUAL linéaire ; `FUTURE` daté non exécutable ; levier/marge/exposition contrôlés par Risk ; `PaperBroker` et ledger gèrent `DerivativePosition`, funding et P&L ; aucun retournement direct contournant `reduce_only`.
 
-- PAPER officiel SPOT + PERPETUAL linéaire ;
-- `FUTURE` daté non exécutable ;
-- BUY/SELL expriment LONG/SHORT sur PERPETUAL, mais le LLM ne choisit pas le levier ;
-- Risk contrôle quantité, levier, marge, exposition, liquidation et retournement ;
-- `PaperBroker` et le ledger gèrent `DerivativePosition`, funding et P&L ;
-- un ordre opposé surdimensionné ferme/réduit avant toute ouverture opposée ultérieure.
-
-### ADR-353 — Univers PAPER SPOT + PERPETUAL linéaire
-
-**ADOPTÉ — Batch 49.1 intégré via `3194fce`.**
-
-### ADR-354 — Aucun retournement direct dans un seul `ExecutionIntent`
-
-**ADOPTÉ — Batch 49.1 intégré via `3194fce`.**
-
-### ADR-355 — Le levier reste entièrement déterministe
-
-**ADOPTÉ — Batch 49.1 intégré via `3194fce`.**
-
-### ADR-356 — Radar et exécution restent séparés
-
-**ADOPTÉ — Batch 49.1 intégré via `3194fce`.**
+ADR actifs : `ADR-353` à `ADR-356`.
 
 ---
 
@@ -367,12 +297,12 @@ Décisions actives :
 - quatre familles : `OPEN_INTEREST`, `FUNDING`, `LIQUIDATION_VOLUME`, `ORDER_FLOW` ;
 - CVD + Aggressor = une seule composante order-flow ;
 - disponibilité seule = 0 ;
-- données absentes/partielles/insuffisantes/stale/technical error/N/A = 0 sans malus ;
+- données absentes/dégradées = 0 sans malus ;
 - signes positifs/négatifs symétriques pour l'attention ;
 - `interest_level` et `candidate_limit` inchangés ;
 - aucune création de candidat par Analytics ;
-- observabilité 48 calculée à la demande sur l'historique Radar borné ;
+- observabilité 48 calculée à la demande ;
 - `rank_change=0` distinct de l'absence de donnée ;
-- aucune évaluation de rentabilité future ni calibration post-hoc.
+- aucune calibration post-hoc.
 
-Références : `docs/47_5_MULTI_ANALYTICS_RANKING.md`, `docs/48_OBSERVABILITE_RANKING_ANALYTICS.md` et historique Git pour les ADR antérieurs.
+Références : `docs/47_5_MULTI_ANALYTICS_RANKING.md`, `docs/48_OBSERVABILITE_RANKING_ANALYTICS.md` et historique Git.

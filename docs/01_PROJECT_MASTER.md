@@ -4,16 +4,16 @@
 
 AI Spot Trader est une application expérimentale de trading pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est un cockpit de contrôle et de visualisation qui peut être fermé sans arrêter le moteur.
 
-Référence GitHub de base du Batch 50.1 :
+Référence GitHub courante auditée au lancement du Batch 50.2 :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 8a0054091c39079dfc5d2c5a9504470b2fbf9493
-Commit     : docs: close batch 49.4 integration
+HEAD       : ebb859c4ed83aada1c0bf3edf17ece85336849b9
+Commit     : feat: add persistent strategic thesis memory
 ```
 
-Les Batches 49.1 à 49.4 sont intégrés. Le Batch 50.1 est livré sous forme de patch à valider/intégrer.
+Les Batches 49.1 à 50.1 sont intégrés. Le Batch 50.1 est intégré et validé ; le Batch 50.2 est livré sous forme de patch read-only à valider/intégrer.
 
 ## 2. Invariants fonctionnels
 
@@ -35,9 +35,10 @@ Les Batches 49.1 à 49.4 sont intégrés. Le Batch 50.1 est livré sous forme de
 - aucun secret dans prompts, logs, frontend ou fichiers versionnés ;
 - frontend non nécessaire au fonctionnement du moteur ;
 - Market Attention détermine l'univers candidat et peut fournir des faits descriptifs causaux, mais n'a aucune autorité `BUY`/`SELL`/`HOLD` ni Risk ;
-- la mémoire de thèse 50.1 est un fait applicatif structuré, jamais une mémoire conversationnelle opaque ni une chaîne de pensée cachée.
+- la mémoire de thèse 50.1 est un fait applicatif structuré, jamais une mémoire conversationnelle opaque ni une chaîne de pensée cachée ;
+- l'observabilité 50.2 est strictement read-only et ne crée ni second store, ni second Agent, ni appel LLM supplémentaire.
 
-Principe central : **le Radar propose les marchés à examiner. Les faits Radar/Analytics et la mémoire stratégique aident l'Agent à raisonner. L'IA propose l'action. Le Risk Engine autorise, modifie ou refuse.**
+Principe central : **le Radar propose les marchés à examiner. Les faits Radar/Analytics et la mémoire stratégique aident l'Agent à raisonner. L'IA propose l'action. Le Risk Engine autorise, modifie ou refuse. Le cockpit observe.**
 
 La cible expérimentale `+4 %/jour` reste un objectif de recherche non garanti, jamais une promesse de rendement.
 
@@ -56,6 +57,8 @@ Session UX
 Une modification de configuration crée un nouveau snapshot Campaign sans réécrire l'historique.
 
 Depuis le Batch 50.1, la continuité stratégique d'une position est également durable. Le dernier cycle `COMPLETED` d'un `paper_run` porte un snapshot canonique des thèses actives. En reprise, si le run courant n'a encore aucun cycle `COMPLETED`, la lecture suit exclusivement `resumed_from_paper_run_id`.
+
+Le Batch 50.2 ne modifie pas cette persistence : il lit les snapshots et les révisions déjà persistés.
 
 ## 4. Market Discovery et Radar
 
@@ -123,6 +126,8 @@ Le Batch 49.3 conserve cette propriété : `FrozenRadarContextDecisionProvider` 
 
 Le Batch 50.1 applique le même pattern avec `StrategicThesisContextDecisionProvider` : lecture durable du contexte, attachement à `CycleDecisionPlanInput`, revalidation, puis une seule délégation. Il n'existe pas d'« Agent mémoire ».
 
+Le Batch 50.2 n'appelle aucun LLM : il projette uniquement des faits déjà persistés pour l'opérateur.
+
 Les outils read-only Agent sont conservés. Ils servent des recherches ponctuelles ; ils ne remplacent pas les snapshots causalisés et figés du cycle.
 
 ## 9. Risk, coûts et exécution
@@ -182,7 +187,7 @@ Les deux concepts restent indépendants : le mouvement récent n'est pas la géo
 
 ## 14. Performance et cache Radar
 
-Les enrichissements coûteux sont appliqués après les filtres déterministes pertinents. `CandleStreamService` reste le point d'accès canonique et réutilise son cache. La mémoire 50.1 ne modifie aucun cache Radar et ne mélange pas ce batch avec le Prompt Cache OpenAI.
+Les enrichissements coûteux sont appliqués après les filtres déterministes pertinents. `CandleStreamService` reste le point d'accès canonique et réutilise son cache. La mémoire 50.1 et l'observabilité 50.2 ne modifient aucun cache Radar et ne mélangent pas ces responsabilités avec le Prompt Cache OpenAI.
 
 ## 15. Contrat API Radar
 
@@ -191,6 +196,8 @@ Les versions Radar intégrées restent celles des batches précédents. `informa
 ## 16. Isolation architecturale
 
 Les couches Market Attention n'ont aucune dépendance Agent/Risk/Broker. Le contexte Radar est projeté avant l'appel Agent. Le contexte de thèse est projeté depuis la persistence avant le même appel Agent. Ces deux sources restent distinctes.
+
+L'observabilité 50.2 dépend uniquement des contrats de domaine, des lectures d'audit et de la lineage PAPER. Elle n'importe aucune dépendance Risk, Broker ou LLM.
 
 ## 17. Microstructure
 
@@ -267,4 +274,42 @@ La persistence choisie est **Option C : extension additive des faits de cycle + 
 
 `INVALIDATED`/`COMPLETED` ne sont jamais convertis automatiquement en SELL. L'Agent conserve la décision stratégique et Risk conserve l'autorité finale.
 
+État intégré : commit `ebb859c4ed83aada1c0bf3edf17ece85336849b9`, suite backend `1217 passed, 2 warnings`, migration PostgreSQL `0008_strategic_thesis_state` appliquée.
+
 Voir `docs/50_1_MEMOIRE_THESE_STRATEGIQUE.md`.
+
+## 24. Observabilité des thèses stratégiques 50.2
+
+Le Batch 50.2 ajoute une vue opérateur dédiée sans modifier le moteur ni la persistence.
+
+Architecture retenue : **endpoint read-only dédié dans le routeur Analytics existant**.
+
+```text
+audit_cycles.strategic_thesis_state_payload
++ decision_plan_payload.thesis_updates
++ lineage paper_run
++ états de portefeuille persistés
+        ↓
+StrategicThesisObservabilityReport
+        ↓
+GET /api/v1/strategic-theses
+        ↓
+cockpit Historique
+```
+
+Règles de projection :
+
+- les thèses actives proviennent uniquement du dernier snapshot `COMPLETED` durable ;
+- l'exposition courante provient des états de portefeuille persistés des cycles `COMPLETED` ;
+- une position sans thèse correspondante reste `UNAVAILABLE_LEGACY` ;
+- aucune `rationale` historique n'est une source de vérité ;
+- chaque révision est reliée au snapshot précédent et à celui du **même cycle**, jamais à un snapshot futur ;
+- un `REJECT` d'ouverture peut être visible comme proposition non activée mais ne crée jamais une thèse active ;
+- un cycle `FAILED` reste visible dans l'audit sans être promu ;
+- une fermeture complète retire la thèse de la vue active tout en conservant la révision finale ;
+- l'historique est borné par `history_limit` et conserve `total_revision_count` ;
+- l'identité reste `(symbol, market_type, side)` ; SPOT reste LONG uniquement.
+
+Le cockpit présente loading/error/empty/legacy, les faits de support, conditions d'invalidation, dernière revue et historique causal. Il rappelle explicitement que `INVALIDATED`, `COMPLETED` et `WEAKENING` ne constituent pas des ordres. Aucun calcul stratégique métier n'est recréé côté frontend.
+
+Voir `docs/50_2_OBSERVABILITE_THESES_STRATEGIQUES.md`.

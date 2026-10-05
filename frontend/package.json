@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types src/lib/market-candles.test.mjs src/lib/session-config.test.mjs src/lib/market-attention.test.mjs src/lib/market-attention-batch47_3.test.mjs src/lib/market-attention-batch47_4.test.mjs src/lib/market-attention-batch47_5.test.mjs src/lib/market-structure.test.mjs src/lib/economic-history.test.mjs"
+    "test": "node --test --experimental-strip-types src/lib/market-candles.test.mjs src/lib/session-config.test.mjs src/lib/market-attention.test.mjs src/lib/market-attention-batch47_3.test.mjs src/lib/market-attention-batch47_4.test.mjs src/lib/market-attention-batch47_5.test.mjs src/lib/market-structure.test.mjs src/lib/economic-history.test.mjs src/lib/strategic-theses.test.mjs"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
