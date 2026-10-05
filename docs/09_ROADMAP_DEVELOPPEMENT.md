@@ -5,7 +5,7 @@
 ```text
 Repository                  : Ax-07/AI-Spot-Trader
 Branche                     : main
-Base GitHub auditée 49.3    : f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b
+HEAD GitHub clôture 49.3     : d08cd31e6a795a8beb09530c2bc9a3f32f94fe35
 Batch 45                    : intégré via 45d41b7
 Batch 46 / 46.1             : intégré via b219365
 Batch 47.1                  : intégré via 842e6bd7
@@ -19,7 +19,7 @@ Batch 48 fonctionnel        : intégré via ebb664c
 Clôture documentaire 48     : 8704eec
 Batch 49.1                  : intégré via 3194fce
 Batch 49.2                  : intégré via f0d4f94
-Batch 49.3                  : patch proposé, non intégré à la livraison
+Batch 49.3                  : intégré via d08cd31
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -211,7 +211,7 @@ Voir `docs/49_2_RADAR_AGENT_UNIVERSE.md`.
 
 ## Batch 49.3 — contexte Radar / Analytics causal fourni à l'Agent
 
-**Patch proposé sur `f0d4f94`, non intégré à GitHub à la livraison.**
+**Intégré via `d08cd31`.**
 
 Décision architecturale : **contexte typé dédié C**.
 
@@ -242,19 +242,18 @@ Aucune modification Risk/Broker, aucune seconde décision LLM et aucune migratio
 
 Voir `docs/49_3_AGENT_RADAR_ANALYTICS_CONTEXT.md`.
 
-## Validation intégrée du Batch 48
+## Validation intégrée du Batch 49.3
 
 ```text
-backend python -m pytest -q : PASS — 1155 passed, 2 warnings
+backend python -m pytest -q : PASS — 1189 passed, 2 warnings
 frontend pnpm typecheck     : PASS
 frontend pnpm test          : PASS — 86/86
 git diff --check            : PASS — avertissements LF/CRLF uniquement
-push GitHub main            : PASS — ebb664c puis clôture 8704eec
+git status --short          : PASS — working tree propre après push
+push GitHub main            : PASS — d08cd31
 ```
 
-Ces résultats appartiennent au Batch 48 intégré et ne valent pas validation du patch 49.3.
-
-## Suite après validation de 49.3
+## Suite après intégration de 49.3
 
 ```text
 49.4 — observabilité des décisions et performances PAPER SPOT/PERP

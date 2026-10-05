@@ -1,20 +1,21 @@
 # 00 — État actuel
 
-## Référence de reprise — Batch 49.3 préparé
+## Référence de reprise — Batch 49.3 intégré
 
 ```text
 Repository                         : Ax-07/AI-Spot-Trader
 Branche                            : main
-HEAD GitHub audité au démarrage    : f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b
-HEAD GitHub                        : feat: feed radar shortlist into agent universe
+Base auditée au démarrage 49.3  : f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b
+HEAD GitHub vérifié à la clôture   : d08cd31e6a795a8beb09530c2bc9a3f32f94fe35
+Commit HEAD                        : feat: expose causal radar analytics context to agent
 Batch 49.1                         : INTÉGRÉ SUR GITHUB main
 Batch 49.2                         : INTÉGRÉ SUR GITHUB main via f0d4f94
-Batch 49.3                         : PATCH PROPOSÉ — NON INTÉGRÉ À GITHUB À LA LIVRAISON
+Batch 49.3                         : INTÉGRÉ SUR GITHUB main via d08cd31
 ```
 
-L'ancien statut « Batch 49.2 non intégré » était obsolète : `main` pointe bien sur `f0d4f94` au démarrage du Batch 49.3.
+Le Batch 49.3 est intégré sur `main` via `d08cd31`. La documentation de reprise est alignée sur cet état intégré.
 
-## État fonctionnel proposé par le Batch 49.3
+## État fonctionnel intégré par le Batch 49.3
 
 La chaîne PAPER dynamique reste unique :
 
@@ -72,6 +73,17 @@ SPOT conserve `NOT_APPLICABLE` pour les Analytics Futures. PERPETUAL conserve LO
 - score Analytics 47.5 inchangé, avec CVD + Aggressor dans une seule famille `ORDER_FLOW` ;
 - aucun look-ahead ni recalibration post-hoc ;
 - aucun secret versionné.
+
+## Validation intégrée du Batch 49.3
+
+```text
+backend python -m pytest -q : PASS — 1189 passed, 2 warnings
+frontend pnpm typecheck     : PASS
+frontend pnpm test          : PASS — 86/86
+git diff --check            : PASS — avertissements LF/CRLF uniquement
+git status --short          : PASS — working tree propre après push
+push GitHub main            : PASS — d08cd31
+```
 
 ## Suite
 

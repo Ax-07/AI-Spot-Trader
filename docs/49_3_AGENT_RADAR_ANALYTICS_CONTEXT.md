@@ -2,14 +2,21 @@
 
 ## Statut
 
-Patch proposé sur le HEAD GitHub `main` audité au démarrage :
+Batch intégré sur GitHub `main` via :
+
+```text
+d08cd31e6a795a8beb09530c2bc9a3f32f94fe35
+feat: expose causal radar analytics context to agent
+```
+
+Base auditée au démarrage du Batch 49.3 :
 
 ```text
 f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b
 feat: feed radar shortlist into agent universe
 ```
 
-Le Batch 49.2 est donc intégré. Le présent batch ne modifie pas GitHub directement.
+Le Batch 49.2 était déjà intégré sur cette base ; le Batch 49.3 est désormais intégré et validé localement.
 
 ## Objectif
 
@@ -189,21 +196,18 @@ docs/10_DECISIONS_ET_CHANGELOG.md
 docs/49_3_AGENT_RADAR_ANALYTICS_CONTEXT.md
 ```
 
-## Validation attendue
+## Validation réalisée
 
-```powershell
-python -m pytest -q
-
-Push-Location frontend
-pnpm typecheck
-pnpm test
-Pop-Location
-
-git diff --check
-git status --short
+```text
+backend python -m pytest -q : PASS — 1189 passed, 2 warnings
+frontend pnpm typecheck     : PASS
+frontend pnpm test          : PASS — 86/86
+git diff --check            : PASS — avertissements LF/CRLF uniquement
+git status --short          : PASS — working tree propre après push
+push GitHub main            : PASS — d08cd31
 ```
 
-Un test non exécuté ne doit jamais être déclaré PASS.
+Les deux warnings backend sont des avertissements de dépréciation de dépendances de test et n'ont provoqué aucun échec.
 
 ## Hors périmètre
 

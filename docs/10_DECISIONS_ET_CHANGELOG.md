@@ -19,14 +19,17 @@ Le Market Attention Radar priorise **l'attention**. Depuis le Batch 49.2 intégr
 
 ```text
 Base GitHub auditée 49.3     : f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b
+HEAD GitHub clôture 49.3     : d08cd31e6a795a8beb09530c2bc9a3f32f94fe35
 Batch 49.1 intégré           : 3194fce — feat: activate perpetual paper trading
 Batch 49.2 intégré           : f0d4f94 — feat: feed radar shortlist into agent universe
-Batch 49.3                   : PATCH PROPOSÉ — NON INTÉGRÉ À LA LIVRAISON
+Batch 49.3 intégré           : d08cd31 — feat: expose causal radar analytics context to agent
 ```
 
-## Changelog — 2026-10-05 — Batch 49.3 contexte Radar / Analytics causal — patch proposé
+## Changelog — 2026-10-05 — Batch 49.3 contexte Radar / Analytics causal — intégré
 
 Base GitHub auditée au démarrage : `f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b` (`feat: feed radar shortlist into agent universe`).
+
+Commit intégré : `d08cd31e6a795a8beb09530c2bc9a3f32f94fe35` (`feat: expose causal radar analytics context to agent`).
 
 ### Audit confirmé
 
@@ -40,7 +43,7 @@ Base GitHub auditée au démarrage : `f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b` 
 - les statuts Analytics existants distinguent déjà disponibilité, partial, stale, historique insuffisant, erreur technique et N/A ;
 - Risk et Broker ne dépendent pas du Radar et restent en aval du plan Agent.
 
-### Patch 49.3
+### Batch 49.3 intégré
 
 - ajout de `RadarAnalyticsStrategicContext`, contrat strict, immuable, borné et trié ;
 - séparation explicite entre identité d'univers 49.2 et contexte analytique 49.3 ;
@@ -57,9 +60,20 @@ Base GitHub auditée au démarrage : `f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b` 
 - aucune modification du Risk Engine ou du `PaperBroker` ;
 - aucune migration, aucun LIVE et aucune API Kraken Futures privée.
 
+### Validation intégrée
+
+```text
+backend python -m pytest -q : PASS — 1189 passed, 2 warnings
+frontend pnpm typecheck     : PASS
+frontend pnpm test          : PASS — 86/86
+git diff --check            : PASS — avertissements LF/CRLF uniquement
+git status --short          : PASS — working tree propre après push
+push GitHub main            : PASS — d08cd31
+```
+
 ## ADR-361 — Le contexte 49.3 utilise un contrat dédié référencé par `CycleDecisionPlanInput`
 
-**ADOPTÉ DANS LE PATCH 49.3 — NON INTÉGRÉ À LA LIVRAISON.**
+**ADOPTÉ — Batch 49.3 intégré via `d08cd31`.**
 
 Options comparées :
 
@@ -71,7 +85,7 @@ Motifs : contrat borné/testable, identité séparée des faits analytiques, pas
 
 ## ADR-362 — Le contexte doit être figé sur le snapshot exact de Discovery
 
-**ADOPTÉ DANS LE PATCH 49.3 — NON INTÉGRÉ À LA LIVRAISON.**
+**ADOPTÉ — Batch 49.3 intégré via `d08cd31`.**
 
 Le runner accepte la projection seulement si :
 
@@ -85,7 +99,7 @@ Le provider Agent ne consulte donc jamais un service Radar mutable pendant l'app
 
 ## ADR-363 — Le score 47.5 reste descriptif et inchangé
 
-**ADOPTÉ DANS LE PATCH 49.3 — NON INTÉGRÉ À LA LIVRAISON.**
+**ADOPTÉ — Batch 49.3 intégré via `d08cd31`.**
 
 Le score reste :
 
@@ -103,7 +117,7 @@ Dans le prompt, ce score est explicitement décrit comme **indice d'attention**,
 
 ## ADR-364 — Les données dégradées restent des données dégradées
 
-**ADOPTÉ DANS LE PATCH 49.3 — NON INTÉGRÉ À LA LIVRAISON.**
+**ADOPTÉ — Batch 49.3 intégré via `d08cd31`.**
 
 Le contexte distingue :
 
@@ -121,7 +135,7 @@ Aucun statut dégradé n'est converti en valeur artificielle positive/négative.
 
 ## ADR-365 — Un seul appel stratégique est conservé
 
-**ADOPTÉ DANS LE PATCH 49.3 — NON INTÉGRÉ À LA LIVRAISON.**
+**ADOPTÉ — Batch 49.3 intégré via `d08cd31`.**
 
 `FrozenRadarContextDecisionProvider` est un décorateur d'entrée, pas un second Agent. Il enrichit `CycleDecisionPlanInput`, revalide le contrat puis appelle une seule fois `delegate.generate_decision_plan(...)`.
 

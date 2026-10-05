@@ -4,16 +4,16 @@
 
 AI Spot Trader est une application expérimentale de trading pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est un cockpit de contrôle et de visualisation qui peut être fermé sans arrêter le moteur.
 
-Référence GitHub auditée au démarrage du Batch 49.3 :
+Référence GitHub vérifiée à la clôture du Batch 49.3 :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b
-Commit     : feat: feed radar shortlist into agent universe
+HEAD       : d08cd31e6a795a8beb09530c2bc9a3f32f94fe35
+Commit     : feat: expose causal radar analytics context to agent
 ```
 
-Les Batches 49.1 et 49.2 sont intégrés. Le Batch 49.3 est livré comme patch proposé non intégré sur cette base.
+Les Batches 49.1, 49.2 et 49.3 sont intégrés. Le Batch 49.3 est intégré via `d08cd31`.
 
 ## 2. Invariants fonctionnels
 
