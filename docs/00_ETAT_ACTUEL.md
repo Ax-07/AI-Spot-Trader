@@ -1,17 +1,17 @@
 # 00 — État actuel
 
-## Référence de clôture Batch 47.4
+## Référence de reprise — Batch 47.5 préparé, non intégré
 
 ```text
-Repository                    : Ax-07/AI-Spot-Trader
-Branche                       : main
-HEAD GitHub audité            : 472f3adca1d19822289af47b52b03afab3cda0fb
-Commit fonctionnel Batch 47.3 : 12051a7
-Clôture Batch 47.3 observée    : ec1cd5d — docs: mark batch 47.3 integrated
-Batch 47.4                    : INTÉGRÉ via 472f3ad — feat: add CVD and aggressor analytics
+Repository                     : Ax-07/AI-Spot-Trader
+Branche                        : main
+HEAD GitHub réel audité        : e972fd9112363b268a53658fe5ce88facbfa7dd7
+Clôture documentaire Batch 47.4: e972fd9 — docs: mark batch 47.4 integrated
+Commit fonctionnel Batch 47.4 : 472f3ad — feat: add CVD and aggressor analytics
+Batch 47.5                     : PATCH PROPOSÉ — NON INTÉGRÉ
 ```
 
-Le **Batch 47.4 est intégré sur GitHub `main` via `472f3ad`**. Les deux smokes Kraken réels sont confirmés, le test de régression 47.3 obsolète a été corrigé, puis la suite backend complète a été relancée avec succès avant intégration.
+Le **Batch 47.4 reste l'état intégré de GitHub `main`**. Le présent patch Batch 47.5 n'est pas encore intégré et doit être validé localement avant commit/push.
 
 Décisions intégrées récentes :
 
@@ -21,15 +21,15 @@ Batch 46 / 46.1 => intégré via b219365
 Batch 47.1      => intégré via 842e6bd7
 Batch 47.2      => intégré via c09dd14
 Batch 47.3      => intégré via 12051a7
-Batch 47.4      => intégré via 472f3ad
+Batch 47.4      => intégré via 472f3ad, clôturé documentairement via e972fd9
 ADR-328..344    => ADOPTÉES selon leur batch intégré
 ```
 
-## Radar intégré jusqu'au Batch 47.4
+## Radar intégré avant application de 47.5
 
 Le Market Attention Radar reste `market-attention-radar-v6`, strictement informatif, déterministe, causal et read-only. L'exécution de trading demeure SPOT uniquement.
 
-Pipeline canonique :
+Pipeline intégré 47.4 :
 
 ```text
 catalogue Kraken
@@ -56,7 +56,7 @@ PerpetualAnalyticsSnapshot
 perpetual_analytics_coverage
 ```
 
-Policy :
+Policy réseau inchangée dans le patch 47.5 :
 
 ```text
 market_limit_per_refresh = 10
@@ -67,38 +67,49 @@ fetch_concurrency        = 4
 baseline_periods         = 12
 ```
 
-Les cinq séries Analytics intégrées sont `open-interest`, `funding`, `liquidation-volume`, `cvd` et `aggressor-differential`. Les smokes locaux ont confirmé : Funding en timestamps millisecondes ; Liquidation Volume, CVD et Aggressor Differential en secondes.
+Les cinq séries Analytics restent `open-interest`, `funding`, `liquidation-volume`, `cvd` et `aggressor-differential`. Elles partagent toujours un seul scanner/cache/cursor/sémaphore. Budget théorique : 5 × 10 = 50 appels Analytics max/refresh.
 
-## Batch 47.4 — intégré via `472f3ad`
+## Batch 47.5 — patch proposé
 
-Le patch ajoute exactement `cvd` et `aggressor-differential` dans la rotation/cache Analytics unique. Le budget reste 10 marchés, concurrence 4, plafond théorique 50 appels/refresh.
+Audit :
 
-Smokes locaux utilisateur confirmés le 2026-10-05 :
+- **confirmé** : `interest_level` et `candidate_limit` sont décidés avant l'enrichissement Analytics ;
+- **confirmé** : la sélection finale Structure est canonique avant l'enrichissement 47.4 ;
+- **confirmé** : CVD et Aggressor Differential sont sémantiquement redondants comme order flow agressif ;
+- **obsolète** : les documents citaient encore `472f3ad` comme HEAD audité alors que le HEAD réel est `e972fd9` ;
+- **manquant avant patch** : politique multi-analytics bornée, déduplication et diagnostics de ranking ;
+- **décidé dans le patch** : aucune création de candidat par Analytics et aucune modification de `interest_level`.
+
+Décision proposée : **score multi-analytics séparé, plafonné à 4, appliqué seulement aux PERP déjà retenus**.
 
 ```text
-CVD        : timestamp epoch secondes ; data.buy_volume[], data.sell_volume[], data.cvd[] ; more=false ; errors=[]
-Aggressor  : timestamp epoch secondes ; data[] scalaire signé ; more=false ; errors=[]
+Open Interest       : 0 ou +1
+Funding             : 0 ou +1
+Liquidation Volume  : 0 ou +1
+Order Flow          : 0 ou +1 (CVD + Aggressor dédupliqués)
+TOTAL               : 0..4
 ```
 
-Le payload CVD réel a montré `6` timestamps, `6` buy volumes, `4` sell volumes et `6` valeurs CVD. Le contrat applicatif est donc corrigé : `timestamp[] + cvd[]` doivent être alignés 1:1 ; les side volumes ne sont exposés que si **les deux** tableaux sont complets et alignés. Sinon ils restent `None`, sans padding ni réindexation. Les clés live sont `buy_volume` / `sell_volume`; la variante camelCase reste tolérée pour compatibilité documentaire.
+Une série ne contribue que si elle est `AVAILABLE` et possède déjà une caractéristique 47.2–47.4 active. Disponibilité seule = 0. `INSUFFICIENT_HISTORY`, `STALE`, `TECHNICAL_ERROR`, `PARTIAL` ou absence = 0 sans pénalité.
 
-Statistiques conservées : CVD sur `cvd_change`, Aggressor directement, médiane + MAD signé, aucun fallback ratio, seuils descriptifs ±2.5. Aucun impact ranking/shortlist/Agent/Risk/Broker.
+Les métriques signées sont symétriques pour **l'attention**, pas pour le trading : un extrême positif ou négatif peut contribuer de façon identique. CVD + Aggressor concordants valent au maximum +1 ; s'ils sont actifs mais opposés, la composante order-flow vaut 0 et le conflit est diagnostiqué.
 
-Validation locale finale observée avant intégration : backend `python -m pytest -q` PASS à 100 %, frontend `pnpm typecheck` PASS, frontend `pnpm test` PASS 82/82, `git diff --check` PASS hors avertissements LF/CRLF, smokes CVD/Aggressor PASS. Le commit `472f3ad` a ensuite été poussé sur GitHub `main` avec un arbre local propre.
+Hiérarchie proposée :
 
-Voir `docs/47_4_CVD_AGGRESSOR_DIFFERENTIAL.md`.
+```text
+interest_level
+-> événement Structure confirmé
+-> analytics_ranking.score
+-> critères microstructure / activité / liquidité restants
+-> symbole déterministe
+```
+
+En scope `ALL`, les positions SPOT sont figées et seuls les PERP peuvent échanger leurs positions entre eux. Le diagnostic `analytics_ranking` expose aussi le rang global avant/après et `rank_change`, afin que l’impact réellement observé soit visible même lorsqu’il est nul. Le patch ne change ni Agent, ni Risk Engine, ni Broker, ni exécution SPOT/PERP.
+
+Voir `docs/47_5_MULTI_ANALYTICS_RANKING.md`.
 
 ## Validations connues
 
-Batch 47.3 local utilisateur avant intégration :
+État intégré Batch 47.4 avant ce patch : backend local utilisateur `python -m pytest -q` PASS à 100 %, frontend `pnpm typecheck` PASS, frontend `pnpm test` PASS 82/82, `git diff --check` PASS hors avertissements LF/CRLF, smokes CVD/Aggressor PASS.
 
-```text
-backend python -m pytest -q : PASS — suite complète à 100 %
-frontend pnpm typecheck     : PASS
-frontend pnpm test          : PASS — 76/76
-git diff --check            : PASS — avertissements LF/CRLF uniquement
-smoke Kraken Funding        : PASS — PF_XBTUSD, rate/relativeRate OHLC, timestamps millisecondes, more=false
-smoke Kraken Liquidation    : PASS — PF_XBTUSD, scalaires non négatifs, timestamps secondes, more=false
-```
-
-Batch 47.4 : **INTÉGRÉ via `472f3ad`** ; smokes live locaux CVD/Aggressor PASS ; backend local `python -m pytest -q` PASS à 100 % après correctif ; frontend local typecheck PASS et tests 82/82 PASS ; `git diff --check` PASS hors avertissements LF/CRLF. Correctif ChatGPT : py_compile PASS, pytest ciblé 47/47 PASS, frontend 47.4 6/6 PASS.
+Validation ChatGPT du patch 47.5 : `py_compile` production + test backend PASS ; harnais backend isolé 15/15 PASS ; typecheck strict ciblé `market-attention.ts` PASS ; parsing TS/TSX lib + cockpit PASS ; test frontend Batch 47.5 4/4 PASS. Les suites complètes `python -m pytest -q`, `pnpm typecheck`, `pnpm test` et `git diff --check` restent à exécuter localement sur le checkout complet avant intégration. Ne jamais considérer 47.5 intégré tant que l'utilisateur n'a pas validé puis poussé le commit.

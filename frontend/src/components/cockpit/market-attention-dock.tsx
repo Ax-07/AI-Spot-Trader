@@ -13,6 +13,8 @@ import {
   attentionHorizon,
   fetchMarketAttention,
   formatAdaptiveScore,
+  formatAnalyticsRankChange,
+  formatAnalyticsRankingScore,
   formatBps,
   formatCoverageRatio,
   formatDurationSeconds,
@@ -30,6 +32,8 @@ import {
   marketStructureCoverageMessage,
   perpetualAnalyticsContext,
   perpetualAnalyticsCoverageMessage,
+  perpetualAnalyticsRankingComponentLabel,
+  perpetualAnalyticsRankingContext,
   perpetualAnalyticsStatusLabel,
   perpetualTickerContext,
   perpetualTickerStatusLabel,
@@ -187,6 +191,7 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
   const structure = marketStructure(item);
   const futures = perpetualTickerContext(item);
   const analytics = perpetualAnalyticsContext(item);
+  const analyticsRanking = perpetualAnalyticsRankingContext(item);
   const funding = analytics?.funding ?? null;
   const liquidations = analytics?.liquidation_volume ?? null;
   const cvd = analytics?.cvd ?? null;
@@ -278,8 +283,52 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
               <div className="mt-4 rounded-md border bg-background/50 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
+                    <p className="font-semibold">Influence Analytics sur le ranking</p>
+                    <p className="text-[10px] text-muted-foreground">Score d’attention borné, appliqué uniquement aux PERP déjà admis dans la shortlist.</p>
+                  </div>
+                  <Badge tone={analyticsRanking?.applied_to_ranking ? "info" : "neutral"}>
+                    {formatAnalyticsRankingScore(analyticsRanking)}
+                  </Badge>
+                </div>
+                {analyticsRanking ? (
+                  <>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                      <Fact label="Rang avant Analytics" value={analyticsRanking.rank_before_analytics ? `#${analyticsRanking.rank_before_analytics}` : "—"} />
+                      <Fact label="Rang après Analytics" value={analyticsRanking.rank_after_analytics ? `#${analyticsRanking.rank_after_analytics}` : "—"} />
+                      <Fact label="Variation de rang" value={formatAnalyticsRankChange(analyticsRanking)} />
+                    </div>
+                    <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                    {analyticsRanking.components.map((component) => (
+                      <div key={component.name} className="rounded-md border bg-muted/10 p-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide">{perpetualAnalyticsRankingComponentLabel(component.name)}</p>
+                          <span className="font-mono text-[11px] font-semibold">+{component.contribution}</span>
+                        </div>
+                        <p className="mt-2 text-[10px] text-muted-foreground">
+                          {component.evidence.length ? component.evidence.map(analyticsCharacteristicLabel).join(" · ") : "Aucune anomalie retenue"}
+                        </p>
+                        <div className="mt-2 space-y-1">
+                          {component.series.map((series) => (
+                            <p key={series.series} className="font-mono text-[9px] text-muted-foreground">
+                              {series.series} · {series.status} · {series.used ? "retenue" : "non retenue"}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    </div>
+                  </>
+                ) : <p className="mt-2 text-[10px] text-muted-foreground">Diagnostic ranking absent de ce payload legacy.</p>}
+                <p className="mt-3 text-[10px] text-muted-foreground">
+                  Hiérarchie : niveau d’intérêt → événement Structure confirmé → score Analytics → critères micro/OHLCV restants. CVD et Aggressor Differential forment une seule composante order-flow : une confirmation concordante compte une seule fois{analyticsRanking?.order_flow_deduplicated ? " (déduplication active ici)" : ""}{analyticsRanking?.order_flow_conflict ? " ; conflit directionnel détecté, contribution order-flow = 0" : ""}. En scope ALL, les positions SPOT restent fixes. Ce score ne crée aucun candidat et n’a aucun impact direct sur Agent, Risk Engine ou Broker.
+                </p>
+              </div>
+
+              <div className="mt-4 rounded-md border bg-background/50 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
                     <p className="font-semibold">Open Interest historique</p>
-                    <p className="text-[10px] text-muted-foreground">Baseline propre au marché, cache/rotation Analytics partagé ; enrichissement descriptif uniquement.</p>
+                    <p className="text-[10px] text-muted-foreground">Baseline propre au marché, cache/rotation Analytics partagé ; une anomalie disponible peut contribuer au score Analytics borné.</p>
                   </div>
                   <Badge tone={analytics?.open_interest_status === "AVAILABLE" ? "success" : analytics?.open_interest_status === "TECHNICAL_ERROR" ? "danger" : "warning"}>
                     {perpetualAnalyticsStatusLabel(analytics?.open_interest_status)}
@@ -300,7 +349,7 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
                 </div>
                 {analytics?.error_type ? <p className="mt-2 text-[10px] text-destructive-subtle-foreground">{analytics.error_type}</p> : null}
                 <p className="mt-3 text-[10px] text-muted-foreground">
-                  Le score compare l’OI à sa propre baseline médiane. Aucune conversion USD n’est inventée et l’OI historique ne change ni le niveau d’intérêt ni le classement.
+                  Le score statistique compare l’OI à sa propre baseline médiane. Aucune conversion USD n’est inventée ; l’OI ne modifie jamais `interest_level` et ne peut pas créer un candidat.
                 </p>
               </div>
 
@@ -328,7 +377,7 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
                 </div>
                 {funding?.error_type ? <p className="mt-2 text-[10px] text-destructive-subtle-foreground">{funding.error_type}</p> : null}
                 <p className="mt-3 text-[10px] text-muted-foreground">
-                  Positif : longs paient shorts ; négatif : shorts paient longs. Ce funding historique n’est ni `fundingRatePrediction`, ni un paiement de funding réalisé sur un compte.
+                  Positif : longs paient shorts ; négatif : shorts paient longs. Les deux directions sont symétriques pour l’attention : aucune n’est interprétée comme BUY ou SELL.
                 </p>
               </div>
 
@@ -384,7 +433,7 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
                 </div>
                 {cvd?.error_type ? <p className="mt-2 text-[10px] text-destructive-subtle-foreground">{cvd.error_type}</p> : null}
                 <p className="mt-3 text-[10px] text-muted-foreground">
-                  Impulsion positive ou négative = description d’un écart statistique de variation CVD, jamais une instruction de trading. Les volumes buy/sell ne sont affichés que si Kraken fournit deux séries complètes alignables sur les timestamps ; sinon ils restent indisponibles plutôt que d’être réindexés artificiellement.
+                  Impulsion positive ou négative = description d’un écart statistique de variation CVD, jamais une instruction de trading. Le CVD partage une seule composante de ranking avec Aggressor Differential et ne peut donc pas être double-compté.
                 </p>
               </div>
 
@@ -411,7 +460,7 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
                 </div>
                 {aggressor?.error_type ? <p className="mt-2 text-[10px] text-destructive-subtle-foreground">{aggressor.error_type}</p> : null}
                 <p className="mt-3 text-[10px] text-muted-foreground">
-                  Positif = pression agressive acheteuse sur l’intervalle ; négatif = pression agressive vendeuse. Cette dominance reste descriptive et n’a aucune autorité de ranking.
+                  Positif = pression agressive acheteuse ; négatif = pression agressive vendeuse. Pour le ranking d’attention, les deux directions sont symétriques et cette série partage la composante order-flow avec le CVD.
                 </p>
               </div>
 
@@ -527,7 +576,7 @@ function MarketRow({ item, expanded, onToggle }: { item: MarketAttentionSnapshot
           ) : null}
 
           <p className="rounded-lg border bg-muted/10 p-3 text-muted-foreground">
-            Prix, OHLCV, structure de marché, Analytics Futures, carnet L2 et trades récents proviennent de données publiques Kraken. La capitalisation est une métadonnée externe read-only ; elle n’autorise aucune décision ni aucun ordre.
+            Prix, OHLCV, structure de marché, Analytics Futures, carnet L2 et trades récents proviennent de données publiques Kraken. Le score Analytics ne pilote ni Agent, ni Risk Engine, ni Broker ; la capitalisation reste une métadonnée externe read-only.
           </p>
         </div>
       ) : null}
@@ -669,7 +718,7 @@ export function MarketAttentionDock() {
                   {data ? <span className="inline-flex"><Badge tone={statusTone(data.status)}>État · {data.status}</Badge></span> : null}
                   {data ? <span className="inline-flex"><Badge tone="neutral">Marché · {data.market_scope === "ALL" ? "TOUS" : data.market_scope === "PERPETUAL" ? "PERP" : "SPOT"}</Badge></span> : null}
                 </div>
-                <CardDescription className="mt-1">Données de marché Kraken déterministes, avec capitalisation descriptive via provider externe read-only. Aucun appel IA, aucune exécution et aucun signal BUY / SELL / HOLD.</CardDescription>
+                <CardDescription className="mt-1">Données de marché Kraken déterministes, avec capitalisation descriptive via provider externe read-only. Le score Analytics peut seulement réordonner l’attention entre PERP déjà sélectionnés ; aucun appel IA, aucune exécution et aucun signal BUY / SELL / HOLD.</CardDescription>
               </div>
               <div className="flex gap-1">
                 <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading} aria-label="Actualiser le radar">
@@ -926,7 +975,7 @@ export function MarketAttentionDock() {
                       ))}
                     </div>
                     <p className="mt-3 text-[11px] text-muted-foreground">{perpetualAnalyticsCoverageMessage(data.perpetual_analytics_coverage)}</p>
-                    <p className="mt-1 text-[10px] text-muted-foreground">Policy 47.4 : jusqu’à 5 requêtes publiques par marché sélectionné (OI + funding + liquidation-volume + CVD + aggressor-differential), soit 50 max/refresh avec la limite par défaut de 10 marchés ; concurrence globale toujours bornée à 4 et aucun auto-tuning.</p>
+                    <p className="mt-1 text-[10px] text-muted-foreground">Policy réseau inchangée en 47.5 : jusqu’à 5 requêtes publiques par marché sélectionné (OI + funding + liquidation-volume + CVD + aggressor-differential), soit 50 max/refresh avec la limite par défaut de 10 marchés ; un seul scanner/cache/cursor et concurrence globale bornée à 4.</p>
                   </div>
                 ) : null}
 
@@ -1028,7 +1077,7 @@ export function MarketAttentionDock() {
                     {loading ? "Construction du snapshot du radar…" : data.status === "NOT_CONFIGURED" ? "Radar non configuré." : marketAttentionStatusMessage(data)}
                   </div>
                 )}
-                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · filtres pilotés par le backend · classement déterministe. Volume 24h SPOT = candles Kraken causales ; volume 24h PERP linear/USD = `volumeQuote` Kraken Futures uniquement lorsqu’il est validé. Analytics Futures historiques = OI + funding + liquidation-volume + CVD + aggressor-differential via une rotation/cache partagée et causale ; ces caractéristiques restent descriptives et n’ont aucun impact de ranking dans le Batch 47.4. Le funding absolu/raw, le funding relatif et la prévision ticker restent distincts ; Liquidation Volume reste agrégé sans split long/short inventé ; le CVD est analysé sur sa variation et l’Aggressor Differential décrit l’écart taker buy − taker sell. Capitalisation = {data.market_cap_metadata_provider ?? "provider externe indisponible"}. La Market Structure utilise uniquement des candles finalisées et des pivots confirmés ; UNKNOWN est fail-closed lorsqu’un filtre correspondant est actif.</p>
+                <p className="text-[10px] text-muted-foreground">Snapshot {shortTime(data.observed_at)} · filtres pilotés par le backend · classement déterministe. Volume 24h SPOT = candles Kraken causales ; volume 24h PERP linear/USD = `volumeQuote` Kraken Futures uniquement lorsqu’il est validé. Analytics Futures historiques = OI + funding + liquidation-volume + CVD + aggressor-differential via une rotation/cache partagée et causale. Batch 47.5 : ces Analytics ne changent ni `interest_level` ni la population des candidats ; elles produisent un score d’attention borné 0–4 qui réordonne seulement des PERP déjà présents, après niveau d’intérêt et événement Structure. CVD + Aggressor comptent au maximum pour une seule composante order-flow ; séries absentes, insuffisantes, périmées ou en erreur sont neutres. En scope ALL, les positions SPOT restent fixes. Aucun impact direct sur Agent, Risk Engine ou Broker. Le funding absolu/raw, le funding relatif et la prévision ticker restent distincts ; Liquidation Volume reste agrégé sans split long/short inventé ; le CVD est analysé sur sa variation et l’Aggressor Differential décrit l’écart taker buy − taker sell. Capitalisation = {data.market_cap_metadata_provider ?? "provider externe indisponible"}. La Market Structure utilise uniquement des candles finalisées et des pivots confirmés ; UNKNOWN est fail-closed lorsqu’un filtre correspondant est actif.</p>
               </div>
             ) : <p className="text-sm text-muted-foreground">{loading ? "Chargement du radar…" : "Aucun snapshot chargé."}</p>}
           </CardContent>

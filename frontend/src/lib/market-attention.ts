@@ -80,6 +80,38 @@ export type PerpetualAnalyticsCharacteristic =
   | "AGGRESSOR_BUY_DOMINANCE"
   | "AGGRESSOR_SELL_DOMINANCE";
 
+export type PerpetualAnalyticsRankingComponentName =
+  | "OPEN_INTEREST"
+  | "FUNDING"
+  | "LIQUIDATION_VOLUME"
+  | "ORDER_FLOW";
+
+export type PerpetualAnalyticsRankingSeriesDiagnostic = {
+  series: string;
+  status: string;
+  used: boolean;
+};
+
+export type PerpetualAnalyticsRankingComponent = {
+  name: PerpetualAnalyticsRankingComponentName;
+  contribution: number;
+  evidence: PerpetualAnalyticsCharacteristic[];
+  series: PerpetualAnalyticsRankingSeriesDiagnostic[];
+};
+
+export type PerpetualAnalyticsRankingContext = {
+  score: number;
+  max_score: number;
+  components: PerpetualAnalyticsRankingComponent[];
+  order_flow_deduplicated: boolean;
+  order_flow_conflict: boolean;
+  applied_to_ranking: boolean;
+  rank_before_analytics?: number | null;
+  rank_after_analytics?: number | null;
+  rank_change?: number | null;
+  ranking_policy: string;
+};
+
 export type PerpetualFundingAnalyticsSnapshot = {
   status: PerpetualAnalyticsStatus;
   observed_at: string;
@@ -462,6 +494,7 @@ export type MarketAttentionSnapshot = {
   market_cap_observed_at?: string | null;
   perpetual_ticker?: PerpetualTickerContext | null;
   perpetual_analytics?: PerpetualAnalyticsSnapshot | null;
+  analytics_ranking?: PerpetualAnalyticsRankingContext | null;
 };
 
 export type MarketAttentionOverview = {
@@ -600,6 +633,36 @@ export function perpetualAnalyticsContext(
   item: MarketAttentionSnapshot,
 ): PerpetualAnalyticsSnapshot | null {
   return item.perpetual_analytics ?? null;
+}
+
+export function perpetualAnalyticsRankingContext(
+  item: MarketAttentionSnapshot,
+): PerpetualAnalyticsRankingContext | null {
+  return item.analytics_ranking ?? null;
+}
+
+export function formatAnalyticsRankingScore(
+  value: PerpetualAnalyticsRankingContext | null | undefined,
+): string {
+  if (!value) return "—";
+  return `${value.score} / ${value.max_score}`;
+}
+
+export function formatAnalyticsRankChange(
+  value: PerpetualAnalyticsRankingContext | null | undefined,
+): string {
+  if (!value || value.rank_change === null || value.rank_change === undefined) return "—";
+  if (value.rank_change > 0) return `+${value.rank_change}`;
+  return String(value.rank_change);
+}
+
+export function perpetualAnalyticsRankingComponentLabel(
+  value: PerpetualAnalyticsRankingComponentName,
+): string {
+  if (value === "OPEN_INTEREST") return "Open Interest";
+  if (value === "FUNDING") return "Funding";
+  if (value === "LIQUIDATION_VOLUME") return "Liquidations";
+  return "Order flow";
 }
 
 export function perpetualAnalyticsSeriesCoverage(
