@@ -5,7 +5,7 @@
 ```text
 Repository                  : Ax-07/AI-Spot-Trader
 Branche                     : main
-HEAD GitHub audité          : ec1cd5dc576c8638bff7c7110aa9a0a2292f71ff
+HEAD GitHub audité          : 472f3adca1d19822289af47b52b03afab3cda0fb
 Commit fonctionnel 47.3     : 12051a7 — feat: add historical funding and liquidation analytics
 Clôture 47.3 observée       : ec1cd5d — docs: mark batch 47.3 integrated
 Batch 43.2                  : intégré
@@ -15,7 +15,7 @@ Batch 46 / 46.1             : intégré via b219365
 Batch 47.1                  : intégré via 842e6bd7
 Batch 47.2                  : intégré via c09dd14
 Batch 47.3                  : intégré via 12051a7
-Batch 47.4                  : VALIDÉ LOCALEMENT, prêt à intégrer sur main
+Batch 47.4                  : intégré via 472f3ad
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -103,7 +103,7 @@ Voir `docs/47_3_FUNDING_LIQUIDATION_VOLUME.md`.
 
 ## Batch 47.4 — CVD + Aggressor Differential
 
-**État : validé localement, prêt à intégrer ; GitHub `main` reste à la clôture 47.3 avant commit.**
+**Intégré sur GitHub `main` via `472f3ad` (`feat: add CVD and aggressor analytics`).**
 
 Périmètre : `cvd` + `aggressor-differential`, toujours dans le même `PerpetualAnalyticsScanner`, cache, curseur et sémaphore global. 5 séries × 10 marchés = 50 requêtes max/refresh ; `fetch_concurrency=4` inchangé.
 
@@ -116,7 +116,7 @@ Contrats live confirmés :
 
 Analyse : CVD sur `cvd_change`, Aggressor directement, médiane + MAD, aucun fallback ratio pour ces séries signées, seuils descriptifs ±2.5. Caractéristiques `CVD_POSITIVE_IMPULSE`, `CVD_NEGATIVE_IMPULSE`, `AGGRESSOR_BUY_DOMINANCE`, `AGGRESSOR_SELL_DOMINANCE`. Aucun impact ranking, shortlist ou exécution.
 
-Validation locale finale observée après correctif : backend `python -m pytest -q` PASS à 100 %, frontend typecheck PASS, tests frontend 82/82 PASS, `git diff --check` PASS hors avertissements LF/CRLF et smokes CVD/Aggressor PASS. Le batch est prêt à être commité puis poussé.
+Validation locale finale observée avant intégration : backend `python -m pytest -q` PASS à 100 %, frontend typecheck PASS, tests frontend 82/82 PASS, `git diff --check` PASS hors avertissements LF/CRLF et smokes CVD/Aggressor PASS. Le commit `472f3ad` a ensuite été poussé sur `main`.
 
 Voir `docs/47_4_CVD_AGGRESSOR_DIFFERENTIAL.md`.
 
@@ -141,7 +141,7 @@ smoke Kraken Funding PF_XBTUSD                     : PASS — rate/relativeRate 
 smoke Kraken Liquidation Volume PF_XBTUSD          : PASS — data[] scalaire, timestamp s
 ```
 
-Batch 47.4 — smokes Kraken locaux PASS ; backend local complet PASS à 100 % après correctif ; frontend local typecheck PASS et tests 82/82 PASS ; `git diff --check` PASS hors avertissements LF/CRLF. Correctif ciblé ChatGPT : 47/47 PASS + frontend 47.4 6/6 PASS. Prêt à intégrer.
+Batch 47.4 — **INTÉGRÉ via `472f3ad`** ; smokes Kraken locaux PASS ; backend local complet PASS à 100 % après correctif ; frontend local typecheck PASS et tests 82/82 PASS ; `git diff --check` PASS hors avertissements LF/CRLF. Correctif ciblé ChatGPT : 47/47 PASS + frontend 47.4 6/6 PASS.
 
 ## Périmètres ultérieurs possibles
 

@@ -2,7 +2,7 @@
 
 ## Statut
 
-**VALIDÉ LOCALEMENT APRÈS CORRECTIF ET SMOKES RÉELS — PRÊT À INTÉGRER.**
+**INTÉGRÉ SUR GITHUB `main` VIA `472f3ad` APRÈS VALIDATION LOCALE ET SMOKES RÉELS.**
 
 Base auditée :
 
@@ -12,9 +12,10 @@ Branche              : main
 HEAD GitHub de départ: ec1cd5dc576c8638bff7c7110aa9a0a2292f71ff
 Message HEAD         : docs: mark batch 47.3 integrated
 Commit fonctionnel 47.3 intégré : 12051a7 — feat: add historical funding and liquidation analytics
+Commit fonctionnel 47.4 intégré : 472f3ad — feat: add CVD and aggressor analytics
 ```
 
-Aucun changement GitHub n'a été effectué par ChatGPT.
+Aucun changement GitHub n'a été effectué directement par ChatGPT. L'intégration a été réalisée localement par l'utilisateur puis poussée sur `main`.
 
 ## Objectif
 
@@ -502,21 +503,14 @@ smoke CVD                   : PASS — secondes, snake_case, side arrays de long
 smoke Aggressor             : PASS — secondes, scalaires signés
 ```
 
-Le Batch 47.4 est donc **validé localement et prêt à intégrer**. GitHub `main` reste à `ec1cd5d` tant que le commit fonctionnel 47.4 n’a pas été poussé.
+Le Batch 47.4 est **intégré sur GitHub `main` via `472f3adca1d19822289af47b52b03afab3cda0fb`**. Après le push, `origin/main` et le HEAD local pointent sur `472f3ad`, et `git status --short` est vide.
 
-Commandes minimales :
+Vérification d’intégration observée :
 
-```powershell
-cd E:\AI-Spot-Trader\backend
-python -m pytest -q
-
-cd E:\AI-Spot-Trader\frontend
-pnpm typecheck
-pnpm test
-
-cd E:\AI-Spot-Trader
-git diff --check
-git status --short
+```text
+git push origin main   : PASS — ec1cd5d..472f3ad
+git status --short     : vide
+git log -1 --oneline   : 472f3ad feat: add CVD and aggressor analytics
 ```
 
 ## Invariants préservés

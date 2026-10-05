@@ -11,7 +11,7 @@ Le Market Attention Radar reste strictement observationnel et ne prend aucune d�
 ## Référence courante
 
 ```text
-HEAD GitHub audité      : ec1cd5dc576c8638bff7c7110aa9a0a2292f71ff
+HEAD GitHub audité      : 472f3adca1d19822289af47b52b03afab3cda0fb
 Commit fonctionnel 47.3 : 12051a7 — feat: add historical funding and liquidation analytics
 Clôture 47.3 observée   : ec1cd5d — docs: mark batch 47.3 integrated
 Batch 45                : intégré via 45d41b7
@@ -19,12 +19,12 @@ Batch 46 / 46.1         : intégré via b219365
 Batch 47.1              : intégré via 842e6bd7
 Batch 47.2              : intégré via c09dd14
 Batch 47.3              : intégré via 12051a7
-Batch 47.4              : VALIDÉ LOCALEMENT, prêt à intégrer ; non encore poussé sur main
+Batch 47.4              : intégré via 472f3ad — feat: add CVD and aggressor analytics
 ```
 
-## Changelog — 2026-10-05 — Batch 47.4 CVD + Aggressor Differential — validation locale finale
+## Changelog — 2026-10-05 — Batch 47.4 CVD + Aggressor Differential — intégré
 
-Base auditée : GitHub `main` au HEAD `ec1cd5dc576c8638bff7c7110aa9a0a2292f71ff` (`docs: mark batch 47.3 integrated`). Commit fonctionnel Batch 47.3 intégré : `12051a7`.
+Base auditée : GitHub `main` au HEAD `ec1cd5dc576c8638bff7c7110aa9a0a2292f71ff` (`docs: mark batch 47.3 integrated`). Batch 47.4 intégré ensuite via `472f3adca1d19822289af47b52b03afab3cda0fb` (`feat: add CVD and aggressor analytics`).
 
 Audit de reprise :
 
@@ -79,7 +79,7 @@ parsing TypeScript cockpit/lib                          : PASS
 
 Ces validations ciblées ne remplacent pas la suite complète du repository.
 
-### Validation finale avant intégration
+### Validation finale et intégration
 
 Smokes publics exécutés localement par l'utilisateur :
 
@@ -90,17 +90,17 @@ PF_XBTUSD/aggressor-differential: PASS — epoch secondes, scalaires signés, mo
 
 L'unique échec de la première suite backend complète provenait du test Batch 47.3 qui attendait exactement 3 séries de coverage. Le scanner 47.4 expose désormais 5 séries tout en ne tentant que les méthodes réellement présentes chez un provider legacy. Le test a été corrigé, puis la suite backend complète a été relancée localement avec succès jusqu'à 100 %.
 
-Validation finale locale après correctif : backend `python -m pytest -q` PASS à 100 %, frontend `pnpm typecheck` PASS, frontend `pnpm test` PASS **82/82**, `git diff --check` PASS hors avertissements LF/CRLF. Les smokes CVD et Aggressor restent PASS. Les validations ciblées ChatGPT (`47/47`, frontend 47.4 `6/6`, `py_compile`) complètent cette validation du repository.
+Validation finale locale après correctif : backend `python -m pytest -q` PASS à 100 %, frontend `pnpm typecheck` PASS, frontend `pnpm test` PASS **82/82**, `git diff --check` PASS hors avertissements LF/CRLF. Les smokes CVD et Aggressor restent PASS. Les validations ciblées ChatGPT (`47/47`, frontend 47.4 `6/6`, `py_compile`) complètent cette validation du repository. Le commit fonctionnel `472f3ad` a ensuite été poussé sur GitHub `main` et le `git status --short` local est resté vide.
 
 ## ADR-344 — CVD utilise timestamp + cvd comme contrat historique obligatoire ; side volumes fail-soft
 
-**VALIDÉ — Batch 47.4 ; adoption effective lors de son intégration sur GitHub `main`.**
+**ADOPTÉ — Batch 47.4 intégré via `472f3ad`.**
 
 Le smoke live démontre que `buy_volume[]` et `sell_volume[]` peuvent avoir des longueurs différentes de `timestamp[]`. Comme ces tableaux n'ont pas de timestamps propres, aucune correspondance par index n'est inventée. `timestamp[] + cvd[]` forment la série historique canonique ; buy/sell ne sont exposés que si les deux tableaux sont intégralement alignés.
 
 ## ADR-340 — CVD et Aggressor Differential réutilisent la rotation/cache Analytics unique
 
-**VALIDÉ — Batch 47.4 ; adoption effective lors de son intégration sur GitHub `main`.**
+**ADOPTÉ — Batch 47.4 intégré via `472f3ad`.**
 
 OI, Funding, Liquidation Volume, CVD et Aggressor Differential utilisent le même `PerpetualAnalyticsScanner`, le même curseur marché, le même cache et le même sémaphore global. Aucun `_cvd_cursor`, `_aggressor_cursor`, `_cvd_cache` ou `_aggressor_cache` n'est créé.
 
@@ -108,7 +108,7 @@ Avec la policy actuelle, le budget maximal devient 50 requêtes publiques Analyt
 
 ## ADR-341 — L'anomalie CVD porte sur la variation et non sur le niveau cumulatif
 
-**VALIDÉ — Batch 47.4 ; adoption effective lors de son intégration sur GitHub `main`.**
+**ADOPTÉ — Batch 47.4 intégré via `472f3ad`.**
 
 Le niveau `current_cvd` reste observable mais n'est pas utilisé directement pour qualifier une anomalie. La série statistique est `cvd_change = current_cvd - previous_cvd`, avec baseline médiane et MAD sur les changements historiques antérieurs au point courant.
 
@@ -116,7 +116,7 @@ Cette règle évite de confondre un niveau cumulatif naturellement élevé/faibl
 
 ## ADR-342 — Les séries order-flow signées utilisent MAD sans fallback ratio
 
-**VALIDÉ — Batch 47.4 ; adoption effective lors de son intégration sur GitHub `main`.**
+**ADOPTÉ — Batch 47.4 intégré via `472f3ad`.**
 
 CVD change et Aggressor Differential sont signés et peuvent être proches de zéro. Lorsque MAD=0, aucun ratio `current / baseline` n'est utilisé : `anomaly_method=UNAVAILABLE` et aucun score extrême artificiel n'est créé.
 
@@ -124,7 +124,7 @@ Les seuils ±2.5 sont symétriques, expérimentaux, descriptifs et non optimisé
 
 ## ADR-343 — CVD et Aggressor restent descriptifs sans autorité de ranking jusqu'au Batch 47.5
 
-**VALIDÉ — Batch 47.4 ; adoption effective lors de son intégration sur GitHub `main`.**
+**ADOPTÉ — Batch 47.4 intégré via `472f3ad`.**
 
 Les deux séries peuvent enrichir `combined_characteristics`, `interest_reasons` et le cockpit d'un candidat déjà retenu. Elles ne peuvent ni modifier `interest_level`, ni changer la clé de tri, ni augmenter `candidate_limit`, ni créer/admettre un candidat.
 
