@@ -13,20 +13,111 @@ L'exécution courante est **PAPER uniquement** :
 - FUTURE daté non exécutable ;
 - LIVE indisponible tant qu'un batch séparé ne l'active pas explicitement.
 
-Le Market Attention Radar est observationnel : il peut prioriser **l'attention**, mais il ne décide jamais BUY/SELL/HOLD et ne possède aucune autorité d'exécution. Le Batch 49.1 ne le raccorde pas à l'univers Agent.
+Le Market Attention Radar priorise **l'attention** et, depuis le Batch 49.2 proposé, peut fournir l'univers candidat au même Agent stratégique. Il ne décide jamais BUY/SELL/HOLD et ne possède aucune autorité Risk ou Broker.
 
 ## Référence courante
 
 ```text
-Base GitHub auditée 49.1     : 8704eec57de09792d0a51e080fdeb7b2a39d2381
-Clôture Batch 48             : 8704eec — docs: mark batch 48 integrated
-Batch 48 fonctionnel         : ebb664c — feat: add analytics ranking observability
-Batch 49.1                   : PATCH PROPOSÉ — NON INTÉGRÉ À LA LIVRAISON
+Base GitHub auditée 49.2     : 3194fce620f5e31672c6b52ef8986daddeea3a25
+Batch 49.1 intégré           : 3194fce — feat: activate perpetual paper trading
+Batch 48 clôturé             : 8704eec — docs: mark batch 48 integrated
+Batch 49.2                   : PATCH PROPOSÉ — NON INTÉGRÉ À LA LIVRAISON
 ```
 
-## Changelog — 2026-10-05 — Batch 49.1 activation officielle PERPETUAL PAPER — patch proposé
+## Changelog — 2026-10-05 — Batch 49.2 Radar shortlist vers univers Agent — patch proposé
 
-Base GitHub auditée au démarrage : `8704eec57de09792d0a51e080fdeb7b2a39d2381` (`docs: mark batch 48 integrated`).
+Base GitHub auditée au démarrage : `3194fce620f5e31672c6b52ef8986daddeea3a25` (`feat: activate perpetual paper trading`).
+
+### Audit confirmé
+
+- `MarketAttentionOverviewV6Analytics.shortlist` conserve un `ExecutableMarket` typé sur chaque candidat ;
+- le Radar final peut contenir `analytics_ranking` et `perpetual_analytics`, mais ces objets ne sont pas nécessaires pour construire l'univers Agent ;
+- `MarketDiscoveryCoordinator` est déjà la frontière canonique de l'univers dynamique ;
+- `DynamicMarketTradingCycleRunner` remet déjà une liste d'`ExecutableMarket` au runner multi-marchés canonique ;
+- `MultiMarketTradingCycleRunner` acquiert les `MarketState` typés et crée `CycleDecisionPlanInput` ;
+- `agent/planner.py` interdit déjà une décision hors des couples `(symbol, market_type)` causaux ;
+- Risk et Broker sont appelés uniquement après le plan stratégique canonique ;
+- `RoutedExecutableMarketDataSource` sait déjà valider/routiner SPOT et PERPETUAL dynamiques ;
+- `MarketDiscoveryPolicy` rejette déjà `FUTURE` comme type dynamique ;
+- `ExecutableMarket` rejette les `FUTURE` datés au niveau domaine.
+
+### Patch 49.2
+
+- `MarketDiscoveryCoordinator` accepte désormais exactement une source : `LEGACY_AGENT` ou `RADAR_SHORTLIST` ;
+- le mode historique Agent reste disponible pour compatibilité/tests ;
+- la composition des Campaigns dynamiques utilise `RADAR_SHORTLIST` et n'instancie plus `OpenAIWatchlistSelector` ;
+- la frontière Radar ne lit que `item.market`, donc `symbol` + `market_type` ;
+- la shortlist est revalidée contre le catalogue public Kraken et les contraintes Campaign/Risk existantes ;
+- les nouvelles ouvertures sont fail-closed si le Radar est indisponible/stale/vide ou si aucun candidat n'est exécutable ;
+- des positions déjà ouvertes peuvent continuer à être gérées en mode MANAGEMENT uniquement ;
+- aucun nouveau chemin Risk/Broker n'est créé ;
+- aucun champ Analytics 47.5/48 n'est injecté prématurément dans le prompt stratégique ;
+- aucun poids Analytics n'est modifié ;
+- aucune migration ni endpoint LIVE n'est ajouté.
+
+## ADR-357 — Le Radar alimente la frontière canonique de Market Discovery
+
+**ADOPTÉ DANS LE PATCH 49.2 — NON INTÉGRÉ À LA LIVRAISON.**
+
+Solutions comparées :
+
+1. remplacer entièrement Market Discovery par un second runner Radar : rejeté car dupliquerait orchestration/audit ;
+2. conserver Market Discovery puis ajouter une seconde shortlist Radar : rejeté car deux sources concurrentes de candidats ;
+3. **faire du Radar une source de candidats derrière `MarketDiscoveryCoordinator` : retenu**.
+
+Motifs :
+
+- réutilise le runner dynamique et le pipeline multi-marchés existants ;
+- conserve les contrats d'audit et de `market_type` ;
+- supprime l'ancien double choix stratégique de watchlist + plan ;
+- ne donne aucune autorité d'exécution au Radar.
+
+## ADR-358 — La frontière 49.2 est une projection identité-only
+
+**ADOPTÉ DANS LE PATCH 49.2 — NON INTÉGRÉ À LA LIVRAISON.**
+
+Le seul payload conceptuellement transféré du Radar vers l'univers Agent est :
+
+```text
+{ symbol, market_type }
+```
+
+Ne traversent pas cette frontière en 49.2 : score Analytics, Open Interest, Funding, Liquidations, CVD, Aggressor Differential, Market Structure détaillée et diagnostics Radar.
+
+Motif : séparer clairement la question « où regarder ? » de la question 49.3 « quels faits Radar exposer à l'Agent ? ».
+
+## ADR-359 — Une panne Radar est fail-closed pour les nouvelles ouvertures
+
+**ADOPTÉ DANS LE PATCH 49.2 — NON INTÉGRÉ À LA LIVRAISON.**
+
+```text
+Radar utilisable + candidats exécutables -> plan normal
+Radar inutilisable + positions ouvertes  -> MANAGEMENT uniquement
+Radar inutilisable + aucune position      -> cycle FAILED avant Agent/Risk/Broker
+```
+
+Le bootstrap n'est jamais promu silencieusement en opportunité lorsque le Radar est en panne. Une erreur technique n'est donc jamais interprétée comme un signal de marché.
+
+## ADR-360 — La shortlist Radar est revalidée contre l'exécutabilité Kraken/Campaign
+
+**ADOPTÉ DANS LE PATCH 49.2 — NON INTÉGRÉ À LA LIVRAISON.**
+
+Être dans la shortlist Radar ne suffit pas à être présenté comme nouvelle opportunité. Le marché doit aussi satisfaire les contraintes factuelles déjà canoniques :
+
+- type présent dans `MarketDiscoveryPolicy.market_types` ;
+- quote égale au settlement asset ;
+- statut marché tradable ;
+- PERPETUAL linéaire ;
+- présence dans le catalogue public Kraken ;
+- whitelist Risk éventuelle.
+
+Les `FUTURE` datés restent non exécutables.
+
+---
+
+## Changelog — 2026-10-05 — Batch 49.1 activation officielle PERPETUAL PAPER — intégré
+
+Commit intégré : `3194fce620f5e31672c6b52ef8986daddeea3a25` (`feat: activate perpetual paper trading`).
 
 ### Audit confirmé
 
@@ -39,8 +130,7 @@ Base GitHub auditée au démarrage : `8704eec57de09792d0a51e080fdeb7b2a39d2381` 
 - `RiskEngine` accepte les PERPETUAL linéaires et contrôle quantité, levier, marge, caps notionnels/exposition, liquidation et retournement ;
 - `PaperBroker` exécute déjà les PERPETUAL linéaires en PAPER ;
 - le ledger gère `DerivativePosition`, LONG/SHORT, funding, P&L, marge et liquidation théorique ;
-- le cockpit possède déjà les champs de configuration dérivés et l'affichage marge/levier/liquidation ;
-- le dernier contrat runtime actif encore contradictoire était le chat opérateur, qui déclarait encore « Trading is SPOT only ».
+- le cockpit possède déjà les champs de configuration dérivés et l'affichage marge/levier/liquidation.
 
 ### Patch 49.1
 
@@ -55,22 +145,15 @@ Base GitHub auditée au démarrage : `8704eec57de09792d0a51e080fdeb7b2a39d2381` 
 
 ## ADR-353 — L'univers d'exécution PAPER officiel est SPOT + PERPETUAL linéaire
 
-**ADOPTÉ DANS LE PATCH 49.1 — NON INTÉGRÉ À LA LIVRAISON.**
+**ADOPTÉ — Batch 49.1 intégré via `3194fce`.**
 
 L'ancien invariant global « SPOT uniquement » est obsolète pour le PAPER. Il reste vrai uniquement pour les règles propres au SPOT : aucun short, levier ni marge sur cette famille.
 
 Les PERPETUAL Kraken linéaires sont exécutables par le même Agent stratégique, sous le même Risk Engine déterministe et via le `PaperBroker`. Les `FUTURE` datés restent interdits.
 
-Motifs :
-
-- la capacité existe déjà dans les composants canoniques ;
-- la conserver cachée derrière un invariant documentaire contradictoire augmente le risque opératoire ;
-- une réimplémentation parallèle serait inutile et dangereuse ;
-- le `market_type` est déjà propagé causalement dans les contrats.
-
 ## ADR-354 — Aucun retournement direct PERPETUAL dans un seul ExecutionIntent
 
-**ADOPTÉ DANS LE PATCH 49.1 — NON INTÉGRÉ À LA LIVRAISON.**
+**ADOPTÉ — Batch 49.1 intégré via `3194fce`.**
 
 Une action opposée à une position existante sert d'abord à la réduire ou la fermer :
 
@@ -86,16 +169,9 @@ Si la quantité demandée dépasse la position :
 
 Une exposition opposée éventuelle doit être créée par une décision ultérieure, une fois la fermeture réellement appliquée au portefeuille.
 
-Motifs :
-
-- séquentialité causale explicite ;
-- pas de P&L/marge/funding implicites cachés dans un retournement atomique ;
-- audit simple ;
-- cohérence avec le Risk Engine et le ledger existants.
-
 ## ADR-355 — Le levier PERPETUAL reste entièrement déterministe
 
-**ADOPTÉ DANS LE PATCH 49.1 — NON INTÉGRÉ À LA LIVRAISON.**
+**ADOPTÉ — Batch 49.1 intégré via `3194fce`.**
 
 Le LLM ne produit pas de champ de levier stratégique. Le levier d'un `ExecutionIntent` dérivé provient de la configuration/policy et reste borné par :
 
@@ -108,11 +184,9 @@ Aucun prompt ou chat ne peut contourner ces contrôles.
 
 ## ADR-356 — Radar et exécution restent séparés en 49.1
 
-**ADOPTÉ DANS LE PATCH 49.1 — NON INTÉGRÉ À LA LIVRAISON.**
+**ADOPTÉ — Batch 49.1 intégré via `3194fce`.**
 
-Le fait que le PAPER sache exécuter des PERPETUAL ne donne aucune autorité au Radar. Le ranking 47.5 et l'observabilité 48 restent read-only.
-
-Le raccordement `Radar shortlist -> univers Agent SPOT + PERPETUAL` est explicitement réservé au Batch 49.2.
+Le fait que le PAPER sache exécuter des PERPETUAL ne donne aucune autorité au Radar. Le ranking 47.5 et l'observabilité 48 restent read-only. Le Batch 49.2 fait uniquement de la shortlist une source d'univers ; l'autorité stratégique reste chez l'Agent.
 
 ---
 
@@ -263,7 +337,7 @@ Clôture documentaire intégrée : `4278a5c732b9636b06144ff58e8485b3350a2c0d` (`
 - aucune modification Agent / Risk Engine / Broker dans le Batch 47.5 ;
 - aucune exécution PERPETUAL ajoutée par le Batch 47.5.
 
-Ces deux derniers points décrivent le périmètre historique du Batch 47.5 ; ils ne remplacent pas la décision courante du Batch 49.1 sur le runtime PAPER.
+Ces deux derniers points décrivent le périmètre historique du Batch 47.5 ; ils ne remplacent pas la décision courante sur le runtime PAPER.
 
 ## ADR-345 — Score Analytics séparé et plafonné à quatre familles
 

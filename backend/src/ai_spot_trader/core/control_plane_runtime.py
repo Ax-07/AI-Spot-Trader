@@ -12,6 +12,7 @@ from ai_spot_trader.core.runtime import (
     TradingEngineUnavailableError,
 )
 from ai_spot_trader.market.candles import CandleStreamService
+from ai_spot_trader.market.discovery import RadarShortlistReader
 from ai_spot_trader.persistence.analytics import PaperAnalyticsReader
 from ai_spot_trader.persistence.campaign_runs import CampaignPaperRunQueryService
 from ai_spot_trader.persistence.control_plane import (
@@ -44,6 +45,7 @@ class CampaignRuntimeManager:
         audit_reader: CycleAuditReader,
         analytics_reader: PaperAnalyticsReader,
         candle_service: CandleStreamService | None = None,
+        market_attention: RadarShortlistReader | None = None,
     ) -> None:
         self._settings = settings
         self.control_plane_store = control_plane_store
@@ -52,6 +54,7 @@ class CampaignRuntimeManager:
         self.audit_reader = audit_reader
         self.analytics_reader = analytics_reader
         self._candle_service = candle_service
+        self._market_attention = market_attention
         self._active: CampaignRuntimeComposition | None = None
         self._active_campaign_id: UUID | None = None
         self._command_lock = asyncio.Lock()
@@ -141,6 +144,7 @@ class CampaignRuntimeManager:
                     revision=revision,
                     resume=resume,
                     candle_service=self._require_candle_service(),
+                    market_attention=self._market_attention,
                 )
             except Exception as exc:
                 raise CampaignActivationError(

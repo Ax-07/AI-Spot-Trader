@@ -149,6 +149,8 @@ def create_app(
                 control_plane_store = SqlAlchemyControlPlaneStore(database.sessions)
                 if resolved_candle_service is None:
                     resolved_candle_service = build_candle_service()
+                if resolved_market_attention is None:
+                    resolved_market_attention = build_market_attention(resolved_candle_service)
                 runtime: AppRuntime | CampaignRuntimeManager = CampaignRuntimeManager(
                     settings=resolved_settings,
                     control_plane_store=control_plane_store,
@@ -157,6 +159,7 @@ def create_app(
                     audit_reader=base_audit_reader,
                     analytics_reader=base_analytics_reader,
                     candle_service=resolved_candle_service,
+                    market_attention=resolved_market_attention,
                 )
             else:
                 raise PaperRuntimeConfigurationError(
@@ -179,8 +182,6 @@ def create_app(
                     ),
                     context_source=RuntimeChatContextSource(runtime),  # type: ignore[arg-type]
                 )
-            if resolved_market_attention is None:
-                resolved_market_attention = build_market_attention(resolved_candle_service)
         else:
             owned_database: Database | None = None
             resolved_audit_reader = audit_reader

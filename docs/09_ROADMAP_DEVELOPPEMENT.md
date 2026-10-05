@@ -5,7 +5,7 @@
 ```text
 Repository                  : Ax-07/AI-Spot-Trader
 Branche                     : main
-Base GitHub auditée 49.1    : 8704eec57de09792d0a51e080fdeb7b2a39d2381
+Base GitHub auditée 49.2    : 3194fce620f5e31672c6b52ef8986daddeea3a25
 Batch 45                    : intégré via 45d41b7
 Batch 46 / 46.1             : intégré via b219365
 Batch 47.1                  : intégré via 842e6bd7
@@ -17,7 +17,8 @@ Batch 47.5                  : intégré via d988de4
 Clôture documentaire 47.5   : 4278a5c
 Batch 48 fonctionnel        : intégré via ebb664c
 Clôture documentaire 48     : 8704eec
-Batch 49.1                  : patch proposé, non intégré à la livraison
+Batch 49.1                  : intégré via 3194fce
+Batch 49.2                  : patch proposé, non intégré à la livraison
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -39,7 +40,7 @@ AI Spot Trader conserve :
 - aucun secret versionné ;
 - aucune optimisation post-hoc.
 
-Le Market Attention Radar reste un **outil de priorisation d'attention**, jamais un moteur BUY/SELL/HOLD. Le Batch 49.1 ne le raccorde pas à l'univers Agent.
+Le Market Attention Radar est un **outil de priorisation d'attention** : depuis 49.2 il peut choisir l'univers candidat, mais il n'est jamais un moteur BUY/SELL/HOLD ni une autorité Risk.
 
 ## État intégré récent
 
@@ -144,9 +145,9 @@ Voir `docs/48_OBSERVABILITE_RANKING_ANALYTICS.md`.
 
 ## Batch 49.1 — activation officielle du PERPETUAL PAPER
 
-**Patch proposé sur `8704eec`, non intégré à GitHub à la livraison.**
+**Intégré via `3194fce`.**
 
-L'audit confirme que la majorité de la capacité était déjà présente et testée avant le batch :
+La majorité de la capacité était déjà présente et testée avant le batch :
 
 - univers `ExecutableMarket` typé SPOT/PERPETUAL ;
 - routage marché exécutable SPOT/derivatives ;
@@ -156,15 +157,9 @@ L'audit confirme que la majorité de la capacité était déjà présente et tes
 - `PaperBroker` PERPETUAL ;
 - ledger LONG/SHORT, funding, P&L et liquidation théorique ;
 - Market Discovery capable de conserver `PERPETUAL` ;
-- configuration/cockpit déjà capables de représenter les paramètres dérivés.
+- configuration/cockpit capables de représenter les paramètres dérivés.
 
-Le batch ne construit donc pas un second moteur dérivés. Il :
-
-1. remplace le dernier contrat opérateur actif encore SPOT-only par `operator-chat-v2` ;
-2. officialise dans la documentation active l'univers PAPER SPOT + PERPETUAL linéaire ;
-3. ajoute une preuve d'intégration Agent -> Risk -> Broker -> `DerivativePosition` ;
-4. verrouille la règle de retournement : fermeture/réduction d'abord, ouverture opposée ensuite ;
-5. laisse Radar et ranking inchangés.
+Le batch a officialisé l'invariant PAPER SPOT + PERPETUAL linéaire, aligné le contrat opérateur et ajouté la preuve d'intégration Agent -> Risk -> Broker -> `DerivativePosition`.
 
 ### Règle de retournement 49.1
 
@@ -173,7 +168,45 @@ LONG + SELL surdimensionné  -> clamp/reject à la fermeture, jamais SHORT direc
 SHORT + BUY surdimensionné  -> clamp/reject à la fermeture, jamais LONG direct
 ```
 
-Avec `risk_allow_quantity_reduction=true`, Risk borne la quantité à la position courante et émet `reduce_only=true`. Sinon l'ordre opposé surdimensionné est rejeté. Cette règle évite un changement de sens implicite dans un seul intent et préserve l'audit séquentiel.
+Avec `risk_allow_quantity_reduction=true`, Risk borne la quantité à la position courante et émet `reduce_only=true`. Sinon l'ordre opposé surdimensionné est rejeté.
+
+## Batch 49.2 — Radar shortlist -> univers Agent SPOT + PERPETUAL
+
+**Patch proposé sur `3194fce`, non intégré à GitHub à la livraison.**
+
+Décision architecturale : **le Radar alimente la frontière canonique de Market Discovery**. Aucun second système de discovery et aucune deuxième shortlist ne sont créés.
+
+```text
+Market Attention Radar
+-> shortlist finale bornée
+-> extraction {symbol, market_type}
+-> validation catalogue public Kraken + Campaign/Risk
+-> DynamicMarketTradingCycleRunner
+-> MultiMarketTradingCycleRunner canonique
+-> même Agent stratégique
+-> Risk
+-> PaperBroker
+```
+
+Le chemin dynamique de production n'appelle plus `OpenAIWatchlistSelector`. Le seul appel stratégique reste `generate_decision_plan(...)`.
+
+Règles 49.2 :
+
+- `BTC/USD SPOT` et `BTC/USD PERPETUAL` restent deux identités distinctes ;
+- seuls les marchés présents dans la shortlist Radar peuvent devenir de nouveaux candidats ;
+- quote incompatible, statut non tradable, marché absent du catalogue, type non activé, PERP non linéaire ou whitelist Risk incompatible => candidat rejeté ;
+- `FUTURE` reste rejeté par les contrats de domaine/policy ;
+- aucune donnée Analytics 47.5 n'est transférée au prompt stratégique en 49.2 ;
+- aucune modification des poids Analytics ou recalibration ;
+- Radar ne touche ni Risk ni Broker.
+
+### Mode dégradé 49.2
+
+Les nouvelles ouvertures sont **fail-closed** si le Radar est `ERROR`, `NOT_CONFIGURED`, `STALE`, trop ancien, si sa shortlist est vide ou si aucun candidat n'est exécutable. Le bootstrap n'est pas utilisé comme faux signal de remplacement.
+
+S'il existe des positions ouvertes, elles restent gérables en mode MANAGEMENT par la chaîne canonique, sans nouvelle exposition.
+
+Voir `docs/49_2_RADAR_AGENT_UNIVERSE.md`.
 
 ## Validation intégrée du Batch 48
 
@@ -185,21 +218,15 @@ git diff --check            : PASS — avertissements LF/CRLF uniquement
 push GitHub main            : PASS — ebb664c puis clôture 8704eec
 ```
 
-Ces résultats appartiennent au Batch 48 intégré et ne valent pas validation du patch 49.1.
+Ces résultats appartiennent au Batch 48 intégré et ne valent pas validation du patch 49.2.
 
-Warnings connus, non bloquants et hors périmètre :
-
-- dépréciations FastAPI/Starlette dans les dépendances de test ;
-- warning Node `MODULE_TYPELESS_PACKAGE_JSON`.
-
-## Suite après validation de 49.1
+## Suite après validation de 49.2
 
 ```text
-49.2 — Radar shortlist -> univers Agent SPOT + PERPETUAL
-49.3 — contexte Radar/Analytics fourni à l'Agent
+49.3 — contexte Radar/Analytics causal fourni à l'Agent
 49.4 — observabilité des décisions et performances PAPER SPOT/PERP
 ```
 
-Le Batch 49.2 devra être lancé dans une nouvelle discussion après resynchronisation avec le HEAD `main` alors courant. Il ne faut pas connecter silencieusement le Radar à l'Agent dans 49.1.
+Le Batch 49.3 devra être lancé dans une nouvelle discussion après resynchronisation avec le HEAD `main` alors courant. Il devra enrichir le contexte stratégique sans transformer les métriques Radar en décision automatique et sans modifier rétroactivement les poids 47.5.
 
 Le LIVE, l'authentification Kraken Futures privée et l'exécution réelle restent des décisions séparées et ultérieures.

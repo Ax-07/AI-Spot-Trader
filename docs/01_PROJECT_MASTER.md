@@ -4,16 +4,16 @@
 
 AI Spot Trader est une application expérimentale de trading pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est un cockpit de contrôle et de visualisation qui peut être fermé sans arrêter le moteur.
 
-Référence GitHub auditée au démarrage du Batch 49.1 :
+Référence GitHub auditée au démarrage du Batch 49.2 :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 8704eec57de09792d0a51e080fdeb7b2a39d2381
-Commit     : docs: mark batch 48 integrated
+HEAD       : 3194fce620f5e31672c6b52ef8986daddeea3a25
+Commit     : feat: activate perpetual paper trading
 ```
 
-Le Batch 49.1 est livré comme patch proposé non intégré sur cette base.
+Le Batch 49.1 est intégré. Le Batch 49.2 est livré comme patch proposé non intégré sur cette base.
 
 ## 2. Invariants fonctionnels
 
@@ -34,9 +34,9 @@ Le Batch 49.1 est livré comme patch proposé non intégré sur cette base.
 - aucun look-ahead ;
 - aucun secret dans prompts, logs, frontend ou fichiers versionnés ;
 - frontend non nécessaire au fonctionnement du moteur ;
-- Market Attention strictement informatif dans le Batch 49.1.
+- Market Attention peut déterminer l'univers candidat, mais n'a aucune autorité `BUY`/`SELL`/`HOLD` ni Risk.
 
-Principe central : **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
+Principe central : **le Radar propose les marchés à examiner. L'IA propose l'action. Le Risk Engine autorise, modifie ou refuse.**
 
 La cible expérimentale `+4 %/jour` reste un objectif de recherche non garanti, jamais une promesse de rendement.
 
@@ -54,11 +54,23 @@ Session UX
 
 Une modification de configuration crée un nouveau snapshot Campaign sans réécrire l'historique.
 
-## 4. Market Discovery
+## 4. Market Discovery et Radar
 
-Market Discovery et Market Attention sont deux frontières distinctes. Market Discovery prépare l'univers stratégique ; Market Attention observe l'activité Kraken. Une shortlist Radar n'est ni une watchlist d'exécution, ni un signal de trading.
+`MarketDiscoveryCoordinator` est la frontière canonique qui résout l'univers dynamique remis au cycle multi-marchés. Depuis le Batch 49.2 proposé, le chemin de production dynamique consomme la shortlist du Market Attention Radar au lieu d'effectuer une seconde sélection LLM de watchlist.
 
-Dans le Batch 49.1, les campagnes dynamiques peuvent conserver `SPOT` et/ou `PERPETUAL` dans `market_types` via les contrats existants. Le Radar n'est pas utilisé comme source de Market Discovery ; ce raccordement reste réservé au Batch 49.2.
+```text
+Kraken / Radar
+-> filtres déterministes Radar
+-> shortlist bornée
+-> projection {symbol, market_type}
+-> validation catalogue/configuration Kraken
+-> univers dynamique canonique
+-> même Agent stratégique
+```
+
+Le mode historique `LEGACY_AGENT` reste disponible dans `MarketDiscoveryCoordinator` pour compatibilité et tests ; il n'est plus le chemin composé des Campaigns dynamiques en 49.2.
+
+La shortlist Radar n'est jamais un ordre ni une recommandation. Le ranking peut influencer **où l'Agent regarde**, pas **ce qu'il décide**.
 
 ## 5. Multi-timeframes stratégiques
 
@@ -69,14 +81,14 @@ Le mapping canonique `trading-style-map-v1` reste :
 
 `StrategicMultiTimeframeContextService` réutilise le `CandleStreamService` partagé. `history_as_of(...)` protège la causalité et empêche tout look-ahead.
 
-La Market Structure du Radar Batch 42 est une autre consommation read-only du même pipeline candles. Elle n'altère pas le contexte stratégique de l'Agent et ne choisit aucune action.
+La Market Structure du Radar reste une consommation read-only du même pipeline candles. En Batch 49.2, cette structure ne traverse pas la frontière d'univers vers le prompt stratégique ; seule l'identité du marché traverse.
 
 ## 6. Cycle stratégique
 
 Un cycle produit un plan ordonné et borné via l'Agent stratégique unique :
 
 ```text
-contexte causal
+univers Radar validé + contexte causal d'exécution
 -> Agent IA unique
 -> plan [D1, D2, ... Dn]
 -> chaque décision : Risk -> exécution éventuelle -> portefeuille courant
@@ -88,11 +100,13 @@ Le `market_type` fait partie de l'identité de marché et doit rester explicite 
 
 ## 7. Cadences distinctes
 
-L'application distingue le monitoring déterministe, la cadence du cycle stratégique IA, Market Discovery, le streaming/cache candles et le Market Attention Radar. Le Radar conserve sa cadence propre et ses caches ; il n'impose jamais la cadence de l'Agent.
+L'application distingue le monitoring déterministe, la cadence du cycle stratégique IA, le cache/stream candles et la cadence du Market Attention Radar. Le Radar conserve sa cadence propre et ses caches ; il ne modifie jamais la cadence de l'Agent.
 
 ## 8. Transparence des appels IA
 
-Les appels de l'Agent stratégique et, lorsqu'elle existe, la logique IA de Market Discovery doivent rester distinguables. **Le Market Attention Radar ne produit aucun appel IA ni aucune recherche Web dans son pipeline actuel.**
+Le Batch 49.2 supprime du chemin dynamique de production l'ancien appel LLM de sélection de watchlist. Le même Agent n'est appelé qu'au stade stratégique canonique `generate_decision_plan(...)` pour choisir `BUY`, `SELL` ou `HOLD` dans l'univers déjà borné par le Radar et les contraintes déterministes.
+
+Le Market Attention Radar ne produit lui-même aucun ordre et n'appelle jamais directement Risk ou Broker.
 
 ## 9. Risk, coûts et exécution
 
@@ -206,21 +220,21 @@ Batch 42 intégré : `market-attention-radar-v5` pour les snapshots réellement 
 
 Batch 43 intégré : `market-attention-radar-v6`, ajoutant l'état runtime des filtres ainsi que `volume_24h_usd` et les métadonnées de capitalisation sur les candidats.
 
-`informative_only=True` reste validé côté backend.
+`informative_only=True` reste validé côté backend : ce champ signifie que le Radar ne produit aucune action de trading. Le Batch 49.2 autorise toutefois sa shortlist à devenir une **source d'univers**, sans transférer d'autorité stratégique.
 
-Les Batches 47.1 à 47.5 ajoutent les Analytics Futures read-only et leur influence bornée sur le ranking des PERP déjà retenus ; le Batch 48 ajoute leur observabilité agrégée. Ces couches restent séparées de l'exécution dans le Batch 49.1.
+Les Batches 47.1 à 47.5 ajoutent les Analytics Futures read-only et leur influence bornée sur le ranking des PERP déjà retenus ; le Batch 48 ajoute leur observabilité agrégée. Le Batch 49.2 ne change ni leurs poids ni leur calibration.
 
 ## 16. Isolation architecturale
 
 La couche v5 hérite de la couche v4. Le Batch 43 ajoute une couche v6 sans second pipeline candles et sans dépendance Agent/Risk/Broker. L'Agent stratégique reste le seul agent IA de l'application.
 
-Le fait que le runtime PAPER sache exécuter des PERPETUAL ne donne aucune autorité d'exécution au Radar.
+Le fait que la shortlist Radar détermine l'univers candidat ne donne aucune autorité d'exécution au Radar.
 
 ## 17. Microstructure
 
 La microstructure du Radar reste **SPOT uniquement**. En scope `PERPETUAL`, aucun sous-scan microstructure SPOT n'est lancé et les marchés dérivés restent `NOT_APPLICABLE` pour cette famille de données. En scope `ALL`, seuls les éléments SPOT peuvent être enrichis par `/Depth` et `/Trades`.
 
-Cette limitation du Radar ne limite pas l'univers d'exécution PAPER : les PERPETUAL linéaires peuvent être exécutés par la chaîne Agent/Risk/PaperBroker. En revanche, aucune exécution LIVE n'est disponible dans le Batch 49.1.
+Cette limitation du Radar ne limite pas l'univers d'exécution PAPER : les PERPETUAL linéaires peuvent être exécutés par la chaîne Agent/Risk/PaperBroker. En revanche, aucune exécution LIVE n'est disponible.
 
 ## 18. Batch 43 — filtres volume et capitalisation
 
@@ -261,7 +275,7 @@ Ces catégories sont des conventions de l'application et non une définition uni
 
 ## 19. Batch 49.1 — exécution PERPETUAL PAPER officielle
 
-L'audit du HEAD `8704eec` confirme que les composants suivants sont déjà canoniques et doivent être réutilisés :
+Le Batch 49.1 intégré confirme et officialise les composants canoniques :
 
 - univers typé `SPOT` / `PERPETUAL` ;
 - `RoutedExecutableMarketDataSource` ;
@@ -273,8 +287,6 @@ L'audit du HEAD `8704eec` confirme que les composants suivants sont déjà canon
 - mark-to-market, funding et liquidation théorique ;
 - paramètres Session/Campaign de levier et limites Risk ;
 - cockpit de configuration et affichage des positions dérivées.
-
-Le Batch 49.1 ne duplique donc aucun de ces composants. Il officialise l'invariant PAPER, aligne le chat opérateur encore SPOT-only et ajoute une preuve d'intégration Agent → Risk → Broker → ledger.
 
 Sémantique PERPETUAL retenue :
 
@@ -289,3 +301,25 @@ HOLD                -> aucune exécution
 ```
 
 Un retournement direct LONG → SHORT ou SHORT → LONG dans un seul intent est interdit. Une action opposée sert d'abord à réduire/fermer la position courante avec `reduce_only`. Une ouverture opposée éventuelle doit être une décision ultérieure après fermeture, ce qui garde la chaîne déterministe, causale et auditable.
+
+## 20. Batch 49.2 — Radar shortlist vers univers Agent
+
+Le raccordement retenu réutilise la frontière `MarketDiscoveryCoordinator` au lieu de créer une deuxième discovery. En mode `RADAR_SHORTLIST`, la dernière shortlist admissible du Radar est projetée exclusivement en identités `ExecutableMarket(symbol, market_type)`.
+
+Chaque identité est revalidée contre les faits exécutables Kraken et les contraintes Campaign : quote de règlement, type activé, statut tradable, contrat PERPETUAL linéaire, whitelist Risk éventuelle et présence au catalogue. L'ordre de priorité du Radar borne d'abord les candidats à `watchlist_limit`, puis le tuple effectif est trié déterministement pour respecter les contrats du cycle.
+
+Le Batch 49.2 n'injecte pas les objets `MarketAttentionSnapshotV6Analytics` dans le contexte Agent. Les champs Analytics, OI, Funding, Liquidations, CVD, Aggressor Differential, structure détaillée et diagnostics restent arrêtés à la frontière Radar. Le Batch 49.3 décidera séparément quels faits causaux enrichissent le contexte stratégique.
+
+### Mode dégradé 49.2
+
+```text
+Radar AVAILABLE/PARTIAL + snapshot frais + candidats exécutables
+    -> univers normal Radar
+
+Radar ERROR/NOT_CONFIGURED/STALE/trop ancien/shortlist vide/aucun candidat exécutable
+    -> aucune nouvelle ouverture
+    -> s'il existe des positions : MANAGEMENT uniquement
+    -> sinon : cycle technique FAILED avant Agent/Risk/Broker
+```
+
+Le bootstrap de Campaign ne devient donc jamais silencieusement un signal de remplacement lorsque le Radar tombe en panne.

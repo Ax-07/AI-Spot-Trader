@@ -10,7 +10,6 @@ from ai_spot_trader.agent.multi_timeframe import MultiTimeframeDecisionProvider
 from ai_spot_trader.agent.openai_client import OpenAIResponsesClient
 from ai_spot_trader.agent.planner import OpenAIMultiMarketDecisionProvider
 from ai_spot_trader.agent.strategy_client import StrategyInstructionsClient
-from ai_spot_trader.agent.watchlist import OpenAIWatchlistSelector
 from ai_spot_trader.broker.paper import PaperBroker
 from ai_spot_trader.broker.pricing import PaperExecutionCostModel
 from ai_spot_trader.chat.provider import OpenAIChatProvider
@@ -39,7 +38,7 @@ from ai_spot_trader.integrations.kraken.market_data import (
 from ai_spot_trader.integrations.kraken.research import KrakenMarketResearchBackend
 from ai_spot_trader.integrations.kraken.resilience import RetryingKrakenDerivativesRestSource
 from ai_spot_trader.market.candles import CandleStreamService, CandleTimeframe
-from ai_spot_trader.market.discovery import MarketDiscoveryCoordinator
+from ai_spot_trader.market.discovery import MarketDiscoveryCoordinator, RadarShortlistReader
 from ai_spot_trader.market.execution import RoutedExecutableMarketDataSource
 from ai_spot_trader.market.research import MarketResearchService
 from ai_spot_trader.market.strategic_context import StrategicMultiTimeframeContextService
@@ -124,8 +123,9 @@ def build_campaign_runtime(
     revision: StrategyRevisionView,
     resume: bool,
     candle_service: CandleStreamService,
+    market_attention: RadarShortlistReader | None = None,
 ) -> CampaignRuntimeComposition:
-    """Compose canonical PAPER components while sharing the backend-owned candle service."""
+    """Compose canonical PAPER components while sharing backend-owned market services."""
 
     database_secret = settings.database_url
     openai_secret = settings.openai_api_key
@@ -150,6 +150,10 @@ def build_campaign_runtime(
     config = campaign.configuration
     dynamic_policy = config.market_discovery
     dynamic_enabled = dynamic_policy is not None
+    if dynamic_enabled and market_attention is None:
+        raise PaperRuntimeConfigurationError(
+            "dynamic campaign requires Market Attention Radar for candidate universe"
+        )
     style_context, execution_cost_context = _campaign_agent_contexts(config)
     clock = SystemClock()
     database = Database(database_url)
@@ -388,12 +392,12 @@ def build_campaign_runtime(
             )
         )
     else:
-        # Discovery remains a compact deterministic/Agent watchlist phase. The same base Agent
-        # then emits the ordered plan once causal executable states are available.
-        watchlist_selector = OpenAIWatchlistSelector(base_agent)
+        assert market_attention is not None
+        # Batch 49.2: Radar decides only which typed markets deserve attention. The same
+        # strategic Agent still performs the sole BUY/SELL/HOLD planning call afterwards.
         discovery = MarketDiscoveryCoordinator(
             research=market_research,
-            agent=watchlist_selector,
+            radar=market_attention,
             policy=dynamic_policy,
             settlement_asset=config.paper_settlement_asset,
             bootstrap_markets=config.paper_executable_markets,

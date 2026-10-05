@@ -19,6 +19,7 @@ from ai_spot_trader.domain.models import (
     TradingStyleContext,
 )
 from ai_spot_trader.domain.symbols import parse_canonical_symbol
+from ai_spot_trader.market.attention import RadarStatus
 from ai_spot_trader.market.research import (
     MarketResearchMarket,
     MarketResearchService,
@@ -26,6 +27,7 @@ from ai_spot_trader.market.research import (
 )
 
 MARKET_DISCOVERY_PROTOCOL_VERSION = "market-discovery-v1"
+DEFAULT_RADAR_STALE_AFTER_SECONDS = 900.0
 
 DiscoveryStatus = Literal[
     "REFRESHED",
@@ -33,6 +35,7 @@ DiscoveryStatus = Literal[
     "FALLBACK",
     "SKIPPED_MANAGEMENT",
 ]
+DiscoverySource = Literal["LEGACY_AGENT", "RADAR_SHORTLIST"]
 
 
 class DiscoveryModel(BaseModel):
@@ -176,6 +179,7 @@ class WatchlistSelection(DiscoveryModel):
 
 class MarketDiscoveryAudit(DiscoveryModel):
     protocol_version: str = MARKET_DISCOVERY_PROTOCOL_VERSION
+    source: DiscoverySource = "LEGACY_AGENT"
     discovery_id: UUID | None = None
     status: DiscoveryStatus
     observed_at: datetime
@@ -200,6 +204,11 @@ class MarketDiscoveryAudit(DiscoveryModel):
     removed_markets: tuple[ExecutableMarket, ...] = ()
     selection_rationale: str | None = None
     selection_entries: tuple[WatchlistEntry, ...] = ()
+    radar_observed_at: datetime | None = None
+    radar_status: RadarStatus | None = None
+    radar_shortlist_market_count: int = Field(default=0, ge=0)
+    radar_shortlist: tuple[ExecutableMarket, ...] = ()
+    radar_rejected_markets: tuple[ExecutableMarket, ...] = ()
     error_type: str | None = None
     next_refresh_at: datetime | None = None
 
@@ -213,10 +222,13 @@ class MarketDiscoveryAudit(DiscoveryModel):
             self.observed_at,
             self.input_created_at,
             self.selection_selected_at,
+            self.radar_observed_at,
             self.next_refresh_at,
         ):
             if value is not None and (value.tzinfo is None or value.utcoffset() is None):
                 raise ValueError("market discovery audit timestamps must be timezone-aware")
+        if self.radar_observed_at is not None and self.radar_observed_at > self.observed_at:
+            raise ValueError("Radar snapshot cannot postdate discovery audit")
         if self.input_created_at is not None:
             if any(
                 candidate.snapshot.as_of > self.input_created_at
@@ -232,6 +244,26 @@ class MarketDiscoveryAudit(DiscoveryModel):
                 raise ValueError("watchlist audit selection postdates observed_at")
         if self.candidate_market_count != len(self.candidates):
             raise ValueError("candidate_market_count must match persisted candidate facts")
+        if self.radar_shortlist_market_count != len(self.radar_shortlist):
+            raise ValueError("radar_shortlist_market_count must match Radar identities")
+
+        if self.source == "RADAR_SHORTLIST":
+            if self.candidates or self.selection_entries or self.selection_rationale is not None:
+                raise ValueError("Radar discovery audit must not persist legacy Agent selection data")
+            if self.status == "REFRESHED":
+                if self.discovery_id is None or self.radar_observed_at is None:
+                    raise ValueError("refreshed Radar audit requires Radar snapshot identity")
+                if self.radar_status not in {RadarStatus.AVAILABLE, RadarStatus.PARTIAL}:
+                    raise ValueError("refreshed Radar audit requires an admissible Radar status")
+                if not self.radar_shortlist or not self.effective_watchlist:
+                    raise ValueError("refreshed Radar audit requires a non-empty executable universe")
+                radar_markets = set(self.radar_shortlist)
+                if any(market not in radar_markets for market in self.effective_watchlist):
+                    raise ValueError("Radar universe must remain inside the Radar shortlist")
+            return self
+
+        if self.radar_shortlist or self.radar_rejected_markets or self.radar_status is not None:
+            raise ValueError("legacy discovery audit cannot carry Radar shortlist facts")
         if self.status == "REFRESHED":
             if self.discovery_id is None or self.input_created_at is None:
                 raise ValueError("refreshed discovery audit requires discovery input identity")
@@ -261,23 +293,63 @@ class WatchlistSelectingAgent(Protocol):
     ) -> WatchlistSelection: ...
 
 
-class MarketDiscoveryCoordinator:
-    """Cache Kraken catalogue facts and periodically ask the same Agent for a watchlist.
+class RadarShortlistItem(Protocol):
+    @property
+    def market(self) -> ExecutableMarket: ...
 
-    Deterministic code only establishes factual admissibility. It never computes an
-    opportunity score and never chooses a trade. The strategic Agent selects the watchlist.
+
+class RadarShortlistOverview(Protocol):
+    observed_at: datetime
+    status: RadarStatus
+    shortlist: tuple[RadarShortlistItem, ...]
+
+
+class RadarShortlistReader(Protocol):
+    @property
+    def latest(self) -> RadarShortlistOverview: ...
+
+
+class RadarUnavailableError(RuntimeError):
+    pass
+
+
+class RadarStaleError(RuntimeError):
+    pass
+
+
+class RadarEmptyShortlistError(RuntimeError):
+    pass
+
+
+class RadarNoExecutableCandidateError(RuntimeError):
+    pass
+
+
+class RadarSnapshotInvalidError(RuntimeError):
+    pass
+
+
+class MarketDiscoveryCoordinator:
+    """Resolve the dynamic executable universe behind one canonical discovery boundary.
+
+    Legacy mode preserves the historical Kraken research -> same-Agent watchlist flow.
+    Radar mode consumes only typed market identities from the deterministic Market Attention
+    shortlist, validates them against the executable Kraken catalogue/configuration, and never
+    forwards Radar Analytics payloads to the strategic Agent.
     """
 
     def __init__(
         self,
         *,
         research: MarketResearchService,
-        agent: WatchlistSelectingAgent,
         policy: MarketDiscoveryPolicy,
         settlement_asset: str,
         bootstrap_markets: tuple[ExecutableMarket, ...],
         aggressiveness: int,
         aggressiveness_context: AggressivenessContext,
+        agent: WatchlistSelectingAgent | None = None,
+        radar: RadarShortlistReader | None = None,
+        radar_stale_after_seconds: float = DEFAULT_RADAR_STALE_AFTER_SECONDS,
         trading_style_context: TradingStyleContext | None = None,
         execution_cost_context: ExecutionCostContext | None = None,
         risk_allowed_pairs: frozenset[str] | None = None,
@@ -288,6 +360,10 @@ class MarketDiscoveryCoordinator:
             raise ValueError("settlement_asset cannot be empty")
         if not bootstrap_markets:
             raise ValueError("market discovery requires bootstrap markets")
+        if (agent is None) == (radar is None):
+            raise ValueError("market discovery requires exactly one source: Agent or Radar")
+        if isinstance(radar_stale_after_seconds, bool) or radar_stale_after_seconds <= 0:
+            raise ValueError("radar_stale_after_seconds must be positive")
         for market in bootstrap_markets:
             _, quote = parse_canonical_symbol(market.symbol)
             if quote != normalized_settlement:
@@ -296,6 +372,8 @@ class MarketDiscoveryCoordinator:
                 raise ValueError("bootstrap market type must be enabled for discovery")
         self._research = research
         self._agent = agent
+        self._radar = radar
+        self._radar_stale_after_seconds = float(radar_stale_after_seconds)
         self._policy = policy
         self._settlement_asset = normalized_settlement
         self._bootstrap = _ordered_markets(bootstrap_markets)
@@ -316,6 +394,14 @@ class MarketDiscoveryCoordinator:
         self._watchlist_refreshed_at: datetime | None = None
         self._watchlist_attempted_at: datetime | None = None
         self._last_audit: MarketDiscoveryAudit | None = None
+        self._radar_observed_at: datetime | None = None
+        self._radar_status: RadarStatus | None = None
+        self._radar_shortlist: tuple[ExecutableMarket, ...] = ()
+        self._radar_rejected_markets: tuple[ExecutableMarket, ...] = ()
+
+    @property
+    def source(self) -> DiscoverySource:
+        return "RADAR_SHORTLIST" if self._radar is not None else "LEGACY_AGENT"
 
     @property
     def watchlist(self) -> tuple[ExecutableMarket, ...]:
@@ -331,14 +417,20 @@ class MarketDiscoveryCoordinator:
         status: Literal["CACHE_REUSED", "SKIPPED_MANAGEMENT"],
     ) -> MarketDiscoveryResult:
         now = self._now()
-        effective = self._watchlist or self._bootstrap
+        effective = self._watchlist if self._radar is not None else (self._watchlist or self._bootstrap)
         audit = MarketDiscoveryAudit(
+            source=self.source,
             status=status,
             observed_at=now,
             trading_style_context=self._trading_style_context,
             execution_cost_context=self._execution_cost_context,
             previous_watchlist=self._watchlist,
             effective_watchlist=effective,
+            radar_observed_at=self._radar_observed_at,
+            radar_status=self._radar_status,
+            radar_shortlist_market_count=len(self._radar_shortlist),
+            radar_shortlist=self._radar_shortlist,
+            radar_rejected_markets=self._radar_rejected_markets,
             next_refresh_at=self._next_watchlist_refresh_at(),
         )
         self._last_audit = audit
@@ -350,6 +442,9 @@ class MarketDiscoveryCoordinator:
         portfolio_state: PortfolioState,
         force: bool = False,
     ) -> MarketDiscoveryResult:
+        if self._radar is not None:
+            return await self._refresh_from_radar(force=force)
+
         attempted_at = self._now()
         if not force and not self._watchlist_due(attempted_at):
             return self.cache_result(status="CACHE_REUSED")
@@ -375,8 +470,6 @@ class MarketDiscoveryCoordinator:
                 if not candidates:
                     raise RuntimeError("market discovery produced no factual candidate")
 
-                # The causal Agent boundary is timestamped only after every candidate fact has
-                # been acquired. Candidate snapshots may therefore never postdate this input.
                 input_created_at = self._now()
                 discovery_input = MarketDiscoveryInput(
                     discovery_id=discovery_id,
@@ -399,6 +492,7 @@ class MarketDiscoveryCoordinator:
                         ),
                     },
                 )
+                assert self._agent is not None
                 selection = await self._agent.select_watchlist(discovery_input)
                 self._validate_selection(discovery_input, selection)
                 completed_at = self._now()
@@ -435,7 +529,6 @@ class MarketDiscoveryCoordinator:
         except Exception as exc:
             completed_at = self._now()
             effective = previous or self._bootstrap
-            # Throttle failed refreshes. We retain the last valid strategic watchlist when possible.
             self._watchlist_refreshed_at = completed_at
             audit = MarketDiscoveryAudit(
                 discovery_id=discovery_id,
@@ -458,6 +551,156 @@ class MarketDiscoveryCoordinator:
             )
             self._last_audit = audit
             return MarketDiscoveryResult(watchlist=effective, audit=audit)
+
+    async def _refresh_from_radar(self, *, force: bool) -> MarketDiscoveryResult:
+        attempted_at = self._now()
+        discovery_id = uuid4()
+        previous = self._watchlist
+        self._watchlist_attempted_at = attempted_at
+        catalogue_refreshed = False
+        compatible: tuple[MarketResearchMarket, ...] = ()
+        radar_observed_at: datetime | None = None
+        radar_status: RadarStatus | None = None
+        radar_shortlist: tuple[ExecutableMarket, ...] = ()
+        rejected: tuple[ExecutableMarket, ...] = ()
+        try:
+            async with asyncio.timeout(self._policy.refresh_timeout_seconds):
+                assert self._radar is not None
+                overview = self._radar.latest
+                raw_observed_at = overview.observed_at
+                if raw_observed_at.tzinfo is None or raw_observed_at.utcoffset() is None:
+                    raise RadarSnapshotInvalidError(
+                        "Radar observed_at must be timezone-aware"
+                    )
+                radar_observed_at = raw_observed_at.astimezone(UTC)
+                radar_status = RadarStatus(overview.status)
+                self._validate_radar_overview(
+                    observed_at=radar_observed_at,
+                    status=radar_status,
+                    now=attempted_at,
+                )
+                radar_shortlist = tuple(item.market for item in overview.shortlist)
+                if not radar_shortlist:
+                    raise RadarEmptyShortlistError("Radar shortlist is empty")
+
+                if (
+                    not force
+                    and self._radar_observed_at == radar_observed_at
+                    and not self._catalogue_due(attempted_at)
+                    and self._watchlist
+                ):
+                    self._watchlist_attempted_at = attempted_at
+                    return self.cache_result(status="CACHE_REUSED")
+
+                if self._catalogue_due(attempted_at):
+                    self._catalogue = await self._load_catalogue()
+                    self._catalogue_refreshed_at = self._now()
+                    catalogue_refreshed = True
+
+                compatible = self._compatible_catalogue(self._catalogue)
+                executable = {
+                    ExecutableMarket(symbol=item.symbol, market_type=item.market_type)
+                    for item in compatible
+                }
+                accepted: list[ExecutableMarket] = []
+                rejected_list: list[ExecutableMarket] = []
+                seen: set[ExecutableMarket] = set()
+                for market in radar_shortlist:
+                    if market in seen:
+                        continue
+                    seen.add(market)
+                    if market not in executable:
+                        rejected_list.append(market)
+                        continue
+                    accepted.append(market)
+                    if len(accepted) >= self._policy.watchlist_limit:
+                        break
+                rejected = tuple(rejected_list)
+                if not accepted:
+                    raise RadarNoExecutableCandidateError(
+                        "Radar shortlist contains no executable campaign candidate"
+                    )
+
+                completed_at = self._now()
+                self._watchlist = _ordered_markets(tuple(accepted))
+                self._watchlist_refreshed_at = completed_at
+                self._radar_observed_at = radar_observed_at
+                self._radar_status = radar_status
+                self._radar_shortlist = radar_shortlist
+                self._radar_rejected_markets = rejected
+                added, maintained, removed = _diff(previous, self._watchlist)
+                audit = MarketDiscoveryAudit(
+                    source="RADAR_SHORTLIST",
+                    discovery_id=discovery_id,
+                    status="REFRESHED",
+                    observed_at=completed_at,
+                    trading_style_context=self._trading_style_context,
+                    execution_cost_context=self._execution_cost_context,
+                    catalogue_refreshed=catalogue_refreshed,
+                    catalogue_market_count=len(self._catalogue),
+                    compatible_market_count=len(compatible),
+                    previous_watchlist=previous,
+                    effective_watchlist=self._watchlist,
+                    added_markets=added,
+                    maintained_markets=maintained,
+                    removed_markets=removed,
+                    radar_observed_at=radar_observed_at,
+                    radar_status=radar_status,
+                    radar_shortlist_market_count=len(radar_shortlist),
+                    radar_shortlist=radar_shortlist,
+                    radar_rejected_markets=rejected,
+                    next_refresh_at=self._next_watchlist_refresh_at(),
+                )
+                self._last_audit = audit
+                return MarketDiscoveryResult(watchlist=self._watchlist, audit=audit)
+        except Exception as exc:
+            completed_at = self._now()
+            self._watchlist = ()
+            self._watchlist_refreshed_at = completed_at
+            self._radar_observed_at = radar_observed_at
+            self._radar_status = radar_status
+            self._radar_shortlist = radar_shortlist
+            self._radar_rejected_markets = rejected
+            audit = MarketDiscoveryAudit(
+                source="RADAR_SHORTLIST",
+                discovery_id=discovery_id,
+                status="FALLBACK",
+                observed_at=completed_at,
+                trading_style_context=self._trading_style_context,
+                execution_cost_context=self._execution_cost_context,
+                catalogue_refreshed=catalogue_refreshed,
+                catalogue_market_count=len(self._catalogue),
+                compatible_market_count=len(compatible),
+                previous_watchlist=previous,
+                effective_watchlist=(),
+                removed_markets=previous,
+                radar_observed_at=radar_observed_at,
+                radar_status=radar_status,
+                radar_shortlist_market_count=len(radar_shortlist),
+                radar_shortlist=radar_shortlist,
+                radar_rejected_markets=rejected,
+                error_type=type(exc).__name__,
+                next_refresh_at=self._next_watchlist_refresh_at(),
+            )
+            self._last_audit = audit
+            return MarketDiscoveryResult(watchlist=(), audit=audit)
+
+    def _validate_radar_overview(
+        self,
+        *,
+        observed_at: datetime,
+        status: RadarStatus,
+        now: datetime,
+    ) -> None:
+        if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+            raise RadarSnapshotInvalidError("Radar observed_at must be timezone-aware")
+        if observed_at > now:
+            raise RadarSnapshotInvalidError("Radar snapshot cannot come from the future")
+        age_seconds = (now - observed_at).total_seconds()
+        if status is RadarStatus.STALE or age_seconds > self._radar_stale_after_seconds:
+            raise RadarStaleError("Radar snapshot is stale")
+        if status not in {RadarStatus.AVAILABLE, RadarStatus.PARTIAL}:
+            raise RadarUnavailableError(f"Radar status {status.value} is not usable")
 
     async def _load_catalogue(self) -> tuple[MarketResearchMarket, ...]:
         found: list[MarketResearchMarket] = []

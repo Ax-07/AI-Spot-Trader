@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from datetime import datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import ConfigDict
 
 from ai_spot_trader.core.clock import Clock
+from ai_spot_trader.domain.enums import MarketType
 from ai_spot_trader.domain.models import (
     ExecutionCostContext,
     ExecutableMarket,
@@ -18,11 +19,18 @@ from ai_spot_trader.domain.models import (
 from ai_spot_trader.domain.planning import DEFAULT_MAX_DECISIONS_PER_CYCLE
 from ai_spot_trader.domain.ports import Broker, ExecutableMarketDataSource, MultiMarketLLMProvider
 from ai_spot_trader.market.discovery import MarketDiscoveryAudit, MarketDiscoveryCoordinator
-from ai_spot_trader.risk.capacity import CapacityEvaluator, open_position_markets
+from ai_spot_trader.risk.capacity import (
+    CapacityAssessment,
+    CapacityEvaluator,
+    open_position_markets,
+)
 from ai_spot_trader.risk.engine import RiskEngine
 from ai_spot_trader.trading.engine import (
     PortfolioSnapshotSource,
+    TradingCycleFailure,
     TradingCycleResult,
+    TradingCycleStage,
+    TradingCycleStatus,
     TradingCycleTimeouts,
 )
 from ai_spot_trader.trading.multi_market import (
@@ -30,13 +38,15 @@ from ai_spot_trader.trading.multi_market import (
     MultiMarketTradingCycleRunner,
 )
 
+RADAR_FAIL_CLOSED_REASON = "RADAR_UNIVERSE_UNAVAILABLE"
+
 # Backward-compatible monkeypatch/import seam retained while the canonical runtime
 # implementation is now the multi-market runner.
 TradingCycleRunner = MultiMarketTradingCycleRunner
 
 
 class DiscoveredMarketSelectionInput(MarketSelectionInput):
-    """Persisted extension of the canonical selection input with Batch 19.4 audit facts."""
+    """Persisted extension of the canonical selection input with discovery/Radar audit facts."""
 
     model_config = ConfigDict(extra="forbid")
     market_discovery: MarketDiscoveryAudit
@@ -57,8 +67,43 @@ class _PrefetchedPortfolio:
         return self._delegate.snapshot(as_of=as_of)
 
 
+class _ManagementOnlyCapacityEvaluator:
+    """Fail closed for new exposure while still allowing canonical management of open positions."""
+
+    def __init__(self, *, settlement_asset: str, reason: str) -> None:
+        self._settlement_asset = settlement_asset
+        self._reason = reason
+
+    def evaluate(
+        self,
+        *,
+        portfolio_state: PortfolioState,
+        executable_markets: tuple[ExecutableMarket, ...],
+    ) -> CapacityAssessment:
+        held = set(
+            open_position_markets(
+                portfolio_state,
+                settlement_asset=self._settlement_asset,
+            )
+        )
+        management = tuple(market for market in executable_markets if market in held)
+        has_spot = any(market.market_type is MarketType.SPOT for market in executable_markets)
+        has_perpetual = any(
+            market.market_type is MarketType.PERPETUAL for market in executable_markets
+        )
+        return CapacityAssessment(
+            mode="MANAGEMENT",
+            reason=self._reason,
+            spot_opening_capacity="UNAVAILABLE" if has_spot else "NOT_APPLICABLE",
+            perpetual_opening_capacity=(
+                "UNAVAILABLE" if has_perpetual else "NOT_APPLICABLE"
+            ),
+            management_markets=management,
+        )
+
+
 class DynamicMarketTradingCycleRunner:
-    """Resolve an audited watchlist, then execute one ordered multi-market strategic plan."""
+    """Resolve an audited universe, then execute one ordered multi-market strategic plan."""
 
     def __init__(
         self,
@@ -112,6 +157,8 @@ class DynamicMarketTradingCycleRunner:
             try:
                 portfolio = self._portfolio.snapshot()
             except Exception:
+                if self._discovery_source() == "RADAR_SHORTLIST":
+                    return self._failed_without_agent("PortfolioSnapshotUnavailable")
                 return await self._run_canonical(
                     effective=_ordered(self._bootstrap_markets + self._discovery.watchlist),
                     portfolio_source=self._portfolio,
@@ -122,6 +169,14 @@ class DynamicMarketTradingCycleRunner:
                 portfolio,
                 settlement_asset=self._settlement_asset,
             )
+            if self._discovery_source() == "RADAR_SHORTLIST":
+                return await self._run_radar_cycle(
+                    portfolio=portfolio,
+                    prefetched=prefetched,
+                    existing=existing,
+                )
+
+            # Legacy discovery behavior remains unchanged for compatibility.
             preflight_universe = _ordered(
                 self._bootstrap_markets + self._discovery.watchlist + existing
             )
@@ -153,16 +208,71 @@ class DynamicMarketTradingCycleRunner:
             )
             return _attach_discovery_audit(result, discovery_result.audit)
 
+    async def _run_radar_cycle(
+        self,
+        *,
+        portfolio: PortfolioState,
+        prefetched: _PrefetchedPortfolio,
+        existing: tuple[ExecutableMarket, ...],
+    ) -> MultiMarketTradingCycleResult:
+        # Radar is already a backend-owned observation service. Resolve its typed shortlist first,
+        # then evaluate capacity on the actual candidate universe; bootstrap is never a substitute.
+        discovery_result = await self._discovery.refresh_if_due(portfolio_state=portfolio)
+        radar_failed = discovery_result.audit.status == "FALLBACK"
+        if radar_failed:
+            if not existing:
+                return self._failed_without_agent(
+                    discovery_result.audit.error_type or "RadarUniverseUnavailable"
+                )
+            result = await self._run_canonical(
+                effective=_ordered(existing),
+                portfolio_source=prefetched,
+                capacity_evaluator=_ManagementOnlyCapacityEvaluator(
+                    settlement_asset=self._settlement_asset,
+                    reason=RADAR_FAIL_CLOSED_REASON,
+                ),
+            )
+            return _attach_discovery_audit(result, discovery_result.audit)
+
+        effective = _ordered(discovery_result.watchlist + existing)
+        if not effective:
+            return self._failed_without_agent("EmptyDynamicUniverse")
+
+        try:
+            self._capacity_evaluator.evaluate(
+                portfolio_state=portfolio,
+                executable_markets=effective,
+            )
+        except Exception:
+            if not existing:
+                return self._failed_without_agent("CapacityEvaluationUnavailable")
+            result = await self._run_canonical(
+                effective=_ordered(existing),
+                portfolio_source=prefetched,
+                capacity_evaluator=_ManagementOnlyCapacityEvaluator(
+                    settlement_asset=self._settlement_asset,
+                    reason=RADAR_FAIL_CLOSED_REASON,
+                ),
+            )
+            return _attach_discovery_audit(result, discovery_result.audit)
+
+        result = await self._run_canonical(
+            effective=effective,
+            portfolio_source=prefetched,
+        )
+        return _attach_discovery_audit(result, discovery_result.audit)
+
     async def _run_canonical(
         self,
         *,
         effective: tuple[ExecutableMarket, ...],
         portfolio_source: PortfolioSnapshotSource,
+        capacity_evaluator: CapacityEvaluator | _ManagementOnlyCapacityEvaluator | None = None,
     ) -> MultiMarketTradingCycleResult:
         runner_kwargs: dict[str, object] = {
             "executable_market_data": self._executable_market_data,
             "executable_markets": effective,
-            "capacity_evaluator": self._capacity_evaluator,
+            "capacity_evaluator": capacity_evaluator or self._capacity_evaluator,
             "portfolio": portfolio_source,
             "agent": self._agent,
             "risk_engine": self._risk_engine,
@@ -179,6 +289,20 @@ class DynamicMarketTradingCycleRunner:
             runner_kwargs["cycle_id_factory"] = self._cycle_id_factory
         runner = TradingCycleRunner(**runner_kwargs)  # type: ignore[arg-type]
         return await runner.run_cycle()
+
+    def _discovery_source(self) -> str:
+        return str(getattr(self._discovery, "source", "LEGACY_AGENT"))
+
+    def _failed_without_agent(self, error_type: str) -> MultiMarketTradingCycleResult:
+        cycle_id = self._cycle_id_factory() if self._cycle_id_factory is not None else uuid4()
+        return MultiMarketTradingCycleResult(
+            cycle_id=cycle_id,
+            status=TradingCycleStatus.FAILED,
+            failure=TradingCycleFailure(
+                stage=TradingCycleStage.SELECTION_INPUT,
+                error_type=error_type,
+            ),
+        )
 
 
 def _attach_discovery_audit(
@@ -211,7 +335,6 @@ def _attach_discovery_audit(
             portfolio_state_after=result.portfolio_state_after,
         )
 
-    # Historical tests/callers may still substitute the pre-19.13 canonical runner.
     return TradingCycleResult(
         cycle_id=result.cycle_id,
         status=result.status,
