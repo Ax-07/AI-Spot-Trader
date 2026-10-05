@@ -1,35 +1,26 @@
 # 00 — État actuel
 
-## Référence de reprise — Batch 47.5 préparé, non intégré
+## Référence de reprise — Batch 47.5 intégré
 
 ```text
-Repository                     : Ax-07/AI-Spot-Trader
-Branche                        : main
-HEAD GitHub réel audité        : e972fd9112363b268a53658fe5ce88facbfa7dd7
-Clôture documentaire Batch 47.4: e972fd9 — docs: mark batch 47.4 integrated
-Commit fonctionnel Batch 47.4 : 472f3ad — feat: add CVD and aggressor analytics
-Batch 47.5                     : PATCH PROPOSÉ — NON INTÉGRÉ
+Repository                       : Ax-07/AI-Spot-Trader
+Branche                          : main
+Base GitHub auditée pour clôture : d988de42dd684b597a78a6ce1d6d32a86147bf37
+Batch 47.4 fonctionnel           : 472f3ad — feat: add CVD and aggressor analytics
+Clôture documentaire Batch 47.4 : e972fd9 — docs: mark batch 47.4 integrated
+Batch 47.5 fonctionnel           : d988de4 — feat: add bounded multi-analytics radar ranking
+Batch 47.5                       : INTÉGRÉ ET VALIDÉ LOCALEMENT
 ```
 
-Le **Batch 47.4 reste l'état intégré de GitHub `main`**. Le présent patch Batch 47.5 n'est pas encore intégré et doit être validé localement avant commit/push.
+Le **Batch 47.5 est intégré sur GitHub `main` via `d988de4`**. L'arbre local utilisateur était propre immédiatement après le push (`git status --short` vide) et `origin/main` pointait sur le même commit.
 
-Décisions intégrées récentes :
+## Radar intégré jusqu'au Batch 47.5
 
-```text
-Batch 45        => intégré via 45d41b7
-Batch 46 / 46.1 => intégré via b219365
-Batch 47.1      => intégré via 842e6bd7
-Batch 47.2      => intégré via c09dd14
-Batch 47.3      => intégré via 12051a7
-Batch 47.4      => intégré via 472f3ad, clôturé documentairement via e972fd9
-ADR-328..344    => ADOPTÉES selon leur batch intégré
-```
+Le Market Attention Radar reste `market-attention-radar-v6`, déterministe, causal, informatif et read-only. Il ne prend aucune décision BUY/SELL/HOLD et n'a aucune autorité d'exécution.
 
-## Radar intégré avant application de 47.5
+L'exécution demeure SPOT uniquement. Aucun short, levier, margin, future ou perpetual n'est exécuté.
 
-Le Market Attention Radar reste `market-attention-radar-v6`, strictement informatif, déterministe, causal et read-only. L'exécution de trading demeure SPOT uniquement.
-
-Pipeline intégré 47.4 :
+Pipeline canonique :
 
 ```text
 catalogue Kraken
@@ -37,26 +28,38 @@ catalogue Kraken
 -> métadonnées / filtre capitalisation
 -> rotation OHLCV et volume 24h
 -> activité adaptative / tendance / liquidité / microstructure canonique
--> pool Analytics Futures historique borné et rotatif
--> pool Structure borné et rotatif
+-> rotation/cache Analytics Futures historique
+-> rotation/cache Market Structure
 -> filtres tendance / Structure
 -> shortlist finale canonique
 -> enrichissement Futures ticker + Analytics
+-> reranking Analytics borné des PERP déjà retenus
 -> cockpit
 ```
 
-Infrastructure Analytics canonique à préserver :
+## Infrastructure Analytics canonique
+
+Les cinq séries historiques restent :
 
 ```text
-KrakenDerivativesAnalyticsClient
-PerpetualAnalyticsProvider
-PerpetualAnalyticsPolicy
-PerpetualAnalyticsScanner
-PerpetualAnalyticsSnapshot
-perpetual_analytics_coverage
+open-interest
+funding
+liquidation-volume
+cvd
+aggressor-differential
 ```
 
-Policy réseau inchangée dans le patch 47.5 :
+Elles partagent toujours exactement :
+
+```text
+1 PerpetualAnalyticsScanner
+1 _perpetual_analytics_cursor
+1 _cache
+1 sémaphore global
+1 PerpetualAnalyticsPolicy
+```
+
+Policy réseau inchangée :
 
 ```text
 market_limit_per_refresh = 10
@@ -67,34 +70,36 @@ fetch_concurrency        = 4
 baseline_periods         = 12
 ```
 
-Les cinq séries Analytics restent `open-interest`, `funding`, `liquidation-volume`, `cvd` et `aggressor-differential`. Elles partagent toujours un seul scanner/cache/cursor/sémaphore. Budget théorique : 5 × 10 = 50 appels Analytics max/refresh.
+Budget théorique maximal : **5 séries × 10 marchés = 50 appels Analytics par refresh**.
 
-## Batch 47.5 — patch proposé
+## Batch 47.5 — décision intégrée
 
-Audit :
+La famille retenue est un **score multi-analytics séparé, plafonné et explicable**, et non un bonus injecté dans `interest_level`.
 
-- **confirmé** : `interest_level` et `candidate_limit` sont décidés avant l'enrichissement Analytics ;
-- **confirmé** : la sélection finale Structure est canonique avant l'enrichissement 47.4 ;
-- **confirmé** : CVD et Aggressor Differential sont sémantiquement redondants comme order flow agressif ;
-- **obsolète** : les documents citaient encore `472f3ad` comme HEAD audité alors que le HEAD réel est `e972fd9` ;
-- **manquant avant patch** : politique multi-analytics bornée, déduplication et diagnostics de ranking ;
-- **décidé dans le patch** : aucune création de candidat par Analytics et aucune modification de `interest_level`.
-
-Décision proposée : **score multi-analytics séparé, plafonné à 4, appliqué seulement aux PERP déjà retenus**.
+Score :
 
 ```text
-Open Interest       : 0 ou +1
-Funding             : 0 ou +1
-Liquidation Volume  : 0 ou +1
-Order Flow          : 0 ou +1 (CVD + Aggressor dédupliqués)
+OPEN_INTEREST       : 0 ou +1
+FUNDING             : 0 ou +1
+LIQUIDATION_VOLUME  : 0 ou +1
+ORDER_FLOW          : 0 ou +1
 TOTAL               : 0..4
 ```
 
-Une série ne contribue que si elle est `AVAILABLE` et possède déjà une caractéristique 47.2–47.4 active. Disponibilité seule = 0. `INSUFFICIENT_HISTORY`, `STALE`, `TECHNICAL_ERROR`, `PARTIAL` ou absence = 0 sans pénalité.
+Règles intégrées :
 
-Les métriques signées sont symétriques pour **l'attention**, pas pour le trading : un extrême positif ou négatif peut contribuer de façon identique. CVD + Aggressor concordants valent au maximum +1 ; s'ils sont actifs mais opposés, la composante order-flow vaut 0 et le conflit est diagnostiqué.
+- disponibilité seule ne rapporte aucun point ;
+- seules les caractéristiques déjà validées par 47.2–47.4 peuvent contribuer ;
+- séries absentes, `PARTIAL`, `INSUFFICIENT_HISTORY`, `STALE`, `TECHNICAL_ERROR` ou `NOT_APPLICABLE` = 0 sans pénalité ;
+- les anomalies signées positives/négatives sont symétriques pour **l'attention**, jamais interprétées comme BUY/SELL ;
+- CVD + Aggressor Differential appartiennent à une seule famille `ORDER_FLOW` ;
+- concordance CVD/Aggressor = +1 maximum et déduplication diagnostiquée ;
+- opposition simultanée = 0 pour `ORDER_FLOW` et conflit diagnostiqué ;
+- aucun changement de `interest_level` ;
+- aucun changement de `candidate_limit` ;
+- aucune création ou suppression de candidat par Analytics.
 
-Hiérarchie proposée :
+Hiérarchie PERPETUAL :
 
 ```text
 interest_level
@@ -104,12 +109,47 @@ interest_level
 -> symbole déterministe
 ```
 
-En scope `ALL`, les positions SPOT sont figées et seuls les PERP peuvent échanger leurs positions entre eux. Le diagnostic `analytics_ranking` expose aussi le rang global avant/après et `rank_change`, afin que l’impact réellement observé soit visible même lorsqu’il est nul. Le patch ne change ni Agent, ni Risk Engine, ni Broker, ni exécution SPOT/PERP.
+Scopes :
+
+- `SPOT` : classement inchangé ;
+- `PERPETUAL` : réordonnancement possible entre PERP déjà retenus ;
+- `ALL` : positions SPOT figées ; seuls les slots PERP peuvent être réordonnés entre eux.
+
+Le diagnostic additif `analytics_ranking` expose notamment le score `0..4`, les composantes, les séries retenues/non retenues, la déduplication/conflit order-flow, le rang avant/après et `rank_change`.
+
+## Invariants préservés
+
+- un seul Agent IA stratégique ;
+- Risk Engine déterministe avec autorité finale ;
+- aucune sortie LLM directement exécutable ;
+- aucune dépendance du Radar vers Agent/Risk/Broker ;
+- PAPER ;
+- exécution SPOT uniquement ;
+- aucune exécution PERPETUAL ;
+- frais/spread/slippage conservés ;
+- journalisation des décisions ;
+- aucun secret versionné ;
+- aucun look-ahead ;
+- aucune optimisation post-hoc sur le P&L.
+
+## Validation finale Batch 47.5
+
+Validation locale utilisateur exécutée après extraction du patch et avant intégration :
+
+```text
+git diff --check       : PASS — aucun défaut whitespace ; avertissements LF -> CRLF uniquement
+python -m pytest -q    : PASS — suite backend complète à 100 %
+pnpm typecheck         : PASS
+pnpm test              : PASS — 86/86
+git status --short     : propre après push
+git log -1 --oneline   : d988de4 feat: add bounded multi-analytics radar ranking
+```
+
+Warnings observés mais non bloquants :
+
+- dépréciations `fastapi/starlette` dans les dépendances de test ;
+- `MODULE_TYPELESS_PACKAGE_JSON` côté Node lors des tests TypeScript.
+
+Aucun de ces warnings n'a provoqué d'échec et aucun correctif hors périmètre n'a été ajouté silencieusement.
 
 Voir `docs/47_5_MULTI_ANALYTICS_RANKING.md`.
-
-## Validations connues
-
-État intégré Batch 47.4 avant ce patch : backend local utilisateur `python -m pytest -q` PASS à 100 %, frontend `pnpm typecheck` PASS, frontend `pnpm test` PASS 82/82, `git diff --check` PASS hors avertissements LF/CRLF, smokes CVD/Aggressor PASS.
-
-Validation ChatGPT du patch 47.5 : `py_compile` production + test backend PASS ; harnais backend isolé 15/15 PASS ; typecheck strict ciblé `market-attention.ts` PASS ; parsing TS/TSX lib + cockpit PASS ; test frontend Batch 47.5 4/4 PASS. Les suites complètes `python -m pytest -q`, `pnpm typecheck`, `pnpm test` et `git diff --check` restent à exécuter localement sur le checkout complet avant intégration. Ne jamais considérer 47.5 intégré tant que l'utilisateur n'a pas validé puis poussé le commit.

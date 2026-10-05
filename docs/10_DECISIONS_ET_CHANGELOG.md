@@ -1,214 +1,189 @@
 # 10 — Décisions et changelog
 
-> Les décisions détaillées plus anciennes restent dans Git. Ce document conserve les principes actifs, les décisions structurantes récentes et les éléments nécessaires à la reprise.
+> Les décisions détaillées plus anciennes restent disponibles dans Git. Ce document conserve les principes actifs, les décisions structurantes récentes et les références nécessaires à la reprise.
 
 ## Principes actifs
 
-Un seul Agent stratégique, Risk Engine autorité finale, aucune sortie LLM directe vers Broker/Kraken, exécution SPOT sans vente d'actif non détenu, audit durable, no-look-ahead, backend indépendant du frontend, `HOLD` valide, aucun secret versionné et LIVE séparé.
+Un seul Agent IA stratégique. Le Risk Engine déterministe conserve l'autorité finale. Aucune sortie LLM ne déclenche directement Broker/Kraken. L'exécution reste SPOT uniquement, en PAPER tant que le passage LIVE n'est pas explicitement décidé.
 
-Le Market Attention Radar reste observationnel : il peut prioriser **l'attention**, mais ne prend aucune décision BUY/SELL/HOLD et n'a aucune autorité d'exécution.
+Le Market Attention Radar est observationnel : il peut prioriser **l'attention**, mais il ne décide jamais BUY/SELL/HOLD et ne possède aucune autorité d'exécution.
 
 ## Référence courante
 
 ```text
-HEAD GitHub réel audité : e972fd9112363b268a53658fe5ce88facbfa7dd7
-Clôture Batch 47.4      : e972fd9 — docs: mark batch 47.4 integrated
-Commit fonctionnel 47.4: 472f3ad — feat: add CVD and aggressor analytics
-Batch 45               : intégré via 45d41b7
-Batch 46 / 46.1        : intégré via b219365
-Batch 47.1             : intégré via 842e6bd7
-Batch 47.2             : intégré via c09dd14
-Batch 47.3             : intégré via 12051a7
-Batch 47.4             : intégré via 472f3ad
-Batch 47.5             : patch proposé, non intégré
+Base GitHub auditée       : d988de42dd684b597a78a6ce1d6d32a86147bf37
+Batch 47.4 fonctionnel    : 472f3ad — feat: add CVD and aggressor analytics
+Clôture 47.4              : e972fd9 — docs: mark batch 47.4 integrated
+Batch 47.5 fonctionnel    : d988de4 — feat: add bounded multi-analytics radar ranking
+Batch 47.5                : INTÉGRÉ ET VALIDÉ
 ```
 
-## Changelog — 2026-10-05 — Batch 47.5 influence multi-analytics sur le ranking — patch proposé
+## Changelog — 2026-10-05 — Batch 47.5 multi-analytics ranking — intégré
 
-Base auditée : GitHub `main` au HEAD `e972fd9112363b268a53658fe5ce88facbfa7dd7` (`docs: mark batch 47.4 integrated`). Aucun changement fonctionnel n'existe sur `main` après `472f3ad`; `e972fd9` est une clôture documentaire.
+Base d'audit initiale du développement : `e972fd9112363b268a53658fe5ce88facbfa7dd7`.
 
-Audit :
+Commit fonctionnel intégré : `d988de42dd684b597a78a6ce1d6d32a86147bf37` (`feat: add bounded multi-analytics radar ranking`).
 
-- **confirmé** : `interest_level` est calculé dans `market/attention.py` avant Analytics ;
-- **confirmé** : `_deterministic_radar_sort_key()` place `interest_level` en premier ;
-- **confirmé** : la microstructure conserve le niveau d'intérêt comme premier axe dans `_v3_sort_key()` ;
-- **confirmé** : la sélection Structure finale place intérêt puis Structure confirmée avant le reste de la clé ;
-- **confirmé** : `candidate_limit` vient de `MarketAttentionPolicy` (`10` par défaut, borné `1..30`) et est appliqué avant l'enrichissement Analytics ;
-- **confirmé** : le scan Analytics est exécuté avant Structure pour alimenter le cache mais, en 47.4, l'enrichissement Analytics intervient après la shortlist finale ;
-- **confirmé** : les cinq séries partagent exactement le même scanner/cache/cursor/sémaphore ;
-- **confirmé** : CVD et Aggressor Differential mesurent deux vues du même domaine order-flow agressif et ne doivent pas compter comme deux preuves indépendantes ;
-- **confirmé** : OI/Funding/Liquidations/CVD/Aggressor exposent déjà les caractéristiques nécessaires ; aucune nouvelle statistique ou seuil n'est requis ;
-- **confirmé** : CVD/Aggressor avec MAD nul ne fabriquent pas de score extrême et restent `UNAVAILABLE` ;
-- **obsolète** : les documents de reprise citaient `472f3ad` comme HEAD audité alors que le HEAD réel est `e972fd9` ;
-- **manquant avant patch** : politique multi-analytics plafonnée, déduplication order-flow, diagnostics API/cockpit et tests de non-création de candidat ;
-- **à décider** : autorité exacte du score Analytics, place dans la clé et traitement des scopes mixtes.
+### Audit confirmé
 
-Familles comparées :
+- `interest_level` est calculé avant l'enrichissement Analytics ;
+- la clé canonique place le niveau d'intérêt en premier ;
+- la sélection Structure finale conserve intérêt puis Structure avant le reste de la clé ;
+- `candidate_limit` vient de `MarketAttentionPolicy` (`10` par défaut, borné `1..30`) ;
+- les Analytics sont scannées avant Structure mais enrichissaient historiquement la shortlist après admission ;
+- les cinq séries partagent exactement le même scanner/cache/cursor/sémaphore ;
+- CVD et Aggressor Differential appartiennent au même domaine order-flow agressif ;
+- OI/Funding/Liquidations/CVD/Aggressor fournissaient déjà les caractéristiques nécessaires ;
+- les statuts dégradés et le MAD nul sur séries signées étaient déjà explicitement représentés.
 
-1. **aucun impact** : très sûr mais laisse les cinq séries uniquement descriptives ;
-2. **tie-break strict** : influence trop souvent inerte à cause de la clé canonique déjà très discriminante ;
-3. **bonus/malus sur le score existant** : rejeté, car risque de modifier `interest_level` et l'admission ;
-4. **score multi-analytics séparé et plafonné** : **retenu**.
+### Familles comparées
 
-Patch 47.5 :
+1. aucun impact Analytics : sûr mais purement descriptif ;
+2. tie-break strict : trop souvent inerte ;
+3. bonus/malus sur le score existant : rejeté car susceptible de modifier `interest_level` et l'admission ;
+4. score multi-analytics séparé et plafonné : **retenu et intégré**.
 
-- ajout d'un `analytics_ranking` optionnel au candidat v6, sans nouvelle version du protocole ;
-- score entier `0..4`, un point maximum par famille `OPEN_INTEREST`, `FUNDING`, `LIQUIDATION_VOLUME`, `ORDER_FLOW` ;
-- disponibilité seule = 0 ; seules les caractéristiques déjà émises par les statistiques 47.2–47.4 peuvent contribuer ;
-- anomalies signées positives/négatives traitées symétriquement comme **attention inhabituelle**, jamais comme direction BUY/SELL ;
-- CVD + Aggressor concordants = `+1` total et `order_flow_deduplicated=true` ;
-- CVD + Aggressor opposés = `0` pour l'order-flow et `order_flow_conflict=true` ;
-- séries absentes, `PARTIAL`, `INSUFFICIENT_HISTORY`, `STALE`, `TECHNICAL_ERROR` ou `NOT_APPLICABLE` = 0 sans pénalité ;
-- aucune modification des statistiques, seuils ou policy réseau 47.2–47.4 ;
-- aucun nouveau scanner/cache/cursor ; budget 50 appels max/refresh inchangé ;
-- aucun changement de `interest_level`, `candidate_limit`, filtres ou population de candidats ;
-- score injecté uniquement après intérêt et événement Structure confirmé, avant les critères micro/OHLCV restants ;
-- scope `SPOT` inchangé ;
-- scope `PERPETUAL` : réordonnancement des PERP déjà présents ;
-- scope `ALL` : slots SPOT figés, réordonnancement uniquement entre slots PERP ;
-- cockpit : score, composantes, séries utilisées/non retenues, déduplication/conflit, rang avant/après et variation réelle ;
-- compatibilité payload legacy : `analytics_ranking` optionnel ;
-- aucune dépendance Agent / Risk Engine / Broker, aucune exécution PERP.
+### Patch intégré
 
-### ADR-345 — Le ranking Analytics utilise un score séparé plafonné à quatre familles
+- ajout additif d'`analytics_ranking` au candidat v6 ;
+- score entier `0..4` ;
+- quatre familles indépendantes : `OPEN_INTEREST`, `FUNDING`, `LIQUIDATION_VOLUME`, `ORDER_FLOW` ;
+- disponibilité seule = 0 ;
+- seules les caractéristiques 47.2–47.4 actives et `AVAILABLE` peuvent contribuer ;
+- anomalies positives/négatives signées symétriques pour l'attention ;
+- CVD + Aggressor concordants = +1 maximum, avec déduplication diagnostiquée ;
+- CVD + Aggressor opposés = 0 sur order-flow, avec conflit diagnostiqué ;
+- données absentes, partielles, insuffisantes, stale, technical error ou N/A = 0 sans malus ;
+- aucune modification des seuils/statistiques 47.2–47.4 ;
+- aucun nouveau scanner/cache/cursor ;
+- budget réseau maximal inchangé à 50 appels Analytics/refresh ;
+- `interest_level` inchangé ;
+- `candidate_limit` inchangé ;
+- aucun filtre ou candidat créé par Analytics ;
+- score injecté après intérêt et Structure confirmée, avant le reste de la clé ;
+- `SPOT` inchangé ;
+- en `ALL`, slots SPOT figés et réordonnancement seulement entre PERP ;
+- cockpit enrichi avec score, composantes, statuts, déduplication/conflit, rang avant/après et `rank_change` ;
+- compatibilité legacy conservée car `analytics_ranking` est optionnel ;
+- aucune modification Agent / Risk Engine / Broker ;
+- aucune exécution PERPETUAL.
 
-**PROPOSÉ — Batch 47.5, non intégré.**
+## ADR-345 — Score Analytics séparé et plafonné à quatre familles
 
-Le score d'attention Analytics est séparé de `interest_level`. Il vaut au maximum 4 car il existe quatre familles sémantiques indépendantes : OI, Funding, Liquidations et Order Flow. La magnitude brute des scores statistiques n'est pas additionnée ; une famille active vaut au plus +1.
+**ADOPTÉ — Batch 47.5 intégré via `d988de4`.**
 
-### ADR-346 — CVD et Aggressor Differential forment une seule composante order-flow
+Le score d'attention Analytics est distinct de `interest_level`. Il vaut au maximum 4 : OI, Funding, Liquidations et Order Flow valent chacun au plus +1.
 
-**PROPOSÉ — Batch 47.5, non intégré.**
+La magnitude brute des scores statistiques n'est pas additionnée. Cette règle borne l'influence et évite qu'une série extrême domine arbitrairement le classement.
 
-Les deux métriques ne sont pas considérées comme deux preuves indépendantes. Concordance = +1 au total ; opposition simultanée = 0 avec diagnostic de conflit. Cette règle supprime la double pondération mécanique.
+## ADR-346 — CVD et Aggressor Differential forment une seule composante order-flow
 
-### ADR-347 — Analytics ne peut ni créer un candidat ni modifier `interest_level`
+**ADOPTÉ — Batch 47.5 intégré via `d988de4`.**
 
-**PROPOSÉ — Batch 47.5, non intégré.**
-
-Le score n'est appliqué qu'à la shortlist finale déjà retenue par le pipeline canonique. La hiérarchie devient intérêt → Structure confirmée → Analytics → reste de la clé. En `ALL`, SPOT garde ses positions et seuls les PERP se réordonnent entre eux.
-
-### ADR-348 — Une série Analytics indisponible est neutre
-
-**PROPOSÉ — Batch 47.5, non intégré.**
-
-Seul `AVAILABLE` permet l'utilisation d'une caractéristique. Données manquantes, partielles, insuffisantes, périmées ou en erreur contribuent 0 sans malus. Une panne technique ne doit jamais être interprétée comme une information de marché.
-
-### Validation du patch 47.5
-
-Validations réellement exécutées dans l’environnement ChatGPT :
+CVD et Aggressor Differential ne sont pas deux preuves indépendantes.
 
 ```text
-python -m py_compile production + test backend 47.5        : PASS
-harnais backend isolé logique ranking 47.5                 : PASS — 15/15 assertions
-tsc strict ciblé frontend/src/lib/market-attention.ts      : PASS
-tsc syntaxe TS/TSX (--noCheck) lib + cockpit               : PASS
-node --test market-attention-batch47_5.test.mjs            : PASS — 4/4
+un seul actif            -> +1
+deux actifs concordants  -> +1 total
+deux actifs opposés      -> 0 + conflit diagnostiqué
 ```
 
-Le harnais backend charge le module de production 47.5 avec des dépendances minimales simulées afin de tester score, symétrie, plafond, déduplication/conflit CVD-Aggressor, statuts dégradés, ordre du sort key, scopes SPOT/ALL et invariants d’absence Agent/Risk/Broker. Il ne remplace pas `pytest` sur le checkout complet.
+Cette décision élimine la double pondération mécanique de l'order flow agressif.
 
-Non exécuté dans l’environnement ChatGPT faute de checkout réseau complet et de `pnpm` disponible : `python -m pytest -q`, `pnpm typecheck`, `pnpm test`, `git diff --check`. Ces validations restent obligatoires localement avant intégration.
+## ADR-347 — Analytics ne peut ni créer un candidat ni modifier `interest_level`
+
+**ADOPTÉ — Batch 47.5 intégré via `d988de4`.**
+
+Le score est appliqué uniquement à des PERP déjà présents dans la shortlist finale.
+
+Hiérarchie :
+
+```text
+interest_level
+-> Structure confirmée
+-> analytics_ranking.score
+-> reste de la clé canonique
+```
+
+En scope `ALL`, les positions SPOT restent fixes.
+
+## ADR-348 — Une série Analytics indisponible est neutre
+
+**ADOPTÉ — Batch 47.5 intégré via `d988de4`.**
+
+Seul le statut `AVAILABLE` permet d'utiliser une caractéristique. Données absentes, `PARTIAL`, `INSUFFICIENT_HISTORY`, `STALE`, `TECHNICAL_ERROR` ou `NOT_APPLICABLE` contribuent 0 sans malus.
+
+Une panne technique ne devient jamais une information de marché.
+
+## Validation finale 47.5
+
+Validations ciblées exécutées pendant la préparation du patch :
+
+```text
+python -m py_compile production + test backend 47.5 : PASS
+harnais backend isolé ranking 47.5                  : PASS — 15/15
+tsc strict ciblé market-attention.ts                : PASS
+tsc syntaxe lib + cockpit                           : PASS
+node --test test frontend 47.5                      : PASS — 4/4
+```
+
+Validation complète exécutée localement par l'utilisateur avant intégration :
+
+```text
+git diff --check    : PASS — warnings LF -> CRLF uniquement
+python -m pytest -q : PASS — suite backend complète à 100 %
+pnpm typecheck      : PASS
+pnpm test           : PASS — 86/86
+git push origin main: PASS — e972fd9..d988de4
+git status --short  : vide après push
+```
+
+Warnings connus, non bloquants et hors périmètre :
+
+- dépréciations dans les dépendances de test FastAPI/Starlette ;
+- warning Node `MODULE_TYPELESS_PACKAGE_JSON`.
+
+Aucun test non exécuté n'est déclaré PASS.
 
 ---
 
-## Historique intégré antérieur
-
-Les décisions ci-dessous restent intégrées et actives sauf lorsqu'une décision 47.5 proposée les remplace explicitement après validation/intégration.
-
-## Batch 47.4 — CVD + Aggressor Differential — intégré
-
-**Intégré via `472f3adca1d19822289af47b52b03afab3cda0fb`, clôturé documentairement via `e972fd9`.**
-
-- un seul `PerpetualAnalyticsScanner`, `_cache`, `_perpetual_analytics_cursor` et sémaphore global ;
-- CVD : `timestamp[] + cvd[]` alignés, side volumes seulement si les deux tableaux sont complets ;
-- Aggressor Differential : scalaire signé taker buy − taker sell ;
-- CVD analysé sur `cvd_change`, Aggressor directement ;
-- médiane/MAD robuste ; aucun fallback ratio pour ces séries signées ;
-- seuils descriptifs ±2.5 ;
-- cinq séries × 10 marchés = 50 appels Analytics max/refresh, concurrence 4 ;
-- contrat API `market-attention-radar-v6` conservé ;
-- aucune exécution PERP.
-
-Validation intégrée observée : backend local utilisateur complet PASS à 100 %, frontend typecheck PASS, tests frontend 82/82 PASS, `git diff --check` PASS hors avertissements LF/CRLF, smokes CVD/Aggressor PASS.
-
-### ADR-344 — CVD utilise timestamp + cvd comme contrat historique obligatoire ; side volumes fail-soft
-
-**ADOPTÉ — Batch 47.4 intégré via `472f3ad`.** Side volumes CVD ne sont exposés que si les deux tableaux sont intégralement alignés ; aucune correspondance par index n'est inventée.
-
-### ADR-340 — CVD et Aggressor Differential réutilisent la rotation/cache Analytics unique
-
-**ADOPTÉ — Batch 47.4 intégré via `472f3ad`.** OI, Funding, Liquidation Volume, CVD et Aggressor Differential utilisent exactement la même infrastructure Analytics.
-
-### ADR-341 — L'anomalie CVD porte sur la variation et non sur le niveau cumulatif
-
-**ADOPTÉ — Batch 47.4 intégré via `472f3ad`.** Le niveau `current_cvd` reste observable mais la statistique porte sur `cvd_change`.
-
-### ADR-342 — Les séries order-flow signées utilisent MAD sans fallback ratio
-
-**ADOPTÉ — Batch 47.4 intégré via `472f3ad`.** Lorsque MAD=0, la méthode devient `UNAVAILABLE`, sans score extrême artificiel.
-
-### ADR-343 — CVD et Aggressor restent descriptifs sans autorité de ranking jusqu'au Batch 47.5
-
-**ADOPTÉ — historique 47.4.** Cette règle décrit l'état intégré 47.4 ; le patch 47.5 propose de la remplacer par ADR-345..348 après validation.
-
-## Batch 47.3 — Funding historique + Liquidation Volume — intégré
-
-**Intégré via `12051a7`.** Funding historique et Liquidation Volume réutilisent le scanner Analytics unique. Funding conserve séparément `rate`, `relativeRate` et la prédiction ticker ; Liquidation Volume reste agrégé et non directionnel.
-
-### ADR-337 — OI, Funding et Liquidation Volume partagent une seule rotation/cache Analytics
-
-**ADOPTÉ — Batch 47.3.** Un même marché sélectionné par la rotation peut déclencher les trois séries sous un sémaphore global.
-
-### ADR-338 — Le Funding historique conserve séparément rate, relativeRate et prédiction ticker
-
-**ADOPTÉ — Batch 47.3.** La statistique adaptative porte sur `relativeRate`; aucun fallback ratio n'est utilisé lorsque MAD=0 sur cette série signée.
-
-### ADR-339 — Liquidation Volume reste agrégé, non directionnel et sans autorité de ranking dans 47.3
-
-**ADOPTÉ — historique 47.3.** Aucun split LONG/SHORT n'est inventé.
-
-## Batch 47.2 — historique Open Interest — intégré
-
-**Intégré via `c09dd14`.** Parser OHLC strict, `close` finalisé comme valeur représentative, `more=true` rejeté, rotation/cache Analytics causal et séparé de l'OHLCV/Structure, médiane/MAD Batch 46, aucune conversion USD inventée.
-
-### ADR-333 — Les Analytics Futures historiques utilisent une rotation/cache séparée
-
-**ADOPTÉ — Batch 47.2.** `PerpetualAnalyticsScanner` est le composant canonique à étendre.
-
-### ADR-334 — L'Open Interest est analysé relativement à son propre historique sans unité économique inventée
-
-**ADOPTÉ — Batch 47.2.** `openInterest` reste une valeur Kraken brute.
-
-### ADR-335 — La causalité Analytics applique un délai conservateur d'un intervalle
-
-**ADOPTÉ — Batch 47.2.** Un point n'est consommé qu'après `timestamp + interval <= as_of`.
-
-### ADR-336 — L'OI historique n'a pas d'autorité de ranking dans 47.2
-
-**ADOPTÉ — historique 47.2.** Toute influence multi-analytics est explicitement réservée à une décision ultérieure.
-
-## Batch 47.1 — fondations Futures ticker — intégré
-
-**Intégré via `842e6bd7`.** Un snapshot bulk `/tickers` partagé alimente volume PERP, liquidité PERP et contexte instantané Futures.
-
-### ADR-331 — Le Radar réutilise un snapshot Futures bulk canonique
-
-**ADOPTÉ — Batch 47.1.** Aucun second client Kraken Futures n'est créé pour le contexte ticker.
-
-### ADR-332 — OI/funding instantanés restent descriptifs et leurs unités restent explicites
-
-**ADOPTÉ — Batch 47.1.** Aucun suffixe économique ni pourcentage n'est inventé pour des valeurs dont l'unité n'est pas démontrée.
-
 ## Décisions antérieures toujours actives
 
-- **ADR-330 — ADOPTÉ via `b219365`** : cible baseline adaptative 12 périodes, plancher 6.
-- **ADR-328 — ADOPTÉ via `b219365`** : anomalie robuste = médiane + MAD normalisé.
-- **ADR-329 — ADOPTÉ via `b219365`** : ratios historiques observables, contrat v6 additif.
-- **ADR-325 — ADOPTÉ via `45d41b7`** : policy Structure et scan Structure séparés.
-- **ADR-326 — ADOPTÉ via `45d41b7`** : événements BOS/CHOCH descriptifs, symétriques.
-- **ADR-327 — ADOPTÉ via `45d41b7`** : filtres Structure fail-closed sur UNKNOWN.
-- **ADR-323 — ADOPTÉ via `c262d54`** : liquidité PERP via `volumeQuote` USD validé.
-- **ADR-324 — ADOPTÉ via `c262d54`** : couverture observée, pas auto-corrigée.
-- **ADR-321 — ADOPTÉ via `25dcb5c`** : volume PERP USD via turnover quote public Kraken.
-- **ADR-322 — ADOPTÉ via `25dcb5c`** : une shortlist PERP vide n'est pas réparée en abaissant le scoring.
+### Batch 47.4
+
+**Intégré via `472f3ad`, clôturé documentairement via `e972fd9`.**
+
+- cinq séries Analytics dans un scanner/cache/cursor/sémaphore uniques ;
+- CVD analysé sur `cvd_change` ;
+- Aggressor Differential signé ;
+- MAD robuste ;
+- aucun fallback ratio pour les séries signées ;
+- 50 appels max/refresh, concurrence 4 ;
+- aucune exécution PERP.
+
+ADR-343 (« CVD/Aggressor sans autorité de ranking jusqu'au Batch 47.5 ») reste une décision historique décrivant l'état 47.4 et est désormais remplacée pour l'état courant par ADR-345..348.
+
+### Batch 47.3
+
+**Intégré via `12051a7`.** Funding relatif signé et Liquidation Volume agrégé réutilisent l'infrastructure Analytics canonique. Aucun split LONG/SHORT n'est inventé.
+
+### Batch 47.2
+
+**Intégré via `c09dd14`.** `PerpetualAnalyticsScanner` est l'infrastructure historique canonique. Open Interest est analysé relativement à sa propre baseline sans unité économique inventée.
+
+### Batch 47.1
+
+**Intégré via `842e6bd7`.** Snapshot Futures bulk canonique partagé ; OI/funding instantanés restent explicitement distincts des historiques.
+
+### Baseline / Structure / liquidité
+
+- ADR-330 — cible baseline adaptative 12 périodes, plancher 6 ;
+- ADR-328 — anomalie robuste médiane + MAD ;
+- ADR-329 — ratios historiques observables ;
+- ADR-325 — policy/scan Structure séparés ;
+- ADR-326 — BOS/CHOCH descriptifs et symétriques ;
+- ADR-327 — filtres Structure fail-closed sur UNKNOWN ;
+- ADR-323 — liquidité PERP via `volumeQuote` USD validé ;
+- ADR-324 — couverture observée, jamais auto-corrigée ;
+- ADR-321 — volume PERP USD via turnover quote Kraken ;
+- ADR-322 — une shortlist PERP vide n'est pas réparée en abaissant le scoring.

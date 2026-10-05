@@ -5,113 +5,118 @@
 ```text
 Repository                  : Ax-07/AI-Spot-Trader
 Branche                     : main
-HEAD GitHub réel audité     : e972fd9112363b268a53658fe5ce88facbfa7dd7
-Clôture 47.4                : e972fd9 — docs: mark batch 47.4 integrated
-Commit fonctionnel 47.4     : 472f3ad — feat: add CVD and aggressor analytics
-Batch 43.2                  : intégré
-Batch 44                    : intégré
+Base GitHub auditée         : d988de42dd684b597a78a6ce1d6d32a86147bf37
 Batch 45                    : intégré via 45d41b7
 Batch 46 / 46.1             : intégré via b219365
 Batch 47.1                  : intégré via 842e6bd7
 Batch 47.2                  : intégré via c09dd14
 Batch 47.3                  : intégré via 12051a7
 Batch 47.4                  : intégré via 472f3ad
-Batch 47.5                  : patch proposé, non intégré
+Clôture documentaire 47.4   : e972fd9
+Batch 47.5                  : intégré via d988de4
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
 
 ## Invariants de roadmap
 
-AI Spot Trader conserve un seul Agent IA stratégique, Kraken comme exchange initial, le Risk Engine comme autorité finale, un backend indépendant du frontend, le mode PAPER avant tout LIVE et aucune sortie LLM directement exécutable.
+AI Spot Trader conserve :
 
-Le Market Attention Radar reste informatif. Les capacités PERPETUAL sont observationnelles uniquement ; l'exécution demeure SPOT.
+- un seul Agent IA stratégique ;
+- Kraken comme exchange initial ;
+- Risk Engine comme autorité finale ;
+- backend indépendant du frontend ;
+- PAPER avant tout LIVE ;
+- exécution SPOT uniquement ;
+- aucune sortie LLM directement exécutable ;
+- aucune exécution PERPETUAL ;
+- aucun secret versionné ;
+- aucune optimisation post-hoc.
+
+Le Market Attention Radar reste un **outil de priorisation d'attention**, jamais un moteur BUY/SELL/HOLD.
 
 ## État intégré récent
 
-### Batch 43.2 — volume PERPETUAL
-
-**Intégré.** `volumeQuote` Kraken Futures est la source 24h des linear perpetuals/USD. Aucune notionnalisation artificielle de `candle.volume`.
-
-### Batch 44 — liquidité PERPETUAL et couverture
-
-**Intégré.** Percentiles SPOT/PERP séparés et diagnostic de rotation/couverture OHLCV, sans auto-tuning silencieux.
-
 ### Batch 45 — Structure en amont
 
-**Intégré via `45d41b7`.** Rotation/cache Structure séparés, événements `BOS/CHOCH`, filtres tendance/Structure et `UNKNOWN` fail-closed. Contrat `market-attention-radar-v6` conservé.
+**Intégré via `45d41b7`.** Rotation/cache Structure séparés, événements BOS/CHOCH, filtres tendance/Structure et `UNKNOWN` fail-closed. Contrat `market-attention-radar-v6` conservé.
 
 ### Batch 46 / 46.1 — baseline adaptative
 
-**Intégré via `b219365`.** Médiane + MAD normalisé, cible 12 périodes et plancher de compatibilité à 6 périodes. Les ratios historiques restent observables et servent de fallback uniquement pour les métriques où cette sémantique est explicitement admise.
+**Intégré via `b219365`.** Médiane + MAD normalisé, cible 12 périodes et fallback ratio uniquement pour les métriques où cette sémantique est justifiée.
 
 ### Batch 47.1 — fondations Futures ticker
 
-**Intégré via `842e6bd7`.** Un snapshot bulk `/tickers` canonique alimente volume PERP, liquidité PERP et contexte instantané Futures, sans impact stratégique.
+**Intégré via `842e6bd7`.** Snapshot bulk `/tickers` partagé pour volume/liquidité/contexte Futures, sans impact stratégique.
 
-### Batch 47.2 — historique Open Interest + infrastructure Analytics
+### Batch 47.2 — historique Open Interest
 
-**Intégré via `c09dd14`.** Une seule infrastructure historique Futures (`PerpetualAnalyticsScanner`, policy, cache, rotation, coverage). `OPEN_INTEREST_EXPANSION` / `OPEN_INTEREST_CONTRACTION` sont descriptifs et causaux.
+**Intégré via `c09dd14`.** Infrastructure Analytics historique canonique avec rotation/cache/concurrence bornés et causalité explicite.
 
 ### Batch 47.3 — Funding historique + Liquidation Volume
 
-**Intégré via `12051a7`.** Funding relatif signé et Liquidation Volume agrégé réutilisent exactement l'infrastructure Analytics 47.2. Aucun split long/short inventé.
+**Intégré via `12051a7`.** Funding relatif signé et Liquidation Volume agrégé réutilisent le même scanner Analytics.
 
 ### Batch 47.4 — CVD + Aggressor Differential
 
-**Intégré via `472f3ad`, clôture documentaire `e972fd9`.** CVD sur variation, Aggressor signé, médiane/MAD, aucun fallback ratio pour ces séries signées, cinq séries dans le même scanner/cache/cursor/sémaphore. Budget : 50 appels max/refresh, concurrence 4.
+**Intégré via `472f3ad`, clôturé documentairement via `e972fd9`.** CVD sur variation, Aggressor signé, MAD robuste, aucun fallback ratio pour les séries signées. Cinq séries partagent le même scanner/cache/cursor/sémaphore.
 
-La règle intégrée 47.4 reste : aucun impact Analytics sur ranking/shortlist/Agent/Risk/Broker.
+### Batch 47.5 — influence multi-analytics bornée sur le ranking
 
-Voir `docs/47_4_CVD_AGGRESSOR_DIFFERENTIAL.md`.
+**Intégré via `d988de4`.**
 
-## Batch 47.5 — influence multi-analytics sur le ranking
-
-**Patch proposé, non intégré.**
-
-Audit des quatre familles de solutions :
-
-1. aucun impact : sûr mais n'exploite pas les caractéristiques désormais robustes ;
-2. tie-break strict : trop souvent inerte ;
-3. bonus/malus sur le score existant : rejeté, car il pourrait modifier `interest_level` et l'admission ;
-4. score multi-analytics séparé et plafonné : **retenu**.
-
-Politique proposée :
+Décision architecturale :
 
 ```text
-OPEN_INTEREST      0/1
-FUNDING            0/1
-LIQUIDATION_VOLUME 0/1
-ORDER_FLOW         0/1 (CVD + Aggressor dédupliqués)
-TOTAL              0..4
+score séparé 0..4
+= OI 0/1
++ Funding 0/1
++ Liquidations 0/1
++ Order Flow 0/1
 ```
 
-Règles :
+CVD et Aggressor Differential forment une seule composante `ORDER_FLOW`. Ils ne peuvent jamais fournir +2.
 
-- disponibilité seule ne rapporte rien ;
-- séries non `AVAILABLE` = neutres, jamais pénalisantes ;
-- signes positifs/négatifs = symétriques pour l'attention ;
-- CVD + Aggressor concordants = +1 total ; opposés = 0 et conflit diagnostiqué ;
-- aucun changement de `interest_level`, `candidate_limit` ou population de candidats ;
-- insertion du score après niveau d'intérêt et Structure confirmée ;
-- scope SPOT inchangé ; scope ALL conserve les positions SPOT et ne réordonne que les slots PERP ;
-- API v6 étendue additivement ; cockpit explicite ;
-- aucune modification Agent/Risk/Broker ou exécution.
+Règles intégrées :
+
+- score calculé uniquement sur les PERP déjà retenus ;
+- `interest_level` inchangé ;
+- `candidate_limit` inchangé ;
+- aucune création/suppression de candidat ;
+- données absentes/dégradées neutres ;
+- signes positifs/négatifs symétriques pour l'attention ;
+- priorité : intérêt -> Structure -> Analytics -> reste de la clé ;
+- `SPOT` inchangé ;
+- en `ALL`, positions SPOT figées ;
+- contrat API v6 étendu additivement ;
+- diagnostics cockpit explicites ;
+- aucun impact direct Agent/Risk/Broker.
 
 Voir `docs/47_5_MULTI_ANALYTICS_RANKING.md`.
 
-## Validation connue
+## Validation intégrée Batch 47.5
 
-Batch 47.4 intégré : backend local utilisateur complet PASS à 100 %, frontend typecheck PASS, tests 82/82 PASS, `git diff --check` PASS hors avertissements LF/CRLF, smokes CVD/Aggressor PASS.
+```text
+backend python -m pytest -q : PASS — suite complète à 100 %
+frontend pnpm typecheck     : PASS
+frontend pnpm test          : PASS — 86/86
+git diff --check            : PASS — avertissements LF/CRLF uniquement
+push GitHub main            : PASS — d988de4
+arbre local après push      : propre
+```
 
-Batch 47.5 : les validations réellement exécutées par ChatGPT sont consignées dans `docs/10_DECISIONS_ET_CHANGELOG.md`. La suite complète backend/frontend et `git diff --check` doivent être relancés localement après extraction avant intégration.
+Les warnings Node `MODULE_TYPELESS_PACKAGE_JSON` et les dépréciations de dépendances de test FastAPI/Starlette sont connus mais non bloquants ; ils n'ont pas été mélangés au Batch 47.5.
 
-## Périmètres ultérieurs possibles
+## Suite
 
-- calibrage futur uniquement si des observations causales le justifient, sans optimisation post-hoc P&L ;
-- microstructure Futures si le besoin est démontré ;
-- conversion multi-devise derrière une source FX explicite et testée ;
-- éventuelle utilisation du Radar comme contexte Agent après décision architecturale séparée ;
+Le Batch 47.5 clôt la sous-série d'intégration initiale des cinq Futures Analytics dans le Radar.
+
+Le prochain batch doit être décidé séparément après resynchronisation. Toute évolution de pondération devra s'appuyer sur des observations causales et reproductibles, sans optimisation rétrospective du P&L et sans transformer le Radar en bot algorithmique traditionnel.
+
+Périmètres futurs possibles, uniquement si justifiés :
+
+- observation/calibrage du comportement du score Analytics ;
+- microstructure Futures ;
+- conversion multi-devise derrière une source FX explicite ;
+- utilisation éventuelle du Radar comme contexte Agent, via décision architecturale séparée ;
 - LIVE séparé et ultérieur.
-
-Aucun bot algorithmique traditionnel, quota de trades, optimisation post-hoc ou promesse de rendement ne doit être introduit silencieusement.

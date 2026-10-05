@@ -1,108 +1,118 @@
 # Batch 47.5 — Influence multi-analytics bornée sur le ranking
 
-## Objet
+## Statut
 
-Le Batch 47.5 décide explicitement si les cinq séries Futures Analytics intégrées jusqu'au Batch 47.4 doivent influencer le classement du Market Attention Radar, sans transformer le Radar en moteur de trading.
+**INTÉGRÉ sur GitHub `main` via `d988de42dd684b597a78a6ce1d6d32a86147bf37` (`feat: add bounded multi-analytics radar ranking`).**
 
-Base auditée au démarrage :
+Base auditée au démarrage du batch :
 
 ```text
-Repository            : Ax-07/AI-Spot-Trader
-Branche               : main
-HEAD GitHub réel      : e972fd9112363b268a53658fe5ce88facbfa7dd7
-Commit fonctionnel 47.4: 472f3adca1d19822289af47b52b03afab3cda0fb
-Clôture documentaire  : e972fd9 — docs: mark batch 47.4 integrated
+Repository               : Ax-07/AI-Spot-Trader
+Branche                  : main
+HEAD initial             : e972fd9112363b268a53658fe5ce88facbfa7dd7
+Commit fonctionnel 47.4 : 472f3adca1d19822289af47b52b03afab3cda0fb
+Clôture documentaire 47.4: e972fd9
+Commit fonctionnel 47.5 : d988de42dd684b597a78a6ce1d6d32a86147bf37
 ```
 
 Le contrat reste `market-attention-radar-v6`, additif, déterministe, causal et informatif. L'exécution reste SPOT uniquement.
 
-## Audit avant modification
+## Objectif
+
+Décider explicitement si les cinq séries Futures Analytics intégrées jusqu'au Batch 47.4 doivent influencer le classement du Market Attention Radar, tout en évitant :
+
+- double comptage CVD/Aggressor ;
+- avantage mécanique lié au nombre de métriques disponibles ;
+- pénalité liée à une panne technique ;
+- modification de `interest_level` ou de l'admission ;
+- création d'un candidat uniquement grâce aux Analytics ;
+- transformation du Radar en bot algorithmique traditionnel.
+
+## Audit
 
 ### Confirmé
 
-- `interest_level` est calculé dans `market/attention.py` à partir des caractéristiques OHLCV, de l'état d'activité et du régime de liquidité ; les seuils restent LOW/MEDIUM/HIGH/VERY_HIGH.
-- la clé canonique `_deterministic_radar_sort_key()` trie par niveau d'intérêt, priorité des caractéristiques, liquidité puis intensité/accélération/mouvement ; le symbole ferme l'ordre déterministe ;
-- la microstructure enrichit ensuite le niveau d'intérêt et `_v3_sort_key()` conserve ce niveau comme premier critère ;
-- `candidate_limit` n'est pas calculé dynamiquement par Analytics : il provient de `MarketAttentionPolicy` (`10` par défaut, borné `1..30`) et est appliqué avant l'enrichissement Analytics, dans les sélections canoniques activité/microstructure puis dans la sélection finale Structure ;
-- la sélection finale Structure utilise `_structured_candidate_sort_key()` : niveau d'intérêt d'abord, puis événement Structure confirmé, puis le reste de la clé canonique ;
-- le scan Analytics est déclenché avant le scan Structure afin d'alimenter le cache, mais `perpetual_analytics` n'était ajouté aux candidats qu'après la shortlist finale ;
-- en 47.4, `_snapshot_with_analytics()` ajoutait `perpetual_analytics`, les caractéristiques Analytics dans `combined_characteristics` et leurs libellés dans `interest_reasons` **après** la shortlist finale ; ces raisons descriptives étaient plafonnées à huit mais ne recalculaient pas `interest_level` ;
-- les cinq séries utilisent un seul `PerpetualAnalyticsScanner`, un seul `_perpetual_analytics_cursor`, un seul `_cache`, un sémaphore global et la même policy réseau ;
-- CVD et Aggressor Differential décrivent tous deux l'order flow agressif ; les traiter comme deux preuves indépendantes créerait une double pondération ;
-- OI, Funding et Liquidation Volume exposent déjà des caractéristiques robustes et testées ; aucune nouvelle statistique n'est nécessaire pour le ranking ;
-- `INSUFFICIENT_HISTORY`, `STALE`, `TECHNICAL_ERROR` et l'absence d'une série sont déjà distingués au niveau des snapshots ;
-- pour CVD/Aggressor signés, MAD nul produit `UNAVAILABLE` sans fallback ratio ni score extrême artificiel.
+- `interest_level` est calculé avant Analytics ;
+- `_deterministic_radar_sort_key()` place le niveau d'intérêt en premier ;
+- la sélection Structure finale préserve intérêt puis Structure avant le reste de la clé ;
+- `candidate_limit` appartient à `MarketAttentionPolicy` (`10` par défaut, `1..30`) ;
+- le scan Analytics alimente le cache avant Structure, mais l'enrichissement 47.4 intervenait après admission dans la shortlist ;
+- les cinq séries partagent un scanner, un curseur, un cache et un sémaphore uniques ;
+- CVD et Aggressor Differential décrivent deux vues du même order flow agressif ;
+- OI/Funding/Liquidation/CVD/Aggressor exposent déjà les caractéristiques nécessaires ;
+- les statuts dégradés sont explicites ;
+- CVD/Aggressor avec MAD nul restent `UNAVAILABLE` sans score extrême artificiel.
 
-### Obsolète
+### Obsolète après intégration
 
-- `docs/00_ETAT_ACTUEL.md`, `docs/09_ROADMAP_DEVELOPPEMENT.md` et `docs/10_DECISIONS_ET_CHANGELOG.md` citaient encore `472f3ad` comme HEAD audité alors que le HEAD réel est la clôture documentaire `e972fd9` ;
-- la règle Batch 47.4 « aucun impact ranking Analytics » devient historique à partir de 47.5. Elle reste vraie pour 47.4 mais n'est plus l'état courant après application de ce batch.
+La règle 47.4 « aucun impact Analytics sur le ranking » reste historiquement vraie pour 47.4 mais n'est plus l'état courant depuis `d988de4`.
 
 ### Manquant avant 47.5
 
-- une politique multi-analytics explicite et plafonnée ;
-- une séparation visible entre les raisons qui expliquent `interest_level` et les diagnostics qui expliquent le reranking Analytics ; le patch conserve la compatibilité de `interest_reasons` mais ajoute `analytics_ranking` comme diagnostic dédié ;
-- une déduplication CVD/Aggressor ;
-- des diagnostics montrant les composantes retenues et ignorées ;
-- une règle claire pour `SPOT`, `PERPETUAL` et `ALL` ;
-- des tests prouvant qu'Analytics ne peut pas créer un candidat ni modifier Agent/Risk/Broker.
-
-### À décider
-
-- niveau d'autorité exact des Analytics sur le ranking ;
-- traitement des métriques signées : direction de trading ou simple intensité d'attention ;
-- comportement lorsqu'une série est indisponible ;
-- place exacte du score dans la clé de tri.
+- politique multi-analytics bornée ;
+- déduplication CVD/Aggressor ;
+- diagnostics d'influence ;
+- règle SPOT/PERPETUAL/ALL ;
+- tests garantissant l'absence d'impact Agent/Risk/Broker.
 
 ## Options comparées
 
-### 1. Aucun impact Analytics
+### 1. Aucun impact
 
-Avantage : risque architectural minimal. Inconvénient : les cinq séries resteraient purement descriptives alors qu'elles possèdent désormais des caractéristiques causales, reproductibles et testées. Cette option est sûre mais n'exploite pas la valeur d'attention démontrée par les batches 47.2–47.4.
+Très sûr, mais les cinq séries resteraient purement descriptives.
 
-### 2. Analytics comme tie-breaker strict
+### 2. Tie-break strict
 
-Avantage : influence très faible. Inconvénient : le tie-break strict serait presque inerte car les clés canoniques contiennent déjà de nombreux critères puis le symbole, rendant les égalités complètes rares. La politique serait difficile à observer et à tester utilement.
+Influence trop faible et rarement observable à cause des clés existantes déjà fortement discriminantes.
 
 ### 3. Bonus/malus sur le score existant
 
-Rejeté. Modifier le score qui détermine `interest_level` pourrait faire franchir un seuil LOW/MEDIUM/HIGH/VERY_HIGH et donc modifier l'admission dans la population de candidats. Cela mélangerait détection d'activité, Analytics Futures et sémantique de direction. Un funding négatif ou une impulsion CVD négative n'est pas intrinsèquement un « malus » d'attention.
+Rejeté : cela aurait pu modifier `interest_level`, franchir un seuil d'admission ou introduire une fausse sémantique directionnelle.
 
-### 4. Score multi-analytics séparé, plafonné, injecté ensuite
+### 4. Score multi-analytics séparé et plafonné
 
-**Retenu.** Cette solution sépare explicitement l'attention Analytics du niveau d'intérêt existant, permet la déduplication sémantique, expose des diagnostics clairs et peut être insérée après l'admission dans la shortlist.
+**Retenu et intégré.**
 
-## Politique retenue
+Cette solution conserve `interest_level` intact, borne l'influence, permet la déduplication order-flow et expose un diagnostic autonome.
 
-### Score d'attention Analytics `0..4`
+## Politique intégrée
 
-Quatre familles sémantiques indépendantes valent chacune au maximum `+1` :
+### Score `0..4`
 
 ```text
-OPEN_INTEREST       : +1 si expansion OU contraction active et série AVAILABLE
-FUNDING             : +1 si extrême positif OU négatif actif et série AVAILABLE
-LIQUIDATION_VOLUME  : +1 si spike actif et série AVAILABLE
-ORDER_FLOW          : +1 max pour CVD + Aggressor Differential
+OPEN_INTEREST       : +1 max
+FUNDING             : +1 max
+LIQUIDATION_VOLUME  : +1 max
+ORDER_FLOW          : +1 max
+TOTAL               : 0..4
 ```
 
-La simple disponibilité d'une série ne donne aucun point. Le score ne dépend pas de la magnitude brute du z-score/MADσ ; il consomme uniquement les caractéristiques déjà validées par les batches 47.2–47.4.
+Une famille contribue uniquement lorsqu'une caractéristique 47.2–47.4 est active et que la série correspondante est `AVAILABLE`.
 
-Les anomalies signées sont symétriques pour l'attention : positif et négatif valent la même contribution lorsqu'ils sont statistiquement actifs. Ce score n'exprime donc jamais BUY/SELL.
+La disponibilité seule vaut 0.
+
+### Symétrie des séries signées
+
+Les extrêmes positifs et négatifs sont symétriques pour **l'attention**.
+
+Ils ne constituent jamais une instruction BUY/SELL et ne modifient pas l'Agent stratégique.
 
 ### Déduplication CVD / Aggressor
 
-CVD et Aggressor Differential constituent une seule famille `ORDER_FLOW` :
+CVD et Aggressor Differential partagent une seule composante `ORDER_FLOW` :
 
-- un seul signal actif : `+1` ;
-- deux signaux actifs concordants : `+1`, `order_flow_deduplicated=true` ;
-- deux signaux actifs opposés : `0`, `order_flow_conflict=true` ;
-- aucune série exploitable : `0`.
+```text
+un seul signal actif          -> +1
+deux signaux concordants      -> +1 total
+deux signaux opposés          -> 0
+aucun signal exploitable      -> 0
+```
 
-Il est donc impossible d'obtenir `+2` avec CVD + Aggressor.
+Le diagnostic expose `order_flow_deduplicated` et `order_flow_conflict`.
 
-### Données manquantes ou dégradées
+### Données dégradées
 
-Une série ne peut contribuer que si son statut est `AVAILABLE`. Les statuts suivants sont neutres :
+Les statuts suivants sont neutres et ne produisent aucun malus :
 
 ```text
 UNAVAILABLE
@@ -113,41 +123,53 @@ TECHNICAL_ERROR
 NOT_APPLICABLE
 ```
 
-Ils n'ajoutent aucun point mais ne soustraient rien non plus. Une panne fournisseur ne devient jamais un malus de marché.
+Une panne fournisseur ne devient jamais une information de marché.
 
-### Place dans le ranking
+## Place dans le ranking
 
-Le score n'est calculé qu'après la shortlist finale déjà construite par le pipeline canonique. Il ne modifie jamais :
+Le score Analytics ne peut agir qu'après admission du candidat.
+
+Il ne modifie jamais :
 
 - `interest_level` ;
 - `candidate_limit` ;
-- les conditions d'éligibilité ;
 - les filtres utilisateur ;
+- les conditions d'éligibilité ;
 - la population de candidats.
 
-Pour les PERP déjà retenus, la hiérarchie devient :
+Hiérarchie PERP :
 
 ```text
 interest_level
--> événement Structure confirmé (timeframe puis type)
--> analytics_ranking.score (0..4)
+-> événement Structure confirmé
+-> analytics_ranking.score
 -> reste de la clé microstructure / activité / liquidité
 -> symbole déterministe
 ```
 
-Analytics ne peut donc pas dépasser un candidat d'un niveau d'intérêt supérieur ni un événement Structure confirmé prioritaire.
+Un score Analytics élevé ne peut donc pas dépasser un niveau d'intérêt supérieur ou une priorité Structure supérieure.
 
-### Compatibilité des scopes
+## Compatibilité des scopes
 
-- `SPOT` : classement inchangé, aucun contexte `analytics_ranking` ;
-- `PERPETUAL` : les candidats PERP déjà présents peuvent être réordonnés ;
-- `ALL` : les positions SPOT sont figées ; seuls les PERP peuvent échanger leurs propres emplacements entre eux.
+### SPOT
 
-Cette règle empêche de favoriser mécaniquement PERPETUAL face à SPOT simplement parce que SPOT n'a pas de Futures Analytics comparable.
+Aucun reranking Analytics. Aucun contexte Futures requis.
 
-## Contrat API additif
+### PERPETUAL
 
-`market-attention-radar-v6` est conservé. Chaque candidat PERP peut exposer :
+Les PERP déjà présents peuvent être réordonnés entre eux.
+
+### ALL
+
+Les positions SPOT restent fixes. Seuls les PERP peuvent échanger leurs propres slots.
+
+Cette règle évite de favoriser PERPETUAL par rapport à SPOT uniquement parce que les Futures Analytics n'ont pas d'équivalent SPOT.
+
+## API et cockpit
+
+`market-attention-radar-v6` est conservé.
+
+Extension additive optionnelle :
 
 ```text
 analytics_ranking.score
@@ -162,47 +184,105 @@ analytics_ranking.rank_change
 analytics_ranking.ranking_policy
 ```
 
-Chaque composante indique sa contribution, ses caractéristiques utilisées et l'état des séries sous-jacentes. Les rangs avant/après et `rank_change` rendent l'impact réellement observé explicite, y compris lorsqu'il vaut zéro. Le champ est optionnel afin de conserver la compatibilité des payloads legacy.
+Le cockpit expose :
+
+- score `0..4` ;
+- composantes ;
+- caractéristiques retenues ;
+- état de chaque série ;
+- déduplication/conflit order-flow ;
+- rang avant/après ;
+- variation réelle de rang ;
+- rappel explicite de l'absence d'impact direct Agent/Risk/Broker.
+
+Les payloads antérieurs restent compatibles car `analytics_ranking` est optionnel.
 
 ## Invariants préservés
 
 - un seul Agent IA stratégique ;
+- Kraken exchange initial ;
 - Risk Engine déterministe avec autorité finale ;
-- aucun ordre direct issu du Radar ;
-- aucune exécution PERPETUAL ;
+- aucune sortie LLM directement exécutable ;
 - PAPER ;
+- exécution SPOT uniquement ;
 - aucun short, levier, margin, future ou perpetual exécuté ;
-- aucun nouveau scanner/cache/cursor Analytics ;
-- policy réseau 47.4 inchangée : 10 marchés, 5 séries, 50 appels max/refresh, concurrence 4 ;
-- aucun changement statistique 47.2–47.4 ;
-- aucun look-ahead ni optimisation post-hoc sur le P&L.
+- un seul scanner/cache/cursor Analytics ;
+- policy réseau inchangée ;
+- statistiques 47.2–47.4 inchangées ;
+- aucun look-ahead ;
+- aucun ajustement post-hoc d'une décision ;
+- aucune optimisation sur le P&L.
 
 ## Tests ciblés ajoutés
 
 Backend :
 
-- symétrie des anomalies signées ;
+- symétrie des séries signées ;
 - score plafonné à 4 ;
 - déduplication CVD/Aggressor ;
 - conflit order-flow ;
-- séries absentes, insuffisantes, stale, technical error et partial neutres ;
-- disponibilité sans anomalie = zéro ;
-- MAD nul CVD = zéro influence ;
-- compatibilité payload historique sans CVD/Aggressor ;
-- insertion du score après intérêt + Structure ;
-- scope ALL : slots SPOT immuables ;
-- scope SPOT inchangé ;
+- données absentes/insuffisantes/stale/technical/partial neutres ;
+- disponibilité sans anomalie = 0 ;
+- MAD nul CVD = 0 influence ;
+- compatibilité snapshots historiques ;
+- ordre intérêt -> Structure -> Analytics ;
+- scope `ALL` avec slots SPOT immuables ;
+- scope `SPOT` inchangé ;
 - égalités déterministes ;
 - aucune création/suppression de candidat ;
-- aucune dépendance Agent/Risk/Broker et aucune modification directe d'`interest_level`.
+- aucune dépendance Agent/Risk/Broker.
 
 Frontend :
 
-- diagnostics score/composantes/déduplication et rang avant/après ;
-- compatibilité payload legacy sans `analytics_ranking` ;
+- score/composantes/déduplication ;
+- rang avant/après et variation ;
+- compatibilité payload legacy ;
 - libellés explicites ;
-- séries indisponibles représentées sans contribution négative.
+- séries indisponibles sans contribution négative.
 
-## Validation
+## Validation finale
 
-Les résultats réellement exécutés dans l'environnement ChatGPT sont consignés dans `docs/00_ETAT_ACTUEL.md` et `docs/10_DECISIONS_ET_CHANGELOG.md`. La validation complète du repository doit être relancée localement après extraction du ZIP.
+Validations de préparation ChatGPT :
+
+```text
+python -m py_compile production + test backend 47.5 : PASS
+harnais backend isolé ranking 47.5                  : PASS — 15/15
+tsc strict ciblé market-attention.ts                : PASS
+tsc syntaxe lib + cockpit                           : PASS
+test frontend 47.5                                  : PASS — 4/4
+```
+
+Validation complète locale utilisateur :
+
+```text
+git diff --check       : PASS — warnings LF -> CRLF uniquement
+python -m pytest -q    : PASS — suite backend complète à 100 %
+pnpm typecheck         : PASS
+pnpm test              : PASS — 86/86
+git push origin main   : PASS — e972fd9..d988de4
+git status --short     : propre
+```
+
+Warnings connus et non bloquants :
+
+- dépréciations FastAPI/Starlette dans les dépendances de test ;
+- warning Node `MODULE_TYPELESS_PACKAGE_JSON`.
+
+Ces warnings n'ont provoqué aucun échec et n'ont pas été mélangés au périmètre fonctionnel 47.5.
+
+## Décisions
+
+Les ADR suivantes sont **ADOPTÉES via `d988de4`** :
+
+- ADR-345 — score Analytics séparé et plafonné à quatre familles ;
+- ADR-346 — CVD + Aggressor = une seule composante order-flow ;
+- ADR-347 — Analytics ne crée aucun candidat et ne modifie pas `interest_level` ;
+- ADR-348 — une série Analytics indisponible est neutre.
+
+## Conclusion
+
+Le Batch 47.5 introduit une influence Analytics volontairement limitée : elle **priorise uniquement l'attention entre PERP déjà sélectionnés**.
+
+Le Radar reste déterministe, causal, informatif et indépendant de la décision stratégique de trading.
+
+**L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
