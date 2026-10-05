@@ -17,6 +17,7 @@ from ai_spot_trader.domain.models import (
     TradingStyleContext,
     UtcDateTime,
 )
+from ai_spot_trader.domain.radar_context import RadarAnalyticsStrategicContext
 
 MAX_DECISIONS_PER_CYCLE_HARD_LIMIT = 20
 DEFAULT_MAX_DECISIONS_PER_CYCLE = 6
@@ -38,6 +39,9 @@ class CycleDecisionPlanInput(DomainModel):
         default=None, exclude_if=lambda value: value is None
     )
     multi_timeframe_context: StrategicMultiTimeframeContext | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    radar_analytics_context: RadarAnalyticsStrategicContext | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     max_decisions_per_cycle: Annotated[
@@ -77,6 +81,7 @@ class CycleDecisionPlanInput(DomainModel):
         if not self.management_mode and self.capacity_reason is not None:
             raise ValueError("capacity_reason is reserved for management_mode")
         self._validate_multi_timeframe_context()
+        self._validate_radar_analytics_context()
         return self
 
     def _validate_multi_timeframe_context(self) -> None:
@@ -88,7 +93,10 @@ class CycleDecisionPlanInput(DomainModel):
             raise ValueError("multi_timeframe_context requires trading_style_context")
         if context.as_of != self.created_at:
             raise ValueError("multi_timeframe_context as_of must match plan input created_at")
-        if context.style is not style.style or context.style_mapping_version != style.mapping_version:
+        if (
+            context.style is not style.style
+            or context.style_mapping_version != style.mapping_version
+        ):
             raise ValueError("multi_timeframe_context trading style identity mismatch")
         expected = tuple((item.symbol, item.market_type) for item in self.market_states)
         actual = tuple((item.symbol, item.market_type) for item in context.markets)
@@ -97,6 +105,17 @@ class CycleDecisionPlanInput(DomainModel):
         for market in context.markets:
             if tuple(item.timeframe for item in market.timeframes) != style.preferred_timeframes:
                 raise ValueError("multi_timeframe_context timeframes must match trading style")
+
+    def _validate_radar_analytics_context(self) -> None:
+        context = self.radar_analytics_context
+        if context is None:
+            return
+        if context.observed_at > self.created_at:
+            raise ValueError("radar_analytics_context cannot postdate the plan input")
+        allowed = {(item.symbol, item.market_type) for item in self.market_states}
+        actual = {(item.symbol, item.market_type) for item in context.markets}
+        if not actual.issubset(allowed):
+            raise ValueError("radar_analytics_context must remain inside market_states")
 
 
 class CycleDecisionPlan(DomainModel):

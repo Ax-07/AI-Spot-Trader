@@ -5,7 +5,7 @@
 ```text
 Repository                  : Ax-07/AI-Spot-Trader
 Branche                     : main
-Base GitHub auditée 49.2    : 3194fce620f5e31672c6b52ef8986daddeea3a25
+Base GitHub auditée 49.3    : f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b
 Batch 45                    : intégré via 45d41b7
 Batch 46 / 46.1             : intégré via b219365
 Batch 47.1                  : intégré via 842e6bd7
@@ -18,7 +18,8 @@ Clôture documentaire 47.5   : 4278a5c
 Batch 48 fonctionnel        : intégré via ebb664c
 Clôture documentaire 48     : 8704eec
 Batch 49.1                  : intégré via 3194fce
-Batch 49.2                  : patch proposé, non intégré à la livraison
+Batch 49.2                  : intégré via f0d4f94
+Batch 49.3                  : patch proposé, non intégré à la livraison
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -40,7 +41,7 @@ AI Spot Trader conserve :
 - aucun secret versionné ;
 - aucune optimisation post-hoc.
 
-Le Market Attention Radar est un **outil de priorisation d'attention** : depuis 49.2 il peut choisir l'univers candidat, mais il n'est jamais un moteur BUY/SELL/HOLD ni une autorité Risk.
+Le Market Attention Radar est un **outil de priorisation d'attention** : depuis 49.2 il choisit l'univers candidat ; depuis 49.3 il peut fournir des faits descriptifs causaux au même Agent. Il n'est jamais un moteur BUY/SELL/HOLD ni une autorité Risk.
 
 ## État intégré récent
 
@@ -172,7 +173,7 @@ Avec `risk_allow_quantity_reduction=true`, Risk borne la quantité à la positio
 
 ## Batch 49.2 — Radar shortlist -> univers Agent SPOT + PERPETUAL
 
-**Patch proposé sur `3194fce`, non intégré à GitHub à la livraison.**
+**Intégré via `f0d4f94`.**
 
 Décision architecturale : **le Radar alimente la frontière canonique de Market Discovery**. Aucun second système de discovery et aucune deuxième shortlist ne sont créés.
 
@@ -196,7 +197,7 @@ Règles 49.2 :
 - seuls les marchés présents dans la shortlist Radar peuvent devenir de nouveaux candidats ;
 - quote incompatible, statut non tradable, marché absent du catalogue, type non activé, PERP non linéaire ou whitelist Risk incompatible => candidat rejeté ;
 - `FUTURE` reste rejeté par les contrats de domaine/policy ;
-- aucune donnée Analytics 47.5 n'est transférée au prompt stratégique en 49.2 ;
+- la frontière Discovery/audit persiste uniquement les identités Radar, pas les Analytics ;
 - aucune modification des poids Analytics ou recalibration ;
 - Radar ne touche ni Risk ni Broker.
 
@@ -208,6 +209,39 @@ S'il existe des positions ouvertes, elles restent gérables en mode MANAGEMENT p
 
 Voir `docs/49_2_RADAR_AGENT_UNIVERSE.md`.
 
+## Batch 49.3 — contexte Radar / Analytics causal fourni à l'Agent
+
+**Patch proposé sur `f0d4f94`, non intégré à GitHub à la livraison.**
+
+Décision architecturale : **contexte typé dédié C**.
+
+```text
+univers 49.2
+-> vérification du même snapshot Radar
+-> projection RadarAnalyticsStrategicContext bornée
+-> filtrage final sur les market_states du plan
+-> même appel generate_decision_plan(...)
+-> Agent BUY / SELL / HOLD
+-> Risk
+-> PaperBroker
+```
+
+Faits retenus : activité/tendance/liquidité, microstructure SPOT compacte, Market Structure compacte, score Analytics 47.5 et faits OI/Funding/Liquidations/CVD/Aggressor pour PERPETUAL. Les statuts dégradés restent explicites ; SPOT reçoit `NOT_APPLICABLE` pour les Analytics Futures.
+
+Règles causales :
+
+- le snapshot utilisé pour la projection doit porter exactement le `radar_observed_at` de Discovery ;
+- tout timestamp imbriqué postérieur au snapshot est rejeté ;
+- le contexte ne peut pas postdater `CycleDecisionPlanInput.created_at` ;
+- un marché hors `market_states` est rejeté/filtré ;
+- aucun résultat futur, P&L futur ou recalibration post-hoc.
+
+Le score 47.5 reste `0..4` avec quatre familles. CVD et Aggressor restent une seule famille `ORDER_FLOW`.
+
+Aucune modification Risk/Broker, aucune seconde décision LLM et aucune migration.
+
+Voir `docs/49_3_AGENT_RADAR_ANALYTICS_CONTEXT.md`.
+
 ## Validation intégrée du Batch 48
 
 ```text
@@ -218,15 +252,14 @@ git diff --check            : PASS — avertissements LF/CRLF uniquement
 push GitHub main            : PASS — ebb664c puis clôture 8704eec
 ```
 
-Ces résultats appartiennent au Batch 48 intégré et ne valent pas validation du patch 49.2.
+Ces résultats appartiennent au Batch 48 intégré et ne valent pas validation du patch 49.3.
 
-## Suite après validation de 49.2
+## Suite après validation de 49.3
 
 ```text
-49.3 — contexte Radar/Analytics causal fourni à l'Agent
 49.4 — observabilité des décisions et performances PAPER SPOT/PERP
 ```
 
-Le Batch 49.3 devra être lancé dans une nouvelle discussion après resynchronisation avec le HEAD `main` alors courant. Il devra enrichir le contexte stratégique sans transformer les métriques Radar en décision automatique et sans modifier rétroactivement les poids 47.5.
+Le Batch 49.4 devra être lancé dans une nouvelle discussion après resynchronisation avec le HEAD `main` alors courant. Il devra mesurer honnêtement performance, frais, slippage, drawdown, exposition et ventilation SPOT/PERP sans recalibrer rétroactivement les décisions.
 
 Le LIVE, l'authentification Kraken Futures privée et l'exécution réelle restent des décisions séparées et ultérieures.

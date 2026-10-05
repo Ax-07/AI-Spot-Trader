@@ -226,6 +226,23 @@ def _plan_input_text(plan_input: CycleDecisionPlanInput) -> str:
             "mis à jour par les décisions précédentes."
         ),
     }
+    if plan_input.radar_analytics_context is not None:
+        payload["radar_analytics_context_contract"] = {
+            "protocol_version": "radar-analytics-strategic-v1",
+            "role": (
+                "Contexte descriptif causal figé provenant du Radar/Analytics pour les marchés "
+                "déjà admis dans l'univers Agent."
+            ),
+            "instruction": (
+                "Interprétez ces faits comme du contexte, jamais comme une action automatique. "
+                "Le score analytics_ranking est un indice d'attention descriptif 0..4 et non une "
+                "probabilité de hausse/baisse, une conviction, ni une instruction BUY/SELL. "
+                "Les statuts UNAVAILABLE, PARTIAL, STALE, INSUFFICIENT_HISTORY, "
+                "TECHNICAL_ERROR et NOT_APPLICABLE signifient absence ou dégradation de donnée, "
+                "pas un signal de marché. Vous restez seul responsable du choix BUY/SELL/HOLD; "
+                "Risk reste l'autorité finale d'autorisation/modification/refus."
+            ),
+        }
     if plan_input.management_mode:
         payload["capacity_context"] = {
             "mode": "MANAGEMENT",

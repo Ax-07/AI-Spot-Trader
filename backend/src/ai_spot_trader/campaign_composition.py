@@ -393,8 +393,8 @@ def build_campaign_runtime(
         )
     else:
         assert market_attention is not None
-        # Batch 49.2: Radar decides only which typed markets deserve attention. The same
-        # strategic Agent still performs the sole BUY/SELL/HOLD planning call afterwards.
+        # Radar resolves the typed universe; the same Agent receives a bounded causal projection
+        # of the exact Radar/Analytics snapshot before its sole BUY/SELL/HOLD planning call.
         discovery = MarketDiscoveryCoordinator(
             research=market_research,
             radar=market_attention,
@@ -418,6 +418,7 @@ def build_campaign_runtime(
             capacity_evaluator=capacity_evaluator,
             discovery=discovery,
             settlement_asset=config.paper_settlement_asset,
+            radar_context_reader=market_attention,
             portfolio=portfolio,
             agent=agent,
             risk_engine=risk_engine,

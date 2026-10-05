@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from pydantic import ConfigDict
 
+from ai_spot_trader.agent.radar_context import FrozenRadarContextDecisionProvider
 from ai_spot_trader.core.clock import Clock
 from ai_spot_trader.domain.enums import MarketType
 from ai_spot_trader.domain.models import (
@@ -18,7 +19,14 @@ from ai_spot_trader.domain.models import (
 )
 from ai_spot_trader.domain.planning import DEFAULT_MAX_DECISIONS_PER_CYCLE
 from ai_spot_trader.domain.ports import Broker, ExecutableMarketDataSource, MultiMarketLLMProvider
-from ai_spot_trader.market.discovery import MarketDiscoveryAudit, MarketDiscoveryCoordinator
+from ai_spot_trader.domain.radar_context import RadarAnalyticsStrategicContext
+from ai_spot_trader.market.discovery import (
+    MarketDiscoveryAudit,
+    MarketDiscoveryCoordinator,
+    MarketDiscoveryResult,
+    RadarShortlistReader,
+)
+from ai_spot_trader.market.radar_agent_context import build_radar_analytics_strategic_context
 from ai_spot_trader.risk.capacity import (
     CapacityAssessment,
     CapacityEvaluator,
@@ -43,6 +51,10 @@ RADAR_FAIL_CLOSED_REASON = "RADAR_UNIVERSE_UNAVAILABLE"
 # Backward-compatible monkeypatch/import seam retained while the canonical runtime
 # implementation is now the multi-market runner.
 TradingCycleRunner = MultiMarketTradingCycleRunner
+
+
+class RadarContextSnapshotMismatchError(RuntimeError):
+    pass
 
 
 class DiscoveredMarketSelectionInput(MarketSelectionInput):
@@ -119,6 +131,7 @@ class DynamicMarketTradingCycleRunner:
         capacity_evaluator: CapacityEvaluator,
         discovery: MarketDiscoveryCoordinator,
         settlement_asset: str,
+        radar_context_reader: RadarShortlistReader | None = None,
         max_decisions_per_cycle: int = DEFAULT_MAX_DECISIONS_PER_CYCLE,
         trading_style_context: TradingStyleContext | None = None,
         execution_cost_context: ExecutionCostContext | None = None,
@@ -146,6 +159,7 @@ class DynamicMarketTradingCycleRunner:
         self._capacity_evaluator = capacity_evaluator
         self._discovery = discovery
         self._settlement_asset = normalized_settlement
+        self._radar_context_reader = radar_context_reader
         self._trading_style_context = trading_style_context
         self._execution_cost_context = execution_cost_context
         self._clock = clock
@@ -215,8 +229,7 @@ class DynamicMarketTradingCycleRunner:
         prefetched: _PrefetchedPortfolio,
         existing: tuple[ExecutableMarket, ...],
     ) -> MultiMarketTradingCycleResult:
-        # Radar is already a backend-owned observation service. Resolve its typed shortlist first,
-        # then evaluate capacity on the actual candidate universe; bootstrap is never a substitute.
+        # Resolve the typed Radar shortlist before planning; bootstrap is never a substitute.
         discovery_result = await self._discovery.refresh_if_due(portfolio_state=portfolio)
         radar_failed = discovery_result.audit.status == "FALLBACK"
         if radar_failed:
@@ -224,6 +237,21 @@ class DynamicMarketTradingCycleRunner:
                 return self._failed_without_agent(
                     discovery_result.audit.error_type or "RadarUniverseUnavailable"
                 )
+            result = await self._run_canonical(
+                effective=_ordered(existing),
+                portfolio_source=prefetched,
+                capacity_evaluator=_ManagementOnlyCapacityEvaluator(
+                    settlement_asset=self._settlement_asset,
+                    reason=RADAR_FAIL_CLOSED_REASON,
+                ),
+            )
+            return _attach_discovery_audit(result, discovery_result.audit)
+
+        try:
+            radar_context = self._freeze_radar_context(discovery_result)
+        except Exception as exc:
+            if not existing:
+                return self._failed_without_agent(type(exc).__name__)
             result = await self._run_canonical(
                 effective=_ordered(existing),
                 portfolio_source=prefetched,
@@ -259,8 +287,36 @@ class DynamicMarketTradingCycleRunner:
         result = await self._run_canonical(
             effective=effective,
             portfolio_source=prefetched,
+            radar_context=radar_context,
         )
         return _attach_discovery_audit(result, discovery_result.audit)
+
+    def _freeze_radar_context(
+        self,
+        discovery_result: MarketDiscoveryResult,
+    ) -> RadarAnalyticsStrategicContext | None:
+        reader = self._radar_context_reader
+        if reader is None:
+            return None
+        expected = discovery_result.audit.radar_observed_at
+        if expected is None:
+            raise RadarContextSnapshotMismatchError(
+                "Radar discovery did not expose a snapshot boundary"
+            )
+        overview = reader.latest
+        actual = overview.observed_at
+        if actual.tzinfo is None or actual.utcoffset() is None:
+            raise RadarContextSnapshotMismatchError(
+                "Radar context snapshot timestamp must be timezone-aware"
+            )
+        if actual.astimezone(UTC) != expected.astimezone(UTC):
+            raise RadarContextSnapshotMismatchError(
+                "Radar context snapshot changed after discovery"
+            )
+        return build_radar_analytics_strategic_context(
+            overview,
+            markets=discovery_result.watchlist,
+        )
 
     async def _run_canonical(
         self,
@@ -268,13 +324,17 @@ class DynamicMarketTradingCycleRunner:
         effective: tuple[ExecutableMarket, ...],
         portfolio_source: PortfolioSnapshotSource,
         capacity_evaluator: CapacityEvaluator | _ManagementOnlyCapacityEvaluator | None = None,
+        radar_context: RadarAnalyticsStrategicContext | None = None,
     ) -> MultiMarketTradingCycleResult:
+        agent: MultiMarketLLMProvider = self._agent
+        if radar_context is not None:
+            agent = FrozenRadarContextDecisionProvider(agent, radar_context)
         runner_kwargs: dict[str, object] = {
             "executable_market_data": self._executable_market_data,
             "executable_markets": effective,
             "capacity_evaluator": capacity_evaluator or self._capacity_evaluator,
             "portfolio": portfolio_source,
-            "agent": self._agent,
+            "agent": agent,
             "risk_engine": self._risk_engine,
             "broker": self._broker,
             "aggressiveness": self._aggressiveness,

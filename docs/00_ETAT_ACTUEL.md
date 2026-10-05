@@ -1,83 +1,82 @@
 # 00 — État actuel
 
-## Référence de reprise — Batch 49.2 préparé
+## Référence de reprise — Batch 49.3 préparé
 
 ```text
 Repository                         : Ax-07/AI-Spot-Trader
 Branche                            : main
-HEAD GitHub audité au démarrage    : 3194fce620f5e31672c6b52ef8986daddeea3a25
-HEAD GitHub                        : feat: activate perpetual paper trading
+HEAD GitHub audité au démarrage    : f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b
+HEAD GitHub                        : feat: feed radar shortlist into agent universe
 Batch 49.1                         : INTÉGRÉ SUR GITHUB main
-Batch 49.2                         : PATCH PROPOSÉ — NON INTÉGRÉ À GITHUB À LA LIVRAISON
+Batch 49.2                         : INTÉGRÉ SUR GITHUB main via f0d4f94
+Batch 49.3                         : PATCH PROPOSÉ — NON INTÉGRÉ À GITHUB À LA LIVRAISON
 ```
 
-Le Batch 49.1 est bien intégré sur `main`. La référence `8704eec` encore présente dans l'ancienne version de ce document était obsolète.
+L'ancien statut « Batch 49.2 non intégré » était obsolète : `main` pointe bien sur `f0d4f94` au démarrage du Batch 49.3.
 
-## État fonctionnel proposé par le Batch 49.2
+## État fonctionnel proposé par le Batch 49.3
 
-Le runtime PAPER conserve un seul Agent stratégique et la chaîne canonique :
+La chaîne PAPER dynamique reste unique :
 
 ```text
 Market Attention Radar
 -> shortlist bornée
--> projection identité {symbol, market_type}
 -> validation catalogue/configuration Kraken
 -> univers Agent typé SPOT/PERPETUAL
+-> projection causale Radar/Analytics bornée pour ces seuls marchés
 -> même Agent IA : BUY / SELL / HOLD
--> Risk Engine
+-> Risk Engine déterministe
 -> PaperBroker
 ```
 
-Le Radar choisit **où regarder**. Il ne choisit jamais l'action, la taille, le levier, `reduce_only` ou l'autorisation Risk.
+Le Radar choisit **où regarder** et fournit désormais des faits descriptifs figés pour aider le raisonnement. Il ne choisit jamais l'action, la taille, le levier, `reduce_only` ou l'autorisation Risk.
 
-## Frontière 49.2 / 49.3
+## Architecture 49.3
 
-Le Batch 49.2 transmet uniquement :
+La solution retenue est un contexte dédié `RadarAnalyticsStrategicContext`, référencé depuis `CycleDecisionPlanInput`. `StrategicMultiTimeframeContext` reste consacré aux candles stratégiques existantes.
 
-```text
-symbol
-market_type
-```
+Le `DynamicMarketTradingCycleRunner` relit le même service Radar après Discovery uniquement pour figer les faits du cycle. Le timestamp doit être exactement celui enregistré par l'audit Discovery ; sinon les nouvelles ouvertures échouent fermées. Le contexte est ensuite filtré sur les `market_states` effectivement visibles par le plan et injecté dans **le même appel** `generate_decision_plan(...)` via un décorateur sans second appel LLM.
 
-Il ne transmet pas encore au prompt stratégique les données Radar/Analytics : `analytics_ranking.score`, Open Interest, Funding, Liquidations, CVD, Aggressor Differential, structure détaillée ni diagnostics Radar. Cet enrichissement est réservé au Batch 49.3.
+## Faits exposés
 
-## Architecture retenue
+Par marché, le contexte reste borné et déterministe :
 
-`MarketDiscoveryCoordinator` reste la frontière canonique de l'univers dynamique. Il accepte désormais deux sources exclusives :
+- identité `{symbol, market_type}` ;
+- activité, tendance récente, caractéristiques et volume 24h ;
+- liquidité/microstructure SPOT utile ;
+- synthèse Market Structure et au plus quatre timeframes ;
+- pour PERPETUAL : score Analytics 47.5 `0..4`, composantes OI/Funding/Liquidations/ORDER_FLOW et déduplication CVD/Aggressor ;
+- valeurs causales compactes Open Interest, Funding, Liquidation Volume, CVD et Aggressor Differential ;
+- statuts explicites `AVAILABLE`, `PARTIAL`, `STALE`, `INSUFFICIENT_HISTORY`, `TECHNICAL_ERROR`, `NOT_APPLICABLE` ou `UNAVAILABLE`.
 
-- mode historique `LEGACY_AGENT`, conservé pour compatibilité/tests ;
-- mode production `RADAR_SHORTLIST`, utilisé par les Campaigns dynamiques après 49.2.
+Ne sont pas exposés : diagnostics techniques internes, erreurs brutes, couverture globale du scanner, ranks avant/après, historique brut, swings complets, données futures, résultats/P&L futurs ou métadonnées d'observabilité inutiles.
 
-En mode Radar, aucun second ranking ni seconde shortlist n'est créé. Seuls les `ExecutableMarket` de la shortlist sont projetés, puis validés contre le catalogue public Kraken et les contraintes Campaign/Risk déjà existantes : type autorisé, quote de règlement, statut tradable, PERPETUAL linéaire, whitelist éventuelle et présence dans le catalogue.
+## Causalité et mode dégradé
 
-Le `DynamicMarketTradingCycleRunner` réutilise ensuite sans duplication `MultiMarketTradingCycleRunner`, le même Agent, le même Risk Engine et le même `PaperBroker`.
+Chaque timestamp inclus doit être `<=` au snapshot Radar figé, lui-même `<=` à la frontière de décision. Une donnée future ou un changement de snapshot entre Discovery et projection provoque un échec fermé pour les nouvelles ouvertures.
 
-## Mode dégradé
+Une position déjà ouverte reste gérable en MANAGEMENT si le Radar/contexte devient indisponible. Une donnée dégradée n'est jamais convertie en signal positif ou négatif artificiel.
 
-Pour les nouvelles ouvertures, le chemin Radar est **fail-closed** lorsque le Radar est indisponible, stale, vide ou sans candidat exécutable. Aucun bootstrap n'est silencieusement transformé en opportunité de remplacement.
+SPOT conserve `NOT_APPLICABLE` pour les Analytics Futures. PERPETUAL conserve LONG/SHORT sous Risk. `FUTURE` daté reste non exécutable.
 
-Si des positions sont déjà ouvertes, elles restent gérables par le même Agent en mode MANAGEMENT uniquement ; ce fallback n'autorise aucune nouvelle exposition.
+## Invariants inchangés
 
-Les `FUTURE` datés restent non exécutables. SPOT reste sans short/levier/marge. PERPETUAL linéaire reste LONG/SHORT sous autorité finale du Risk Engine.
-
-## Fichiers fonctionnels principaux du patch 49.2
-
-```text
-backend/src/ai_spot_trader/market/discovery.py
-backend/src/ai_spot_trader/trading/discovery_runner.py
-backend/src/ai_spot_trader/campaign_composition.py
-backend/src/ai_spot_trader/core/control_plane_runtime.py
-backend/src/ai_spot_trader/main.py
-backend/tests/test_batch49_2_radar_agent_universe.py
-```
-
-Documentation active mise à jour : `README.md`, `docs/00_ETAT_ACTUEL.md`, `docs/01_PROJECT_MASTER.md`, `docs/09_ROADMAP_DEVELOPPEMENT.md`, `docs/10_DECISIONS_ET_CHANGELOG.md` et `docs/49_2_RADAR_AGENT_UNIVERSE.md`.
+- un seul Agent IA stratégique ;
+- PAPER uniquement ;
+- Kraken ;
+- SPOT + PERPETUAL linéaire ;
+- aucun LIVE ni API Kraken Futures privée ;
+- aucun champ Radar/Analytics ne crée un `ExecutionIntent` ;
+- aucun champ Radar/Analytics ne définit levier, marge ou `reduce_only` ;
+- Risk Engine déterministe = autorité finale ;
+- score Analytics 47.5 inchangé, avec CVD + Aggressor dans une seule famille `ORDER_FLOW` ;
+- aucun look-ahead ni recalibration post-hoc ;
+- aucun secret versionné.
 
 ## Suite
 
 ```text
-49.3 — contexte Radar/Analytics causal fourni à l'Agent
 49.4 — observabilité des décisions et performances PAPER SPOT/PERP
 ```
 
-Aucun LIVE, aucune API Kraken Futures privée et aucun ordre réel Kraken ne font partie du Batch 49.2.
+Le Batch 49.3 n'ajoute aucune migration, aucun endpoint LIVE et aucun ordre Kraken réel.
