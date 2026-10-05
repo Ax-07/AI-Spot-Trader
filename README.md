@@ -2,6 +2,8 @@
 
 AI Spot Trader est une application expérimentale de trading crypto **PAPER** sur Kraken, pilotée par **un seul Agent IA stratégique**. L'Agent recherche/sélectionne les opportunités puis, au stade décisionnel du cycle, produit un **plan ordonné** de décisions `BUY`, `SELL` ou `HOLD` sur des marchés distincts. Le **Risk Engine déterministe** conserve l'autorité finale sur chaque décision avant toute exécution éventuelle par le `PaperBroker`.
 
+Le runtime PAPER canonique accepte désormais officiellement des marchés **SPOT** et des **PERPETUAL linéaires Kraken**. Sur PERPETUAL, l'Agent peut exprimer des expositions LONG ou SHORT avec les mêmes actions `BUY` / `SELL`, mais il ne choisit ni le levier, ni la marge, ni `reduce_only` : ces paramètres restent contrôlés par la configuration et le Risk Engine. Les `FUTURE` datés et toute exécution LIVE restent hors périmètre.
+
 > Objectif expérimental : rechercher une performance élevée, avec une cible de travail de +4 %/jour. Ce n'est ni une promesse ni une garantie de rendement. Cette cible n'est pas injectée dans les instructions stratégiques courantes du LLM.
 
 ## Parcours utilisateur
@@ -53,6 +55,31 @@ Deux modes de marchés sont disponibles :
 - **Manuel** : `market_discovery = null`, l'univers exécutable est la liste fournie et la whitelist Risk est alignée sur cet univers.
 
 La configuration avancée expose les valeurs réellement persistées : cadence, coûts PAPER, timeouts, paramètres Risk, limites PERPETUAL, paramètres de discovery et `max_decisions_per_cycle`.
+
+## Exécution PERPETUAL PAPER
+
+La chaîne d'exécution PERPETUAL réutilise les composants canoniques existants :
+
+```text
+Agent
+-> DecisionCandidate (market_type=PERPETUAL)
+-> Risk Engine
+-> ExecutionIntent PAPER
+-> PaperBroker
+-> DerivativePosition
+-> mark-to-market / funding / P&L / liquidation théorique
+-> audit
+```
+
+Sémantique stratégique :
+
+- sans position : `BUY` ouvre LONG, `SELL` ouvre SHORT ;
+- avec LONG : `BUY` augmente LONG, `SELL` réduit ou ferme LONG ;
+- avec SHORT : `SELL` augmente SHORT, `BUY` réduit ou ferme SHORT ;
+- `HOLD` ne produit aucun `ExecutionIntent` ;
+- un ordre opposé surdimensionné ne retourne jamais silencieusement la position : le Risk Engine le borne à la fermeture (`reduce_only`) ou le rejette selon la policy. Un retournement exige donc une fermeture puis une décision ultérieure d'ouverture opposée.
+
+Le levier exécutable est borné par la configuration, les métadonnées de marge de l'instrument et les limites Risk. Une sortie LLM ne peut pas imposer directement un levier, une marge ou un contournement de ces limites.
 
 ## Cycle stratégique multi-marchés
 
@@ -135,24 +162,25 @@ Le Radar possède une cadence indépendante, des caches/TTL, un scan Kraken born
 
 La v1 garde un historique agrégé borné en mémoire. Elle n'ajoute aucune migration et ne persiste ni copies de pages web, ni posts sociaux complets, ni résultats de recherche bruts.
 
-**Aucune donnée du Radar n'est actuellement fournie à l'Agent stratégique.**
+**Aucune donnée du Radar n'est actuellement fournie à l'Agent stratégique.** Le raccordement `Radar shortlist -> univers Agent` reste un batch séparé.
 
 ## Invariants
 
 - un seul Agent IA stratégique ;
 - Kraken comme exchange initial ;
 - PAPER uniquement ; LIVE séparé et ultérieur ;
-- SPOT sans short/levier/marge ; PERPETUAL linéaire selon les capacités intégrées ;
+- SPOT sans short/levier/marge ;
+- PERPETUAL linéaire PAPER exécutable en LONG/SHORT sous autorité Risk ;
 - FUTURE daté interdit ;
 - aucune sortie LLM → Broker/Kraken ;
 - Risk Engine déterministe = autorité finale ;
 - exécution séquentielle et causale des décisions ;
-- frais, spread, slippage, accounting et mark-to-market canoniques côté backend ;
+- frais, spread, slippage, accounting, funding et mark-to-market canoniques côté backend ;
 - toutes les décisions, y compris `HOLD` et les décisions rejetées par Risk, restent auditables ;
 - aucun look-ahead ;
 - aucun secret dans prompts, logs, réponses UI ou fichiers versionnés ;
 - frontend = cockpit ; aucune logique Risk/P&L/Broker/discovery stratégique parallèle ;
-- Market Attention Radar v1 = observation uniquement, aucune influence sur le trading.
+- Market Attention Radar = observation uniquement, aucune influence sur le trading dans le Batch 49.1.
 
 Principe : **l'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
@@ -177,15 +205,15 @@ La persistence d'audit trading utilise la migration :
 
 Les relations 1:N couvrent les décisions, `RiskAssessment` et `ExecutionIntent` d'un cycle, tout en conservant la lecture des historiques antérieurs.
 
-Market Attention Radar v1 n'ajoute aucune migration : son historique agrégé est process-local et borné.
+Market Attention Radar n'ajoute aucune migration pour son historique agrégé process-local borné.
 
 ## Référence de travail
 
-HEAD GitHub vérifié au démarrage du batch Market Attention, le 28 septembre 2026 :
+Base GitHub réellement auditée pour le Batch 49.1, le 5 octobre 2026 :
 
 ```text
-d011faa98e7e347875186f12cb24b5e7041aa25c
-feat: add trading reasoning doctrine
+8704eec57de09792d0a51e080fdeb7b2a39d2381
+docs: mark batch 48 integrated
 ```
 
-Le parent direct `b46f463c` contient le Batch 25 d'historique économique. Le recalibrage net/cost-aware est intégré dans `463850d`. Le HEAD exact de `main` doit toujours être vérifié en direct au début de toute nouvelle tâche.
+Le Batch 49.1 est livré comme **patch proposé non intégré** : il officialise la capacité PERPETUAL PAPER déjà présente dans la chaîne canonique, aligne le contrat opérateur encore SPOT-only, ajoute une preuve d'intégration Agent → Risk → Broker → ledger et met à jour la documentation active. Le raccordement réel du Radar à l'univers Agent reste hors périmètre.

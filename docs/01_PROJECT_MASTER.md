@@ -4,23 +4,27 @@
 
 AI Spot Trader est une application expérimentale de trading pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est un cockpit de contrôle et de visualisation qui peut être fermé sans arrêter le moteur.
 
-Référence GitHub intégrée après le Batch 43 :
+Référence GitHub auditée au démarrage du Batch 49.1 :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 32320e268722c6e431ae722924bca487ae45d004
-Commit     : feat: add market attention volume and market cap filters
+HEAD       : 8704eec57de09792d0a51e080fdeb7b2a39d2381
+Commit     : docs: mark batch 48 integrated
 ```
 
-Les Batches 39 à 43 sont intégrés sur `main`.
+Le Batch 49.1 est livré comme patch proposé non intégré sur cette base.
 
 ## 2. Invariants fonctionnels
 
 - un seul Agent IA stratégique ;
 - Kraken comme exchange initial ;
 - premières versions en PAPER ;
-- SPOT comme invariant d'exécution cible ;
+- SPOT et PERPETUAL Kraken linéaire comme familles d'exécution PAPER autorisées ;
+- SPOT sans short, levier ni marge ;
+- PERPETUAL avec LONG/SHORT sous contrôle du Risk Engine ;
+- FUTURE daté non exécutable ;
+- LIVE hors périmètre tant qu'une décision séparée ne l'active pas explicitement ;
 - actions stratégiques `BUY`, `SELL`, `HOLD` ;
 - Luna par défaut pour les premiers tests, Sol sélectionnable par configuration ;
 - Risk Engine déterministe comme autorité finale ;
@@ -30,7 +34,7 @@ Les Batches 39 à 43 sont intégrés sur `main`.
 - aucun look-ahead ;
 - aucun secret dans prompts, logs, frontend ou fichiers versionnés ;
 - frontend non nécessaire au fonctionnement du moteur ;
-- Market Attention strictement informatif.
+- Market Attention strictement informatif dans le Batch 49.1.
 
 Principe central : **L'IA propose. Le Risk Engine autorise, modifie ou refuse.**
 
@@ -54,6 +58,8 @@ Une modification de configuration crée un nouveau snapshot Campaign sans rééc
 
 Market Discovery et Market Attention sont deux frontières distinctes. Market Discovery prépare l'univers stratégique ; Market Attention observe l'activité Kraken. Une shortlist Radar n'est ni une watchlist d'exécution, ni un signal de trading.
 
+Dans le Batch 49.1, les campagnes dynamiques peuvent conserver `SPOT` et/ou `PERPETUAL` dans `market_types` via les contrats existants. Le Radar n'est pas utilisé comme source de Market Discovery ; ce raccordement reste réservé au Batch 49.2.
+
 ## 5. Multi-timeframes stratégiques
 
 Le mapping canonique `trading-style-map-v1` reste :
@@ -76,6 +82,8 @@ contexte causal
 -> chaque décision : Risk -> exécution éventuelle -> portefeuille courant
 ```
 
+Le `market_type` fait partie de l'identité de marché et doit rester explicite afin que `BTC/USD SPOT` et `BTC/USD PERPETUAL` ne puissent pas être confondus.
+
 `HOLD` et `REJECT` ne sont pas des erreurs techniques.
 
 ## 7. Cadences distinctes
@@ -84,11 +92,25 @@ L'application distingue le monitoring déterministe, la cadence du cycle straté
 
 ## 8. Transparence des appels IA
 
-Les appels de l'Agent stratégique et, lorsqu'elle existe, la logique IA de Market Discovery doivent rester distinguables. **Le Market Attention Radar ne produit aucun appel IA ni aucune recherche Web.**
+Les appels de l'Agent stratégique et, lorsqu'elle existe, la logique IA de Market Discovery doivent rester distinguables. **Le Market Attention Radar ne produit aucun appel IA ni aucune recherche Web dans son pipeline actuel.**
 
 ## 9. Risk, coûts et exécution
 
-Le Radar ne modifie ni Risk, ni Broker. Le slippage microstructure est une **simulation théorique read-only** obtenue en parcourant le snapshot L2 ; aucun ordre réel ou PAPER n'est construit.
+La chaîne d'exécution PAPER canonique est :
+
+```text
+Agent
+-> DecisionCandidate
+-> Risk Engine
+-> ExecutionIntent
+-> PaperBroker
+-> ledger
+-> audit
+```
+
+Pour les PERPETUAL linéaires, le ledger produit des `DerivativePosition` et le monitoring dérivé assure mark-to-market, funding, P&L et liquidation théorique. Le Risk Engine reste l'unique autorité pour le levier exécutable, la marge, les caps notionnels/exposition, la granularité de quantité, `reduce_only` et le buffer de liquidation.
+
+Le Radar ne modifie ni Risk, ni Broker. Le slippage microstructure du Radar est une **simulation théorique read-only** obtenue en parcourant le snapshot L2 ; aucun ordre réel ou PAPER n'est construit par le Radar.
 
 ## 10. Market Attention Radar v4 — scope et tendance récente
 
@@ -186,15 +208,19 @@ Batch 43 intégré : `market-attention-radar-v6`, ajoutant l'état runtime des f
 
 `informative_only=True` reste validé côté backend.
 
+Les Batches 47.1 à 47.5 ajoutent les Analytics Futures read-only et leur influence bornée sur le ranking des PERP déjà retenus ; le Batch 48 ajoute leur observabilité agrégée. Ces couches restent séparées de l'exécution dans le Batch 49.1.
+
 ## 16. Isolation architecturale
 
 La couche v5 hérite de la couche v4. Le Batch 43 ajoute une couche v6 sans second pipeline candles et sans dépendance Agent/Risk/Broker. L'Agent stratégique reste le seul agent IA de l'application.
 
+Le fait que le runtime PAPER sache exécuter des PERPETUAL ne donne aucune autorité d'exécution au Radar.
+
 ## 17. Microstructure
 
-La microstructure reste **SPOT uniquement**. En scope `PERPETUAL`, aucun sous-scan microstructure n'est lancé et les marchés dérivés restent `NOT_APPLICABLE`. En scope `ALL`, seuls les éléments SPOT peuvent être enrichis par `/Depth` et `/Trades`.
+La microstructure du Radar reste **SPOT uniquement**. En scope `PERPETUAL`, aucun sous-scan microstructure SPOT n'est lancé et les marchés dérivés restent `NOT_APPLICABLE` pour cette famille de données. En scope `ALL`, seuls les éléments SPOT peuvent être enrichis par `/Depth` et `/Trades`.
 
-L'observation de marchés `PERPETUAL` par le Radar ne modifie pas l'invariant d'exécution : le projet reste SPOT, sans short, levier, margin, future ou perpetual en exécution LIVE.
+Cette limitation du Radar ne limite pas l'univers d'exécution PAPER : les PERPETUAL linéaires peuvent être exécutés par la chaîne Agent/Risk/PaperBroker. En revanche, aucune exécution LIVE n'est disponible dans le Batch 49.1.
 
 ## 18. Batch 43 — filtres volume et capitalisation
 
@@ -232,3 +258,34 @@ LARGE  >= 10 Md$
 ```
 
 Ces catégories sont des conventions de l'application et non une définition universelle du marché.
+
+## 19. Batch 49.1 — exécution PERPETUAL PAPER officielle
+
+L'audit du HEAD `8704eec` confirme que les composants suivants sont déjà canoniques et doivent être réutilisés :
+
+- univers typé `SPOT` / `PERPETUAL` ;
+- `RoutedExecutableMarketDataSource` ;
+- provider Agent et JSON Schema multi-marchés avec `market_type` ;
+- validation des contrats PERPETUAL linéaires ;
+- `RiskEngine` dérivés ;
+- `PaperBroker` dérivés ;
+- `DerivativePosition` et ledger ;
+- mark-to-market, funding et liquidation théorique ;
+- paramètres Session/Campaign de levier et limites Risk ;
+- cockpit de configuration et affichage des positions dérivées.
+
+Le Batch 49.1 ne duplique donc aucun de ces composants. Il officialise l'invariant PAPER, aligne le chat opérateur encore SPOT-only et ajoute une preuve d'intégration Agent → Risk → Broker → ledger.
+
+Sémantique PERPETUAL retenue :
+
+```text
+BUY sans position   -> ouvrir LONG
+SELL sans position  -> ouvrir SHORT
+BUY avec LONG       -> augmenter LONG
+SELL avec LONG      -> réduire/fermer LONG
+BUY avec SHORT      -> réduire/fermer SHORT
+SELL avec SHORT     -> augmenter SHORT
+HOLD                -> aucune exécution
+```
+
+Un retournement direct LONG → SHORT ou SHORT → LONG dans un seul intent est interdit. Une action opposée sert d'abord à réduire/fermer la position courante avec `reduce_only`. Une ouverture opposée éventuelle doit être une décision ultérieure après fermeture, ce qui garde la chaîne déterministe, causale et auditable.

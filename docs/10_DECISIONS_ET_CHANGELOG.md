@@ -4,25 +4,125 @@
 
 ## Principes actifs
 
-Un seul Agent IA stratégique. Le Risk Engine déterministe conserve l'autorité finale. Aucune sortie LLM ne déclenche directement Broker/Kraken. L'exécution reste SPOT uniquement, en PAPER tant que le passage LIVE n'est pas explicitement décidé.
+Un seul Agent IA stratégique. Le Risk Engine déterministe conserve l'autorité finale. Aucune sortie LLM ne déclenche directement Broker/Kraken.
 
-Le Market Attention Radar est observationnel : il peut prioriser **l'attention**, mais il ne décide jamais BUY/SELL/HOLD et ne possède aucune autorité d'exécution.
+L'exécution courante est **PAPER uniquement** :
+
+- SPOT exécutable sans short, levier ni marge ;
+- PERPETUAL Kraken linéaire exécutable en LONG/SHORT sous contrôle Risk ;
+- FUTURE daté non exécutable ;
+- LIVE indisponible tant qu'un batch séparé ne l'active pas explicitement.
+
+Le Market Attention Radar est observationnel : il peut prioriser **l'attention**, mais il ne décide jamais BUY/SELL/HOLD et ne possède aucune autorité d'exécution. Le Batch 49.1 ne le raccorde pas à l'univers Agent.
 
 ## Référence courante
 
 ```text
-Base GitHub auditée          : ebb664c538f7a77ffe1a51ef4a44536a83cb484e
-Batch 47.5 fonctionnel       : d988de4 — feat: add bounded multi-analytics radar ranking
-Clôture 47.5                 : 4278a5c — docs: mark batch 47.5 integrated
+Base GitHub auditée 49.1     : 8704eec57de09792d0a51e080fdeb7b2a39d2381
+Clôture Batch 48             : 8704eec — docs: mark batch 48 integrated
 Batch 48 fonctionnel         : ebb664c — feat: add analytics ranking observability
-Batch 48                     : INTÉGRÉ ET VALIDÉ
+Batch 49.1                   : PATCH PROPOSÉ — NON INTÉGRÉ À LA LIVRAISON
 ```
+
+## Changelog — 2026-10-05 — Batch 49.1 activation officielle PERPETUAL PAPER — patch proposé
+
+Base GitHub auditée au démarrage : `8704eec57de09792d0a51e080fdeb7b2a39d2381` (`docs: mark batch 48 integrated`).
+
+### Audit confirmé
+
+- `MarketType` distingue déjà `SPOT`, `PERPETUAL` et `FUTURE` ;
+- `MarketSelectionInput`, `CycleDecisionPlanInput`, `AgentInput`, `DecisionCandidate` et `ExecutionIntent` conservent le `market_type` ;
+- le JSON Schema du plan Agent accepte explicitement `SPOT` et `PERPETUAL` ;
+- le prompt stratégique courant connaît la sémantique BUY/LONG et SELL/SHORT PERPETUAL ;
+- `RoutedExecutableMarketDataSource` route SPOT et derivatives ;
+- les campagnes statiques et dynamiques savent déjà représenter `PERPETUAL` ;
+- `RiskEngine` accepte les PERPETUAL linéaires et contrôle quantité, levier, marge, caps notionnels/exposition, liquidation et retournement ;
+- `PaperBroker` exécute déjà les PERPETUAL linéaires en PAPER ;
+- le ledger gère `DerivativePosition`, LONG/SHORT, funding, P&L, marge et liquidation théorique ;
+- le cockpit possède déjà les champs de configuration dérivés et l'affichage marge/levier/liquidation ;
+- le dernier contrat runtime actif encore contradictoire était le chat opérateur, qui déclarait encore « Trading is SPOT only ».
+
+### Patch 49.1
+
+- `operator-chat-v2` remplace le contrat opérateur SPOT-only ;
+- le contrat indique PAPER uniquement, SPOT + PERPETUAL linéaire, FUTURE daté et LIVE indisponibles ;
+- aucun nouveau contrôle de levier n'est confié au LLM ;
+- aucun endpoint privé Kraken Futures n'est ajouté ;
+- aucune nouvelle configuration frontend n'est créée ;
+- un test d'intégration dédié prouve le passage Agent -> `DecisionCandidate` -> Risk -> `ExecutionIntent` -> `PaperBroker` -> `DerivativePosition` ;
+- le test couvre ouverture LONG/SHORT, fermeture opposée, `HOLD`, conservation de `market_type` et absence de retournement direct ;
+- Radar, ranking Analytics et shortlist restent inchangés.
+
+## ADR-353 — L'univers d'exécution PAPER officiel est SPOT + PERPETUAL linéaire
+
+**ADOPTÉ DANS LE PATCH 49.1 — NON INTÉGRÉ À LA LIVRAISON.**
+
+L'ancien invariant global « SPOT uniquement » est obsolète pour le PAPER. Il reste vrai uniquement pour les règles propres au SPOT : aucun short, levier ni marge sur cette famille.
+
+Les PERPETUAL Kraken linéaires sont exécutables par le même Agent stratégique, sous le même Risk Engine déterministe et via le `PaperBroker`. Les `FUTURE` datés restent interdits.
+
+Motifs :
+
+- la capacité existe déjà dans les composants canoniques ;
+- la conserver cachée derrière un invariant documentaire contradictoire augmente le risque opératoire ;
+- une réimplémentation parallèle serait inutile et dangereuse ;
+- le `market_type` est déjà propagé causalement dans les contrats.
+
+## ADR-354 — Aucun retournement direct PERPETUAL dans un seul ExecutionIntent
+
+**ADOPTÉ DANS LE PATCH 49.1 — NON INTÉGRÉ À LA LIVRAISON.**
+
+Une action opposée à une position existante sert d'abord à la réduire ou la fermer :
+
+```text
+LONG + SELL  -> reduce_only LONG
+SHORT + BUY  -> reduce_only SHORT
+```
+
+Si la quantité demandée dépasse la position :
+
+- avec réduction de quantité autorisée, Risk borne à la quantité détenue et ferme sans ouvrir l'autre sens ;
+- sinon Risk rejette l'accidental reversal.
+
+Une exposition opposée éventuelle doit être créée par une décision ultérieure, une fois la fermeture réellement appliquée au portefeuille.
+
+Motifs :
+
+- séquentialité causale explicite ;
+- pas de P&L/marge/funding implicites cachés dans un retournement atomique ;
+- audit simple ;
+- cohérence avec le Risk Engine et le ledger existants.
+
+## ADR-355 — Le levier PERPETUAL reste entièrement déterministe
+
+**ADOPTÉ DANS LE PATCH 49.1 — NON INTÉGRÉ À LA LIVRAISON.**
+
+Le LLM ne produit pas de champ de levier stratégique. Le levier d'un `ExecutionIntent` dérivé provient de la configuration/policy et reste borné par :
+
+- `paper_derivative_leverage` ;
+- `risk_max_derivative_leverage` ;
+- les contraintes de marge applicables à l'instrument ;
+- les caps de position/exposition et la marge disponible.
+
+Aucun prompt ou chat ne peut contourner ces contrôles.
+
+## ADR-356 — Radar et exécution restent séparés en 49.1
+
+**ADOPTÉ DANS LE PATCH 49.1 — NON INTÉGRÉ À LA LIVRAISON.**
+
+Le fait que le PAPER sache exécuter des PERPETUAL ne donne aucune autorité au Radar. Le ranking 47.5 et l'observabilité 48 restent read-only.
+
+Le raccordement `Radar shortlist -> univers Agent SPOT + PERPETUAL` est explicitement réservé au Batch 49.2.
+
+---
 
 ## Changelog — 2026-10-05 — Batch 48 observabilité ranking Analytics — intégré
 
 Base GitHub auditée au démarrage : `4278a5c732b9636b06144ff58e8485b3350a2c0d` (`docs: mark batch 47.5 integrated`).
 
 Commit fonctionnel intégré : `ebb664c538f7a77ffe1a51ef4a44536a83cb484e` (`feat: add analytics ranking observability`).
+
+Clôture documentaire intégrée : `8704eec57de09792d0a51e080fdeb7b2a39d2381` (`docs: mark batch 48 integrated`).
 
 ### Audit confirmé
 
@@ -121,9 +221,8 @@ python -m pytest -q : PASS — 1155 passed, 2 warnings
 pnpm typecheck      : PASS
 pnpm test           : PASS — 86/86
 git diff --check    : PASS — avertissements LF -> CRLF uniquement
-git push origin main: PASS — 4278a5c..ebb664c
+git push origin main: PASS — puis clôture documentaire 8704eec
 git status --short  : vide après push
-git log -1 --oneline: ebb664c feat: add analytics ranking observability
 ```
 
 Warnings connus non bloquants :
@@ -142,7 +241,7 @@ Commit fonctionnel intégré : `d988de42dd684b597a78a6ce1d6d32a86147bf37` (`feat
 
 Clôture documentaire intégrée : `4278a5c732b9636b06144ff58e8485b3350a2c0d` (`docs: mark batch 47.5 integrated`).
 
-### Décisions 47.5 actives
+### Décisions 47.5 actives dans leur périmètre Radar
 
 - score entier `0..4` ;
 - quatre familles indépendantes : `OPEN_INTEREST`, `FUNDING`, `LIQUIDATION_VOLUME`, `ORDER_FLOW` ;
@@ -161,8 +260,10 @@ Clôture documentaire intégrée : `4278a5c732b9636b06144ff58e8485b3350a2c0d` (`
 - score injecté après intérêt et Structure confirmée ;
 - `SPOT` inchangé ;
 - en `ALL`, slots SPOT figés et réordonnancement seulement entre PERP ;
-- aucune modification Agent / Risk Engine / Broker ;
-- aucune exécution PERPETUAL.
+- aucune modification Agent / Risk Engine / Broker dans le Batch 47.5 ;
+- aucune exécution PERPETUAL ajoutée par le Batch 47.5.
+
+Ces deux derniers points décrivent le périmètre historique du Batch 47.5 ; ils ne remplacent pas la décision courante du Batch 49.1 sur le runtime PAPER.
 
 ## ADR-345 — Score Analytics séparé et plafonné à quatre familles
 
@@ -203,9 +304,9 @@ Seul le statut `AVAILABLE` permet d'utiliser une caractéristique. Données abse
 
 Une panne technique ne devient jamais une information de marché.
 
-## Décisions antérieures toujours actives
+## Décisions antérieures toujours actives dans leur périmètre
 
-- Batch 47.4 : cinq séries Analytics dans un scanner/cache/cursor/sémaphore uniques ; CVD sur variation ; Aggressor signé ; MAD robuste ; aucun fallback ratio pour les séries signées ; aucune exécution PERP.
+- Batch 47.4 : cinq séries Analytics dans un scanner/cache/cursor/sémaphore uniques ; CVD sur variation ; Aggressor signé ; MAD robuste ; aucun fallback ratio pour les séries signées.
 - Batch 47.3 : Funding relatif signé et Liquidation Volume agrégé, sans split LONG/SHORT inventé.
 - Batch 47.2 : `PerpetualAnalyticsScanner` est l'infrastructure historique canonique ; Open Interest est analysé relativement à sa baseline.
 - Batch 47.1 : snapshot Futures bulk canonique partagé ; OI/funding instantanés distincts des historiques.
