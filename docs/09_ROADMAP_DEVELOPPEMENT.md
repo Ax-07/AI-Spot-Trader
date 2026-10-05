@@ -5,7 +5,7 @@
 ```text
 Repository                  : Ax-07/AI-Spot-Trader
 Branche                     : main
-HEAD GitHub audité Batch 48 : 4278a5c732b9636b06144ff58e8485b3350a2c0d
+Base GitHub auditée         : ebb664c538f7a77ffe1a51ef4a44536a83cb484e
 Batch 45                    : intégré via 45d41b7
 Batch 46 / 46.1             : intégré via b219365
 Batch 47.1                  : intégré via 842e6bd7
@@ -15,7 +15,7 @@ Batch 47.4                  : intégré via 472f3ad
 Clôture documentaire 47.4   : e972fd9
 Batch 47.5                  : intégré via d988de4
 Clôture documentaire 47.5   : 4278a5c
-Batch 48                    : patch proposé, non intégré à GitHub à la livraison
+Batch 48                    : intégré via ebb664c
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -96,13 +96,13 @@ Règles intégrées :
 
 Voir `docs/47_5_MULTI_ANALYTICS_RANKING.md`.
 
-## Batch 48 — observabilité du ranking Analytics
+### Batch 48 — observabilité du ranking Analytics
 
-**Patch préparé sur le HEAD `4278a5c`; non intégré à GitHub au moment de la livraison.**
+**Intégré via `ebb664c`.**
 
 Objectif : mesurer le comportement réel du ranking 47.5 avant toute nouvelle pondération ou toute exposition à l'Agent.
 
-Décision proposée et implémentée dans le patch :
+Décision architecturale intégrée :
 
 ```text
 historique Radar borné existant
@@ -113,21 +113,22 @@ historique Radar borné existant
 
 Pas de nouvelle persistence et pas de second buffer. La persistence SQL actuelle reste réservée à ses responsabilités PAPER/audit économique.
 
-Mesures ajoutées :
+Mesures intégrées :
 
 - distribution score `0..4` ;
 - contribution des quatre familles ;
 - statuts des cinq séries ;
 - fréquence de reranking applicable/effectif ;
 - snapshots applicables sans mouvement ;
-- `rank_change` direction/moyenne/max ;
+- distribution exacte de `rank_change`, moyenne et maximum de `abs(rank_change)` ;
+- candidats montés/descendus/inchangés ;
 - déduplications et conflits CVD/Aggressor ;
 - PERP sans Analytics exploitable ;
 - ventilation par scope ;
 - couverture descriptive par marché ;
 - fenêtre et taille d'échantillon explicites.
 
-Nouvelle route additive :
+Route additive :
 
 ```text
 GET /api/v1/market-attention/observability?limit=96
@@ -137,35 +138,21 @@ Le score, l'admission, `interest_level`, `candidate_limit`, Agent, Risk et Broke
 
 Voir `docs/48_OBSERVABILITE_RANKING_ANALYTICS.md`.
 
-## Validation connue
-
-### Batch 47.5 intégré
+## Validation intégrée Batch 48
 
 ```text
-backend python -m pytest -q : PASS — suite complète à 100 %
+backend python -m pytest -q : PASS — 1155 passed, 2 warnings
 frontend pnpm typecheck     : PASS
 frontend pnpm test          : PASS — 86/86
 git diff --check            : PASS — avertissements LF/CRLF uniquement
-push GitHub main            : PASS — d988de4 puis clôture 4278a5c
+push GitHub main            : PASS — ebb664c
+arbre local après push      : propre
 ```
 
-### Batch 48 — patch proposé
+Warnings connus, non bloquants et hors périmètre :
 
-ChatGPT a exécuté sur le nouveau module autonome :
-
-```text
-python -m pytest -q tests/test_market_attention_batch48_analytics_observability.py
-12 passed
-```
-
-Les validations complètes restent obligatoires localement après extraction :
-
-```text
-python -m pytest -q
-pnpm typecheck
-pnpm test
-git diff --check
-```
+- dépréciations FastAPI/Starlette dans les dépendances de test ;
+- warning Node `MODULE_TYPELESS_PACKAGE_JSON`.
 
 ## Suite après Batch 48
 

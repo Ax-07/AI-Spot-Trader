@@ -1,20 +1,18 @@
 # 48 — Observabilité et validation causale du ranking Analytics
 
-## Statut de la livraison
+## Statut intégré
 
 ```text
-Repository GitHub audité : Ax-07/AI-Spot-Trader
+Repository GitHub          : Ax-07/AI-Spot-Trader
 Branche                    : main
-HEAD GitHub de départ       : 4278a5c732b9636b06144ff58e8485b3350a2c0d
-Commit HEAD                 : docs: mark batch 47.5 integrated
-Batch 48                    : patch proposé, non intégré à GitHub au moment de la livraison
+HEAD GitHub de départ      : 4278a5c732b9636b06144ff58e8485b3350a2c0d
+Commit fonctionnel Batch 48: ebb664c538f7a77ffe1a51ef4a44536a83cb484e
+Batch 48                   : INTÉGRÉ ET VALIDÉ LOCALEMENT
 ```
 
 Le Batch 48 est strictement un batch d'**observabilité**. Il ne modifie ni le score Analytics `0..4`, ni ses seuils, ni la population de candidats, ni `interest_level`, ni `candidate_limit`.
 
-## 1. Audit préalable
-
-### Confirmé
+## 1. Audit préalable confirmé
 
 - Le Radar produit un snapshot à chaque refresh et conserve déjà un historique process-local borné par `MarketAttentionPolicy.history_limit`.
 - La valeur par défaut est `history_limit=96` et `refresh_seconds=300`, soit environ huit heures de profondeur nominale lorsque le processus reste actif et que la cadence nominale est tenue.
@@ -70,9 +68,9 @@ Reproductibilité inter-redémarrage supérieure, mais nécessite un nouveau con
 
 La persistence durable existante est canonique pour les cycles PAPER, pas pour la télémétrie Radar. La réutiliser couplerait l'observation du marché à l'audit économique et à ses propriétés fail-closed. Rejetée dans l'état actuel.
 
-## 3. Décision Batch 48
+## 3. Décision intégrée Batch 48
 
-**Retenue : agrégation à la demande sur l'historique Radar déjà canonique et borné.**
+**Retenue et intégrée : agrégation à la demande sur l'historique Radar déjà canonique et borné.**
 
 ```text
 Radar refresh
@@ -98,15 +96,15 @@ Il n'existe :
 
 La contrepartie est explicite : **un redémarrage backend remet l'historique Radar process-local à zéro**. Le Batch 48 ne prétend donc pas fournir une archive longue durée.
 
-## 4. Contrat d'observabilité
+## 4. Contrat d'observabilité intégré
 
-Nouveau schéma :
+Schéma :
 
 ```text
 analytics-ranking-observability-v1
 ```
 
-Nouvelle route additive :
+Route additive :
 
 ```text
 GET /api/v1/market-attention/observability?limit=96
@@ -127,7 +125,7 @@ Le diagnostic expose :
 
 L'agrégateur se reborde lui-même à `96` même si un appelant lui transmet accidentellement davantage d'éléments.
 
-## 5. Métriques descriptives
+## 5. Métriques descriptives intégrées
 
 ### Scores
 
@@ -225,9 +223,9 @@ Le diagnostic expose :
 
 Aucune comparaison de P&L n'est effectuée.
 
-## 6. Cockpit
+## 6. Cockpit intégré
 
-Un dock compact séparé est ajouté au cockpit afin de ne pas surcharger le dock Radar principal.
+Un dock compact séparé a été ajouté au cockpit afin de ne pas surcharger le dock Radar principal.
 
 Il affiche :
 
@@ -263,9 +261,9 @@ Le Batch 48 ne modifie pas :
 
 Les snapshots antérieurs sans contrat Analytics 47.5 sont ignorés explicitement et comptés dans `legacy_snapshots_ignored` au lieu d'être interprétés rétroactivement.
 
-## 8. Validation préparée
+## 8. Validation finale
 
-Tests Batch 48 ajoutés pour couvrir notamment :
+Tests Batch 48 couvrent notamment :
 
 - distribution `0..4` ;
 - composantes comptées une seule fois ;
@@ -283,18 +281,23 @@ Tests Batch 48 ajoutés pour couvrir notamment :
 - absence de dépendance Agent/Risk/Broker/P&L futur ;
 - route API additive et validation du `limit`.
 
-La validation complète du repository doit rester :
+Validation complète réellement exécutée localement avant intégration :
 
-```powershell
-python -m pytest -q
-cd frontend
-pnpm typecheck
-pnpm test
-cd ..
-git diff --check
+```text
+python -m pytest -q : PASS — 1155 passed, 2 warnings
+pnpm typecheck      : PASS
+pnpm test           : PASS — 86/86
+git diff --check    : PASS — aucun défaut whitespace ; avertissements LF -> CRLF uniquement
+git push origin main: PASS — 4278a5c..ebb664c
+git status --short  : vide après push
+git log -1 --oneline: ebb664c feat: add analytics ranking observability
 ```
 
-Aucune réussite de ces commandes complètes ne doit être déclarée tant qu'elles n'ont pas été réellement exécutées sur le repository complet.
+Warnings non bloquants observés :
+
+- `StarletteDeprecationWarning` dans `fastapi.testclient` ;
+- dépréciation `anyio.abc.BlockingPortal` dans `starlette.testclient` ;
+- warning Node `MODULE_TYPELESS_PACKAGE_JSON`.
 
 ## 9. Interprétation des observations
 

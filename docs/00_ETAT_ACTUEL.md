@@ -1,20 +1,19 @@
 # 00 — État actuel
 
-## Référence de reprise — Batch 48 préparé sur Batch 47.5 intégré
+## Référence de reprise — Batch 48 intégré
 
 ```text
 Repository                         : Ax-07/AI-Spot-Trader
 Branche                            : main
-HEAD GitHub audité au démarrage    : 4278a5c732b9636b06144ff58e8485b3350a2c0d
-HEAD GitHub                        : docs: mark batch 47.5 integrated
-Batch 47.5 fonctionnel             : d988de4 — feat: add bounded multi-analytics radar ranking
-Batch 47.5                         : INTÉGRÉ ET VALIDÉ LOCALEMENT
-Batch 48                           : PATCH PROPOSÉ — NON INTÉGRÉ À GITHUB À LA LIVRAISON
+Base GitHub auditée pour clôture   : ebb664c538f7a77ffe1a51ef4a44536a83cb484e
+Clôture documentaire Batch 47.5    : 4278a5c — docs: mark batch 47.5 integrated
+Batch 48 fonctionnel               : ebb664c — feat: add analytics ranking observability
+Batch 48                           : INTÉGRÉ ET VALIDÉ LOCALEMENT
 ```
 
-Le HEAD GitHub réel a été revérifié avant le Batch 48 et correspondait exactement à `4278a5c732b9636b06144ff58e8485b3350a2c0d`.
+Le **Batch 48 est intégré sur GitHub `main` via `ebb664c`**. L'arbre local utilisateur était propre immédiatement après le push (`git status --short` vide) et `origin/main` pointait sur le même commit.
 
-## Radar intégré jusqu'au Batch 47.5
+## Radar intégré jusqu'au Batch 48
 
 Le Market Attention Radar reste `market-attention-radar-v6`, déterministe, causal, informatif et read-only. Il ne prend aucune décision BUY/SELL/HOLD et n'a aucune autorité d'exécution.
 
@@ -34,6 +33,8 @@ catalogue Kraken
 -> shortlist finale canonique
 -> enrichissement Futures ticker + Analytics
 -> reranking Analytics borné des PERP déjà retenus
+-> historique Radar borné
+-> observabilité Analytics agrégée à la demande
 -> cockpit
 ```
 
@@ -69,9 +70,9 @@ Scopes inchangés :
 
 ## Batch 48 — observabilité du comportement réel
 
-Le patch Batch 48 ajoute une agrégation **read-only, descriptive et causale** du ranking Analytics sans toucher à sa logique.
+Le Batch 48 ajoute une agrégation **read-only, descriptive et causale** du ranking Analytics sans toucher à sa logique.
 
-Décision architecturale : réutiliser l'historique Radar process-local déjà borné, au lieu d'ajouter une seconde `deque` ou une nouvelle persistence.
+Décision architecturale intégrée : réutiliser l'historique Radar process-local déjà borné, au lieu d'ajouter une seconde `deque` ou une nouvelle persistence.
 
 Avec la policy par défaut :
 
@@ -82,7 +83,7 @@ history_limit   = 96
 
 la profondeur nominale maximale est d'environ huit heures tant que le backend reste actif.
 
-Nouvelle route additive :
+Route additive intégrée :
 
 ```text
 GET /api/v1/market-attention/observability?limit=96
@@ -108,9 +109,9 @@ Métriques principales :
 - couverture descriptive par marché ;
 - fenêtre temporelle et taille d'échantillon explicites.
 
-Le cockpit reçoit un dock compact séparé qui lit uniquement cette route backend. Fermer le frontend n'affecte pas le moteur ni l'historique backend.
+Le cockpit possède un dock compact séparé qui lit uniquement cette route backend. Fermer le frontend n'affecte pas le moteur ni l'historique backend.
 
-Limite assumée : l'historique Radar n'est pas durable. Un redémarrage backend remet la fenêtre d'observation à zéro. Aucune nouvelle base/table n'est ajoutée silencieusement.
+Limite assumée : l'historique Radar n'est pas durable. Un redémarrage backend remet la fenêtre d'observation à zéro. Aucune nouvelle base/table n'a été ajoutée.
 
 ## Invariants préservés
 
@@ -129,22 +130,26 @@ Limite assumée : l'historique Radar n'est pas durable. Un redémarrage backend 
 - aucun look-ahead ;
 - aucune optimisation post-hoc sur le P&L.
 
-## Validation Batch 48 à la livraison du patch
+## Validation finale Batch 48
 
-Exécuté par ChatGPT sur le sous-ensemble autonome du nouveau module :
-
-```text
-python -m pytest -q tests/test_market_attention_batch48_analytics_observability.py
-12 passed
-```
-
-Les validations repository complètes restent à exécuter après extraction dans le clone utilisateur :
+Validation locale utilisateur exécutée après extraction du patch et avant intégration :
 
 ```text
-python -m pytest -q
-pnpm typecheck
-pnpm test
-git diff --check
+python -m pytest -q : PASS — 1155 passed, 2 warnings
+pnpm typecheck      : PASS
+pnpm test           : PASS — 86/86
+git diff --check    : PASS — aucun défaut whitespace ; avertissements LF -> CRLF uniquement
+git push origin main: PASS — 4278a5c..ebb664c
+git status --short  : vide après push
+git log -1 --oneline: ebb664c feat: add analytics ranking observability
 ```
+
+Warnings observés mais non bloquants :
+
+- `StarletteDeprecationWarning` dans `fastapi.testclient` ;
+- dépréciation `anyio.abc.BlockingPortal` dans `starlette.testclient` ;
+- warning Node `MODULE_TYPELESS_PACKAGE_JSON`.
+
+Aucun de ces warnings n'a provoqué d'échec et aucun correctif hors périmètre n'a été ajouté silencieusement.
 
 Voir `docs/48_OBSERVABILITE_RANKING_ANALYTICS.md`.

@@ -11,17 +11,18 @@ Le Market Attention Radar est observationnel : il peut prioriser **l'attention**
 ## Référence courante
 
 ```text
-HEAD GitHub audité Batch 48 : 4278a5c732b9636b06144ff58e8485b3350a2c0d
-Batch 47.4 fonctionnel      : 472f3ad — feat: add CVD and aggressor analytics
-Clôture 47.4                : e972fd9 — docs: mark batch 47.4 integrated
-Batch 47.5 fonctionnel      : d988de4 — feat: add bounded multi-analytics radar ranking
-Clôture 47.5                : 4278a5c — docs: mark batch 47.5 integrated
-Batch 48                    : patch proposé, non intégré à GitHub à la livraison
+Base GitHub auditée          : ebb664c538f7a77ffe1a51ef4a44536a83cb484e
+Batch 47.5 fonctionnel       : d988de4 — feat: add bounded multi-analytics radar ranking
+Clôture 47.5                 : 4278a5c — docs: mark batch 47.5 integrated
+Batch 48 fonctionnel         : ebb664c — feat: add analytics ranking observability
+Batch 48                     : INTÉGRÉ ET VALIDÉ
 ```
 
-## Changelog — 2026-10-05 — Batch 48 observabilité ranking Analytics — patch proposé
+## Changelog — 2026-10-05 — Batch 48 observabilité ranking Analytics — intégré
 
-Base GitHub auditée : `4278a5c732b9636b06144ff58e8485b3350a2c0d` (`docs: mark batch 47.5 integrated`).
+Base GitHub auditée au démarrage : `4278a5c732b9636b06144ff58e8485b3350a2c0d` (`docs: mark batch 47.5 integrated`).
+
+Commit fonctionnel intégré : `ebb664c538f7a77ffe1a51ef4a44536a83cb484e` (`feat: add analytics ranking observability`).
 
 ### Audit confirmé
 
@@ -40,9 +41,9 @@ Base GitHub auditée : `4278a5c732b9636b06144ff58e8485b3350a2c0d` (`docs: mark b
 2. nouvelle agrégation glissante séparée : rejetée car double le buffer historique ;
 3. nouvelle persistence durable : prématurée et plus lourde qu'il n'est justifié ;
 4. historique Radar existant + persistence PAPER : rejeté car couplage de responsabilités ;
-5. **agrégation à la demande sur l'historique Radar borné existant : retenue**.
+5. **agrégation à la demande sur l'historique Radar borné existant : retenue et intégrée**.
 
-### Patch Batch 48
+### Batch 48 intégré
 
 - nouveau module `attention_analytics_observability.py` ;
 - agrégation auto-bornée à 96 snapshots ;
@@ -74,7 +75,7 @@ L'historique utilisé est process-local. Un redémarrage backend remet la fenêt
 
 ## ADR-349 — L'observabilité Batch 48 réutilise l'historique Radar borné
 
-**RETENU DANS LE PATCH BATCH 48 — À INTÉGRER.**
+**ADOPTÉ — Batch 48 intégré via `ebb664c`.**
 
 Le diagnostic agrégé est calculé à la demande depuis les snapshots déjà conservés par le Radar.
 
@@ -89,7 +90,7 @@ Motifs :
 
 ## ADR-350 — La persistence PAPER n'est pas utilisée comme télémétrie Radar générique
 
-**RETENU DANS LE PATCH BATCH 48 — À INTÉGRER.**
+**ADOPTÉ — Batch 48 intégré via `ebb664c`.**
 
 Les tables et writers PAPER servent la continuité économique, l'audit des décisions, du Risk et des exécutions. Leur réutilisation pour chaque refresh Radar créerait un couplage non justifié et modifierait les conséquences d'une indisponibilité du store.
 
@@ -97,7 +98,7 @@ Une persistence Radar durable, si elle devient nécessaire, devra faire l'objet 
 
 ## ADR-351 — `rank_change=0` est une observation, pas une absence de donnée
 
-**RETENU DANS LE PATCH BATCH 48 — À INTÉGRER.**
+**ADOPTÉ — Batch 48 intégré via `ebb664c`.**
 
 Un candidat applicable dont `rank_change == 0` est compté comme inchangé. Un candidat non applicable ou un `rank_change` absent est compté séparément.
 
@@ -105,31 +106,33 @@ Cette distinction est nécessaire pour mesurer correctement les snapshots où An
 
 ## ADR-352 — Le diagnostic Batch 48 n'évalue aucune rentabilité
 
-**RETENU DANS LE PATCH BATCH 48 — À INTÉGRER.**
+**ADOPTÉ — Batch 48 intégré via `ebb664c`.**
 
 Les métriques utilisent uniquement les snapshots et diagnostics disponibles au moment de leur observation. Aucun rendement futur, P&L futur, meilleur point d'entrée rétrospectif ou autre donnée postérieure n'entre dans l'agrégation.
 
 Les métriques peuvent décrire le comportement du ranking ; elles ne démontrent pas qu'il est rentable et n'autorisent aucune calibration automatique.
 
-## Validation Batch 48 au moment de la préparation
+## Validation finale Batch 48
 
-Exécuté par ChatGPT sur le nouveau module autonome :
-
-```text
-python -m pytest -q tests/test_market_attention_batch48_analytics_observability.py
-12 passed
-```
-
-La route complète et le frontend dépendent du repository entier, indisponible dans l'environnement de préparation. Les validations suivantes restent à exécuter après extraction à la racine du clone utilisateur :
+Validation locale utilisateur exécutée avant intégration :
 
 ```text
-python -m pytest -q
-pnpm typecheck
-pnpm test
-git diff --check
+python -m pytest -q : PASS — 1155 passed, 2 warnings
+pnpm typecheck      : PASS
+pnpm test           : PASS — 86/86
+git diff --check    : PASS — avertissements LF -> CRLF uniquement
+git push origin main: PASS — 4278a5c..ebb664c
+git status --short  : vide après push
+git log -1 --oneline: ebb664c feat: add analytics ranking observability
 ```
 
-Aucun de ces tests complets n'est déclaré PASS avant exécution réelle.
+Warnings connus non bloquants :
+
+- `StarletteDeprecationWarning` dans `fastapi.testclient` ;
+- dépréciation `anyio.abc.BlockingPortal` dans `starlette.testclient` ;
+- warning Node `MODULE_TYPELESS_PACKAGE_JSON`.
+
+Aucun test non exécuté n'est déclaré PASS.
 
 ---
 
