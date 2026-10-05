@@ -18,6 +18,10 @@ from ai_spot_trader.domain.models import (
     UtcDateTime,
 )
 from ai_spot_trader.domain.radar_context import RadarAnalyticsStrategicContext
+from ai_spot_trader.domain.strategic_thesis import (
+    StrategicPositionContext,
+    StrategicThesisUpdate,
+)
 
 MAX_DECISIONS_PER_CYCLE_HARD_LIMIT = 20
 DEFAULT_MAX_DECISIONS_PER_CYCLE = 6
@@ -42,6 +46,9 @@ class CycleDecisionPlanInput(DomainModel):
         default=None, exclude_if=lambda value: value is None
     )
     radar_analytics_context: RadarAnalyticsStrategicContext | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    strategic_position_context: StrategicPositionContext | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     max_decisions_per_cycle: Annotated[
@@ -82,6 +89,7 @@ class CycleDecisionPlanInput(DomainModel):
             raise ValueError("capacity_reason is reserved for management_mode")
         self._validate_multi_timeframe_context()
         self._validate_radar_analytics_context()
+        self._validate_strategic_position_context()
         return self
 
     def _validate_multi_timeframe_context(self) -> None:
@@ -117,6 +125,17 @@ class CycleDecisionPlanInput(DomainModel):
         if not actual.issubset(allowed):
             raise ValueError("radar_analytics_context must remain inside market_states")
 
+    def _validate_strategic_position_context(self) -> None:
+        context = self.strategic_position_context
+        if context is None:
+            return
+        if context.as_of > self.created_at:
+            raise ValueError("strategic_position_context cannot postdate the plan input")
+        allowed = {(item.symbol, item.market_type) for item in self.market_states}
+        actual = {(item.symbol, item.market_type) for item in context.positions}
+        if not actual.issubset(allowed):
+            raise ValueError("strategic_position_context must remain inside market_states")
+
 
 class CycleDecisionPlan(DomainModel):
     """Ordered strategic plan emitted once by the single Agent for one cycle."""
@@ -124,6 +143,7 @@ class CycleDecisionPlan(DomainModel):
     cycle_id: UUID
     created_at: UtcDateTime
     decisions: Annotated[tuple[DecisionCandidate, ...], Field(min_length=1)]
+    thesis_updates: tuple[StrategicThesisUpdate | None, ...] = ()
     rationale: str | None = None
     tool_traces: tuple[AgentToolTrace, ...] = ()
 
@@ -131,6 +151,8 @@ class CycleDecisionPlan(DomainModel):
     def validate_plan(self) -> "CycleDecisionPlan":
         if len(self.decisions) > MAX_DECISIONS_PER_CYCLE_HARD_LIMIT:
             raise ValueError("decision plan exceeds the hard cycle decision limit")
+        if self.thesis_updates and len(self.thesis_updates) != len(self.decisions):
+            raise ValueError("thesis_updates must be empty or aligned one-to-one with decisions")
         keys: list[tuple[str, object]] = []
         for decision in self.decisions:
             if decision.cycle_id != self.cycle_id:

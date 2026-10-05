@@ -152,6 +152,9 @@ class CycleRecord(Base):
     portfolio_after_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
     decision_plan_input_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
     decision_plan_payload: Mapped[dict[str, object] | None] = mapped_column(JsonType)
+    strategic_thesis_state_payload: Mapped[list[dict[str, object]] | None] = mapped_column(
+        JsonType
+    )
 
     paper_run: Mapped[PaperRunRecord | None] = relationship(back_populates="cycles")
     decisions: Mapped[list["DecisionRecord"]] = relationship(

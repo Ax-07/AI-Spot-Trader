@@ -1,54 +1,51 @@
 # 00 — État actuel
 
-## Référence de reprise — Batch 49.4 intégré
+## Référence de reprise — Batch 50.1 livré, intégration à valider
 
 ```text
 Repository                         : Ax-07/AI-Spot-Trader
 Branche                            : main
-Base auditée au démarrage 49.4      : e7d605aa2b6393516c0ccd391cd4d11193c18671
-HEAD GitHub vérifié à la clôture   : 2e552cbaf1b8ffcae9244c1fb472f1ee8fb0f193
-Commit HEAD                        : feat: add paper trading observability
-Batch 49.3                         : INTÉGRÉ SUR GITHUB main via d08cd31
-Batch 49.4                         : INTÉGRÉ SUR GITHUB main via 2e552cb
+HEAD GitHub de base vérifié        : 8a0054091c39079dfc5d2c5a9504470b2fbf9493
+Commit HEAD de base                : docs: close batch 49.4 integration
+Dernier commit fonctionnel 49.4    : 2e552cbaf1b8ffcae9244c1fb472f1ee8fb0f193
+Batch 50.1                         : PATCH LIVRÉ — validation locale / intégration GitHub à faire
 ```
 
-Le Batch 49.4 est intégré sur `main` via `2e552cb`. La documentation de reprise est alignée sur cet état fonctionnel intégré.
+Le Batch 50.1 part exclusivement de l'état intégré GitHub `main` ci-dessus. Il introduit une mémoire de thèse stratégique structurée pour les positions PAPER ouvertes, sans second Agent et sans modifier l'autorité du Risk Engine.
 
-## État fonctionnel intégré par le Batch 49.4
-
-Le pipeline de trading reste inchangé :
+## État fonctionnel cible après intégration 50.1
 
 ```text
-Radar
--> Agent BUY / SELL / HOLD
--> Risk Engine déterministe
--> PaperBroker
--> faits persistés
--> Analytics / Economic History canoniques
--> projection read-only d'observabilité 49.4
+Radar / Analytics causal
++ contexte multi-timeframes
++ positions courantes
++ mémoire de thèse active / état legacy explicite
+        ↓
+Agent stratégique unique — un seul generate_decision_plan(...)
+        ↓
+BUY / SELL / HOLD + création/révision structurée de thèse
+        ↓
+Risk Engine déterministe
+        ↓
+PaperBroker
+        ↓
+cycle audité + portefeuille commités atomiquement
+        ↓
+projection durable des thèses encore actives
 ```
 
-La projection 49.4 étend additivement `/api/v1/economic-history` et le cockpit Historique. Elle expose :
+La source durable retenue est additive : `audit_cycles.strategic_thesis_state_payload` contient le snapshot canonique des thèses actives après chaque cycle `COMPLETED`. Les révisions proposées restent auditées dans `decision_plan_payload`. Un cycle `FAILED` ne promeut aucun nouvel état stratégique.
 
-- une vue `TOTAL / SPOT / PERPETUAL` ;
-- le funnel Agent -> Risk -> exécution ;
-- une ventilation stricte par `(symbol, market_type)` ;
-- coûts, funding, montant échangé, fills, trades, P&L réalisé et exposition lorsque les faits permettent une attribution exacte ;
-- les métriques indisponibles comme telles, sans attribution artificielle.
+## Sémantique 50.1
 
-Le P&L brut/net global, le drawdown et l'exposition globale restent issus des calculs canoniques existants. Aucun second moteur P&L, aucune nouvelle persistence et aucun nouvel endpoint ne sont introduits.
-
-## Limite volontaire importante
-
-Les faits durables actuels ne permettent pas d'attribuer exactement les variations globales d'equity entre SPOT et PERPETUAL. En conséquence :
-
-```text
-TOTAL gross_pnl / net_pnl       : disponible, canonique
-SPOT gross_pnl / net_pnl        : indisponible
-PERPETUAL gross_pnl / net_pnl   : indisponible
-```
-
-Les P&L réalisés, coûts, funding, notionnels et expositions attribuables restent ventilés lorsqu'ils sont causalement déterminables.
+- statuts : `NEW`, `CONFIRMED`, `WEAKENING`, `INVALIDATED`, `COMPLETED` ;
+- `INVALIDATED` et `COMPLETED` ne déclenchent jamais automatiquement un `SELL` ;
+- une nouvelle thèse n'est activée qu'après exposition économique réellement ouverte par fill ;
+- `REJECT` Risk ou absence de fill sur une entrée => aucune thèse active ;
+- réduction partielle => thèse active conservée/révisée ;
+- fermeture complète => thèse retirée du snapshot actif mais historique d'audit conservé ;
+- position historique sans mémoire 50.1 => `UNAVAILABLE_LEGACY`, sans reconstruction depuis une ancienne rationale ;
+- recovery : lecture du dernier snapshot `COMPLETED`, puis suivi de `resumed_from_paper_run_id` si nécessaire.
 
 ## Invariants inchangés
 
@@ -56,24 +53,19 @@ Les P&L réalisés, coûts, funding, notionnels et expositions attribuables rest
 - PAPER uniquement ;
 - Kraken ;
 - SPOT + PERPETUAL linéaire ;
+- SPOT sans short, levier ni marge ;
+- PERPETUAL LONG/SHORT sous contrôle Risk ;
 - FUTURE daté non exécutable ;
 - aucun LIVE ni API Kraken Futures privée ;
 - Risk Engine déterministe = autorité finale ;
 - aucune sortie LLM directement exécutable ;
-- aucun changement du ranking Analytics 47.5 ni du contexte 49.3 ;
-- aucune adaptation stratégique à partir des résultats 49.4 ;
-- aucun look-ahead ni recalibration post-hoc ;
-- aucun secret versionné.
+- Radar = sélection/priorisation d'attention, jamais action ;
+- aucune règle déterministe d'entrée/sortie ajoutée ;
+- aucun hidden chain-of-thought ni transcript LLM persisté ;
+- aucun look-ahead ;
+- aucun secret versionné ;
+- frontend non requis par le moteur.
 
-## Validation intégrée du Batch 49.4
+## Validation du patch 50.1
 
-```text
-backend python -m pytest -q : PASS — 1195 passed, 2 warnings
-frontend pnpm typecheck     : PASS
-frontend pnpm test          : PASS — 89/89
-git diff --check            : PASS — avertissements LF/CRLF uniquement
-git status --short          : PASS — working tree propre après push
-push GitHub main            : PASS — 2e552cb
-```
-
-Les warnings Node `MODULE_TYPELESS_PACKAGE_JSON` observés pendant `pnpm test` sont non bloquants. Aucun changement global de `package.json` n'est requis pour la clôture 49.4.
+Dans l'environnement de livraison ChatGPT, les fichiers Python du patch sont compilés avec succès via `python -m py_compile`. La suite complète `python -m pytest -q`, Alembic sur la base locale et `git diff --check` doivent être exécutés après extraction dans le repository réel avant intégration.

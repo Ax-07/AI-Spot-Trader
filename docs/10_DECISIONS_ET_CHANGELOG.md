@@ -17,16 +17,143 @@ Le Market Attention Radar priorise **l'attention**. Depuis le Batch 49.2 intégr
 
 L'observabilité 49.4 est strictement read-only : elle mesure les faits PAPER persistés et ne revient jamais dans le pipeline Agent/Risk/Broker.
 
+Le Batch 50.1 ajoute une mémoire stratégique structurée des positions ouvertes. Cette mémoire n'est ni une conversation LLM, ni une chaîne de pensée cachée. Elle est causale, bornée, durable et remise au **même** appel stratégique.
+
 ## Référence courante
 
 ```text
-HEAD GitHub clôture 49.4     : 2e552cbaf1b8ffcae9244c1fb472f1ee8fb0f193
-Batch 49.4 intégré           : 2e552cb — feat: add paper trading observability
-Clôture documentaire 49.3    : e7d605a — docs: close batch 49.3 integration
-Batch 49.3 fonctionnel       : d08cd31 — feat: expose causal radar analytics context to agent
-Batch 49.2 intégré           : f0d4f94 — feat: feed radar shortlist into agent universe
-Batch 49.1 intégré           : 3194fce — feat: activate perpetual paper trading
+HEAD GitHub de base 50.1     : 8a0054091c39079dfc5d2c5a9504470b2fbf9493
+Clôture documentaire 49.4    : 8a005409 — docs: close batch 49.4 integration
+Batch 49.4 intégré            : 2e552cb — feat: add paper trading observability
+Batch 49.3 intégré            : d08cd31 — feat: expose causal radar analytics context to agent
+Batch 49.2 intégré            : f0d4f94 — feat: feed radar shortlist into agent universe
+Batch 49.1 intégré            : 3194fce — feat: activate perpetual paper trading
+Batch 50.1                    : patch livré — validation/intégration à faire
 ```
+
+## Changelog — 2026-10-05 — Batch 50.1 mémoire de thèse stratégique — patch livré
+
+Base GitHub auditée : `8a0054091c39079dfc5d2c5a9504470b2fbf9493` (`docs: close batch 49.4 integration`).
+
+### Audit confirmé
+
+- `CycleDecisionPlanInput` contient déjà portefeuille, marchés, agressivité, coûts, multi-timeframes et contexte Radar/Analytics ;
+- `CycleDecisionPlan` est produit par un seul appel `generate_decision_plan(...)` ;
+- les décorateurs MTF et Radar enrichissent l'entrée puis délèguent une seule fois ;
+- `AuditedTradingCycleRunner` restaure le ledger lors d'un cycle `FAILED` puis persiste l'audit ;
+- `SqlAlchemyCycleAuditRepository.record(...)` commit déjà atomiquement le cycle et `paper_runs.current_portfolio_payload` ;
+- le recovery PAPER relie explicitement les runs via `resumed_from_paper_run_id` ;
+- les anciennes `rationale` ne constituent pas une source fiable de thèse historique.
+
+### Architecture retenue
+
+**Option C — extension additive des faits de cycle + projection canonique.**
+
+La nouvelle colonne nullable `audit_cycles.strategic_thesis_state_payload` contient le snapshot des thèses encore actives après chaque cycle `COMPLETED`. Les révisions proposées par l'Agent sont conservées dans `decision_plan_payload` via `CycleDecisionPlan.thesis_updates`.
+
+Ce choix évite une table métier parallèle tout en conservant :
+
+- lecture rapide de l'état actif ;
+- historique immuable des revues ;
+- atomicité avec le cycle/portefeuille ;
+- recovery déterministe par lineage ;
+- compatibilité des anciens cycles avec colonne `NULL`.
+
+### Contrat Agent 50.1
+
+Le schéma Structured Outputs du **même appel** contient, par décision, `thesis_update` :
+
+```text
+status
+horizon
+thesis_summary
+supporting_facts[]
+invalidation_conditions[]
+review_summary
+```
+
+Statuts :
+
+```text
+NEW / CONFIRMED / WEAKENING / INVALIDATED / COMPLETED
+```
+
+`BUY`/`SELL` requièrent une révision structurée. Un `HOLD` sur une position ouverte requiert une revue structurée ; un `HOLD` sans position peut laisser `thesis_update=null`.
+
+`INVALIDATED` et `COMPLETED` sont descriptifs. Ils ne sont jamais traduits en `SELL` automatique.
+
+### Activation et lifecycle
+
+- exposition inexistante -> entrée Agent proposée -> Risk -> fill réel -> thèse active ;
+- Risk REJECT ou intent sans fill et aucune exposition économique -> aucune thèse active ;
+- position existante + HOLD/augmentation/réduction partielle -> thèse révisée et conservée si l'exposition reste du même côté ;
+- fermeture complète -> suppression du snapshot actif ; la révision finale reste dans l'audit du plan ;
+- position historique sans mémoire -> `UNAVAILABLE_LEGACY` ; aucune ancienne `rationale` n'est transformée en thèse fictive ;
+- adoption legacy éventuelle -> nouvelle thèse de gestion créée à partir du cycle courant uniquement ;
+- cycle `FAILED` -> aucun nouvel état stratégique promu.
+
+### Recovery et causalité
+
+Le contexte du prochain cycle lit le dernier cycle `COMPLETED` du run courant. Si aucun n'existe, il remonte exclusivement `resumed_from_paper_run_id` jusqu'au premier snapshot disponible ou à un état legacy.
+
+Les timestamps d'une thèse/revue doivent être `<=` à la frontière du contexte puis `<= CycleDecisionPlanInput.created_at`. `BTC/USD SPOT`, `BTC/USD PERPETUAL LONG` et `BTC/USD PERPETUAL SHORT` restent des identités distinctes.
+
+### Invariants préservés
+
+- aucun second Agent ;
+- aucun second appel stratégique ;
+- aucun changement Risk/Broker ;
+- aucune exécution directe depuis la thèse ;
+- aucune règle déterministe stop-loss/take-profit/temps/P&L/score ;
+- aucun look-ahead ;
+- aucun hidden chain-of-thought persisté ;
+- PAPER uniquement ;
+- frontend non modifié dans 50.1 ;
+- Prompt Cache OpenAI hors périmètre.
+
+## ADR-371 — La source de vérité 50.1 est une projection additive portée par les cycles
+
+**ADOPTÉ — patch Batch 50.1, intégration à valider.**
+
+Options comparées :
+
+1. table dédiée de thèses : contrat clair mais nouvelle responsabilité persistante parallèle ;
+2. reconstruction intégrale depuis les rationales/audits : rejetée, implicite et incapable de distinguer proprement état actif/historique ;
+3. **snapshot canonique additif dans `audit_cycles` + revues dans le plan : retenu**.
+
+Motifs : atomicité avec le cycle existant, recovery simple, compatibilité legacy et absence de second store métier.
+
+## ADR-372 — La thèse est produite dans le même appel Agent
+
+**ADOPTÉ — patch Batch 50.1, intégration à valider.**
+
+`StrategicThesisContextDecisionProvider` lit le contexte durable, l'attache à `CycleDecisionPlanInput`, revalide puis délègue une seule fois. Il n'existe aucun `Agent trading -> Agent mémoire`.
+
+## ADR-373 — Une thèse proposée n'est active qu'après exposition économique réelle
+
+**ADOPTÉ — patch Batch 50.1, intégration à valider.**
+
+Un REJECT Risk ou une absence de fill sur une ouverture n'active rien. L'activation est corrélée au portefeuille effectivement engagé après exécution.
+
+## ADR-374 — Legacy reste explicitement inconnu
+
+**ADOPTÉ — patch Batch 50.1, intégration à valider.**
+
+Une position ouverte antérieure à 50.1 sans snapshot correspondant est exposée comme `UNAVAILABLE_LEGACY`. Aucune ancienne rationale n'est utilisée pour fabriquer une motivation historique.
+
+## ADR-375 — INVALIDATED/COMPLETED n'ont aucune sémantique d'ordre automatique
+
+**ADOPTÉ — patch Batch 50.1, intégration à valider.**
+
+Les statuts sont des descriptions de la thèse. La sortie stratégique reste `BUY / SELL / HOLD`, ensuite contrôlée par Risk.
+
+## ADR-376 — Les cycles FAILED ne promeuvent jamais la mémoire stratégique
+
+**ADOPTÉ — patch Batch 50.1, intégration à valider.**
+
+La projection active est écrite uniquement sur un cycle `COMPLETED`. Les cycles `FAILED` conservent leur audit mais ne remplacent pas le dernier snapshot durable.
+
+---
 
 ## Changelog — 2026-10-05 — Batch 49.4 observabilité décisions/performance PAPER — intégré
 
@@ -145,115 +272,27 @@ Base GitHub auditée au démarrage : `f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b` 
 
 Commit intégré : `d08cd31e6a795a8beb09530c2bc9a3f32f94fe35` (`feat: expose causal radar analytics context to agent`).
 
-### Audit confirmé
-
-- `CycleDecisionPlanInput` est la frontière causale du plan multi-marchés ;
-- `StrategicMultiTimeframeContext` est un contrat spécialisé candles et ne doit pas être surchargé de faits Radar ;
-- `OpenAIMultiMarketDecisionProvider` sérialise déjà l'entrée complète du plan de façon déterministe et n'effectue qu'un appel stratégique ;
-- `DynamicMarketTradingCycleRunner` reçoit l'univers Radar 49.2 puis délègue au runner multi-marchés canonique ;
-- `MarketAttentionSnapshotV6Analytics` contient activité, microstructure, Market Structure, Analytics Futures et ranking 47.5 ;
-- le ranking 47.5 reste exactement quatre familles `0/1` : OI, Funding, Liquidations et Order Flow ;
-- CVD + Aggressor Differential restent une seule famille `ORDER_FLOW` ;
-- les statuts Analytics existants distinguent déjà disponibilité, partial, stale, historique insuffisant, erreur technique et N/A ;
-- Risk et Broker ne dépendent pas du Radar et restent en aval du plan Agent.
-
-### Batch 49.3 intégré
-
-- ajout de `RadarAnalyticsStrategicContext`, contrat strict, immuable, borné et trié ;
-- séparation explicite entre identité d'univers 49.2 et contexte analytique 49.3 ;
-- projection compacte de l'activité/tendance/liquidité, microstructure SPOT et Market Structure ;
-- projection PERPETUAL du ranking 47.5, Open Interest, Funding, Liquidation Volume, CVD et Aggressor Differential ;
-- statuts dégradés conservés sans valeurs artificielles ;
-- SPOT expose les Analytics Futures comme `NOT_APPLICABLE` ;
-- diagnostics techniques internes, ranks avant/après, `rank_change`, historiques bruts et métadonnées d'observabilité inutiles exclus du prompt ;
-- contrôle de causalité imbriqué : aucun timestamp ne peut dépasser le snapshot Radar ;
-- contrôle de frontière : le snapshot relu doit porter exactement le `radar_observed_at` utilisé par Discovery ;
-- contrôle de plan : le contexte ne peut pas postdater `CycleDecisionPlanInput.created_at` ni contenir un marché hors `market_states` ;
-- `FrozenRadarContextDecisionProvider` attache le contexte puis délègue une seule fois au même Agent ;
-- contrat de prompt explicite : score 0..4 descriptif, jamais signal BUY/SELL/probabilité/conviction ;
-- aucune modification du Risk Engine ou du `PaperBroker` ;
-- aucune migration, aucun LIVE et aucune API Kraken Futures privée.
-
-### Validation intégrée
-
-```text
-backend python -m pytest -q : PASS — 1189 passed, 2 warnings
-frontend pnpm typecheck     : PASS
-frontend pnpm test          : PASS — 86/86
-git diff --check            : PASS — avertissements LF/CRLF uniquement
-git status --short          : PASS — working tree propre après push
-push GitHub main            : PASS — d08cd31
-```
+Décision active : `RadarAnalyticsStrategicContext` est un contrat dédié strict, borné et causal ; le snapshot doit correspondre exactement à celui de Discovery ; le score 47.5 reste descriptif ; les données dégradées restent explicitement dégradées ; `FrozenRadarContextDecisionProvider` ne crée aucun second appel Agent.
 
 ## ADR-361 — Le contexte 49.3 utilise un contrat dédié référencé par `CycleDecisionPlanInput`
 
 **ADOPTÉ — Batch 49.3 intégré via `d08cd31`.**
 
-Options comparées :
-
-1. ajouter les faits directement comme champs dispersés dans `CycleDecisionPlanInput` : rejeté, séparation insuffisante ;
-2. étendre `StrategicMultiTimeframeContext` : rejeté, mélange Radar/Analytics avec le contrat candles ;
-3. **ajouter un `RadarAnalyticsStrategicContext` dédié : retenu**.
-
-Motifs : contrat borné/testable, identité séparée des faits analytiques, pas de duplication du pipeline candles, sérialisation déterministe et évolution indépendante.
-
 ## ADR-362 — Le contexte doit être figé sur le snapshot exact de Discovery
 
 **ADOPTÉ — Batch 49.3 intégré via `d08cd31`.**
-
-Le runner accepte la projection seulement si :
-
-```text
-radar.latest.observed_at == discovery.audit.radar_observed_at
-```
-
-Tous les timestamps imbriqués doivent être `<=` à cette frontière et la frontière doit être `<=` au plan. Une divergence de snapshot ou une donnée future échoue fermée pour les nouvelles ouvertures.
-
-Le provider Agent ne consulte donc jamais un service Radar mutable pendant l'appel LLM ; il reçoit un objet figé.
 
 ## ADR-363 — Le score 47.5 reste descriptif et inchangé
 
 **ADOPTÉ — Batch 49.3 intégré via `d08cd31`.**
 
-Le score reste :
-
-```text
-OPEN_INTEREST      0/1
-FUNDING            0/1
-LIQUIDATION_VOLUME 0/1
-ORDER_FLOW         0/1
-TOTAL              0..4
-```
-
-CVD et Aggressor concordants valent toujours au plus `+1` ensemble ; un conflit garde sa sémantique existante. Le Batch 49.3 ne recalibre ni poids ni seuils.
-
-Dans le prompt, ce score est explicitement décrit comme **indice d'attention**, jamais comme probabilité de hausse/baisse, conviction ou instruction d'action.
-
 ## ADR-364 — Les données dégradées restent des données dégradées
 
 **ADOPTÉ — Batch 49.3 intégré via `d08cd31`.**
 
-Le contexte distingue :
-
-```text
-AVAILABLE
-PARTIAL
-STALE
-INSUFFICIENT_HISTORY
-TECHNICAL_ERROR
-NOT_APPLICABLE
-UNAVAILABLE
-```
-
-Aucun statut dégradé n'est converti en valeur artificielle positive/négative. Une panne technique ne devient jamais une information de marché. Les Analytics Futures SPOT sont `NOT_APPLICABLE`.
-
 ## ADR-365 — Un seul appel stratégique est conservé
 
 **ADOPTÉ — Batch 49.3 intégré via `d08cd31`.**
-
-`FrozenRadarContextDecisionProvider` est un décorateur d'entrée, pas un second Agent. Il enrichit `CycleDecisionPlanInput`, revalide le contrat puis appelle une seule fois `delegate.generate_decision_plan(...)`.
-
-Les outils read-only actuels ne sont pas supprimés : ils couvrent des recherches ponctuelles distinctes du snapshot Radar figé.
 
 ---
 
@@ -277,33 +316,17 @@ Décisions actives :
 
 **ADOPTÉ — Batch 49.2 intégré via `f0d4f94`.**
 
-Aucun second système de discovery ni seconde shortlist concurrente n'est créé.
-
 ### ADR-358 — La frontière d'univers 49.2 reste identité-only
 
 **ADOPTÉ — Batch 49.2 intégré via `f0d4f94`.**
-
-```text
-{ symbol, market_type }
-```
-
-Le Batch 49.3 ajoute un contexte séparé ; il ne transforme pas l'audit Discovery en dump Radar.
 
 ### ADR-359 — Panne Radar fail-closed pour les nouvelles ouvertures
 
 **ADOPTÉ — Batch 49.2 intégré via `f0d4f94`.**
 
-```text
-Radar utilisable + candidats exécutables -> plan normal
-Radar inutilisable + positions ouvertes  -> MANAGEMENT uniquement
-Radar inutilisable + aucune position      -> cycle FAILED avant Agent/Risk/Broker
-```
-
 ### ADR-360 — Revalidation de l'exécutabilité Kraken/Campaign
 
 **ADOPTÉ — Batch 49.2 intégré via `f0d4f94`.**
-
-Type autorisé, quote de règlement, statut tradable, PERPETUAL linéaire, présence catalogue et whitelist éventuelle restent nécessaires.
 
 ---
 

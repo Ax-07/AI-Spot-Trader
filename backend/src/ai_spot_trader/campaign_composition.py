@@ -9,6 +9,7 @@ from uuid import uuid4
 from ai_spot_trader.agent.multi_timeframe import MultiTimeframeDecisionProvider
 from ai_spot_trader.agent.openai_client import OpenAIResponsesClient
 from ai_spot_trader.agent.planner import OpenAIMultiMarketDecisionProvider
+from ai_spot_trader.agent.strategic_thesis import StrategicThesisContextDecisionProvider
 from ai_spot_trader.agent.strategy_client import StrategyInstructionsClient
 from ai_spot_trader.broker.paper import PaperBroker
 from ai_spot_trader.broker.pricing import PaperExecutionCostModel
@@ -26,7 +27,7 @@ from ai_spot_trader.domain.models import (
     PortfolioState,
     TradingStyleContext,
 )
-from ai_spot_trader.domain.ports import MarketDataSource
+from ai_spot_trader.domain.ports import MarketDataSource, MultiMarketLLMProvider
 from ai_spot_trader.integrations.kraken.derivatives import (
     KrakenDerivativesMarketDataSource,
     KrakenDerivativesPublicClient,
@@ -53,6 +54,7 @@ from ai_spot_trader.persistence.db import Database
 from ai_spot_trader.persistence.dynamic_campaign_runs import DynamicCampaignPaperRunLifecycle
 from ai_spot_trader.persistence.query import SqlAlchemyCycleAuditQueryService
 from ai_spot_trader.persistence.repository import SqlAlchemyCycleAuditRepository
+from ai_spot_trader.persistence.strategic_thesis import RunBoundStrategicPositionContextSource
 from ai_spot_trader.portfolio.ledger import PaperPortfolioLedger
 from ai_spot_trader.portfolio.mark_to_market import (
     PaperDerivativeMarkToMarketMonitor,
@@ -88,7 +90,7 @@ class CampaignRuntimeComposition:
     portfolio: PaperPortfolioLedger
     mark_to_market: PaperSpotMarkToMarketMonitor
     derivative_mark_to_market: PaperDerivativeMarkToMarketMonitor
-    agent: MultiTimeframeDecisionProvider
+    agent: MultiMarketLLMProvider
     risk_engine: RiskEngine
     broker: PaperBroker
     cost_model: PaperExecutionCostModel
@@ -264,7 +266,18 @@ def build_campaign_runtime(
         max_tool_calls=settings.agent_tool_max_calls,
     )
     strategic_market_context = StrategicMultiTimeframeContextService(candle_service)
-    agent = MultiTimeframeDecisionProvider(base_agent, strategic_market_context)
+    multi_timeframe_agent = MultiTimeframeDecisionProvider(
+        base_agent,
+        strategic_market_context,
+    )
+    strategic_position_context = RunBoundStrategicPositionContextSource(
+        database.sessions,
+        run_provider=paper_run_lifecycle,
+    )
+    agent = StrategicThesisContextDecisionProvider(
+        multi_timeframe_agent,
+        strategic_position_context,
+    )
 
     execution_spot = build_kraken_market_data_source(
         settings,
@@ -393,8 +406,8 @@ def build_campaign_runtime(
         )
     else:
         assert market_attention is not None
-        # Radar resolves the typed universe; the same Agent receives a bounded causal projection
-        # of the exact Radar/Analytics snapshot before its sole BUY/SELL/HOLD planning call.
+        # Radar resolves the typed universe; the same Agent receives bounded causal Radar,
+        # multi-timeframe and strategic-position memory before its sole BUY/SELL/HOLD plan call.
         discovery = MarketDiscoveryCoordinator(
             research=market_research,
             radar=market_attention,

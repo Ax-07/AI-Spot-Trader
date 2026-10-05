@@ -271,6 +271,7 @@ Migration :
 ```text
 0006_paper_control_plane
 -> 0007_multi_decision_cycles
+-> 0008_strategic_thesis_state
 ```
 
 Un cycle peut posséder plusieurs décisions, plusieurs évaluations Risk et plusieurs intentions d'exécution ordonnées.
@@ -315,3 +316,41 @@ Il ne peut pas produire un ranking, recalculer Risk, inventer un fill ou réordo
 - aucun calcul financier canonique déporté dans le frontend ;
 - aucun effacement d'historique ;
 - aucune promesse de rendement.
+
+## 22. Batch 50.1 — mémoire de thèse stratégique des positions
+
+Le Batch 50.1 ajoute `strategic-position-thesis-v1` **dans le même appel** `generate_decision_plan(...)`. Chaque décision peut porter une `thesis_update` structurée avec statut, horizon, résumé, faits de support, conditions d'invalidation et revue concise.
+
+Pour toute position ouverte remise à l'Agent, `CycleDecisionPlanInput.strategic_position_context` expose un contexte borné et causal :
+
+```text
+symbol + market_type + side + quantity
++ ACTIVE(thèse courante)
+ou
++ UNAVAILABLE_LEGACY
+```
+
+`UNAVAILABLE_LEGACY` signifie que la motivation historique n'est pas disponible. Le backend ne reconstruit jamais une thèse depuis une ancienne `rationale`. L'Agent peut seulement adopter une nouvelle thèse de gestion à partir du cycle courant.
+
+Statuts stratégiques :
+
+```text
+NEW / CONFIRMED / WEAKENING / INVALIDATED / COMPLETED
+```
+
+Ces statuts ne sont pas des actions. En particulier `INVALIDATED != SELL` et `COMPLETED != SELL`. L'Agent conserve le jugement `BUY / SELL / HOLD`, puis Risk conserve son autorité habituelle.
+
+Activation économique :
+
+- nouvelle exposition + fill => la thèse proposée peut devenir active ;
+- `REJECT` Risk ou absence de fill sur une entrée => aucune nouvelle thèse active ;
+- `HOLD` sur position ouverte => la même thèse peut être réévaluée ;
+- augmentation/réduction partielle => identité de thèse conservée si l'exposition reste du même côté ;
+- fermeture complète => retrait de la projection active, tandis que la dernière révision reste dans l'audit du plan ;
+- retournement de côté PERPETUAL => ancienne identité retirée et nouvelle identité seulement si une nouvelle exposition est effectivement fillée.
+
+La persistence utilise une projection additive sur les cycles : `audit_cycles.strategic_thesis_state_payload`. Seuls les cycles `COMPLETED` promeuvent un snapshot actif. Un cycle `FAILED` ne modifie pas l'état durable. La reprise suit `resumed_from_paper_run_id` et récupère le dernier snapshot `COMPLETED` disponible dans la lineage.
+
+La mémoire 50.1 ne contient ni hidden chain-of-thought, ni transcript complet du LLM. Elle reste compacte pour limiter la taille du prompt et n'introduit aucune règle déterministe d'entrée/sortie.
+
+Voir `docs/50_1_MEMOIRE_THESE_STRATEGIQUE.md`.

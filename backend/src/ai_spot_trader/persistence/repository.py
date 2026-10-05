@@ -19,6 +19,11 @@ from ai_spot_trader.persistence.models import (
     RiskAssessmentRecord,
 )
 from ai_spot_trader.persistence.runs import PaperRunClosedError, PaperRunNotFoundError
+from ai_spot_trader.persistence.strategic_thesis import (
+    derive_committed_active_theses,
+    load_latest_active_theses,
+    serialize_active_theses,
+)
 from ai_spot_trader.trading.engine import TradingCycleResult, TradingCycleStatus
 from ai_spot_trader.trading.multi_market import (
     DecisionExecutionResult,
@@ -71,7 +76,33 @@ class SqlAlchemyCycleAuditRepository:
                 raise CycleAuditConflictError(
                     f"cycle_id {result.cycle_id} already exists with different content"
                 )
-            self._add_graph(session, result=result, digest=digest, paper_run_id=paper_run_id)
+
+            strategic_thesis_state_payload: list[dict[str, object]] | None = None
+            if result.status is TradingCycleStatus.COMPLETED:
+                previous = (
+                    await load_latest_active_theses(session, paper_run_id)
+                    if paper_run_id is not None
+                    else ()
+                )
+                active = (
+                    derive_committed_active_theses(previous, result)
+                    if isinstance(result, MultiMarketTradingCycleResult)
+                    else previous
+                )
+                strategic_thesis_state_payload = serialize_active_theses(active)
+
+            self._add_graph(
+                session,
+                result=result,
+                digest=digest,
+                paper_run_id=paper_run_id,
+            )
+            if strategic_thesis_state_payload is not None:
+                _set_pending_strategic_thesis_state(
+                    session,
+                    cycle_id=result.cycle_id,
+                    payload=strategic_thesis_state_payload,
+                )
             if run is not None and result.status is TradingCycleStatus.COMPLETED:
                 committed = _committed_portfolio_payload(result)
                 if committed is None:
@@ -259,6 +290,23 @@ class SqlAlchemyCycleAuditRepository:
             )
         for fill in trajectory.fills:
             session.add(_fill_record(fill))
+
+
+def _set_pending_strategic_thesis_state(
+    session: AsyncSession,
+    *,
+    cycle_id: UUID,
+    payload: list[dict[str, object]],
+) -> None:
+    """Attach the completed-cycle projection without widening the legacy _add_graph seam."""
+
+    for pending in session.new:
+        if isinstance(pending, CycleRecord) and pending.cycle_id == cycle_id:
+            pending.strategic_thesis_state_payload = payload
+            return
+    raise CycleAuditConflictError(
+        "cycle audit graph did not create the expected pending CycleRecord"
+    )
 
 
 def _fill_record(fill: Any) -> FillRecord:

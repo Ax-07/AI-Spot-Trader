@@ -5,14 +5,13 @@
 ```text
 Repository                  : Ax-07/AI-Spot-Trader
 Branche                     : main
-HEAD GitHub clôture 49.4     : 2e552cbaf1b8ffcae9244c1fb472f1ee8fb0f193
+HEAD GitHub de base 50.1    : 8a0054091c39079dfc5d2c5a9504470b2fbf9493
+Clôture documentaire 49.4   : 8a005409
+Batch 49.4 fonctionnel      : intégré via 2e552cb
 Batch 49.3 fonctionnel      : intégré via d08cd31
-Clôture documentaire 49.3   : e7d605a
-Batch 49.4                  : intégré via 2e552cb
-Batch 49.1                  : intégré via 3194fce
 Batch 49.2                  : intégré via f0d4f94
-Batch 48 fonctionnel        : intégré via ebb664c
-Batch 47.5                  : intégré via d988de4
+Batch 49.1                  : intégré via 3194fce
+Batch 50.1                  : patch livré, validation/intégration à faire
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -32,7 +31,8 @@ AI Spot Trader conserve :
 - FUTURE daté non exécutable ;
 - aucune sortie LLM directement exécutable ;
 - aucun secret versionné ;
-- aucune optimisation post-hoc.
+- aucune optimisation post-hoc ;
+- aucune mémoire stratégique opaque du LLM : les continuités de position doivent être des faits applicatifs typés et auditables.
 
 Le Market Attention Radar est un **outil de priorisation d'attention** : depuis 49.2 il choisit l'univers candidat ; depuis 49.3 il peut fournir des faits descriptifs causaux au même Agent. Il n'est jamais un moteur BUY/SELL/HOLD ni une autorité Risk.
 
@@ -287,8 +287,58 @@ git status --short          : PASS — working tree propre après push
 push GitHub main            : PASS — 2e552cb
 ```
 
-Les warnings Node `MODULE_TYPELESS_PACKAGE_JSON` sont non bloquants et ne changent pas le statut de validation.
+## Batch 50.1 — mémoire de thèse stratégique des positions
 
-## Suite après intégration de 49.4
+**Patch livré sur base `8a005409`; validation locale puis intégration à faire.**
 
-La suite devra être décidée à partir des métriques observées sans adaptation rétroactive. Le LIVE, l'authentification Kraken Futures privée et l'exécution réelle restent des décisions séparées et ultérieures.
+Objectif : corriger le manque de continuité stratégique entre cycles sans ajouter de second Agent ni d'automatisme de trading.
+
+Architecture retenue : **Option C — extension additive des faits de cycle + projection canonique**.
+
+```text
+positions ouvertes
++ dernier snapshot de thèses actives
++ contexte marché / MTF / Radar
+        ↓
+StrategicThesisContextDecisionProvider
+        ↓
+même generate_decision_plan(...)
+        ↓
+BUY / SELL / HOLD + thesis_update structurée
+        ↓
+Risk -> PaperBroker
+        ↓
+commit cycle + portefeuille
+        ↓
+audit_cycles.strategic_thesis_state_payload
+```
+
+Livrables 50.1 :
+
+- contrat de domaine `StrategicThesis*` ;
+- `strategic_position_context` dans `CycleDecisionPlanInput` ;
+- `thesis_updates` alignées avec les décisions du plan ;
+- schéma Structured Outputs enrichi dans le même appel Agent ;
+- snapshot actif persisté uniquement après cycle `COMPLETED` ;
+- recovery par lineage `paper_run` ;
+- état `UNAVAILABLE_LEGACY` sans reconstruction de rationale ;
+- migration `0008_strategic_thesis_state` ;
+- tests dédiés Batch 50.1 ;
+- documentation dédiée `docs/50_1_MEMOIRE_THESE_STRATEGIQUE.md`.
+
+Règles critiques :
+
+- nouvelle entrée sans fill / Risk REJECT => aucune thèse active ;
+- réduction partielle => thèse maintenue ;
+- fermeture complète => thèse retirée du snapshot actif mais audit conservé ;
+- `INVALIDATED`/`COMPLETED` ne signifient jamais `SELL` automatique ;
+- un cycle `FAILED` ne corrompt pas le snapshot durable ;
+- aucun changement Risk/Broker ;
+- aucun frontend ajouté dans 50.1 ;
+- aucun Prompt Cache OpenAI dans ce batch.
+
+### Suite prévue
+
+Le Batch 50.2 reste séparé et **n'est pas démarré ici**. Il pourra traiter l'UI détaillée/historique des thèses après validation et intégration de 50.1.
+
+Le LIVE, l'authentification Kraken Futures privée et l'exécution réelle restent des décisions séparées et ultérieures.

@@ -16,10 +16,59 @@ from ai_spot_trader.domain.planning import (
     CycleDecisionPlanInput,
     MAX_DECISIONS_PER_CYCLE_HARD_LIMIT,
 )
+from ai_spot_trader.domain.strategic_thesis import (
+    MAX_INVALIDATION_CONDITIONS,
+    MAX_SUPPORTING_FACTS,
+    StrategicThesisStatus,
+    StrategicThesisUpdate,
+)
 
 PositiveDecimal = Annotated[Decimal, Field(gt=0)]
 StrategicAction = Literal["BUY", "SELL", "HOLD"]
 SelectionMarketType = Literal["SPOT", "PERPETUAL"]
+StrategicThesisStatusLiteral = Literal[
+    "NEW",
+    "CONFIRMED",
+    "WEAKENING",
+    "INVALIDATED",
+    "COMPLETED",
+]
+
+_THESIS_UPDATE_OBJECT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": ["NEW", "CONFIRMED", "WEAKENING", "INVALIDATED", "COMPLETED"],
+        },
+        "horizon": {"type": "string", "minLength": 1, "maxLength": 64},
+        "thesis_summary": {"type": "string", "minLength": 1, "maxLength": 1200},
+        "supporting_facts": {
+            "type": "array",
+            "maxItems": MAX_SUPPORTING_FACTS,
+            "items": {"type": "string", "minLength": 1, "maxLength": 500},
+        },
+        "invalidation_conditions": {
+            "type": "array",
+            "maxItems": MAX_INVALIDATION_CONDITIONS,
+            "items": {"type": "string", "minLength": 1, "maxLength": 500},
+        },
+        "review_summary": {"type": "string", "minLength": 1, "maxLength": 800},
+    },
+    "required": [
+        "status",
+        "horizon",
+        "thesis_summary",
+        "supporting_facts",
+        "invalidation_conditions",
+        "review_summary",
+    ],
+    "additionalProperties": False,
+}
+
+_THESIS_UPDATE_SCHEMA: dict[str, Any] = {
+    "anyOf": [_THESIS_UPDATE_OBJECT_SCHEMA, {"type": "null"}]
+}
 
 
 def _decision_item_variant(
@@ -37,6 +86,7 @@ def _decision_item_variant(
             "market_type": {"type": "string", "enum": ["SPOT", "PERPETUAL"]},
             "proposed_quantity": proposed_quantity_schema,
             "rationale": {"type": ["string", "null"]},
+            "thesis_update": _THESIS_UPDATE_SCHEMA,
         },
         "required": [
             "action",
@@ -44,6 +94,7 @@ def _decision_item_variant(
             "market_type",
             "proposed_quantity",
             "rationale",
+            "thesis_update",
         ],
         "additionalProperties": False,
     }
@@ -85,6 +136,33 @@ STRATEGIC_PLAN_SCHEMA: dict[str, Any] = {
 }
 
 
+class _StrategicThesisUpdatePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    status: StrategicThesisStatusLiteral
+    horizon: Annotated[str, Field(min_length=1, max_length=64)]
+    thesis_summary: Annotated[str, Field(min_length=1, max_length=1200)]
+    supporting_facts: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=500)]],
+        Field(max_length=MAX_SUPPORTING_FACTS),
+    ]
+    invalidation_conditions: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=500)]],
+        Field(max_length=MAX_INVALIDATION_CONDITIONS),
+    ]
+    review_summary: Annotated[str, Field(min_length=1, max_length=800)]
+
+    def to_domain(self) -> StrategicThesisUpdate:
+        return StrategicThesisUpdate(
+            status=StrategicThesisStatus(self.status),
+            horizon=self.horizon,
+            thesis_summary=self.thesis_summary,
+            supporting_facts=tuple(self.supporting_facts),
+            invalidation_conditions=tuple(self.invalidation_conditions),
+            review_summary=self.review_summary,
+        )
+
+
 class _StrategicPlanEntryPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -93,6 +171,7 @@ class _StrategicPlanEntryPayload(BaseModel):
     market_type: SelectionMarketType
     proposed_quantity: PositiveDecimal | None
     rationale: str | None
+    thesis_update: _StrategicThesisUpdatePayload | None = None
 
     @model_validator(mode="after")
     def validate_quantity(self) -> "_StrategicPlanEntryPayload":
@@ -125,6 +204,15 @@ class OpenAIMultiMarketDecisionProvider(OpenAIDecisionProvider):
         plan_input: CycleDecisionPlanInput,
     ) -> CycleDecisionPlan:
         allowed = {(item.symbol, item.market_type) for item in plan_input.market_states}
+        strategic_context_enabled = plan_input.strategic_position_context is not None
+        managed = {
+            (item.symbol, item.market_type)
+            for item in (
+                plan_input.strategic_position_context.positions
+                if strategic_context_enabled
+                else ()
+            )
+        }
         self._last_tool_traces = ()
         input_text = _plan_input_text(plan_input)
         traces: tuple[AgentToolTrace, ...] = ()
@@ -175,6 +263,7 @@ class OpenAIMultiMarketDecisionProvider(OpenAIDecisionProvider):
 
         seen: set[tuple[str, MarketType]] = set()
         decisions: list[DecisionCandidate] = []
+        thesis_updates: list[StrategicThesisUpdate | None] = []
         for entry in payload.decisions:
             market_type = MarketType(entry.market_type)
             key = (entry.symbol, market_type)
@@ -186,6 +275,18 @@ class OpenAIMultiMarketDecisionProvider(OpenAIDecisionProvider):
                 raise AgentContractViolationError(
                     "LLM decision plan contains a duplicate symbol + market_type"
                 )
+            thesis_update = (
+                None if entry.thesis_update is None else entry.thesis_update.to_domain()
+            )
+            if strategic_context_enabled:
+                if entry.action != "HOLD" and thesis_update is None:
+                    raise AgentContractViolationError(
+                        "BUY and SELL decisions require a structured strategic thesis update"
+                    )
+                if entry.action == "HOLD" and key in managed and thesis_update is None:
+                    raise AgentContractViolationError(
+                        "HOLD on an open position requires a structured strategic thesis review"
+                    )
             seen.add(key)
             decisions.append(
                 DecisionCandidate(
@@ -200,12 +301,19 @@ class OpenAIMultiMarketDecisionProvider(OpenAIDecisionProvider):
                     tool_traces=traces,
                 )
             )
+            thesis_updates.append(thesis_update)
 
         self._last_tool_traces = traces
+        retained_thesis_updates = (
+            tuple(thesis_updates)
+            if strategic_context_enabled or any(item is not None for item in thesis_updates)
+            else ()
+        )
         return CycleDecisionPlan(
             cycle_id=plan_input.cycle_id,
             created_at=created_at,
             decisions=tuple(decisions),
+            thesis_updates=retained_thesis_updates,
             rationale=payload.rationale,
             tool_traces=traces,
         )
@@ -224,6 +332,42 @@ def _plan_input_text(plan_input: CycleDecisionPlanInput) -> str:
         "sequential_risk_notice": (
             "Risk réévaluera chaque décision dans cet ordre contre le portefeuille effectivement "
             "mis à jour par les décisions précédentes."
+        ),
+    }
+    payload["strategic_thesis_contract"] = {
+        "protocol_version": "strategic-position-thesis-v1",
+        "role": (
+            "Dans ce même appel stratégique, produisez aussi la création ou la réévaluation "
+            "structurée de la thèse associée à chaque position concernée."
+        ),
+        "continuity": (
+            "Lorsqu'une position figure dans strategic_position_context, partez de sa mémoire de "
+            "thèse, comparez les faits actuels aux faits de support et aux conditions "
+            "d'invalidation, puis qualifiez la thèse NEW, CONFIRMED, WEAKENING, INVALIDATED ou "
+            "COMPLETED avant de comparer maintien, réduction, fermeture, augmentation et "
+            "alternatives. Une position UNAVAILABLE_LEGACY n'a aucune motivation historique "
+            "connue : ne l'inventez pas; créez seulement une thèse de gestion fondée sur les "
+            "faits disponibles à partir de ce cycle."
+        ),
+        "output": (
+            "BUY et SELL exigent thesis_update. HOLD exige thesis_update lorsqu'une position "
+            "ouverte correspondante est fournie; HOLD sans position peut utiliser null. Les "
+            "champs de thèse doivent rester concis, factuels, bornés et auditables."
+        ),
+        "activation": (
+            "Une thèse proposée avec une entrée n'est pas encore une thèse active. Le backend ne "
+            "l'activera qu'après autorisation Risk et fill économique réel. Un REJECT Risk ou une "
+            "absence de fill ne crée aucune thèse active."
+        ),
+        "non_automatic": (
+            "INVALIDATED et COMPLETED sont des états stratégiques descriptifs, jamais des ordres "
+            "SELL automatiques. La décision reste BUY / SELL / HOLD et le Risk Engine conserve "
+            "l'autorité finale."
+        ),
+        "privacy": (
+            "N'émettez ni chaîne de pensée cachée ni transcript de raisonnement. Utilisez "
+            "uniquement le résumé de thèse, les faits, conditions d'invalidation et la revue "
+            "structurée demandés."
         ),
     }
     if plan_input.radar_analytics_context is not None:
@@ -286,6 +430,8 @@ def _validation_error_message(exc: ValidationError) -> str:
             return "LLM strategic plan contains an invalid action"
         if "proposed_quantity" in location or "quantity" in message.lower():
             return "LLM strategic plan contains an invalid action/quantity combination"
+        if "thesis_update" in location:
+            return "LLM strategic plan contains an invalid strategic thesis update"
         if "decisions" in location and error_type in {
             "too_long",
             "too_short",
