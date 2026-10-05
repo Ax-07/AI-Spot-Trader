@@ -4,11 +4,16 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 
 from ai_spot_trader.api.economic_history_schemas import EconomicHistoryResponse
+from ai_spot_trader.api.paper_observability_schemas import PaperObservabilityResponse
 from ai_spot_trader.api.schemas import PaperAnalyticsResponse
 from ai_spot_trader.core.runtime import AppRuntime
 from ai_spot_trader.economic_history import (
     EconomicHistoryDataError,
     project_economic_history,
+)
+from ai_spot_trader.paper_observability import (
+    PaperObservabilityDataError,
+    project_paper_observability,
 )
 from ai_spot_trader.persistence.analytics import (
     PaperAnalyticsReader,
@@ -127,7 +132,11 @@ async def economic_history(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="economic history store is unavailable",
         ) from exc
-    except (AuditDataIntegrityError, EconomicHistoryDataError) as exc:
+    except (
+        AuditDataIntegrityError,
+        EconomicHistoryDataError,
+        PaperObservabilityDataError,
+    ) as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="economic history data is unavailable",
@@ -199,7 +208,19 @@ async def _economic_history_response(
         cycle_summaries=tuple(summaries),
         lineage=lineage,
     )
-    return EconomicHistoryResponse.model_validate(report, from_attributes=True)
+    observability = project_paper_observability(
+        history=report,
+        cycles=tuple(details),
+    )
+    response = EconomicHistoryResponse.model_validate(report, from_attributes=True)
+    return response.model_copy(
+        update={
+            "observability": PaperObservabilityResponse.model_validate(
+                observability,
+                from_attributes=True,
+            )
+        }
+    )
 
 
 async def _paper_run_lineage(

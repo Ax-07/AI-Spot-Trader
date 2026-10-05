@@ -77,6 +77,77 @@ export type EconomicHistorySummaryResponse = {
   last_at: string | null;
 };
 
+export type PaperObservabilityBreakdownResponse = {
+  scope: "TOTAL" | "SPOT" | "PERPETUAL";
+  gross_pnl: string | null;
+  net_pnl: string | null;
+  realized_pnl: string;
+  unrealized_pnl: string | null;
+  fees: string;
+  spread_cost: string;
+  slippage_cost: string;
+  funding_pnl: string;
+  execution_costs: string;
+  total_costs: string;
+  total_notional: string;
+  trade_count: number;
+  fill_count: number;
+  current_exposure_value: string | null;
+  current_exposure_fraction: string | null;
+};
+
+export type PaperDecisionFunnelResponse = {
+  decision_count: number;
+  buy_count: number;
+  sell_count: number;
+  hold_count: number;
+  risk_allow_count: number;
+  risk_modify_count: number;
+  risk_reject_count: number;
+  execution_intent_count: number;
+  decisions_with_fill: number;
+  decisions_without_fill: number;
+  fill_count: number;
+  economic_trade_count: number;
+};
+
+export type PaperMarketObservabilityResponse = {
+  symbol: string;
+  market_type: "SPOT" | "PERPETUAL" | "FUTURE";
+  decision_count: number;
+  buy_count: number;
+  sell_count: number;
+  hold_count: number;
+  risk_allow_count: number;
+  risk_modify_count: number;
+  risk_reject_count: number;
+  decisions_with_fill: number;
+  decisions_without_fill: number;
+  trade_count: number;
+  fill_count: number;
+  total_notional: string;
+  fees: string;
+  spread_cost: string;
+  slippage_cost: string;
+  funding_pnl: string | null;
+  execution_costs: string;
+  total_costs: string | null;
+  realized_pnl: string;
+  current_exposure_value: string | null;
+  current_exposure_fraction: string | null;
+  unrealized_pnl: string | null;
+};
+
+export type PaperObservabilityResponse = {
+  calculation_version: string;
+  timezone: "UTC";
+  source_digest: string;
+  breakdowns: PaperObservabilityBreakdownResponse[];
+  funnel: PaperDecisionFunnelResponse;
+  markets: PaperMarketObservabilityResponse[];
+  unavailable_metrics: string[];
+};
+
 export type EconomicHistoryResponse = {
   paper_run_id: string;
   lineage_paper_run_ids: string[];
@@ -86,7 +157,21 @@ export type EconomicHistoryResponse = {
   summary: EconomicHistorySummaryResponse;
   operations: EconomicOperationResponse[];
   cycles: CycleSummaryResponse[];
+  observability: PaperObservabilityResponse | null;
 };
+
+export function paperObservabilityBreakdown(
+  report: EconomicHistoryResponse,
+  scope: "TOTAL" | "SPOT" | "PERPETUAL",
+): PaperObservabilityBreakdownResponse | null {
+  return report.observability?.breakdowns.find((item) => item.scope === scope) ?? null;
+}
+
+export function paperObservabilityMarketKey(
+  item: Pick<PaperMarketObservabilityResponse, "symbol" | "market_type">,
+): string {
+  return `${item.symbol}::${item.market_type}`;
+}
 
 const API_PREFIX = "/backend";
 

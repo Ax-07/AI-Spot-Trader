@@ -7,6 +7,7 @@ from uuid import UUID
 
 from pydantic import Field
 
+from ai_spot_trader.api.paper_observability_schemas import PaperObservabilityResponse
 from ai_spot_trader.api.schemas import ApiModel, CycleSummaryResponse
 
 
@@ -96,3 +97,4 @@ class EconomicHistoryResponse(ApiModel):
     summary: EconomicHistorySummaryResponse
     operations: tuple[EconomicOperationResponse, ...] = ()
     cycles: tuple[CycleSummaryResponse, ...] = ()
+    observability: PaperObservabilityResponse | None = None

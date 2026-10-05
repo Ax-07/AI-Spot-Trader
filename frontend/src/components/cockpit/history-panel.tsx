@@ -26,8 +26,11 @@ import type {
 import {
   economicHistoryExportPath,
   fetchEconomicHistory,
+  paperObservabilityMarketKey,
   type EconomicHistoryResponse,
   type EconomicOperationResponse,
+  type PaperMarketObservabilityResponse,
+  type PaperObservabilityBreakdownResponse,
 } from "@/lib/economic-history";
 
 type ReferenceState =
@@ -143,6 +146,122 @@ function MetricCard({ label, value, detail }: { label: string; value: string; de
       <p className="mt-1 text-xl font-semibold tracking-tight">{value}</p>
       <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{detail}</p>
     </div>
+  );
+}
+
+function BreakdownCard({ item }: { item: PaperObservabilityBreakdownResponse }) {
+  const net = item.net_pnl === null ? "—" : formatDecimal(item.net_pnl);
+  const gross = item.gross_pnl === null ? "indisponible" : formatDecimal(item.gross_pnl);
+  return (
+    <Card className="gap-3 py-5">
+      <CardHeader className="px-5 pb-0">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="text-base">{item.scope}</CardTitle>
+          <Badge tone={item.scope === "PERPETUAL" ? "warning" : item.scope === "SPOT" ? "info" : "neutral"}>
+            {item.trade_count} trade(s)
+          </Badge>
+        </div>
+        <CardDescription>
+          {item.scope === "TOTAL" ? "Source économique canonique" : "Attribution uniquement lorsque les faits le permettent"}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-2 px-5 text-xs sm:grid-cols-2">
+        <div><span className="text-muted-foreground">P&L net</span><p className="font-mono text-sm">{net}</p></div>
+        <div><span className="text-muted-foreground">P&L brut</span><p className="font-mono text-sm">{gross}</p></div>
+        <div><span className="text-muted-foreground">Réalisé</span><p className="font-mono text-sm">{formatDecimal(item.realized_pnl)}</p></div>
+        <div><span className="text-muted-foreground">Latent</span><p className="font-mono text-sm">{formatDecimal(item.unrealized_pnl)}</p></div>
+        <div><span className="text-muted-foreground">Coûts économiques</span><p className="font-mono text-sm">{formatDecimal(item.total_costs)}</p></div>
+        <div><span className="text-muted-foreground">Funding</span><p className="font-mono text-sm">{formatDecimal(item.funding_pnl)}</p></div>
+        <div><span className="text-muted-foreground">Exposition</span><p className="font-mono text-sm">{formatDecimal(item.current_exposure_value)}</p></div>
+        <div><span className="text-muted-foreground">Exposition / equity</span><p className="text-sm">{percent(item.current_exposure_fraction)}</p></div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function MarketObservabilityTable({ markets }: { markets: PaperMarketObservabilityResponse[] }) {
+  if (markets.length === 0) {
+    return <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">Aucun marché observé.</p>;
+  }
+  return (
+    <div className="overflow-x-auto rounded-xl border">
+      <table className="min-w-[1150px] w-full text-xs">
+        <thead className="bg-muted/50 text-left text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2 font-medium">Marché</th>
+            <th className="px-3 py-2 font-medium">Agent</th>
+            <th className="px-3 py-2 font-medium">Risk</th>
+            <th className="px-3 py-2 font-medium">Exécution</th>
+            <th className="px-3 py-2 text-right font-medium">Montant</th>
+            <th className="px-3 py-2 text-right font-medium">Coûts</th>
+            <th className="px-3 py-2 text-right font-medium">Funding</th>
+            <th className="px-3 py-2 text-right font-medium">P&L réalisé</th>
+            <th className="px-3 py-2 text-right font-medium">Exposition</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y">
+          {markets.map((item) => (
+            <tr key={paperObservabilityMarketKey(item)}>
+              <td className="px-3 py-3"><span className="font-semibold">{item.symbol}</span> <Badge>{item.market_type}</Badge></td>
+              <td className="px-3 py-3">{item.decision_count} · B {item.buy_count} / S {item.sell_count} / H {item.hold_count}</td>
+              <td className="px-3 py-3">A {item.risk_allow_count} / M {item.risk_modify_count} / R {item.risk_reject_count}</td>
+              <td className="px-3 py-3">{item.decisions_with_fill} décision(s) fillée(s) · {item.fill_count} fill(s) · {item.trade_count} trade(s)</td>
+              <td className="px-3 py-3 text-right font-mono">{formatDecimal(item.total_notional)}</td>
+              <td className="px-3 py-3 text-right font-mono">{formatDecimal(item.total_costs)}</td>
+              <td className="px-3 py-3 text-right font-mono">{formatDecimal(item.funding_pnl)}</td>
+              <td className="px-3 py-3 text-right font-mono">{formatDecimal(item.realized_pnl)}</td>
+              <td className="px-3 py-3 text-right font-mono">{formatDecimal(item.current_exposure_value)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ObservabilitySection({ report }: { report: EconomicHistoryResponse }) {
+  const observability = report.observability;
+  if (!observability) return null;
+  const funnel = observability.funnel;
+  return (
+    <section className="space-y-4">
+      <div>
+        <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">Observabilité PAPER 49.4</p>
+        <h3 className="mt-1 text-xl font-semibold">TOTAL / SPOT / PERPETUAL</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Les valeurs absentes restent indisponibles : aucun P&L brut/net par type n’est réparti artificiellement.
+        </p>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-3">
+        {observability.breakdowns.map((item) => <BreakdownCard key={item.scope} item={item} />)}
+      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base"><ShieldCheck className="size-4" /> Funnel Agent → Risk → exécution</CardTitle>
+          <CardDescription>Une décision n’est jamais assimilée à un trade ou à un fill.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <MetricCard label="Agent" value={String(funnel.decision_count)} detail={`BUY ${funnel.buy_count} · SELL ${funnel.sell_count} · HOLD ${funnel.hold_count}`} />
+          <MetricCard label="Risk" value={`ALLOW ${funnel.risk_allow_count}`} detail={`MODIFY ${funnel.risk_modify_count} · REJECT ${funnel.risk_reject_count}`} />
+          <MetricCard label="Décisions fillées" value={String(funnel.decisions_with_fill)} detail={`${funnel.decisions_without_fill} sans fill · ${funnel.execution_intent_count} intent(s)`} />
+          <MetricCard label="Économie" value={`${funnel.economic_trade_count} trade(s)`} detail={`${funnel.fill_count} fill(s) économiquement engagés`} />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Ventilation par marché</CardTitle>
+          <CardDescription>Identité stricte (symbol, market_type) : SPOT et PERPETUAL restent séparés.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <MarketObservabilityTable markets={observability.markets} />
+        </CardContent>
+      </Card>
+      {observability.unavailable_metrics.length ? (
+        <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+          Métriques volontairement non attribuées : {observability.unavailable_metrics.join(" · ")}
+        </p>
+      ) : null}
+    </section>
   );
 }
 
@@ -461,14 +580,18 @@ export function HistoryPanel() {
 
       {summary && report ? (
         <>
-          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
             <MetricCard label="Equity" value={`${formatDecimal(summary.initial_equity)} → ${formatDecimal(summary.ending_equity)}`} detail="Initiale → finale / actuelle" />
             <MetricCard label="P&L net" value={formatDecimal(summary.net_pnl)} detail={`Brut ${formatDecimal(summary.gross_pnl)}`} />
             <MetricCard label="P&L réalisé" value={formatDecimal(summary.realized_pnl)} detail={`Latent ${formatDecimal(summary.unrealized_pnl)}`} />
             <MetricCard label="Coûts totaux" value={formatDecimal(summary.total_costs)} detail={`Exécution ${formatDecimal(summary.execution_costs)} · funding ${formatDecimal(summary.funding_pnl)}`} />
+            <MetricCard label="Drawdown max" value={percent(summary.max_drawdown_fraction)} detail={`Actuel ${percent(summary.current_drawdown_fraction)} · ${formatDecimal(summary.max_drawdown_value)} max`} />
+            <MetricCard label="Exposition" value={percent(summary.current_exposure_fraction)} detail={`${formatDecimal(summary.current_exposure_value)} à la dernière valorisation durable`} />
             <MetricCard label="Turnover" value={percent(summary.turnover_fraction)} detail={`Montant échangé ${formatDecimal(summary.total_notional)} / equity initiale`} />
             <MetricCard label="Cadence réelle" value={summary.fills_per_hour === null ? "—" : `${formatDecimal(summary.fills_per_hour)} fills/h`} detail={`${summary.trade_count} trade(s) · ${summary.fill_count} fill(s)`} />
           </section>
+
+          <ObservabilitySection report={report} />
 
           <section className="grid gap-4 xl:grid-cols-2">
             <Card>

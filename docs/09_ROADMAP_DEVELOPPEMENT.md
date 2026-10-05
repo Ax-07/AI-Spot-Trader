@@ -5,21 +5,14 @@
 ```text
 Repository                  : Ax-07/AI-Spot-Trader
 Branche                     : main
-HEAD GitHub clôture 49.3     : d08cd31e6a795a8beb09530c2bc9a3f32f94fe35
-Batch 45                    : intégré via 45d41b7
-Batch 46 / 46.1             : intégré via b219365
-Batch 47.1                  : intégré via 842e6bd7
-Batch 47.2                  : intégré via c09dd14
-Batch 47.3                  : intégré via 12051a7
-Batch 47.4                  : intégré via 472f3ad
-Clôture documentaire 47.4   : e972fd9
-Batch 47.5                  : intégré via d988de4
-Clôture documentaire 47.5   : 4278a5c
-Batch 48 fonctionnel        : intégré via ebb664c
-Clôture documentaire 48     : 8704eec
+HEAD GitHub réel audité 49.4: e7d605aa2b6393516c0ccd391cd4d11193c18671
+Batch 49.3 fonctionnel      : intégré via d08cd31
+Clôture documentaire 49.3   : e7d605a
+Batch 49.4                  : patch proposé, non intégré
 Batch 49.1                  : intégré via 3194fce
 Batch 49.2                  : intégré via f0d4f94
-Batch 49.3                  : intégré via d08cd31
+Batch 48 fonctionnel        : intégré via ebb664c
+Batch 47.5                  : intégré via d988de4
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
@@ -211,7 +204,7 @@ Voir `docs/49_2_RADAR_AGENT_UNIVERSE.md`.
 
 ## Batch 49.3 — contexte Radar / Analytics causal fourni à l'Agent
 
-**Intégré via `d08cd31`.**
+**Intégré fonctionnellement via `d08cd31`, clôturé documentairement via `e7d605a`.**
 
 Décision architecturale : **contexte typé dédié C**.
 
@@ -253,12 +246,45 @@ git status --short          : PASS — working tree propre après push
 push GitHub main            : PASS — d08cd31
 ```
 
-## Suite après intégration de 49.3
+## Batch 49.4 — observabilité décisions et performances PAPER SPOT/PERP
+
+**Patch proposé sur `e7d605a`, non intégré à GitHub dans cette livraison.**
+
+Décision architecturale proposée : **projection read-only dédiée au-dessus de `EconomicHistoryReport` et des audits persistés**, attachée à l'endpoint économique existant.
 
 ```text
-49.4 — observabilité des décisions et performances PAPER SPOT/PERP
+faits PAPER persistés
+-> PaperAnalyticsReport canonique
+-> EconomicHistoryReport canonique
+-> PaperObservabilityReport
+-> /api/v1/economic-history
+-> cockpit Historique
 ```
 
-Le Batch 49.4 devra être lancé dans une nouvelle discussion après resynchronisation avec le HEAD `main` alors courant. Il devra mesurer honnêtement performance, frais, slippage, drawdown, exposition et ventilation SPOT/PERP sans recalibrer rétroactivement les décisions.
+Objectifs du patch :
 
-Le LIVE, l'authentification Kraken Futures privée et l'exécution réelle restent des décisions séparées et ultérieures.
+- vue TOTAL / SPOT / PERPETUAL ;
+- funnel Agent -> Risk -> exécution ;
+- distinction décisions / intents / fills / trades ;
+- ventilation stricte `(symbol, market_type)` ;
+- coûts, funding, notionnel, P&L réalisé et exposition attribués uniquement lorsqu'ils sont déterminables ;
+- métriques indisponibles laissées à `null` au lieu d'être fabriquées.
+
+Le P&L brut/net par type de marché n'est volontairement pas attribué : les faits durables actuels ne permettent pas une décomposition exacte de l'equity globale entre SPOT et PERPETUAL. Le P&L global reste canonique et inchangé.
+
+Aucune nouvelle persistence, aucun nouvel endpoint, aucun changement Agent/Risk/Broker, aucun LIVE et aucune recalibration Analytics/Radar.
+
+Voir `docs/49_4_OBSERVABILITE_DECISIONS_PERFORMANCES_PAPER.md`.
+
+## Validation du patch 49.4 dans le sandbox de livraison
+
+```text
+backend py_compile ciblé     : PASS
+frontend test ciblé 49.4    : PASS — 3/3
+backend pytest ciblé        : non collectable dans le sandbox partiel (repo complet absent)
+validation complète         : à exécuter localement après extraction
+```
+
+## Suite après validation et intégration de 49.4
+
+La suite devra être décidée à partir des métriques observées sans adaptation rétroactive. Le LIVE, l'authentification Kraken Futures privée et l'exécution réelle restent des décisions séparées et ultérieures.

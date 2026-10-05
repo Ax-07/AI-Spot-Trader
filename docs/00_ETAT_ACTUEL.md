@@ -1,64 +1,53 @@
 # 00 — État actuel
 
-## Référence de reprise — Batch 49.3 intégré
+## Référence de reprise — Batch 49.4 préparé
 
 ```text
 Repository                         : Ax-07/AI-Spot-Trader
 Branche                            : main
-Base auditée au démarrage 49.3  : f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b
-HEAD GitHub vérifié à la clôture   : d08cd31e6a795a8beb09530c2bc9a3f32f94fe35
-Commit HEAD                        : feat: expose causal radar analytics context to agent
-Batch 49.1                         : INTÉGRÉ SUR GITHUB main
-Batch 49.2                         : INTÉGRÉ SUR GITHUB main via f0d4f94
-Batch 49.3                         : INTÉGRÉ SUR GITHUB main via d08cd31
+HEAD GitHub audité 49.4            : e7d605aa2b6393516c0ccd391cd4d11193c18671
+Commit HEAD                        : docs: close batch 49.3 integration
+Batch 49.3 fonctionnel             : d08cd31e6a795a8beb09530c2bc9a3f32f94fe35
+Batch 49.4                         : PATCH PROPOSÉ — NON INTÉGRÉ À GITHUB
 ```
 
-Le Batch 49.3 est intégré sur `main` via `d08cd31`. La documentation de reprise est alignée sur cet état intégré.
+Le commit `e7d605a` ne change que la clôture documentaire de 49.3 ; l'état fonctionnel intégré reste celui de `d08cd31`.
 
-## État fonctionnel intégré par le Batch 49.3
+## État proposé par le Batch 49.4
 
-La chaîne PAPER dynamique reste unique :
+Le pipeline de trading reste inchangé :
 
 ```text
-Market Attention Radar
--> shortlist bornée
--> validation catalogue/configuration Kraken
--> univers Agent typé SPOT/PERPETUAL
--> projection causale Radar/Analytics bornée pour ces seuls marchés
--> même Agent IA : BUY / SELL / HOLD
+Radar
+-> Agent BUY / SELL / HOLD
 -> Risk Engine déterministe
 -> PaperBroker
+-> faits persistés
+-> Analytics / Economic History canoniques
+-> projection read-only d'observabilité 49.4
 ```
 
-Le Radar choisit **où regarder** et fournit désormais des faits descriptifs figés pour aider le raisonnement. Il ne choisit jamais l'action, la taille, le levier, `reduce_only` ou l'autorisation Risk.
+La projection 49.4 étend additivement `/api/v1/economic-history` et le cockpit Historique. Elle expose :
 
-## Architecture 49.3
+- une vue `TOTAL / SPOT / PERPETUAL` ;
+- le funnel Agent -> Risk -> exécution ;
+- une ventilation stricte par `(symbol, market_type)` ;
+- coûts, funding, montant échangé, fills, trades, P&L réalisé et exposition lorsque les faits permettent une attribution exacte ;
+- les métriques indisponibles comme telles, sans attribution artificielle.
 
-La solution retenue est un contexte dédié `RadarAnalyticsStrategicContext`, référencé depuis `CycleDecisionPlanInput`. `StrategicMultiTimeframeContext` reste consacré aux candles stratégiques existantes.
+Le P&L brut/net global, le drawdown et l'exposition globale restent issus des calculs canoniques existants. Aucun second moteur P&L, aucune nouvelle persistence et aucun nouvel endpoint ne sont introduits.
 
-Le `DynamicMarketTradingCycleRunner` relit le même service Radar après Discovery uniquement pour figer les faits du cycle. Le timestamp doit être exactement celui enregistré par l'audit Discovery ; sinon les nouvelles ouvertures échouent fermées. Le contexte est ensuite filtré sur les `market_states` effectivement visibles par le plan et injecté dans **le même appel** `generate_decision_plan(...)` via un décorateur sans second appel LLM.
+## Limite volontaire importante
 
-## Faits exposés
+Les faits durables actuels ne permettent pas d'attribuer exactement les variations globales d'equity entre SPOT et PERPETUAL. En conséquence :
 
-Par marché, le contexte reste borné et déterministe :
+```text
+TOTAL gross_pnl / net_pnl       : disponible, canonique
+SPOT gross_pnl / net_pnl        : indisponible
+PERPETUAL gross_pnl / net_pnl   : indisponible
+```
 
-- identité `{symbol, market_type}` ;
-- activité, tendance récente, caractéristiques et volume 24h ;
-- liquidité/microstructure SPOT utile ;
-- synthèse Market Structure et au plus quatre timeframes ;
-- pour PERPETUAL : score Analytics 47.5 `0..4`, composantes OI/Funding/Liquidations/ORDER_FLOW et déduplication CVD/Aggressor ;
-- valeurs causales compactes Open Interest, Funding, Liquidation Volume, CVD et Aggressor Differential ;
-- statuts explicites `AVAILABLE`, `PARTIAL`, `STALE`, `INSUFFICIENT_HISTORY`, `TECHNICAL_ERROR`, `NOT_APPLICABLE` ou `UNAVAILABLE`.
-
-Ne sont pas exposés : diagnostics techniques internes, erreurs brutes, couverture globale du scanner, ranks avant/après, historique brut, swings complets, données futures, résultats/P&L futurs ou métadonnées d'observabilité inutiles.
-
-## Causalité et mode dégradé
-
-Chaque timestamp inclus doit être `<=` au snapshot Radar figé, lui-même `<=` à la frontière de décision. Une donnée future ou un changement de snapshot entre Discovery et projection provoque un échec fermé pour les nouvelles ouvertures.
-
-Une position déjà ouverte reste gérable en MANAGEMENT si le Radar/contexte devient indisponible. Une donnée dégradée n'est jamais convertie en signal positif ou négatif artificiel.
-
-SPOT conserve `NOT_APPLICABLE` pour les Analytics Futures. PERPETUAL conserve LONG/SHORT sous Risk. `FUTURE` daté reste non exécutable.
+Les P&L réalisés, coûts, funding, notionnels et expositions attribuables restent ventilés lorsqu'ils sont causalement déterminables.
 
 ## Invariants inchangés
 
@@ -66,29 +55,23 @@ SPOT conserve `NOT_APPLICABLE` pour les Analytics Futures. PERPETUAL conserve LO
 - PAPER uniquement ;
 - Kraken ;
 - SPOT + PERPETUAL linéaire ;
+- FUTURE daté non exécutable ;
 - aucun LIVE ni API Kraken Futures privée ;
-- aucun champ Radar/Analytics ne crée un `ExecutionIntent` ;
-- aucun champ Radar/Analytics ne définit levier, marge ou `reduce_only` ;
 - Risk Engine déterministe = autorité finale ;
-- score Analytics 47.5 inchangé, avec CVD + Aggressor dans une seule famille `ORDER_FLOW` ;
+- aucune sortie LLM directement exécutable ;
+- aucun changement du ranking Analytics 47.5 ni du contexte 49.3 ;
+- aucune adaptation stratégique à partir des résultats 49.4 ;
 - aucun look-ahead ni recalibration post-hoc ;
 - aucun secret versionné.
 
-## Validation intégrée du Batch 49.3
+## Validation du patch 49.4 dans cette livraison
 
 ```text
-backend python -m pytest -q : PASS — 1189 passed, 2 warnings
-frontend pnpm typecheck     : PASS
-frontend pnpm test          : PASS — 86/86
-git diff --check            : PASS — avertissements LF/CRLF uniquement
-git status --short          : PASS — working tree propre après push
-push GitHub main            : PASS — d08cd31
+python -m py_compile des fichiers backend 49.4 : PASS
+frontend test ciblé 49.4                         : PASS — 3/3
+backend pytest ciblé 49.4                        : NON VALIDÉ — collecte impossible dans le sandbox partiel
+suite backend complète                           : À EXÉCUTER LOCALEMENT
+frontend pnpm typecheck / test complet           : À EXÉCUTER LOCALEMENT
 ```
 
-## Suite
-
-```text
-49.4 — observabilité des décisions et performances PAPER SPOT/PERP
-```
-
-Le Batch 49.3 n'ajoute aucune migration, aucun endpoint LIVE et aucun ordre Kraken réel.
+Le Batch 49.4 reste un patch local proposé tant qu'il n'a pas été extrait, validé dans le repository complet puis commité/poussé explicitement par l'utilisateur.
