@@ -18,24 +18,26 @@ Depuis 51.2, les nouvelles Sessions peuvent persister leur provider stratégique
 
 Depuis 51.3, les appels Ollama possèdent une observabilité live best-effort dans les logs backend : départ, succès/échec, corrélation Session/cycle, `call_id`, tentative et latence, puis résumé BUY/SELL/HOLD du plan validé. Aucun contenu décisionnel brut ou secret n'est journalisé par cette couche.
 
-Le Batch 51.4 proposé fait de la frontière UTC le trigger unique du scheduler CANDLE_CLOSE. Les données restent causales via `history_as_of()` dans le cycle ; le scheduler ne pré-résout plus Radar et ne bloque plus l'appel du runner sur les candles bootstrap. Le runtime normal rend INFO visibles pour Agent/Ollama/cadence tout en gardant `httpx`/`httpcore` et Kraken normal silencieux à INFO.
+Depuis le Batch 51.4 intégré, la frontière UTC est le trigger unique du scheduler CANDLE_CLOSE. Les données restent causales via `history_as_of()` dans le cycle ; le scheduler ne pré-résout plus Radar et ne bloque plus l'appel du runner sur les candles bootstrap. Le runtime normal rend INFO visibles pour Agent/Ollama/cadence tout en gardant `httpx`/`httpcore` et Kraken normal silencieux à INFO.
 
 ## Référence courante
 
 ```text
-HEAD GitHub intégré audité        : 5d24185ac1eefe9be3c21e31e62831228c73fea9
+HEAD GitHub intégré audité        : 566e0ca1a2170a18a06d1bd531ac3b2d118f6849
 Batch 51.1 intégré                : aeaf04f — feat: add local Ollama LLM provider
 Batch 51.1.1 intégré              : 7e2ce28 — fix: harden causal Ollama decision contract
 Batch 51.2 intégré                : 36491d4 — feat: configure LLM provider per session
 Batch 51.3 intégré                : 5d24185 — feat: add live Ollama agent observability
-Batch 51.4                        : patch livré — non intégré
+Batch 51.4 intégré                : 566e0ca — fix: restore automatic candle-close agent cycles
 ```
 
 ---
 
-## Changelog — 2026-10-07 — Batch 51.4 scheduler CANDLE_CLOSE / logging runtime — patch livré
+## Changelog — 2026-10-07 — Batch 51.4 scheduler CANDLE_CLOSE / logging runtime — intégré `566e0ca`
 
 ### Diagnostic confirmé
+
+Diagnostic réalisé sur le HEAD pré-51.4 `5d24185ac1eefe9be3c21e31e62831228c73fea9`.
 
 `ScheduledTradingEngine._run_candle_close_loop()` appelait `CandleCloseReadinessGate.wait_until_ready()` avant le runner. Le gate vérifiait une candle finale exacte pour tous les marchés reçus et retournait `False` dès qu'un seul `history_as_of()` levait une exception.
 
@@ -92,7 +94,7 @@ Les warnings/errors Kraken restent visibles ; les requêtes normales Kraken ne s
 
 ### Timeouts Ollama
 
-Le HEAD audité utilise un défaut transport Ollama de 60 s tandis que le configurateur initialisait le timeout Agent à 35 s. La validation backend 51.2 refusait déjà `Agent <= transport`, mais l'UX pouvait créer cette combinaison incohérente avant soumission.
+Le HEAD pré-51.4 audité `5d24185` utilisait un défaut transport Ollama de 60 s tandis que le configurateur initialisait le timeout Agent à 35 s. La validation backend 51.2 refusait déjà `Agent <= transport`, mais l'UX pouvait créer cette combinaison incohérente avant soumission.
 
 Le contrat backend reste inchangé : `cycle_agent_timeout_seconds` doit être strictement supérieur au timeout transport Ollama effectif. Le cockpit ajoute une recommandation dérivée `2 × transport` uniquement lorsque le passage vers Ollama rencontre une enveloppe Agent absente/invalide/incompatible. Ainsi le défaut 60 s propose 120 s sans coder en dur un couple 120/300. Une valeur Agent déjà supérieure est conservée. Cette recommandation ne garantit pas le budget d'une tool-loop multi-appels.
 
@@ -107,23 +109,23 @@ parse/transpile TypeScript ciblé session-config + TSX       : PASS
 contrôle espaces finaux / arborescence de livraison         : PASS
 ```
 
-La suite repository complète n'a pas été exécutée dans cet environnement, faute de checkout complet disponible. Elle reste obligatoire localement avec `pytest`, `pnpm typecheck`, `pnpm test`, `git diff --check` et un smoke réel Ollama CANDLE_CLOSE.
+Ces résultats correspondent à la livraison pré-intégration de 51.4 ; la mention de suite repository complète non exécutée est conservée comme historique de cet environnement de livraison.
 
 ## ADR-398 — CANDLE_CLOSE est un trigger temporel, pas un gate de disponibilité multi-marchés
 
-**ADOPTÉ — patch 51.4.** Le scheduler possède le temps ; les services du cycle possèdent les données et appliquent la causalité via `history_as_of()`.
+**ADOPTÉ — intégré 51.4 (`566e0ca`).** Le scheduler possède le temps ; les services du cycle possèdent les données et appliquent la causalité via `history_as_of()`.
 
 ## ADR-399 — La résolution de l'univers Radar reste exclusivement dans le runner dynamique
 
-**ADOPTÉ — patch 51.4.** Le scheduler ne réplique ni Discovery, ni positions, ni capacity pour construire un pseudo-univers de readiness.
+**ADOPTÉ — intégré 51.4 (`566e0ca`).** Le scheduler ne réplique ni Discovery, ni positions, ni capacity pour construire un pseudo-univers de readiness.
 
 ## ADR-400 — Le logging runtime est ciblé par namespace
 
-**ADOPTÉ — patch 51.4.** Agent/Ollama/cadence sont visibles à INFO dans le lancement normal ; `httpx`/`httpcore` et Kraken restent à WARNING afin de conserver les anomalies sans bruit de requêtes normales.
+**ADOPTÉ — intégré 51.4 (`566e0ca`).** Agent/Ollama/cadence sont visibles à INFO dans le lancement normal ; `httpx`/`httpcore` et Kraken restent à WARNING afin de conserver les anomalies sans bruit de requêtes normales.
 
 ## ADR-401 — La recommandation timeout Ollama est dérivée, la validation backend reste stricte
 
-**ADOPTÉ — patch 51.4.** L'UI recommande `2 × transport` seulement lorsqu'elle doit corriger une enveloppe incompatible ; le backend conserve la règle de sûreté minimale `Agent > transport` et n'impose pas de couple fixe.
+**ADOPTÉ — intégré 51.4 (`566e0ca`).** L'UI recommande `2 × transport` seulement lorsqu'elle doit corriger une enveloppe incompatible ; le backend conserve la règle de sûreté minimale `Agent > transport` et n'impose pas de couple fixe.
 
 ---
 

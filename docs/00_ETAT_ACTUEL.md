@@ -1,17 +1,17 @@
 # 00 — État actuel
 
-## Référence de reprise — Batch 51.4 livré, non intégré
+## Référence de reprise — Batch 51.4 intégré
 
 ```text
 Repository                         : Ax-07/AI-Spot-Trader
 Branche                            : main
-HEAD GitHub intégré vérifié        : 5d24185ac1eefe9be3c21e31e62831228c73fea9
-Commit GitHub                      : feat: add live Ollama agent observability
+HEAD GitHub intégré vérifié        : 566e0ca1a2170a18a06d1bd531ac3b2d118f6849
+Commit GitHub                      : fix: restore automatic candle-close agent cycles
 Batch 51.1 intégré                 : aeaf04f — feat: add local Ollama LLM provider
 Batch 51.1.1 intégré               : 7e2ce28 — fix: harden causal Ollama decision contract
 Batch 51.2 intégré                 : 36491d4 — feat: configure LLM provider per session
 Batch 51.3 intégré                 : 5d24185 — feat: add live Ollama agent observability
-Batch 51.4                         : patch root-relative livré — non intégré
+Batch 51.4 intégré                 : 566e0ca — fix: restore automatic candle-close agent cycles
 ```
 
 ## État intégré confirmé
@@ -22,7 +22,7 @@ Le moteur PAPER supporte SPOT et PERPETUAL selon l'univers intégré. Le Market 
 
 ## Diagnostic Batch 51.4 — scheduler CANDLE_CLOSE
 
-Diagnostic confirmé sur le HEAD `5d24185` :
+Diagnostic historique confirmé sur le HEAD pré-51.4 `5d24185` :
 
 - `ScheduledTradingEngine` attendait `CandleCloseReadinessGate` avant d'entrer dans le cycle ;
 - le gate exigeait une candle finale exacte pour **tous** les marchés reçus ;
@@ -76,7 +76,7 @@ parse/transpile TypeScript ciblé session-config + TSX       : PASS
 contrôle espaces finaux / arborescence de livraison         : PASS
 ```
 
-Le clone complet du repository n'était pas disponible dans l'environnement d'exécution ; la suite repository complète `pytest`, `pnpm typecheck`, `pnpm test`, `git diff --check` et le smoke réel d'une Session Ollama CANDLE_CLOSE restent à rejouer localement après extraction du ZIP.
+Ces résultats décrivent la livraison pré-intégration de 51.4 ; ils sont conservés comme historique de validation et ne remettent pas en cause le statut désormais intégré du batch.
 
 ## Invariants inchangés
 

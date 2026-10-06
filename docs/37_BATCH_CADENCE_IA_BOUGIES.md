@@ -4,7 +4,7 @@
 
 Le Batch 37 a introduit `CANDLE_CLOSE` sur une grille UTC avec `CandleCloseSchedule` et un garde de finalité pré-cycle. Son audit initial avait été réalisé sur `9fc6a4a15f1c44c8ff7b43a342ab8d74bbedb892`.
 
-Le Batch 51.4 réaudite cette architecture sur :
+Le diagnostic ayant conduit au Batch 51.4 a été réalisé sur le HEAD pré-51.4 :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
@@ -13,7 +13,14 @@ HEAD       : 5d24185ac1eefe9be3c21e31e62831228c73fea9
 Commit     : feat: add live Ollama agent observability
 ```
 
-Cette mise à jour corrige la sémantique de readiness du scheduler sans créer de second moteur.
+Le Batch 51.4 est désormais intégré sur `main` :
+
+```text
+HEAD       : 566e0ca1a2170a18a06d1bd531ac3b2d118f6849
+Commit     : fix: restore automatic candle-close agent cycles
+```
+
+Cette intégration corrige la sémantique de readiness du scheduler sans créer de second moteur.
 
 ## 2. Invariants
 
@@ -222,7 +229,7 @@ Le Batch 51.4 ajoute une couverture ciblée pour :
 - logs de scheduler bornés/non spammés ;
 - causalité `history_as_of()` inchangée.
 
-Dans l'environnement de livraison, le harness isolé du scheduler passe 26/26 et les tests ciblés de logging passent 2/2. La suite repository complète reste à exécuter sur le checkout utilisateur.
+Dans l'environnement de livraison pré-intégration, le harness isolé du scheduler passait 26/26 et les tests ciblés de logging passaient 2/2. Cette mention est conservée comme historique de validation de la livraison 51.4.
 
 ## 15. Hors périmètre
 
