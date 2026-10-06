@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Protocol, cast
 from uuid import uuid4
 
+from ai_spot_trader.agent.client_factory import build_structured_decision_client
 from ai_spot_trader.agent.multi_timeframe import MultiTimeframeDecisionProvider
 from ai_spot_trader.agent.openai_client import OpenAIResponsesClient
 from ai_spot_trader.agent.planner import OpenAIMultiMarketDecisionProvider
@@ -19,7 +20,7 @@ from ai_spot_trader.control_plane import CampaignConfiguration
 from ai_spot_trader.core.clock import SystemClock
 from ai_spot_trader.core.config import PaperRuntimeConfigurationError, Settings
 from ai_spot_trader.core.runtime import AppRuntime
-from ai_spot_trader.domain.enums import MarketType, TradingCadenceMode
+from ai_spot_trader.domain.enums import LLMProviderKind, MarketType, TradingCadenceMode
 from ai_spot_trader.domain.experiments import aggressiveness_context, trading_style_context
 from ai_spot_trader.domain.models import (
     AssetBalance,
@@ -83,7 +84,7 @@ class RuntimeMarketDataSource(MarketDataSource, Protocol):
 @dataclass(frozen=True, slots=True)
 class CampaignRuntimeComposition:
     runtime: AppRuntime
-    chat_service: OperatorChatService
+    chat_service: OperatorChatService | None
     market_data: RoutedExecutableMarketDataSource
     market_research: MarketResearchService
     agent_tools: ReadOnlyToolRegistry
@@ -138,8 +139,12 @@ def build_campaign_runtime(
         raise PaperRuntimeConfigurationError(
             "campaign PAPER runtime requires PostgreSQL via postgresql+asyncpg"
         )
-    if openai_secret is None or not openai_secret.get_secret_value().strip():
-        raise PaperRuntimeConfigurationError("campaign activation requires OPENAI_API_KEY")
+    if settings.llm_provider is LLMProviderKind.OPENAI and (
+        openai_secret is None or not openai_secret.get_secret_value().strip()
+    ):
+        raise PaperRuntimeConfigurationError(
+            "campaign activation requires OPENAI_API_KEY when llm_provider=OPENAI"
+        )
     if revision.strategy_id != campaign.strategy_id:
         raise PaperRuntimeConfigurationError("campaign strategy identity mismatch")
     if revision.strategy_revision != campaign.strategy_revision:
@@ -249,18 +254,18 @@ def build_campaign_runtime(
         clock=clock,
     )
 
-    openai_client = OpenAIResponsesClient(
-        api_key=openai_secret,
-        base_url=settings.openai_base_url,
-        timeout_seconds=settings.openai_timeout_seconds,
+    transport_client, agent_model = build_structured_decision_client(
+        settings,
+        openai_model=config.llm_model,
     )
+
     strategy_client = StrategyInstructionsClient(
-        openai_client,
+        transport_client,  # type: ignore[arg-type]
         strategy_prompt=revision.strategy_prompt,
     )
     base_agent = OpenAIMultiMarketDecisionProvider(
         client=strategy_client,
-        model=config.llm_model,
+        model=agent_model,  # type: ignore[arg-type]
         clock=clock,
         tool_registry=agent_tools,
         max_tool_calls=settings.agent_tool_max_calls,
@@ -502,10 +507,13 @@ def build_campaign_runtime(
         owned_database=database,
         owned_resources=tuple(unique_resources),
     )
-    chat_service = OperatorChatService(
-        provider=OpenAIChatProvider(client=openai_client, model=config.llm_model),
-        context_source=RuntimeChatContextSource(runtime),
-    )
+    chat_service: OperatorChatService | None = None
+    if settings.llm_provider is LLMProviderKind.OPENAI:
+        assert isinstance(transport_client, OpenAIResponsesClient)
+        chat_service = OperatorChatService(
+            provider=OpenAIChatProvider(client=transport_client, model=config.llm_model),
+            context_source=RuntimeChatContextSource(runtime),
+        )
     return CampaignRuntimeComposition(
         runtime=runtime,
         chat_service=chat_service,

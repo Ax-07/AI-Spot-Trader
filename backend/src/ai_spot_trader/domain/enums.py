@@ -117,8 +117,15 @@ class RiskReason(StrEnum):
     DERIVATIVE_REDUCE_ONLY_LIMIT = "DERIVATIVE_REDUCE_ONLY_LIMIT"
 
 
+class LLMProviderKind(StrEnum):
+    """Configured transport provider for the single strategic Agent."""
+
+    OPENAI = "OPENAI"
+    OLLAMA = "OLLAMA"
+
+
 class LLMModel(StrEnum):
-    """LLM selections supported by configuration."""
+    """OpenAI model selections preserved for Campaign compatibility."""
 
     LUNA = "gpt-5.6-luna"
     SOL = "gpt-5.6-sol"

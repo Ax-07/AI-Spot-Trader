@@ -40,7 +40,7 @@ La configuration simple demande notamment :
 - `SPOT` ou `PERPETUAL` ;
 - style `SCALP` ou `SWING` ;
 - mode de marchés ;
-- modèle IA Luna/Sol ;
+- modèle IA Luna/Sol dans le snapshot Campaign ; le provider `OPENAI`/`OLLAMA` est configuré côté backend au niveau process/runtime dans le Batch 51.1 ;
 - agressivité 1–10 ;
 - profil Risk ;
 - instructions IA/opérateur.
@@ -51,6 +51,33 @@ Deux modes de marchés sont disponibles :
 - **Manuel** : `market_discovery = null`, l'univers exécutable est la liste fournie et la whitelist Risk est alignée sur cet univers.
 
 La configuration avancée expose les valeurs réellement persistées : cadence, coûts PAPER, timeouts, paramètres Risk, limites PERPETUAL, paramètres de discovery et `max_decisions_per_cycle`.
+
+## Provider LLM : OpenAI ou Ollama
+
+Le Batch 51.1 introduit une frontière de transport LLM sans créer de second Agent. Le même pipeline stratégique, les mêmes contextes Radar/multi-timeframe/thèse et les mêmes validations métier restent utilisés.
+
+Configuration backend :
+
+```env
+AI_SPOT_TRADER_LLM_PROVIDER=OPENAI
+AI_SPOT_TRADER_LLM_MODEL=gpt-5.6-luna
+
+# ou, pour exécuter le moteur LLM localement :
+AI_SPOT_TRADER_LLM_PROVIDER=OLLAMA
+AI_SPOT_TRADER_OLLAMA_BASE_URL=http://localhost:11434
+AI_SPOT_TRADER_OLLAMA_MODEL=qwen3.5:9b
+AI_SPOT_TRADER_OLLAMA_TIMEOUT_SECONDS=60
+```
+
+En mode `OLLAMA`, `AI_SPOT_TRADER_OPENAI_API_KEY` n'est pas requise et aucun fallback silencieux vers OpenAI n'existe. Le choix du provider est process/runtime dans 51.1 ; la Campaign conserve son champ `llm_model` Luna/Sol pour compatibilité des snapshots/digests. Un sélecteur UX/persisté est réservé au Batch 51.2.
+
+Le client Ollama utilise `/api/chat`, transmet le JSON Schema canonique via `format`, puis laisse les providers existants appliquer exactement la même validation Pydantic. Les tools Agent read-only utilisent le même registre borné. Le chat opérateur reste volontairement désactivé en mode local pour ce premier batch afin de garantir l'absence d'appel OpenAI implicite.
+
+Smoke test minimal PowerShell :
+
+```powershell
+Invoke-RestMethod http://localhost:11434/api/tags
+```
 
 ## Exécution PERPETUAL PAPER
 
@@ -210,11 +237,11 @@ Les Batches 49.2 et 49.3 n'ajoutent aucune migration. Le contexte 49.3 est une e
 
 ## Référence de travail
 
-Base GitHub réellement auditée pour le Batch 49.3, le 5 octobre 2026 :
+Base GitHub réellement auditée pour le Batch 51.1, le 6 octobre 2026 :
 
 ```text
-f0d4f94d2ed9b8f02eadb7ea021aa3fc817c973b
-feat: feed radar shortlist into agent universe
+e5887da5e8e6ebf0fa739a041c0226a6fed940dd
+feat: add strategic thesis observability
 ```
 
-Le Batch 49.3 conserve les poids Analytics du Batch 47.5, le Risk Engine et le `PaperBroker` inchangés. Il ajoute uniquement une frontière de contexte stratégique causale, bornée et testable pour le même Agent.
+Le Batch 50.2 est intégré sur cette base. Le Batch 51.1 conserve Risk, Broker, Radar, mémoire de thèse et contrats métier inchangés ; il ajoute uniquement la frontière de provider LLM et l'adaptateur Ollama associé.

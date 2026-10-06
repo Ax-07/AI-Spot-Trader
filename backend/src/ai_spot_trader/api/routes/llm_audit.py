@@ -23,7 +23,11 @@ class LLMAuditRecordResponse(BaseModel):
     recorded_at: str
     sequence: int = Field(ge=1)
     category: Category
+    provider: Literal["OPENAI", "OLLAMA"]
     model: str
+    status: Literal["SUCCESS", "ERROR"]
+    error_type: str | None = None
+    latency_ms: float | None = Field(default=None, ge=0)
     session_id: UUID | None = None
     cycle_id: UUID | None = None
     discovery_id: UUID | None = None
@@ -47,7 +51,11 @@ def _response(value: LLMAuditRecord) -> LLMAuditRecordResponse:
         recorded_at=value.recorded_at.isoformat().replace("+00:00", "Z"),
         sequence=value.sequence,
         category=value.category,
+        provider=value.provider,
         model=value.model,
+        status=value.status,
+        error_type=value.error_type,
+        latency_ms=value.latency_ms,
         session_id=value.session_id,
         cycle_id=value.cycle_id,
         discovery_id=value.discovery_id,

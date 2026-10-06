@@ -1,75 +1,87 @@
 # 00 — État actuel
 
-## Référence de reprise — Batch 50.2 patch livré, intégration locale à valider
+## Référence de reprise — Batch 51.1 patch livré, intégration locale à valider
 
 ```text
 Repository                         : Ax-07/AI-Spot-Trader
 Branche                            : main
-HEAD GitHub vérifié                : ebb859c4ed83aada1c0bf3edf17ece85336849b9
-Commit HEAD                        : feat: add persistent strategic thesis memory
+HEAD GitHub vérifié                : e5887da5e8e6ebf0fa739a041c0226a6fed940dd
+Commit HEAD                        : feat: add strategic thesis observability
 Batch 50.1                         : INTÉGRÉ ET VALIDÉ
-Validation intégrée 50.1           : 1217 passed, 2 warnings
-Migration PostgreSQL 50.1          : 0008 strategic_thesis_state appliquée
-Batch 50.2                         : PATCH LIVRÉ — intégration/validation repository à faire
+Batch 50.2                         : INTÉGRÉ — feat: add strategic thesis observability
+Batch 51.1                         : PATCH LIVRÉ — intégration/validation repository à faire
 ```
 
-Le Batch 50.1 est désormais la base intégrée. La mention précédente « patch livré / intégration à faire » était obsolète et est supprimée.
+Les mentions précédentes indiquant que le Batch 50.2 restait « patch livré / intégration à faire » sont obsolètes : le HEAD GitHub courant contient bien l'observabilité des thèses stratégiques.
 
-## Batch 50.2 — observabilité des thèses stratégiques
+## Batch 51.1 — Provider LLM local / Ollama
 
-Le patch 50.2 ajoute une projection **read-only** de la mémoire stratégique existante, sans nouvelle persistence et sans modifier le pipeline de trading.
+Le patch 51.1 introduit une frontière explicite de transport LLM pour **le même Agent stratégique canonique**.
 
 ```text
-audit_cycles.strategic_thesis_state_payload
-+ decision_plan_payload / thesis_updates
-+ lineage paper_run
-+ faits de cycle persistés
+StrategicThesisContextDecisionProvider
         ↓
-projection stratégique read-only
+MultiTimeframeDecisionProvider
         ↓
-GET /api/v1/strategic-theses
+OpenAIMultiMarketDecisionProvider  (nom legacy conservé)
         ↓
-cockpit Historique
+StrategyInstructionsClient / StructuredDecisionClient
+        ├── OpenAIResponsesClient
+        └── OllamaStructuredDecisionClient
+        ↓
+validation Pydantic canonique
+        ↓
+Risk Engine
+        ↓
+PaperBroker
 ```
 
-Choix architectural : endpoint dédié dans le routeur Analytics existant. Le snapshot actif provient uniquement du dernier cycle `COMPLETED`; les révisions proviennent uniquement des `thesis_updates` persistées et sont évaluées contre l'état précédent et l'état du même cycle, jamais contre un futur snapshot.
+Configuration process/runtime :
 
-Sémantique opérateur :
+```text
+AI_SPOT_TRADER_LLM_PROVIDER=OPENAI | OLLAMA
+AI_SPOT_TRADER_LLM_MODEL=gpt-5.6-luna | gpt-5.6-sol
+AI_SPOT_TRADER_OLLAMA_BASE_URL=http://localhost:11434
+AI_SPOT_TRADER_OLLAMA_MODEL=qwen3.5:9b
+AI_SPOT_TRADER_OLLAMA_TIMEOUT_SECONDS=60
+```
 
-- `SPOT` / `PERPETUAL` et `LONG` / `SHORT` restent des identités distinctes ;
-- une position sans mémoire durable reste `UNAVAILABLE_LEGACY` ;
-- aucune ancienne `rationale` n'est reconstruite en thèse ;
-- une proposition rejetée peut apparaître en audit comme `PROPOSED_NOT_ACTIVATED`, jamais comme thèse active ;
-- `HOLD` peut être une revue sans exécution ;
-- une réduction partielle conserve la thèse si elle reste active ;
-- une fermeture complète retire la thèse active mais conserve la révision durable ;
-- un cycle `FAILED` n'est jamais promu comme état actif ;
-- `INVALIDATED`, `COMPLETED` et `WEAKENING` restent des qualifications de l'Agent et ne déclenchent aucune action automatique ;
-- Risk Engine déterministe reste l'autorité finale.
+Règles 51.1 :
 
-## Validation du patch 50.2 dans l'environnement ChatGPT
+- `LLMProviderKind` distingue `OPENAI` et `OLLAMA` sans réutiliser le port domaine `LLMProvider` ;
+- `LLMModel` reste Luna/Sol afin de préserver la sémantique et les snapshots Campaign existants ;
+- le modèle Ollama est une chaîne configurable séparée ;
+- `OPENAI_API_KEY` n'est requise que lorsque `LLM_PROVIDER=OPENAI` ;
+- aucun fallback `OLLAMA -> OPENAI` ;
+- le client Ollama utilise `/api/chat` avec JSON Schema via `format` ;
+- la sortie locale traverse les mêmes parseurs/validations Pydantic que la sortie OpenAI ;
+- les tools read-only réutilisent le registre et le budget existants ;
+- le chat opérateur reste volontairement OpenAI-only en 51.1 et devient indisponible en mode LOCAL plutôt que de provoquer un fallback ;
+- Risk, Broker, Radar, mémoire de thèse, multi-timeframe et stratégie restent inchangés.
+
+L'observabilité LLM expose désormais provider, modèle, statut, type d'erreur et latence lorsque disponible, sans secret HTTP.
+
+## Validation réalisée dans l'environnement ChatGPT
 
 Exécuté réellement :
 
 ```text
-python -m py_compile (fichiers Python du patch)                          : PASS
-pytest ciblé projection 50.2, environnement de contrats minimal         : PASS — 9 passed
-node --test --experimental-strip-types strategic-theses.test.mjs        : PASS — 3 passed
-tsc ciblé src/lib/strategic-theses.ts                                   : PASS
+python -m compileall (fichiers Python du patch)                    : PASS
+harnais isolé Ollama MockTransport (structured + tools + réseau)   : PASS
+harnais isolé OpenAI audit (SUCCESS/ERROR + latence)               : PASS
+git diff --cached --check sur staging du patch root-relative       : PASS
 ```
 
-À exécuter dans le repository réel après extraction :
+Non exécuté ici faute de checkout complet du repository et de serveur Ollama local :
 
 ```text
 python -m pytest -q
-cd frontend
 pnpm typecheck
 pnpm test
-cd ..
-git diff --check
-git status --short
+git diff --check dans le repository réel
+smoke/inférence réelle Ollama
 ```
 
 ## Invariants inchangés
 
-Un seul Agent IA stratégique ; Kraken ; PAPER uniquement ; SPOT + PERPETUAL linéaire ; SPOT sans short/levier/marge ; PERPETUAL LONG/SHORT sous contrôle Risk ; FUTURE daté non exécutable ; aucun LIVE ; aucune sortie LLM directement exécutable ; Radar informatif/priorisation uniquement ; aucun second Agent mémoire ; aucun second appel LLM d'observabilité ; aucun hidden chain-of-thought ; aucun secret versionné ; frontend non requis par le moteur.
+Un seul Agent IA stratégique ; Kraken ; PAPER uniquement ; SPOT + PERPETUAL linéaire ; Risk Engine déterministe autorité finale ; aucune sortie LLM directement exécutable ; Radar informatif/priorisation ; même `CycleDecisionPlanInput`, même mémoire de thèse et même contexte multi-timeframe ; `BUY` / `SELL` / `HOLD` inchangés ; aucun look-ahead ; aucun secret versionné ; frontend non requis par le moteur.

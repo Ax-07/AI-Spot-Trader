@@ -5,18 +5,17 @@
 ```text
 Repository                  : Ax-07/AI-Spot-Trader
 Branche                     : main
-HEAD GitHub vérifié 50.2    : ebb859c4ed83aada1c0bf3edf17ece85336849b9
+HEAD GitHub vérifié 51.1    : e5887da5e8e6ebf0fa739a041c0226a6fed940dd
 Batch 49.1                  : intégré via 3194fce
 Batch 49.2                  : intégré via f0d4f94
 Batch 49.3                  : intégré via d08cd31
 Batch 49.4                  : intégré via 2e552cb
 Batch 50.1                  : intégré via ebb859c4
-Batch 50.2                  : patch livré, validation/intégration à faire
+Batch 50.2                  : intégré via e5887da
+Batch 51.1                  : patch livré, validation/intégration à faire
 ```
 
 Le HEAD GitHub réel doit être revérifié au démarrage de chaque nouveau batch.
-
-État intégré 50.1 communiqué lors de sa clôture : `1217 passed, 2 warnings`, migration PostgreSQL `0008_strategic_thesis_state` appliquée, working tree propre après push.
 
 ## Invariants de roadmap
 
@@ -36,7 +35,8 @@ AI Spot Trader conserve :
 - aucun secret versionné ;
 - aucun look-ahead ni adaptation post-hoc ;
 - mémoire stratégique typée, causale et durable, jamais opaque ;
-- observabilité strictement read-only, sans rétroaction sur Agent/Risk/Broker.
+- observabilité strictement read-only, sans rétroaction sur Agent/Risk/Broker ;
+- depuis 51.1, le moteur LLM peut être OpenAI ou Ollama sans dupliquer l'Agent.
 
 Le Market Attention Radar reste un **outil de priorisation d'attention**. Il choisit l'univers candidat et fournit des faits descriptifs causaux au même Agent, sans devenir un moteur BUY/SELL/HOLD ni une autorité Risk.
 
@@ -161,7 +161,7 @@ Voir `docs/50_1_MEMOIRE_THESE_STRATEGIQUE.md`.
 
 ## Batch 50.2 — observabilité et cockpit des thèses stratégiques
 
-**Patch livré sur HEAD intégré `ebb859c4`; validation repository réelle puis intégration à faire.**
+**Intégré via `e5887da5e8e6ebf0fa739a041c0226a6fed940dd` (`feat: add strategic thesis observability`).**
 
 Objectif : rendre visible la continuité stratégique de chaque position PAPER sans modifier le comportement de trading.
 
@@ -180,54 +180,96 @@ GET /api/v1/strategic-theses
 cockpit Historique
 ```
 
-Livrables 50.2 :
+Livrables 50.2 intégrés : exposition active typée, `UNAVAILABLE_LEGACY`, historique causal borné des révisions, distinction proposition/Risk/fill/état actif, `PROPOSED_NOT_ACTIVATED`, `FAILED_CYCLE`, conservation de la révision finale après fermeture et cockpit Historique dédié.
 
-- exposition active avec identité `(symbol, market_type, side)` ;
-- état `UNAVAILABLE_LEGACY` explicite ;
-- historique borné des révisions réellement persistées ;
-- distinction proposition Agent / Risk / fill / état actif commit ;
-- `PROPOSED_NOT_ACTIVATED` pour proposition durable non activée lorsque déterminable ;
-- `FAILED_CYCLE` visible sans promotion ;
-- conservation de la révision finale après fermeture ;
-- endpoint `/api/v1/strategic-theses` ;
-- section dédiée dans le cockpit Historique ;
-- aucun second store, aucune migration, aucun second LLM, aucune dépendance Risk/Broker dans le projecteur.
+Aucun second store, aucune migration, aucun second LLM et aucune dépendance Risk/Broker dans le projecteur.
 
-Causalité : chaque révision est interprétée uniquement avec le snapshot précédent et celui du même cycle. Aucun état futur n'est utilisé pour requalifier une révision passée.
+Voir `docs/50_2_OBSERVABILITE_THESES_STRATEGIQUES.md`.
 
-Validation ChatGPT exécutée sur le patch :
+## Batch 51.1 — Provider LLM local / Ollama
+
+**Patch livré sur HEAD intégré `e5887da5`; validation repository réelle puis intégration à faire.**
+
+Objectif : permettre au même Agent stratégique de remplacer le transport OpenAI par un LLM Ollama local sans modifier la logique de décision, Risk, Broker, Radar ou la mémoire de thèse.
+
+Architecture :
 
 ```text
-python -m py_compile                                          : PASS
-pytest ciblé projection 50.2 (contrats minimaux)             : PASS — 9 passed
-node --test strategic-theses.test.mjs                        : PASS — 3 passed
-tsc ciblé src/lib/strategic-theses.ts                        : PASS
+Agent stratégique canonique
+-> StrategyInstructionsClient / StructuredDecisionClient
+   -> OpenAIResponsesClient
+   -> OllamaStructuredDecisionClient
+-> sortie JSON structurée
+-> validation Pydantic existante
+-> Risk Engine
 ```
 
-À valider dans le repository réel avant intégration :
+Livrables 51.1 :
+
+- `LLMProviderKind = OPENAI | OLLAMA` distinct du port domaine historique `LLMProvider` ;
+- factory unique `build_structured_decision_client(...)` ;
+- modèle Ollama séparé et configurable (`AI_SPOT_TRADER_OLLAMA_MODEL`) ;
+- URL/timeout Ollama configurables ;
+- `OPENAI_API_KEY` requise uniquement en mode OpenAI ;
+- aucun fallback silencieux vers OpenAI ;
+- `/api/chat` Ollama + JSON Schema `format` ;
+- même validation Pydantic métier ;
+- conversion des tools read-only vers le format Ollama et réutilisation du registre/budget existant ;
+- audit LLM enrichi avec provider, modèle, statut, erreur, latence ;
+- cockpit audit adapté minimalement ;
+- chat opérateur explicitement indisponible en LOCAL pour 51.1 ;
+- nom legacy `OpenAIMultiMarketDecisionProvider` conservé pour éviter un renommage transversal sans bénéfice fonctionnel.
+
+Validation ChatGPT réellement exécutée :
 
 ```text
+python -m compileall sur les fichiers Python du patch              : PASS
+harnais isolé MockTransport Ollama structured/tools/network         : PASS
+harnais isolé OpenAI audit SUCCESS/ERROR + latence                  : PASS
+git diff --cached --check sur staging root-relative du patch        : PASS
+```
+
+À valider dans le repository réel :
+
+```text
+Push-Location backend
 python -m pytest -q
-cd frontend
+Pop-Location
+
+Push-Location frontend
 pnpm typecheck
 pnpm test
-cd ..
+Pop-Location
+
 git diff --check
 git status --short
 ```
 
-Voir `docs/50_2_OBSERVABILITE_THESES_STRATEGIQUES.md`.
+Smoke local Ollama :
 
-## Suite après intégration 50.2
+```powershell
+Invoke-RestMethod http://localhost:11434/api/tags
+ollama pull qwen3.5:9b
+```
 
-Ne pas ouvrir automatiquement un nouveau chantier de stratégie. Observer d'abord le comportement réel des thèses dans des runs PAPER : qualité de continuité, fréquence des révisions, cohérence des invalidations, propositions non activées, fermetures et recovery.
+Une vraie décision structurée et un cycle avec tools doivent être testés sur le PC de l'opérateur ; aucune inférence Ollama réelle n'a été exécutée dans l'environnement ChatGPT.
 
-Les sujets suivants restent séparés et nécessitent une décision explicite :
+Voir `docs/51_1_PROVIDER_LLM_LOCAL_OLLAMA.md`.
 
-- Prompt Cache OpenAI / optimisation coûts LLM ;
-- nouvelle stratégie ou auto-tuning ;
+## Suite proposée après intégration 51.1
+
+### Batch 51.2 — sélection UX/persistée du provider
+
+Ajouter le choix `OpenAI / Local` au contrat Session/Campaign uniquement après validation du transport 51.1. Ce batch devra décider explicitement comment versionner le provider et le modèle local dans les snapshots/digests sans casser les Campaigns existantes.
+
+Sujets séparés, non inclus dans 51.1 :
+
+- comparaison de performance Luna/local ;
+- fine-tuning/entraînement ;
+- optimisation de stratégie ;
+- Prompt Cache OpenAI ;
+- auto-tuning ;
 - recalibration Radar/Analytics ;
-- alertes automatiques liées aux statuts de thèse ;
 - stop-loss/take-profit algorithmique ;
 - LIVE ;
 - API Kraken Futures privée.

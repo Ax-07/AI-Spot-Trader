@@ -1,5 +1,6 @@
 import asyncio
 import math
+from time import perf_counter
 from typing import Any, cast
 
 import httpx
@@ -92,20 +93,55 @@ class OpenAIResponsesClient:
 
     async def _responses(self, request: dict[str, Any]) -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {self._api_key.get_secret_value()}", "Content-Type": "application/json"}
-        response = await self._post(f"{self._base_url}/responses", headers=headers, json=request)
+        started = perf_counter()
         try:
-            payload = response.json()
-        except ValueError as exc:
-            raise LLMProviderError("OpenAI response body is not valid JSON") from exc
-        if not isinstance(payload, dict):
-            raise LLMProviderError("OpenAI response body must be a JSON object")
-        typed_payload = cast(dict[str, Any], payload)
+            response = await self._post(f"{self._base_url}/responses", headers=headers, json=request)
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise LLMProviderError("OpenAI response body is not valid JSON") from exc
+            if not isinstance(payload, dict):
+                raise LLMProviderError("OpenAI response body must be a JSON object")
+            typed_payload = cast(dict[str, Any], payload)
+        except Exception as exc:
+            self._audit(
+                request=request,
+                response={},
+                status="ERROR",
+                error_type=type(exc).__name__,
+                latency_ms=(perf_counter() - started) * 1000,
+            )
+            raise
+        self._audit(
+            request=request,
+            response=typed_payload,
+            status="SUCCESS",
+            error_type=None,
+            latency_ms=(perf_counter() - started) * 1000,
+        )
+        return typed_payload
+
+    @staticmethod
+    def _audit(
+        *,
+        request: dict[str, Any],
+        response: dict[str, Any],
+        status: str,
+        error_type: str | None,
+        latency_ms: float,
+    ) -> None:
         try:
-            GLOBAL_LLM_AUDIT_STORE.append(request=cast(dict[str, object], request), response=cast(dict[str, object], typed_payload))
+            GLOBAL_LLM_AUDIT_STORE.append(
+                request=cast(dict[str, object], request),
+                response=cast(dict[str, object], response),
+                provider="OPENAI",
+                status=cast(Any, status),
+                error_type=error_type,
+                latency_ms=latency_ms,
+            )
         except Exception:
             # Observability must never change the strategic/chat execution path.
             pass
-        return typed_payload
 
     async def _post(self, url: str, *, headers: dict[str, str], json: dict[str, Any]) -> httpx.Response:
         async def operation() -> httpx.Response:

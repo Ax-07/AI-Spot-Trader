@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Protocol, cast
 from uuid import uuid4
 
+from ai_spot_trader.agent.client_factory import build_structured_decision_client
 from ai_spot_trader.agent.openai_client import OpenAIResponsesClient
 from ai_spot_trader.agent.provider import OpenAIDecisionProvider
 from ai_spot_trader.broker.paper import PaperBroker
@@ -13,7 +14,7 @@ from ai_spot_trader.chat.service import OperatorChatService, RuntimeChatContextS
 from ai_spot_trader.core.clock import SystemClock
 from ai_spot_trader.core.config import PaperRunConfiguration, Settings
 from ai_spot_trader.core.runtime import AppRuntime
-from ai_spot_trader.domain.enums import MarketType
+from ai_spot_trader.domain.enums import LLMProviderKind, MarketType
 from ai_spot_trader.domain.models import AssetBalance, PortfolioState
 from ai_spot_trader.domain.ports import MarketDataSource
 from ai_spot_trader.integrations.kraken.derivatives import (
@@ -65,7 +66,7 @@ class PaperRuntimeComposition:
     """Canonical objects assembled for the executable multi-market PAPER application."""
 
     runtime: AppRuntime
-    chat_service: OperatorChatService
+    chat_service: OperatorChatService | None
     market_data: RoutedExecutableMarketDataSource
     market_research: MarketResearchService
     agent_tools: ReadOnlyToolRegistry
@@ -189,14 +190,14 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         clock=clock,
     )
 
-    openai_client = OpenAIResponsesClient(
-        api_key=run.openai_api_key,
-        base_url=settings.openai_base_url,
-        timeout_seconds=settings.openai_timeout_seconds,
+    decision_client, agent_model = build_structured_decision_client(
+        settings,
+        openai_model=run.llm_model,
     )
+
     agent = OpenAIDecisionProvider(
-        client=openai_client,
-        model=run.llm_model,
+        client=decision_client,  # type: ignore[arg-type]
+        model=agent_model,  # type: ignore[arg-type]
         clock=clock,
         tool_registry=agent_tools,
         max_tool_calls=run.agent_tool_max_calls,
@@ -331,10 +332,13 @@ def build_paper_runtime(settings: Settings) -> PaperRuntimeComposition:
         owned_database=database,
         owned_resources=tuple(unique_resources),
     )
-    chat_service = OperatorChatService(
-        provider=OpenAIChatProvider(client=openai_client, model=run.llm_model),
-        context_source=RuntimeChatContextSource(runtime),
-    )
+    chat_service: OperatorChatService | None = None
+    if run.llm_provider is LLMProviderKind.OPENAI:
+        assert isinstance(decision_client, OpenAIResponsesClient)
+        chat_service = OperatorChatService(
+            provider=OpenAIChatProvider(client=decision_client, model=run.llm_model),
+            context_source=RuntimeChatContextSource(runtime),
+        )
 
     return PaperRuntimeComposition(
         runtime=runtime,

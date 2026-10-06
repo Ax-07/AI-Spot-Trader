@@ -4,10 +4,10 @@ Backend Python/FastAPI autonome d'AI Spot Trader. Le frontend Next.js est unique
 
 Le runtime exécutable est **PAPER** et supporte un univers typé composé de marchés **SPOT** et de
 **PERPETUAL linéaires** autorisés. Kraken public fournit les données de marché ; le même Agent
-Luna/Sol sélectionne le marché puis propose BUY/SELL/HOLD ; le Risk Engine déterministe
-autorise/modifie/refuse ; le Paper Broker exécute seulement un `ExecutionIntent` créé par Risk ;
-et chaque résultat de cycle est persisté dans PostgreSQL. Aucun endpoint Kraken privé d'ordre
-n'est utilisé.
+stratégique utilise le provider LLM configuré (`OPENAI` ou `OLLAMA`) puis propose BUY/SELL/HOLD ;
+le Risk Engine déterministe autorise/modifie/refuse ; le Paper Broker exécute seulement un
+`ExecutionIntent` créé par Risk ; et chaque résultat de cycle est persisté dans PostgreSQL. Aucun
+endpoint Kraken privé d'ordre n'est utilisé.
 
 ## Développement
 
@@ -38,10 +38,22 @@ Copier `backend/.env.example` vers `backend/.env`, puis renseigner localement le
 - fee rate, spread et slippage ;
 - paramètres Derivatives/Risk requis si un `PERPETUAL` appartient à l'univers ;
 - `AI_SPOT_TRADER_DATABASE_URL` PostgreSQL/asyncpg ;
-- `AI_SPOT_TRADER_OPENAI_API_KEY` ;
-- modèle Luna/Sol selon le run.
+- `AI_SPOT_TRADER_LLM_PROVIDER=OPENAI|OLLAMA` ;
+- sous `OPENAI` : `AI_SPOT_TRADER_OPENAI_API_KEY` et modèle Luna/Sol ;
+- sous `OLLAMA` : URL locale et nom de modèle Ollama, sans clé OpenAI requise.
 
-Aucun de ces paramètres produit n'est inventé par la composition. Le démarrage de `ai_spot_trader.main:app` échoue de façon fermée si un paramètre indispensable manque. `ExecutionMode` reste PAPER uniquement.
+Exemple local :
+
+```env
+AI_SPOT_TRADER_LLM_PROVIDER=OLLAMA
+AI_SPOT_TRADER_OLLAMA_BASE_URL=http://localhost:11434
+AI_SPOT_TRADER_OLLAMA_MODEL=qwen3.5:9b
+AI_SPOT_TRADER_OLLAMA_TIMEOUT_SECONDS=60
+```
+
+Le provider est process/runtime dans le Batch 51.1 ; la Campaign conserve son champ OpenAI `llm_model` historique pour compatibilité. Aucun fallback silencieux d'Ollama vers OpenAI n'est autorisé.
+
+Aucun de ces paramètres produit n'est inventé par la composition. Le démarrage de `ai_spot_trader.main:app` échoue de façon fermée si un paramètre indispensable au provider sélectionné manque. `ExecutionMode` reste PAPER uniquement.
 
 Les secrets restent exclusivement dans l'environnement local. Ne jamais versionner `backend/.env`.
 

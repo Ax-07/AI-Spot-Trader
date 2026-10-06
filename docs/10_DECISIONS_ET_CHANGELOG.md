@@ -19,26 +19,169 @@ L'observabilité 49.4 et l'observabilité stratégique 50.2 sont strictement rea
 
 Le Batch 50.1 fournit la mémoire stratégique structurée des positions ouvertes. Cette mémoire n'est ni une conversation LLM ni une chaîne de pensée cachée. Elle est causale, bornée, durable et remise au **même** appel stratégique.
 
+Depuis le Batch 51.1, le moteur LLM est séparé du rôle de l'Agent : OpenAI et Ollama sont des transports interchangeables derrière la même frontière structurée. Aucun fallback silencieux d'Ollama vers OpenAI n'est permis.
+
 ## Référence courante
 
 ```text
-HEAD GitHub vérifié 50.2      : ebb859c4ed83aada1c0bf3edf17ece85336849b9
-Commit                         : feat: add persistent strategic thesis memory
+HEAD GitHub vérifié 51.1      : e5887da5e8e6ebf0fa739a041c0226a6fed940dd
+Commit                         : feat: add strategic thesis observability
 Batch 49.4 intégré             : 2e552cb — feat: add paper trading observability
 Batch 49.3 intégré             : d08cd31 — feat: expose causal radar analytics context to agent
 Batch 49.2 intégré             : f0d4f94 — feat: feed radar shortlist into agent universe
 Batch 49.1 intégré             : 3194fce — feat: activate perpetual paper trading
 Batch 50.1 intégré             : ebb859c4 — feat: add persistent strategic thesis memory
-Batch 50.2                     : patch livré — validation/intégration à faire
+Batch 50.2 intégré             : e5887da5 — feat: add strategic thesis observability
+Batch 51.1                     : patch livré — validation/intégration à faire
 ```
 
-État intégré 50.1 communiqué à la clôture : `1217 passed, 2 warnings`, migration PostgreSQL `0008 strategic_thesis_state` appliquée, working tree propre après push.
+L'ancien statut documentaire 50.2 « patch livré — validation/intégration à faire » est obsolète : `e5887da5` est le HEAD intégré.
 
 ---
 
-## Changelog — 2026-10-05 — Batch 50.2 observabilité et cockpit des thèses stratégiques — patch livré
+## Changelog — 2026-10-06 — Batch 51.1 Provider LLM local / Ollama — patch livré
 
-Base GitHub auditée : `ebb859c4ed83aada1c0bf3edf17ece85336849b9` (`feat: add persistent strategic thesis memory`).
+Base GitHub auditée : `e5887da5e8e6ebf0fa739a041c0226a6fed940dd` (`feat: add strategic thesis observability`).
+
+### Audit confirmé
+
+- `StructuredDecisionClient` est déjà la frontière minimale du transport structuré ;
+- `OpenAIDecisionProvider` et `OpenAIMultiMarketDecisionProvider` portent surtout la validation et les invariants de l'Agent malgré leur nom historique ;
+- `StrategyInstructionsClient` injecte le prompt Campaign avant le transport ;
+- `StrategicThesisContextDecisionProvider` et `MultiTimeframeDecisionProvider` restent les wrappers canoniques du même Agent ;
+- `OPENAI_API_KEY` était imposée par la composition/configuration PAPER, même lorsque la stratégie elle-même n'en dépend pas ;
+- le registre des tools read-only possède déjà validation Pydantic, timeout, taille de réponse et budget d'appels ;
+- l'audit LLM existant peut être enrichi sans second store.
+
+### Architecture retenue
+
+```text
+StrategicThesisContextDecisionProvider
+        ↓
+MultiTimeframeDecisionProvider
+        ↓
+OpenAIMultiMarketDecisionProvider  (nom legacy conservé)
+        ↓
+StrategyInstructionsClient / StructuredDecisionClient
+        ├── OpenAIResponsesClient
+        └── OllamaStructuredDecisionClient
+        ↓
+validation Pydantic canonique
+        ↓
+Risk Engine
+        ↓
+PaperBroker
+```
+
+Le Batch 51.1 change le **moteur LLM**, pas l'Agent.
+
+### Configuration retenue
+
+`LLMProviderKind` devient explicite :
+
+```text
+OPENAI
+OLLAMA
+```
+
+`LLMModel` reste réservé aux modèles OpenAI Luna/Sol afin de ne pas détourner sa sémantique historique ni casser les snapshots/digests Campaign. Le modèle local est une chaîne séparée `OLLAMA_MODEL`.
+
+Configuration initiale :
+
+```text
+AI_SPOT_TRADER_LLM_PROVIDER=OLLAMA
+AI_SPOT_TRADER_OLLAMA_BASE_URL=http://localhost:11434
+AI_SPOT_TRADER_OLLAMA_MODEL=qwen3.5:9b
+AI_SPOT_TRADER_OLLAMA_TIMEOUT_SECONDS=60
+```
+
+Le choix du provider est process/runtime en 51.1. La persistance/UX par Session est réservée au Batch 51.2.
+
+### Structured outputs Ollama
+
+`OllamaStructuredDecisionClient` utilise `/api/chat` en non-streaming et transmet le JSON Schema canonique dans `format`. Le contenu textuel retourné n'est jamais accepté directement par le domaine : il repasse par les parseurs et modèles Pydantic déjà canoniques.
+
+Les cas JSON invalide, propriété manquante, action invalide et quantité invalide restent donc refusés par les mêmes contrats métier.
+
+### Tools read-only
+
+Les définitions existantes du registre sont adaptées au format tool Ollama, mais les handlers, validations d'arguments, timeouts, tailles maximales et budgets restent ceux de `ReadOnlyToolRegistry`.
+
+Aucune capacité inexistante n'est simulée. Le smoke test réel du modèle installé reste nécessaire pour confirmer sa qualité pratique de tool calling.
+
+### Fail-closed et absence de fallback
+
+- en `OLLAMA`, `OPENAI_API_KEY` n'est pas requise ;
+- aucun appel OpenAI n'est construit pour le chemin stratégique local ;
+- aucun fallback LOCAL -> OpenAI n'existe ;
+- le chat opérateur reste volontairement non configuré sous `OLLAMA` dans 51.1 plutôt que de retomber sur OpenAI ;
+- une indisponibilité Ollama, un timeout, une erreur réseau, un modèle absent ou un HTTP invalide échoue au stade Agent et ne contourne jamais Risk/Broker.
+
+### Observabilité
+
+Le store LLM process-local existant est conservé. Chaque enregistrement expose désormais :
+
+```text
+provider
+model
+status
+error_type
+latency_ms
+```
+
+Le payload reste borné et sanitizé ; aucun header d'autorisation ni secret n'est ajouté.
+
+### Compatibilité
+
+Risk Engine, Broker, Radar, `CycleDecisionPlanInput`, contexte multi-timeframe, mémoire de thèse et sémantique BUY/SELL/HOLD ne sont pas modifiés.
+
+Le nom `OpenAIMultiMarketDecisionProvider` est désormais trop spécifique, mais son renommage aurait un rayon de migration disproportionné pour 51.1. La dette de nommage est explicitement conservée.
+
+### Validation ChatGPT du patch 51.1
+
+Exécuté réellement : `compileall` PASS ; harnais MockTransport Ollama structured/tools/network PASS ; harnais MockTransport OpenAI audit succès/erreur/latence PASS ; `git diff --cached --check` sur staging root-relative du patch PASS. La suite complète backend/frontend et une vraie inférence Ollama restent à exécuter dans le repository local.
+
+## ADR-381 — Le provider LLM est distinct du modèle OpenAI historique
+
+**ADOPTÉ — patch Batch 51.1, intégration à valider.**
+
+`LLMProviderKind` porte `OPENAI|OLLAMA`. `LLMModel` reste Luna/Sol pour compatibilité des Campaigns et expériences historiques. Un modèle Ollama est une chaîne configurable séparée.
+
+## ADR-382 — Le provider 51.1 est une configuration process/runtime
+
+**ADOPTÉ — patch Batch 51.1, intégration à valider.**
+
+Aucune migration Campaign n'est introduite dans 51.1. La sélection UX/persistée est reportée à 51.2 afin de définir explicitement une nouvelle version de configuration plutôt que de muter silencieusement les snapshots existants.
+
+## ADR-383 — Ollama réutilise la frontière StructuredDecisionClient
+
+**ADOPTÉ — patch Batch 51.1, intégration à valider.**
+
+Le provider local transforme `/api/chat` en texte JSON et laisse les validateurs Pydantic existants décider de la conformité métier. Aucun JSON local non validé n'atteint le domaine.
+
+## ADR-384 — Aucun fallback Ollama vers OpenAI
+
+**ADOPTÉ — patch Batch 51.1, intégration à valider.**
+
+Une erreur locale reste une erreur locale. Le chat opérateur est indisponible en LOCAL pour 51.1 plutôt que de créer un chemin OpenAI caché.
+
+## ADR-385 — Les tools read-only sont adaptés, pas réimplémentés
+
+**ADOPTÉ — patch Batch 51.1, intégration à valider.**
+
+Ollama reçoit une projection de la définition des tools, puis l'exécution réutilise exclusivement `ReadOnlyToolRegistry` et ses limites déterministes.
+
+## ADR-386 — Le nom OpenAIMultiMarketDecisionProvider reste une dette de compatibilité
+
+**ADOPTÉ — patch Batch 51.1, intégration à valider.**
+
+Le rôle est désormais provider-agnostique, mais le renommage est séparé pour éviter une migration mécanique sans valeur fonctionnelle dans ce batch.
+
+---
+
+## Changelog — 2026-10-05 — Batch 50.2 observabilité et cockpit des thèses stratégiques — intégré
+
+Commit intégré : `e5887da5e8e6ebf0fa739a041c0226a6fed940dd` (`feat: add strategic thesis observability`).
 
 ### Audit confirmé
 
@@ -138,20 +281,9 @@ Le cockpit Historique ajoute une section indépendante avec :
 
 Le frontend ne reconstruit aucune thèse et ne recalcule aucune règle stratégique.
 
-### Validation exécutée dans l'environnement ChatGPT
-
-```text
-python -m py_compile (fichiers Python du patch)                  : PASS
-pytest ciblé projection 50.2 avec contrats minimaux              : PASS — 9 passed
-node --test --experimental-strip-types strategic-theses.test.mjs : PASS — 3 passed
-tsc ciblé src/lib/strategic-theses.ts                            : PASS
-```
-
-La suite complète du repository, `pnpm typecheck`, le test frontend complet et `git diff --check` restent à exécuter après extraction dans le checkout réel.
-
 ## ADR-377 — 50.2 utilise un endpoint dédié, sans nouvelle persistence
 
-**ADOPTÉ — patch Batch 50.2, intégration à valider.**
+**ADOPTÉ — intégré via `e5887da5`.**
 
 Options comparées :
 
@@ -163,19 +295,19 @@ Aucune table d'historique supplémentaire n'est créée.
 
 ## ADR-378 — L'historique de thèse est causal et local au cycle
 
-**ADOPTÉ — patch Batch 50.2, intégration à valider.**
+**ADOPTÉ — intégré via `e5887da5`.**
 
 Une révision est comparée uniquement au snapshot précédent et au snapshot du même cycle. Les états futurs ne peuvent pas rétroagir sur son classement historique.
 
 ## ADR-379 — Une proposition non activée reste distincte d'une thèse active
 
-**ADOPTÉ — patch Batch 50.2, intégration à valider.**
+**ADOPTÉ — intégré via `e5887da5`.**
 
 Un `thesis_update` associé à une entrée rejetée ou non remplie peut rester visible comme audit `PROPOSED_NOT_ACTIVATED` lorsque les faits le déterminent sans ambiguïté. Il n'apparaît jamais dans les positions/thèses actives.
 
 ## ADR-380 — Le cockpit est une fenêtre read-only sur la mémoire 50.1
 
-**ADOPTÉ — patch Batch 50.2, intégration à valider.**
+**ADOPTÉ — intégré via `e5887da5`.**
 
 Le frontend formate les données du backend et ne reconstitue ni thèse, ni règle BUY/SELL/HOLD, ni relation économique absente. `UNAVAILABLE_LEGACY` reste explicitement inconnu.
 

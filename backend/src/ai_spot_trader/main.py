@@ -31,6 +31,7 @@ from ai_spot_trader.core.runtime import (
     PortfolioSnapshotSource,
     StoppableTradingEngine,
 )
+from ai_spot_trader.domain.enums import LLMProviderKind
 from ai_spot_trader.integrations.coinpaprika import CoinPaprikaMarketMetadataProvider
 from ai_spot_trader.integrations.kraken.attention import KrakenAttentionCatalogue
 from ai_spot_trader.integrations.kraken.candles import KrakenCandleProvider
@@ -167,9 +168,14 @@ def create_app(
                     "no campaign activation is required"
                 )
 
+            # Batch 51.1 keeps operator chat OpenAI-only. In LOCAL mode it is deliberately
+            # unavailable rather than falling back to a cloud provider.
             resolved_chat_service = None
             api_key = resolved_settings.openai_api_key
-            if api_key is not None:
+            if (
+                resolved_settings.llm_provider is LLMProviderKind.OPENAI
+                and api_key is not None
+            ):
                 client = OpenAIResponsesClient(
                     api_key=api_key,
                     base_url=resolved_settings.openai_base_url,
@@ -222,7 +228,11 @@ def create_app(
             )
             resolved_chat_service = chat_service
             api_key = resolved_settings.openai_api_key
-            if resolved_chat_service is None and api_key is not None:
+            if (
+                resolved_chat_service is None
+                and resolved_settings.llm_provider is LLMProviderKind.OPENAI
+                and api_key is not None
+            ):
                 client = OpenAIResponsesClient(
                     api_key=api_key,
                     base_url=resolved_settings.openai_base_url,

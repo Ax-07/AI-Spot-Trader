@@ -4,16 +4,16 @@
 
 AI Spot Trader est une application expérimentale de trading pilotée par **un seul Agent IA stratégique**. Le backend constitue l'application de trading ; le frontend est un cockpit de contrôle et de visualisation qui peut être fermé sans arrêter le moteur.
 
-Référence GitHub courante auditée au lancement du Batch 50.2 :
+Référence GitHub courante auditée au lancement du Batch 51.1 :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : ebb859c4ed83aada1c0bf3edf17ece85336849b9
-Commit     : feat: add persistent strategic thesis memory
+HEAD       : e5887da5e8e6ebf0fa739a041c0226a6fed940dd
+Commit     : feat: add strategic thesis observability
 ```
 
-Les Batches 49.1 à 50.1 sont intégrés. Le Batch 50.1 est intégré et validé ; le Batch 50.2 est livré sous forme de patch read-only à valider/intégrer.
+Les Batches 49.1 à 50.2 sont intégrés. Le Batch 51.1 est livré sous forme de patch à valider/intégrer localement.
 
 ## 2. Invariants fonctionnels
 
@@ -26,7 +26,8 @@ Les Batches 49.1 à 50.1 sont intégrés. Le Batch 50.1 est intégré et validé
 - FUTURE daté non exécutable ;
 - LIVE hors périmètre tant qu'une décision séparée ne l'active pas explicitement ;
 - actions stratégiques `BUY`, `SELL`, `HOLD` ;
-- Luna par défaut pour les premiers tests, Sol sélectionnable par configuration ;
+- OpenAI Luna par défaut pour les premiers tests cloud, Sol sélectionnable par configuration ;
+- provider stratégique configurable `OPENAI` / `OLLAMA` depuis le Batch 51.1 ;
 - Risk Engine déterministe comme autorité finale ;
 - aucune sortie LLM directement transmise au Broker/Kraken ;
 - frais, spread et slippage pris en compte dans la chaîne d'exécution concernée ;
@@ -313,3 +314,48 @@ Règles de projection :
 Le cockpit présente loading/error/empty/legacy, les faits de support, conditions d'invalidation, dernière revue et historique causal. Il rappelle explicitement que `INVALIDATED`, `COMPLETED` et `WEAKENING` ne constituent pas des ordres. Aucun calcul stratégique métier n'est recréé côté frontend.
 
 Voir `docs/50_2_OBSERVABILITE_THESES_STRATEGIQUES.md`.
+
+## 25. Provider LLM local / Ollama 51.1
+
+Le Batch 51.1 introduit une frontière explicite de provider LLM sans modifier la stratégie ni créer de second Agent.
+
+```text
+StrategicThesisContextDecisionProvider
+-> MultiTimeframeDecisionProvider
+-> OpenAIMultiMarketDecisionProvider (nom legacy)
+-> StrategyInstructionsClient / StructuredDecisionClient
+   -> OpenAIResponsesClient
+   -> OllamaStructuredDecisionClient
+-> validation Pydantic canonique
+-> Risk Engine
+-> Broker PAPER
+```
+
+Décisions architecturales :
+
+- `LLMProviderKind` distingue `OPENAI` et `OLLAMA` ; le nom évite de masquer le port domaine historique `LLMProvider` ;
+- `LLMModel` reste réservé à Luna/Sol afin de préserver la sémantique et les snapshots Campaign existants ;
+- en 51.1, le provider est une configuration process/runtime et le modèle local vient de `AI_SPOT_TRADER_OLLAMA_MODEL` ;
+- `OPENAI_API_KEY` n'est obligatoire que pour `OPENAI` ;
+- aucun fallback `OLLAMA -> OPENAI` n'existe ;
+- `build_structured_decision_client(...)` centralise la sélection du transport afin que les compositions legacy et Campaign suivent la même règle ;
+- le nom `OpenAIMultiMarketDecisionProvider` est conservé pour compatibilité : son rôle est déjà provider-agnostique, le renommage est une dette de nommage à traiter séparément ;
+- le chat opérateur n'est pas câblé sur Ollama dans 51.1 et reste donc indisponible en mode local plutôt que de provoquer un fallback implicite ;
+- Risk, Broker, Radar, mémoire de thèse, contexte multi-timeframe et contrats BUY/SELL/HOLD restent inchangés.
+
+Ollama utilise `/api/chat` avec le JSON Schema canonique dans `format`. Le texte JSON retourné traverse ensuite exactement la même validation Pydantic métier. Les tools read-only sont convertis vers le format Ollama mais réutilisent le registre, les handlers, les timeouts et le budget existants.
+
+L'audit LLM expose désormais `provider`, `model`, `status`, `error_type` et `latency_ms` en plus du payload borné déjà conservé. Aucun secret HTTP ou clé n'est ajouté au store.
+
+Configuration initiale :
+
+```text
+AI_SPOT_TRADER_LLM_PROVIDER=OLLAMA
+AI_SPOT_TRADER_OLLAMA_BASE_URL=http://localhost:11434
+AI_SPOT_TRADER_OLLAMA_MODEL=qwen3.5:9b
+AI_SPOT_TRADER_OLLAMA_TIMEOUT_SECONDS=60
+```
+
+Le modèle Ollama reste configurable. Le candidat `qwen3.5:9b` n'est pas codé dans la logique Agent ; il n'est qu'une valeur par défaut de configuration.
+
+Limites 51.1 : le sélecteur UX/persisté par Session est reporté à 51.2 ; le chat opérateur est OpenAI-only ; une vraie inférence et la combinaison réelle tools + structured output doivent être smoke-testées sur le serveur Ollama local de l'opérateur.

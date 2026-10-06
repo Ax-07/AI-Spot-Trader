@@ -7,7 +7,13 @@ from typing import Literal
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from ai_spot_trader.domain.enums import ExecutionMode, LLMModel, MarginMode, MarketType
+from ai_spot_trader.domain.enums import (
+    ExecutionMode,
+    LLMModel,
+    LLMProviderKind,
+    MarginMode,
+    MarketType,
+)
 from ai_spot_trader.domain.models import ExecutableMarket
 from ai_spot_trader.domain.symbols import parse_canonical_symbol
 
@@ -41,8 +47,10 @@ class PaperRunConfiguration:
     spread_bps: Decimal
     slippage_bps: Decimal
     database_url: SecretStr
-    openai_api_key: SecretStr
+    openai_api_key: SecretStr | None
+    llm_provider: LLMProviderKind
     llm_model: LLMModel
+    ollama_model: str
     derivative_leverage: Decimal | None = None
     max_derivative_leverage: Decimal | None = None
     max_derivative_position_notional: Decimal | None = None
@@ -76,8 +84,9 @@ class PaperRunConfiguration:
             "paper_spread_bps": settings.paper_spread_bps,
             "paper_slippage_bps": settings.paper_slippage_bps,
             "database_url": settings.database_url,
-            "openai_api_key": settings.openai_api_key,
         }
+        if settings.llm_provider is LLMProviderKind.OPENAI:
+            required["openai_api_key"] = settings.openai_api_key
         missing = sorted(name for name, value in required.items() if value is None)
         if missing:
             raise PaperRuntimeConfigurationError(
@@ -115,7 +124,6 @@ class PaperRunConfiguration:
         assert spread_bps is not None
         assert slippage_bps is not None
         assert database_url is not None
-        assert openai_api_key is not None
 
         if settings.paper_market_type is MarketType.FUTURE:
             raise PaperRuntimeConfigurationError(
@@ -206,8 +214,15 @@ class PaperRunConfiguration:
             raise PaperRuntimeConfigurationError(
                 "the executable PAPER runtime requires PostgreSQL via postgresql+asyncpg"
             )
-        if not openai_api_key.get_secret_value().strip():
-            raise PaperRuntimeConfigurationError("openai_api_key cannot be empty")
+        if settings.llm_provider is LLMProviderKind.OPENAI:
+            if openai_api_key is None or not openai_api_key.get_secret_value().strip():
+                raise PaperRuntimeConfigurationError(
+                    "openai_api_key is required when llm_provider=OPENAI"
+                )
+        elif not settings.ollama_model.strip():
+            raise PaperRuntimeConfigurationError(
+                "ollama_model cannot be empty when llm_provider=OLLAMA"
+            )
         if spread_bps + slippage_bps >= Decimal(10_000):
             raise PaperRuntimeConfigurationError(
                 "combined paper_spread_bps and paper_slippage_bps must be below 10000"
@@ -232,7 +247,9 @@ class PaperRunConfiguration:
             slippage_bps=slippage_bps,
             database_url=database_url,
             openai_api_key=openai_api_key,
+            llm_provider=settings.llm_provider,
             llm_model=settings.llm_model,
+            ollama_model=settings.ollama_model.strip(),
             derivative_leverage=settings.paper_derivative_leverage,
             max_derivative_leverage=settings.risk_max_derivative_leverage,
             max_derivative_position_notional=settings.risk_max_derivative_position_notional,
@@ -311,6 +328,7 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000, ge=1, le=65535)
     log_level: LogLevel = "INFO"
     execution_mode: ExecutionMode = ExecutionMode.PAPER
+    llm_provider: LLMProviderKind = LLMProviderKind.OPENAI
     llm_model: LLMModel = LLMModel.LUNA
     aggressiveness: int | None = Field(default=None, ge=1, le=10)
     paper_symbol: str | None = None
@@ -343,6 +361,9 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr | None = None
     openai_base_url: str = "https://api.openai.com/v1"
     openai_timeout_seconds: float = Field(default=30.0, gt=0)
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = Field(default="qwen3.5:9b", min_length=1, max_length=256)
+    ollama_timeout_seconds: float = Field(default=60.0, gt=0)
     agent_tool_max_calls: int = Field(default=6, ge=0, le=32)
     agent_tool_timeout_seconds: float = Field(default=5.0, gt=0)
     agent_tool_max_result_bytes: int = Field(default=32768, ge=1024, le=262144)
