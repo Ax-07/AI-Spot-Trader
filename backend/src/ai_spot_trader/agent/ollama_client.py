@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
+from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, cast
+from uuid import UUID, uuid4
 
 import httpx
 
@@ -18,7 +21,10 @@ from ai_spot_trader.agent.errors import (
     LLMTransientError,
     LLMTransportError,
 )
-from ai_spot_trader.agent.llm_audit import GLOBAL_LLM_AUDIT_STORE
+from ai_spot_trader.agent.llm_audit import (
+    GLOBAL_LLM_AUDIT_STORE,
+    current_llm_audit_context,
+)
 from ai_spot_trader.core.retry import LLM_PRE_DECISION_RETRY_POLICY, RetryPolicy, Sleep, retry_async
 from ai_spot_trader.domain.enums import LLMModel
 from ai_spot_trader.domain.models import AgentToolTrace
@@ -27,6 +33,15 @@ from ai_spot_trader.tools.read_only import (
     ToolCallBudgetExceededError,
     ToolLoopResult,
 )
+
+logger = logging.getLogger("ai_spot_trader.agent.ollama")
+
+
+@dataclass(frozen=True, slots=True)
+class _OllamaHTTPResult:
+    response: httpx.Response
+    attempt: int
+    latency_ms: float
 
 
 class OllamaStructuredDecisionClient:
@@ -166,11 +181,20 @@ class OllamaStructuredDecisionClient:
 
     async def _chat(self, request: dict[str, Any]) -> dict[str, Any]:
         started = perf_counter()
+        context = current_llm_audit_context()
+        model = str(request.get("model", "")).strip() or "-"
+        call_id = uuid4().hex[:12]
+        post_result: _OllamaHTTPResult | None = None
         try:
-            response = await self._post(
+            post_result = await self._post(
                 f"{self._base_url}/api/chat",
                 json=request,
+                call_id=call_id,
+                model=model,
+                session_id=context.session_id,
+                cycle_id=context.cycle_id,
             )
+            response = post_result.response
             try:
                 payload = response.json()
             except ValueError as exc:
@@ -181,6 +205,16 @@ class OllamaStructuredDecisionClient:
             if typed_payload.get("done") is not True:
                 raise LLMProviderError("Ollama response did not complete")
         except Exception as exc:
+            if post_result is not None:
+                _log_request_failed(
+                    model=model,
+                    session_id=context.session_id,
+                    cycle_id=context.cycle_id,
+                    call_id=call_id,
+                    attempt=post_result.attempt,
+                    error_type=type(exc).__name__,
+                    latency_ms=(perf_counter() - started) * 1000,
+                )
             self._audit(
                 request=request,
                 response={},
@@ -190,6 +224,14 @@ class OllamaStructuredDecisionClient:
             )
             raise
 
+        _log_request_succeeded(
+            model=model,
+            session_id=context.session_id,
+            cycle_id=context.cycle_id,
+            call_id=call_id,
+            attempt=post_result.attempt,
+            latency_ms=post_result.latency_ms,
+        )
         self._audit(
             request=request,
             response=typed_payload,
@@ -199,29 +241,67 @@ class OllamaStructuredDecisionClient:
         )
         return typed_payload
 
-    async def _post(self, url: str, *, json: dict[str, Any]) -> httpx.Response:
-        async def operation() -> httpx.Response:
-            try:
-                if self._http_client is not None:
-                    response = await self._http_client.post(
-                        url,
-                        json=json,
-                        timeout=self._timeout_seconds,
-                    )
-                else:
-                    async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
-                        response = await client.post(url, json=json)
-            except httpx.TimeoutException as exc:
-                raise LLMTimeoutError("Ollama request timed out") from exc
-            except httpx.TransportError as exc:
-                raise LLMNetworkError("Ollama network request failed") from exc
-            except httpx.HTTPError as exc:
-                raise LLMTransportError("Ollama request failed") from exc
+    async def _post(
+        self,
+        url: str,
+        *,
+        json: dict[str, Any],
+        call_id: str,
+        model: str,
+        session_id: UUID | None,
+        cycle_id: UUID | None,
+    ) -> _OllamaHTTPResult:
+        attempt = 0
 
-            error = _http_error(response)
-            if error is not None:
-                raise error
-            return response
+        async def operation() -> _OllamaHTTPResult:
+            nonlocal attempt
+            attempt += 1
+            attempt_started = perf_counter()
+            _log_request_started(
+                model=model,
+                session_id=session_id,
+                cycle_id=cycle_id,
+                call_id=call_id,
+                attempt=attempt,
+            )
+            try:
+                try:
+                    if self._http_client is not None:
+                        response = await self._http_client.post(
+                            url,
+                            json=json,
+                            timeout=self._timeout_seconds,
+                        )
+                    else:
+                        async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+                            response = await client.post(url, json=json)
+                except httpx.TimeoutException as exc:
+                    raise LLMTimeoutError("Ollama request timed out") from exc
+                except httpx.TransportError as exc:
+                    raise LLMNetworkError("Ollama network request failed") from exc
+                except httpx.HTTPError as exc:
+                    raise LLMTransportError("Ollama request failed") from exc
+
+                error = _http_error(response)
+                if error is not None:
+                    raise error
+            except Exception as exc:
+                _log_request_failed(
+                    model=model,
+                    session_id=session_id,
+                    cycle_id=cycle_id,
+                    call_id=call_id,
+                    attempt=attempt,
+                    error_type=type(exc).__name__,
+                    latency_ms=(perf_counter() - attempt_started) * 1000,
+                )
+                raise
+
+            return _OllamaHTTPResult(
+                response=response,
+                attempt=attempt,
+                latency_ms=(perf_counter() - attempt_started) * 1000,
+            )
 
         return await retry_async(
             operation,
@@ -254,6 +334,79 @@ class OllamaStructuredDecisionClient:
             pass
 
 
+def _log_request_started(
+    *,
+    model: str,
+    session_id: UUID | None,
+    cycle_id: UUID | None,
+    call_id: str,
+    attempt: int,
+) -> None:
+    try:
+        logger.info(
+            "llm_request_started provider=OLLAMA model=%s session_id=%s cycle_id=%s call_id=%s attempt=%d",
+            model,
+            _identifier(session_id),
+            _identifier(cycle_id),
+            call_id,
+            attempt,
+        )
+    except Exception:
+        pass
+
+
+def _log_request_succeeded(
+    *,
+    model: str,
+    session_id: UUID | None,
+    cycle_id: UUID | None,
+    call_id: str,
+    attempt: int,
+    latency_ms: float,
+) -> None:
+    try:
+        logger.info(
+            "llm_request_succeeded provider=OLLAMA model=%s session_id=%s cycle_id=%s call_id=%s attempt=%d latency_ms=%.0f",
+            model,
+            _identifier(session_id),
+            _identifier(cycle_id),
+            call_id,
+            attempt,
+            latency_ms,
+        )
+    except Exception:
+        pass
+
+
+def _log_request_failed(
+    *,
+    model: str,
+    session_id: UUID | None,
+    cycle_id: UUID | None,
+    call_id: str,
+    attempt: int,
+    error_type: str,
+    latency_ms: float,
+) -> None:
+    try:
+        logger.error(
+            "llm_request_failed provider=OLLAMA model=%s session_id=%s cycle_id=%s call_id=%s attempt=%d error_type=%s latency_ms=%.0f",
+            model,
+            _identifier(session_id),
+            _identifier(cycle_id),
+            call_id,
+            attempt,
+            error_type,
+            latency_ms,
+        )
+    except Exception:
+        pass
+
+
+def _identifier(value: UUID | None) -> str:
+    return "-" if value is None else str(value)
+
+
 def _model_name(model: LLMModel | str) -> str:
     value = model.value if isinstance(model, LLMModel) else str(model)
     normalized = value.strip()
@@ -284,7 +437,6 @@ def _http_error(response: httpx.Response) -> LLMTransportError | None:
     return LLMHTTPError("Ollama request returned a permanent HTTP error", **metadata)
 
 
-
 def _retry_after_seconds(value: str | None) -> float | None:
     if value is None:
         return None
@@ -295,6 +447,7 @@ def _retry_after_seconds(value: str | None) -> float | None:
     if not math.isfinite(delay) or delay < 0:
         return None
     return delay
+
 
 def _message(response: dict[str, Any]) -> dict[str, Any]:
     value = response.get("message")

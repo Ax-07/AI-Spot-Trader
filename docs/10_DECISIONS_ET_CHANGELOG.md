@@ -16,18 +16,89 @@ Depuis 51.1, le même Agent peut utiliser `OPENAI` ou `OLLAMA` derrière `Struct
 
 Depuis 51.2, les nouvelles Sessions peuvent persister leur provider stratégique. Les Campaigns historiques sans champ 51.2 restent compatibles et héritent du provider process.
 
+Depuis 51.3, les appels Ollama possèdent une observabilité live best-effort dans les logs backend : départ, succès/échec, corrélation Session/cycle, `call_id`, tentative et latence, puis résumé BUY/SELL/HOLD du plan validé. Aucun contenu décisionnel brut ou secret n'est journalisé par cette couche.
+
 ## Référence courante
 
 ```text
-HEAD GitHub intégré audité        : 7e2ce2821660c9be7f5ffdfe053244d56fae7986
+HEAD GitHub intégré audité        : 36491d4caf1fcc3bb4a2ceb5e3bc418e566ee598
 Batch 51.1 intégré                : aeaf04f — feat: add local Ollama LLM provider
 Batch 51.1.1 intégré              : 7e2ce28 — fix: harden causal Ollama decision contract
-Batch 51.2                        : patch livré — validation locale/intégration à faire
+Batch 51.2 intégré                : 36491d4 — feat: configure LLM provider per session
+Batch 51.3                        : patch livré — non intégré
 ```
 
 ---
 
-## Changelog — 2026-10-06 — Batch 51.2 provider LLM par Session — patch livré
+## Changelog — 2026-10-06 — Batch 51.3 observabilité live Ollama — patch livré
+
+### Diagnostic confirmé
+
+L'audit LLM existant permettait de consulter les appels terminés, et 51.2 corrélait déjà `session_id` et `cycle_id`, mais le transport Ollama ne produisait aucun signal live lisible pendant l'attente d'un `/api/chat`. Un cycle long pouvait donc être impossible à distinguer d'une absence complète d'appel Agent depuis le terminal backend.
+
+### Architecture retenue
+
+Aucun système d'audit parallèle n'est ajouté. `OllamaStructuredDecisionClient` lit le `llm_audit_context` déjà actif et utilise le `logging` Python existant.
+
+Chaque tentative HTTP réelle reçoit un `call_id` éphémère propre au tour Ollama logique et un numéro `attempt` :
+
+```text
+llm_request_started   provider=OLLAMA model=... session_id=... cycle_id=... call_id=... attempt=...
+llm_request_succeeded provider=OLLAMA model=... session_id=... cycle_id=... call_id=... attempt=... latency_ms=...
+llm_request_failed    provider=OLLAMA model=... session_id=... cycle_id=... call_id=... attempt=... error_type=... latency_ms=...
+```
+
+Un retry conserve le même `call_id` et incrémente `attempt`. Un nouveau tour de tool loop crée un nouveau `call_id`. Les warnings/errors de retry historiques restent émis par `ai_spot_trader.retry`; leur comportement n'est pas modifié.
+
+Le succès live n'est journalisé qu'après validation de l'enveloppe provider Ollama (`JSON object`, `done=true`). Un corps invalide ou incomplet est donc visible comme `llm_request_failed` avec `LLMProviderError`.
+
+### Résumé stratégique
+
+Le wrapper canonique `StrategicThesisContextDecisionProvider` journalise, après retour réussi du delegate stratégique et donc après construction/validation du `CycleDecisionPlan`, uniquement les compteurs d'actions :
+
+```text
+agent_plan_completed session_id=<uuid> cycle_id=<uuid> decisions=6 buy=0 sell=0 hold=6
+```
+
+Ce log permet d'identifier immédiatement un cycle sans trade parce que l'Agent a proposé uniquement HOLD. Il ne journalise ni rationale, ni thèse détaillée, ni réponse brute.
+
+### Confidentialité et isolation
+
+Les nouveaux logs ne contiennent jamais le prompt, les messages, la réponse brute, `thinking`, l'URL Ollama, les erreurs transport brutes, les clés ou autres secrets. Seules des métadonnées opérationnelles bornées sont émises.
+
+Les helpers de logging sont best-effort et absorbent leurs propres erreurs. Une panne du handler de logging ne modifie ni la réponse Ollama, ni les retries, ni le plan stratégique, ni Risk/Broker.
+
+### Couverture de tests
+
+Le test 51.3 dédié couvre : ordre start/success, latence, corrélation Session/cycle/modèle, timeout/réseau/provider error, absence de prompt/réponse brute/`thinking`/secret/URL, retries avec `call_id` stable et `attempt` croissant, tool rounds avec `call_id` distincts, résumé BUY/SELL/HOLD et neutralité d'une panne de logging.
+
+L'absence de fallback Ollama → OpenAI reste également couverte par les tests 51.1.1/51.2 existants ; aucun code de sélection provider n'est modifié dans 51.3.
+
+### Validation dans l'environnement ChatGPT
+
+```text
+python -m py_compile fichiers Python 51.3            : PASS
+pytest ciblé 51.3 dans un harness isolé              : PASS — 8/8
+contrôle des espaces finaux des fichiers livrés       : PASS
+```
+
+La suite backend repository complète, `pnpm typecheck`, `pnpm test`, `git diff --check` sur le vrai checkout et le smoke Ollama réel restent des validations locales obligatoires.
+
+## ADR-395 — L'observabilité live Ollama reste transport-level et best-effort
+
+**ADOPTÉ — patch 51.3.** Les logs live s'appuient sur le transport canonique et `llm_audit_context`; aucune nouvelle persistance ni voie décisionnelle n'est créée.
+
+## ADR-396 — `call_id` est éphémère et les retries réutilisent le même identifiant
+
+**ADOPTÉ — patch 51.3.** Un appel logique Ollama conserve son `call_id` entre tentatives et incrémente `attempt`; un nouveau round/tool loop obtient un nouveau `call_id`. Rien n'est persisté pour ce besoin opérateur.
+
+## ADR-397 — Le résumé BUY/SELL/HOLD est émis uniquement après validation du plan
+
+**ADOPTÉ — patch 51.3.** Le résumé est dérivé du `CycleDecisionPlan` déjà retourné par le provider canonique. Il ne peut ni créer ni transformer une décision.
+
+---
+
+## Changelog — 2026-10-06 — Batch 51.2 provider LLM par Session — intégré `36491d4`
 
 ### Diagnostic confirmé
 
@@ -95,27 +166,27 @@ python -m py_compile fichiers Python 51.2                       : PASS
 node --test --experimental-strip-types session-config-batch51_2.test.mjs : PASS — 9/9
 ```
 
-La suite repository complète, `pnpm typecheck`, `pnpm test`, le smoke applicatif Ollama et `git diff --check` sur le vrai checkout restent des validations locales obligatoires.
+Après intégration locale, la validation utilisateur communiquée pour 51.2 est : suite backend complète PASS, `pnpm typecheck` PASS et frontend `101/101` PASS. Le smoke réel Ollama `qwen3.5:9b` a confirmé un cycle `COMPLETED`, audit `provider=OLLAMA`, `status=SUCCESS`, corrélation Session/cycle et aucun fallback OpenAI.
 
 ## ADR-390 — Le provider explicite Campaign est prioritaire sur le provider process
 
-**ADOPTÉ — patch 51.2.** `Settings.llm_provider` reste uniquement la valeur de compatibilité pour les snapshots legacy sans `llm_provider`.
+**ADOPTÉ — intégré 51.2.** `Settings.llm_provider` reste uniquement la valeur de compatibilité pour les snapshots legacy sans `llm_provider`.
 
 ## ADR-391 — Les champs 51.2 sont additifs et exclus lorsqu'ils sont null
 
-**ADOPTÉ — patch 51.2.** Cette forme conserve le payload et le digest des Campaigns historiques sans réécriture/migration.
+**ADOPTÉ — intégré 51.2.** Cette forme conserve le payload et le digest des Campaigns historiques sans réécriture/migration.
 
 ## ADR-392 — `ollama_base_url` et les secrets restent process-level
 
-**ADOPTÉ — patch 51.2.** La Campaign porte le choix opérateur provider/modèle/budget transport, pas l'adresse de l'infrastructure ni les secrets.
+**ADOPTÉ — intégré 51.2.** La Campaign porte le choix opérateur provider/modèle/budget transport, pas l'adresse de l'infrastructure ni les secrets.
 
 ## ADR-393 — Aucun fallback inter-provider n'est autorisé
 
-**ADOPTÉ — patch 51.2.** Un provider explicite défaillant produit une erreur du provider choisi.
+**ADOPTÉ — intégré 51.2.** Un provider explicite défaillant produit une erreur du provider choisi.
 
 ## ADR-394 — Le chat opérateur suit le provider effectif sans portage Ollama
 
-**ADOPTÉ — patch 51.2.** Chat présent pour Campaign OpenAI, absent pour Campaign Ollama. Aucun second Agent.
+**ADOPTÉ — intégré 51.2.** Chat présent pour Campaign OpenAI, absent pour Campaign Ollama. Aucun second Agent.
 
 ---
 

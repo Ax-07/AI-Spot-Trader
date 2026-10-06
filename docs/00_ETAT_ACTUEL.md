@@ -1,54 +1,59 @@
 # 00 — État actuel
 
-## Référence de reprise — Batch 51.2 en validation locale, correctif audit Session à valider
+## Référence de reprise — Batch 51.3 livré, non intégré
 
 ```text
 Repository                         : Ax-07/AI-Spot-Trader
 Branche                            : main
-HEAD GitHub intégré vérifié        : 7e2ce2821660c9be7f5ffdfe053244d56fae7986
-Commit GitHub                      : fix: harden causal Ollama decision contract
+HEAD GitHub intégré vérifié        : 36491d4caf1fcc3bb4a2ceb5e3bc418e566ee598
+Commit GitHub                      : feat: configure LLM provider per session
 Batch 51.1 intégré                 : aeaf04f — feat: add local Ollama LLM provider
 Batch 51.1.1 intégré               : 7e2ce28 — fix: harden causal Ollama decision contract
-Working tree connu après push      : propre (état utilisateur communiqué au lancement)
-Batch 51.2                         : patch root-relative livré — non intégré
+Batch 51.2 intégré                 : 36491d4 — feat: configure LLM provider per session
+Working tree connu au lancement    : propre (état utilisateur communiqué)
+Batch 51.3                         : patch root-relative livré — non intégré
 ```
 
-## État validé avant 51.2
+## État intégré validé
 
-Le même Agent stratégique peut utiliser OpenAI ou Ollama derrière `StructuredDecisionClient`. Le Structured Output multi-marché est causal : seuls les couples `(symbol, market_type)` présents dans `CycleDecisionPlanInput.market_states` sont admissibles. Ollama utilise `think:false` et aucune chaîne `thinking` n'est exposée dans l'audit.
+Le même Agent stratégique utilise `OPENAI` ou `OLLAMA` derrière `StructuredDecisionClient`, sans fallback inter-provider. Le provider stratégique est configurable et persistant par Session/Campaign depuis 51.2 ; les snapshots legacy sans champ 51.2 héritent encore du provider process.
 
-Validation locale communiquée avant 51.2 : suite backend complète PASS, frontend typecheck PASS, frontend `92/92` PASS, `git diff --check` PASS et smoke réel `OLLAMA / qwen3.5:9b` PASS avec cycle `COMPLETED`, audit `provider=OLLAMA`, aucun appel OpenAI et aucun `thinking` exposé.
+Ollama réel a été validé avec `qwen3.5:9b` : cycle `COMPLETED`, audit `STRATEGIC_MULTI_MARKET_PLAN`, `provider=OLLAMA`, `status=SUCCESS`, `session_id` et `cycle_id` corrélés. Le Structured Output reste causal, `think:false` reste actif et aucune chaîne `thinking` n'est exposée.
 
-## Batch 51.2 — provider LLM par Session/Campaign
+Validation locale communiquée pour 51.2 : backend complet PASS, frontend typecheck PASS, frontend `101/101` PASS.
+
+## Batch 51.3 — observabilité live Ollama
 
 Patch livré :
 
-- `CampaignConfiguration` accepte de façon additive `llm_provider`, `ollama_model`, `ollama_timeout_seconds` ;
-- ces champs restent absents quand ils valent `null`, afin de préserver payload et digest des Campaigns legacy ;
-- une nouvelle Session API doit choisir explicitement `OPENAI` ou `OLLAMA` ; une Session legacy peut rester en mode « hérité du runtime » lors d'une édition ;
-- provider explicite Campaign > provider process ; `Settings.llm_provider` ne sert plus que de comportement legacy quand le snapshot ne contient pas le champ 51.2 ;
-- `ollama_base_url`, secrets et timeout OpenAI restent process/infrastructure ;
-- `ollama_model` reste une chaîne et ne modifie pas `LLMModel` Luna/Sol ;
-- aucun fallback entre OpenAI et Ollama ;
-- le chat opérateur reste disponible seulement lorsque le provider effectif de la Campaign est OpenAI ; Ollama chat reste hors périmètre ;
-- le cockpit canonique `SimpleConfigurator` expose provider, modèle local et timeout transport ;
-- `cycle_agent_timeout_seconds` reste l'enveloppe du stade Agent et doit être strictement supérieur au timeout Ollama effectif, sans prétendre garantir le budget d'une boucle multi-appels/tools.
+- `OllamaStructuredDecisionClient` journalise chaque tentative HTTP réelle `/api/chat` au départ ;
+- chaque tentative possède un `call_id` éphémère et un numéro `attempt`, ce qui distingue les tool rounds et les retries sans nouvel identifiant persistant ;
+- succès et erreurs exposent uniquement provider, modèle, Session, cycle, `call_id`, tentative, latence et type d'erreur ;
+- les retries restent ceux de `ai_spot_trader.retry` et leur sémantique n'est pas modifiée ;
+- après retour d'un `CycleDecisionPlan` déjà validé par le provider stratégique canonique, un log `agent_plan_completed` expose uniquement le nombre de décisions et les compteurs BUY/SELL/HOLD ;
+- aucun prompt, historique, réponse brute, `thinking`, rationale détaillée, secret ou URL n'est ajouté aux logs ;
+- les helpers de logging sont best-effort : une défaillance de logging ne modifie jamais la décision ni l'exécution.
 
-
-## Smoke runtime 51.2 observé
-
-Le smoke local du 6 octobre 2026 confirme un appel stratégique réel `STRATEGIC_MULTI_MARKET_PLAN` avec `provider=OLLAMA`, `model=qwen3.5:9b` et `status=SUCCESS`. Après redémarrage du backend, l’audit process-local a toutefois révélé que `cycle_id` était présent mais `session_id` absent. Le correctif 51.2 rattache désormais le contexte d’audit stratégique à `campaign.strategy_id` (identité Session) sans modifier le routage LLM ni la décision.
-
-## Validation du patch 51.2 dans l'environnement ChatGPT
-
-Exécuté :
+Exemples attendus :
 
 ```text
-python -m py_compile sur les fichiers Python 51.2 : PASS
-node --test --experimental-strip-types session-config-batch51_2.test.mjs : PASS — 9/9
+llm_request_started provider=OLLAMA model=qwen3.5:9b session_id=<uuid> cycle_id=<uuid> call_id=<id> attempt=1
+llm_request_succeeded provider=OLLAMA model=qwen3.5:9b session_id=<uuid> cycle_id=<uuid> call_id=<id> attempt=1 latency_ms=12345
+llm_request_failed provider=OLLAMA model=qwen3.5:9b session_id=<uuid> cycle_id=<uuid> call_id=<id> attempt=1 error_type=LLMTimeoutError latency_ms=30000
+agent_plan_completed session_id=<uuid> cycle_id=<uuid> decisions=6 buy=0 sell=0 hold=6
 ```
 
-Non exécutable ici faute de checkout/dépendances complets : suite backend repository, `pnpm typecheck`, suite frontend complète, smoke applicatif Ollama, `git diff --check` sur le vrai checkout.
+## Validation 51.3
+
+Exécuté dans l'environnement de livraison ChatGPT :
+
+```text
+python -m py_compile sur les 3 fichiers Python 51.3 : PASS
+pytest ciblé 51.3 dans un harness isolé              : PASS — 8/8
+contrôle des espaces finaux des fichiers livrés       : PASS
+```
+
+Le pytest ciblé exécute les modules modifiés avec des dépendances minimales simulées ; il ne remplace pas la suite repository. La suite backend complète, `pnpm typecheck`, `pnpm test`, `git diff --check` sur le vrai checkout et le smoke Ollama réel restent à rejouer localement après extraction.
 
 ## Invariants inchangés
 
