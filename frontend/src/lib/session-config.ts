@@ -8,12 +8,20 @@ import type {
   TradingStyle,
 } from "@/lib/api/types";
 
+export type LlmProvider = "OPENAI" | "OLLAMA";
 export type SessionMarketSelectionMode = "AUTOMATIC_AI" | "MANUAL";
+export type SessionCampaignConfiguration = CampaignConfiguration & {
+  llm_provider?: LlmProvider | null;
+  ollama_model?: string | null;
+  ollama_timeout_seconds?: number | null;
+};
 export type SessionRiskProfile = "prudent" | "balanced" | "aggressive" | "custom";
 
 export const TRADING_STYLE_MAPPING_VERSION = "trading-style-map-v1" as const;
 export const DEFAULT_MAX_DECISIONS_PER_CYCLE = 6;
 export const MAX_DECISIONS_PER_CYCLE_HARD_LIMIT = 20;
+export const DEFAULT_OLLAMA_MODEL = "qwen3.5:9b";
+export const DEFAULT_OLLAMA_TIMEOUT_SECONDS = 60;
 
 export const TRADING_STYLE_UI_METADATA = {
   SCALP: {
@@ -62,7 +70,10 @@ export type SessionConfigurationInput = {
   marketSelectionMode: SessionMarketSelectionMode;
   pairs: string;
   capital: string;
+  llmProvider?: LlmProvider | null;
   model: LlmModel;
+  ollamaModel?: string;
+  ollamaTimeout?: string;
   aggressiveness: number;
   tradingStyle: TradingStyle | null;
   strategicScheduleMode: TradingCadenceMode | null;
@@ -85,6 +96,20 @@ export type SessionConfigurationInput = {
   brokerTimeout: string;
   discovery: Omit<MarketDiscoveryPolicy, "protocol_version" | "market_types">;
 };
+
+export function initialSessionLlmValues(
+  configuration: CampaignConfiguration | null,
+  editing: boolean,
+) {
+  const llmConfiguration = configuration as SessionCampaignConfiguration | null;
+  return {
+    llmProvider: llmConfiguration?.llm_provider ?? (editing ? null : "OPENAI" as const),
+    model: configuration?.llm_model ?? ("gpt-5.6-luna" as const),
+    ollamaModel: llmConfiguration?.ollama_model ?? DEFAULT_OLLAMA_MODEL,
+    ollamaTimeoutSeconds:
+      llmConfiguration?.ollama_timeout_seconds ?? DEFAULT_OLLAMA_TIMEOUT_SECONDS,
+  };
+}
 
 export function tradingStyleRecommendations(style: TradingStyle) {
   const metadata = TRADING_STYLE_UI_METADATA[style];
@@ -299,7 +324,31 @@ function buildStrategicSchedule(input: SessionConfigurationInput): Pick<Campaign
   };
 }
 
-export function buildSessionCampaignConfiguration(input: SessionConfigurationInput): CampaignConfiguration {
+function buildLlmConfiguration(
+  input: SessionConfigurationInput,
+  agentTimeout: number,
+): Partial<SessionCampaignConfiguration> {
+  if (input.llmProvider == null) return {};
+  if (input.llmProvider === "OPENAI") {
+    return { llm_provider: "OPENAI" };
+  }
+
+  const ollamaModel = (input.ollamaModel ?? "").trim();
+  if (!ollamaModel) throw new Error("Le modèle local Ollama est obligatoire.");
+  const ollamaTimeout = positiveNumber(input.ollamaTimeout ?? "", "Le timeout transport Ollama");
+  if (agentTimeout <= ollamaTimeout) {
+    throw new Error(
+      "Le timeout Agent doit être strictement supérieur au timeout transport Ollama. Cette relation ne garantit pas à elle seule le budget d’une boucle avec plusieurs appels/tools.",
+    );
+  }
+  return {
+    llm_provider: "OLLAMA",
+    ollama_model: ollamaModel,
+    ollama_timeout_seconds: ollamaTimeout,
+  };
+}
+
+export function buildSessionCampaignConfiguration(input: SessionConfigurationInput): SessionCampaignConfiguration {
   const capital = positiveNumber(input.capital, "Le capital PAPER");
   const marketPlan = parseSessionMarkets(input.pairs, input.marketType);
   const risk = input.riskProfile === "custom"
@@ -321,6 +370,7 @@ export function buildSessionCampaignConfiguration(input: SessionConfigurationInp
   const marketTimeout = positiveNumber(input.marketTimeout, "Le timeout marché");
   const agentTimeout = positiveNumber(input.agentTimeout, "Le timeout Agent");
   const brokerTimeout = positiveNumber(input.brokerTimeout, "Le timeout Broker");
+  const llmConfiguration = buildLlmConfiguration(input, agentTimeout);
 
   const customAllowed = splitPairs(input.customAllowedPairs);
   const riskAllowedPairs = input.marketSelectionMode === "MANUAL"
@@ -353,6 +403,7 @@ export function buildSessionCampaignConfiguration(input: SessionConfigurationInp
   return {
     configuration_version: "paper-control-plane-config-v1",
     llm_model: input.model,
+    ...llmConfiguration,
     aggressiveness: input.aggressiveness,
     trading_cadence_seconds: cadence,
     ...strategicSchedule,

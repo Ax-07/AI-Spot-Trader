@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from ai_spot_trader.agent.prompt import BASE_AGENT_CONTRACT_VERSION
 from ai_spot_trader.domain.enums import (
     LLMModel,
+    LLMProviderKind,
     MarginMode,
     MarketType,
     TradingCadenceMode,
@@ -75,6 +76,22 @@ class CampaignConfiguration(ControlPlaneModel):
 
     configuration_version: str = CONTROL_PLANE_CONFIGURATION_VERSION
     llm_model: LLMModel
+    # Optional for exact digest-compatible loading of Campaigns created before Batch 51.2.
+    # New Sessions persist the provider explicitly; legacy snapshots keep the field absent.
+    llm_provider: LLMProviderKind | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    ollama_model: str | None = Field(
+        default=None,
+        max_length=256,
+        exclude_if=lambda value: value is None,
+    )
+    ollama_timeout_seconds: float | None = Field(
+        default=None,
+        gt=0,
+        exclude_if=lambda value: value is None,
+    )
     aggressiveness: int = Field(ge=1, le=10)
     trading_cadence_seconds: float = Field(gt=0)
     # Optional for exact digest-compatible loading of Campaigns created before Batch 37.
@@ -126,6 +143,16 @@ class CampaignConfiguration(ControlPlaneModel):
     cycle_market_timeout_seconds: float = Field(gt=0)
     cycle_agent_timeout_seconds: float = Field(gt=0)
     cycle_broker_timeout_seconds: float = Field(gt=0)
+
+    @field_validator("ollama_model")
+    @classmethod
+    def normalize_ollama_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("ollama_model cannot be empty")
+        return normalized
 
     @field_validator("paper_settlement_asset")
     @classmethod
@@ -193,6 +220,22 @@ class CampaignConfiguration(ControlPlaneModel):
     def validate_structural_configuration(self) -> "CampaignConfiguration":
         if self.configuration_version != CONTROL_PLANE_CONFIGURATION_VERSION:
             raise ValueError("unsupported control-plane configuration version")
+        if self.llm_provider is None and (
+            self.ollama_model is not None or self.ollama_timeout_seconds is not None
+        ):
+            raise ValueError(
+                "provider-specific Ollama settings require an explicit llm_provider"
+            )
+        if self.llm_provider is LLMProviderKind.OLLAMA:
+            if self.ollama_model is None:
+                raise ValueError("OLLAMA campaigns require ollama_model")
+            if (
+                self.ollama_timeout_seconds is not None
+                and self.cycle_agent_timeout_seconds <= self.ollama_timeout_seconds
+            ):
+                raise ValueError(
+                    "cycle_agent_timeout_seconds must be greater than ollama_timeout_seconds"
+                )
         if (self.trading_style is None) != (self.trading_style_mapping_version is None):
             raise ValueError(
                 "trading_style and trading_style_mapping_version must be supplied together"

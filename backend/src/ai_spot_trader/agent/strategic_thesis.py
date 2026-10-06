@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from typing import Protocol, cast
+from uuid import UUID
 
+from ai_spot_trader.agent.llm_audit import llm_audit_context
 from ai_spot_trader.domain.models import AgentToolTrace
 from ai_spot_trader.domain.planning import CycleDecisionPlan, CycleDecisionPlanInput
 from ai_spot_trader.domain.ports import MultiMarketLLMProvider
@@ -22,9 +24,12 @@ class StrategicThesisContextDecisionProvider:
         self,
         delegate: MultiMarketLLMProvider,
         context_source: StrategicPositionContextSource,
+        *,
+        session_id: UUID | None = None,
     ) -> None:
         self._delegate = delegate
         self._context_source = context_source
+        self._session_id = session_id
 
     @property
     def last_tool_traces(self) -> tuple[AgentToolTrace, ...]:
@@ -41,7 +46,11 @@ class StrategicThesisContextDecisionProvider:
             plan_input
         )
         CycleDecisionPlanInput.model_validate(plan_input.model_dump(mode="python"))
-        return await self._delegate.generate_decision_plan(plan_input)
+        with llm_audit_context(
+            session_id=self._session_id,
+            cycle_id=plan_input.cycle_id,
+        ):
+            return await self._delegate.generate_decision_plan(plan_input)
 
 
 __all__ = [

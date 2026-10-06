@@ -34,8 +34,10 @@ import {
   buildSessionCampaignConfiguration,
   decisionTimeframeLabel,
   inferSessionRiskProfile,
+  initialSessionLlmValues,
   initialSessionStyleValues,
   tradingStyleRecommendations,
+  type LlmProvider,
   type SessionMarketSelectionMode,
   type SessionRiskProfile,
 } from "@/lib/session-config";
@@ -139,6 +141,7 @@ export function SimpleConfigurator({
   const discovery = config?.market_discovery;
   const editing = session !== null;
   const initialStyle = initialSessionStyleValues(config, editing);
+  const initialLlm = initialSessionLlmValues(config, editing);
 
   const [name, setName] = useState(
     session?.name ?? `Session PAPER ${new Date().toISOString().slice(0, 16).replace("T", " ")}`,
@@ -153,7 +156,10 @@ export function SimpleConfigurator({
     config?.paper_executable_markets.map((market) => market.symbol).join("\n") ?? "BTC/USD",
   );
   const [capital, setCapital] = useState(config?.paper_initial_capital ?? "1000");
-  const [model, setModel] = useState<LlmModel>(config?.llm_model ?? "gpt-5.6-luna");
+  const [llmProvider, setLlmProvider] = useState<LlmProvider | null>(initialLlm.llmProvider);
+  const [model, setModel] = useState<LlmModel>(initialLlm.model);
+  const [ollamaModel, setOllamaModel] = useState(initialLlm.ollamaModel);
+  const [ollamaTimeout, setOllamaTimeout] = useState(numberString(initialLlm.ollamaTimeoutSeconds));
   const [aggressiveness, setAggressiveness] = useState(config?.aggressiveness ?? 5);
   const [tradingStyle, setTradingStyle] = useState<TradingStyle | null>(initialStyle.tradingStyle);
   const [strategicScheduleMode, setStrategicScheduleMode] = useState<TradingCadenceMode | null>(
@@ -247,7 +253,10 @@ export function SimpleConfigurator({
         marketSelectionMode,
         pairs,
         capital,
+        llmProvider,
         model,
+        ollamaModel,
+        ollamaTimeout,
         aggressiveness,
         tradingStyle,
         strategicScheduleMode,
@@ -305,6 +314,7 @@ export function SimpleConfigurator({
     customTotalExposure,
     decisionTimeframe,
     feeRate,
+    llmProvider,
     marketSelectionMode,
     marketTimeout,
     marketType,
@@ -313,6 +323,8 @@ export function SimpleConfigurator({
     minWindowObservations,
     model,
     name,
+    ollamaModel,
+    ollamaTimeout,
     pairs,
     prompt,
     refreshTimeout,
@@ -445,13 +457,44 @@ export function SimpleConfigurator({
             <Field label="Capital PAPER">
               <div className="relative"><CircleDollarSign className="absolute left-3 top-3.5 size-4 text-muted-foreground" /><input className={`${inputClass} pl-9`} value={capital} onChange={(event) => setCapital(event.target.value)} inputMode="decimal" /></div>
             </Field>
-            <Field label="Modèle IA">
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Provider IA</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <ChoiceCard active={llmProvider === "OPENAI"} title="OpenAI" detail="Luna ou Sol. La clé reste exclusivement dans l’environnement backend." onClick={() => setLlmProvider("OPENAI")} />
+                <ChoiceCard active={llmProvider === "OLLAMA"} title="Ollama local" detail="Même Agent stratégique, transport local via l’infrastructure Ollama du backend." onClick={() => setLlmProvider("OLLAMA")} />
+              </div>
+            </div>
+          </div>
+
+          {llmProvider === null ? (
+            <div className="rounded-lg border border-warning/35 bg-warning-subtle p-3 text-sm text-warning-foreground">
+              Session historique : provider hérité du runtime. Le champ reste absent tant que tu ne choisis pas explicitement OpenAI ou Ollama local.
+            </div>
+          ) : null}
+
+          {llmProvider === "OPENAI" ? (
+            <Field label="Modèle OpenAI">
               <select className={inputClass} value={model} onChange={(event) => setModel(event.target.value as LlmModel)}>
-                <option value="gpt-5.6-luna">Luna</option>
-                <option value="gpt-5.6-sol">Sol</option>
+                <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
+                <option value="gpt-5.6-sol">GPT-5.6 Sol</option>
               </select>
             </Field>
-          </div>
+          ) : null}
+
+          {llmProvider === "OLLAMA" ? (
+            <div className="grid gap-4 rounded-xl border bg-muted/20 p-4 md:grid-cols-2">
+              <Field label="Modèle local Ollama" hint="Chaîne libre persistée par Session, par exemple qwen3.5:9b.">
+                <input className={inputClass} value={ollamaModel} onChange={(event) => setOllamaModel(event.target.value)} placeholder="qwen3.5:9b" />
+              </Field>
+              <Field label="Timeout transport Ollama (s)" hint="Budget d’un appel HTTP Ollama. Il doit rester inférieur au timeout Agent global.">
+                <input className={inputClass} value={ollamaTimeout} onChange={(event) => setOllamaTimeout(event.target.value)} inputMode="decimal" />
+              </Field>
+              <div className="md:col-span-2 rounded-lg border bg-background p-3 text-xs leading-relaxed text-muted-foreground">
+                <span className="font-medium text-foreground">Timeout Agent actuel : {agentTimeout || "—"} s.</span>
+                <span className="block mt-1">Le timeout Agent enveloppe tout le stade Agent ; une boucle de tools peut contenir plusieurs appels LLM. Aucune valeur n’est réécrite automatiquement lors d’un changement de provider.</span>
+              </div>
+            </div>
+          ) : null}
 
           <div className="space-y-3">
             <div>
@@ -654,7 +697,7 @@ export function SimpleConfigurator({
               </div>
               <div className="grid gap-4 md:grid-cols-3">
                 <Field label="Timeout marché (s)"><input className={inputClass} value={marketTimeout} onChange={(e) => setMarketTimeout(e.target.value)} /></Field>
-                <Field label="Timeout Agent (s)"><input className={inputClass} value={agentTimeout} onChange={(e) => setAgentTimeout(e.target.value)} /></Field>
+                <Field label="Timeout Agent (s)" hint="Enveloppe du stade Agent complet, distincte d’un appel transport Ollama."><input className={inputClass} value={agentTimeout} onChange={(e) => setAgentTimeout(e.target.value)} /></Field>
                 <Field label="Timeout Broker (s)"><input className={inputClass} value={brokerTimeout} onChange={(e) => setBrokerTimeout(e.target.value)} /></Field>
               </div>
             </section>

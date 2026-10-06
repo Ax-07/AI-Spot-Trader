@@ -6,7 +6,10 @@ from decimal import Decimal
 from typing import Protocol, cast
 from uuid import uuid4
 
-from ai_spot_trader.agent.client_factory import build_structured_decision_client
+from ai_spot_trader.agent.client_factory import (
+    build_structured_decision_client,
+    resolve_llm_configuration,
+)
 from ai_spot_trader.agent.multi_timeframe import MultiTimeframeDecisionProvider
 from ai_spot_trader.agent.openai_client import OpenAIResponsesClient
 from ai_spot_trader.agent.planner import OpenAIMultiMarketDecisionProvider
@@ -131,19 +134,12 @@ def build_campaign_runtime(
     """Compose canonical PAPER components while sharing backend-owned market services."""
 
     database_secret = settings.database_url
-    openai_secret = settings.openai_api_key
     if database_secret is None or not database_secret.get_secret_value().strip():
         raise PaperRuntimeConfigurationError("campaign activation requires DATABASE_URL")
     database_url = database_secret.get_secret_value().strip()
     if not database_url.startswith("postgresql+asyncpg://") and settings.environment != "test":
         raise PaperRuntimeConfigurationError(
             "campaign PAPER runtime requires PostgreSQL via postgresql+asyncpg"
-        )
-    if settings.llm_provider is LLMProviderKind.OPENAI and (
-        openai_secret is None or not openai_secret.get_secret_value().strip()
-    ):
-        raise PaperRuntimeConfigurationError(
-            "campaign activation requires OPENAI_API_KEY when llm_provider=OPENAI"
         )
     if revision.strategy_id != campaign.strategy_id:
         raise PaperRuntimeConfigurationError("campaign strategy identity mismatch")
@@ -155,6 +151,10 @@ def build_campaign_runtime(
         raise PaperRuntimeConfigurationError("campaign Agent contract version mismatch")
 
     config = campaign.configuration
+    resolved_llm = resolve_llm_configuration(
+        settings,
+        campaign_configuration=config,
+    )
     dynamic_policy = config.market_discovery
     dynamic_enabled = dynamic_policy is not None
     if dynamic_enabled and market_attention is None:
@@ -256,7 +256,7 @@ def build_campaign_runtime(
 
     transport_client, agent_model = build_structured_decision_client(
         settings,
-        openai_model=config.llm_model,
+        resolved=resolved_llm,
     )
 
     strategy_client = StrategyInstructionsClient(
@@ -282,6 +282,7 @@ def build_campaign_runtime(
     agent = StrategicThesisContextDecisionProvider(
         multi_timeframe_agent,
         strategic_position_context,
+        session_id=campaign.strategy_id,
     )
 
     execution_spot = build_kraken_market_data_source(
@@ -508,7 +509,7 @@ def build_campaign_runtime(
         owned_resources=tuple(unique_resources),
     )
     chat_service: OperatorChatService | None = None
-    if settings.llm_provider is LLMProviderKind.OPENAI:
+    if resolved_llm.provider is LLMProviderKind.OPENAI:
         assert isinstance(transport_client, OpenAIResponsesClient)
         chat_service = OperatorChatService(
             provider=OpenAIChatProvider(client=transport_client, model=config.llm_model),

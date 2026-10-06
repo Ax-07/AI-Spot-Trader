@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ai_spot_trader.api.schemas import EngineStatusResponse
 from ai_spot_trader.control_plane import CampaignConfiguration
@@ -19,6 +19,12 @@ class SessionCreateRequest(SessionApiModel):
     instructions: str = Field(min_length=1)
     configuration: CampaignConfiguration
     start_now: bool = False
+
+    @model_validator(mode="after")
+    def require_explicit_llm_provider(self) -> "SessionCreateRequest":
+        if self.configuration.llm_provider is None:
+            raise ValueError("new Sessions require an explicit llm_provider")
+        return self
 
 
 class SessionUpdateRequest(SessionApiModel):
