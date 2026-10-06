@@ -48,6 +48,8 @@ class LLMAuditRecord:
     category: LLMCallCategory
     provider: LLMAuditProvider
     model: str
+    # SUCCESS means that the LLM transport/provider call completed successfully. It does not mean
+    # that Pydantic, Agent business validation, Risk or Broker subsequently accepted the decision.
     status: LLMAuditStatus
     error_type: str | None
     latency_ms: float | None
@@ -306,17 +308,27 @@ def _uuid(value: object) -> UUID | None:
 def _response_output(response: JsonObject) -> tuple[JsonObject, ...]:
     raw = response.get("output")
     if isinstance(raw, list):
-        return tuple(copy.deepcopy(item) for item in raw if isinstance(item, dict))
+        return tuple(
+            _sanitize_response_item(item) for item in raw if isinstance(item, dict)
+        )
     message = response.get("message")
     if isinstance(message, dict):
-        return (copy.deepcopy(message),)
+        return (_sanitize_response_item(message),)
     return ()
+
+
+def _sanitize_response_item(item: dict[str, object]) -> JsonObject:
+    """Return public/auditable provider output without hidden reasoning payloads."""
+
+    copied = copy.deepcopy(item)
+    _drop_key_recursive(copied, "thinking")
+    return copied
 
 
 def _response_text(output: tuple[JsonObject, ...]) -> str | None:
     texts: list[str] = []
     for item in output:
-        # Ollama native /api/chat message.
+        # Ollama native /api/chat message. `thinking` has already been removed above.
         direct_content = item.get("content")
         if isinstance(direct_content, str) and direct_content.strip():
             texts.append(direct_content)

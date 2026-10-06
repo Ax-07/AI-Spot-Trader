@@ -155,6 +155,9 @@ class OllamaStructuredDecisionClient:
             "model": _model_name(model),
             "messages": request_messages,
             "stream": False,
+            # Structured AI Spot Trader calls consume only message.content. Disable provider-side
+            # reasoning output so no hidden chain-of-thought is produced for the application.
+            "think": False,
             "format": schema,
         }
         if tools:

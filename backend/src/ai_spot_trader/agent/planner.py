@@ -75,15 +75,27 @@ def _decision_item_variant(
     action: StrategicAction,
     *,
     proposed_quantity_schema: dict[str, Any],
+    symbol: str | None = None,
+    market_type: SelectionMarketType | None = None,
 ) -> dict[str, Any]:
     """Build one strict Structured Outputs variant without weakening Pydantic validation."""
+
+    symbol_schema: dict[str, Any] = {"type": "string", "minLength": 1}
+    market_type_schema: dict[str, Any] = {
+        "type": "string",
+        "enum": ["SPOT", "PERPETUAL"],
+    }
+    if symbol is not None:
+        symbol_schema = {"type": "string", "enum": [symbol]}
+    if market_type is not None:
+        market_type_schema = {"type": "string", "enum": [market_type]}
 
     return {
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": [action]},
-            "symbol": {"type": "string", "minLength": 1},
-            "market_type": {"type": "string", "enum": ["SPOT", "PERPETUAL"]},
+            "symbol": symbol_schema,
+            "market_type": market_type_schema,
             "proposed_quantity": proposed_quantity_schema,
             "rationale": {"type": ["string", "null"]},
             "thesis_update": _THESIS_UPDATE_SCHEMA,
@@ -100,40 +112,75 @@ def _decision_item_variant(
     }
 
 
-# Nested anyOf is supported by OpenAI Structured Outputs. Keeping the root an object also
-# preserves the strict adapter contract. The quantity constraints now match the Pydantic model:
-# BUY/SELL require a strictly positive number, while HOLD requires null.
-_DECISION_ITEM_SCHEMA: dict[str, Any] = {
-    "anyOf": [
+def _decision_variants(
+    allowed_markets: tuple[tuple[str, SelectionMarketType], ...] | None,
+) -> list[dict[str, Any]]:
+    actions: tuple[tuple[StrategicAction, dict[str, Any]], ...] = (
+        ("BUY", {"type": "number", "exclusiveMinimum": 0}),
+        ("SELL", {"type": "number", "exclusiveMinimum": 0}),
+        ("HOLD", {"type": "null"}),
+    )
+    if allowed_markets is None:
+        return [
+            _decision_item_variant(action, proposed_quantity_schema=quantity_schema)
+            for action, quantity_schema in actions
+        ]
+    return [
         _decision_item_variant(
-            "BUY",
-            proposed_quantity_schema={"type": "number", "exclusiveMinimum": 0},
-        ),
-        _decision_item_variant(
-            "SELL",
-            proposed_quantity_schema={"type": "number", "exclusiveMinimum": 0},
-        ),
-        _decision_item_variant(
-            "HOLD",
-            proposed_quantity_schema={"type": "null"},
-        ),
+            action,
+            proposed_quantity_schema=quantity_schema,
+            symbol=symbol,
+            market_type=market_type,
+        )
+        for action, quantity_schema in actions
+        for symbol, market_type in allowed_markets
     ]
-}
 
-STRATEGIC_PLAN_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "decisions": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": MAX_DECISIONS_PER_CYCLE_HARD_LIMIT,
-            "items": _DECISION_ITEM_SCHEMA,
+
+def _strategic_plan_schema(
+    allowed_markets: tuple[tuple[str, SelectionMarketType], ...] | None,
+) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "decisions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MAX_DECISIONS_PER_CYCLE_HARD_LIMIT,
+                "items": {"anyOf": _decision_variants(allowed_markets)},
+            },
+            "rationale": {"type": ["string", "null"]},
         },
-        "rationale": {"type": ["string", "null"]},
-    },
-    "required": ["decisions", "rationale"],
-    "additionalProperties": False,
-}
+        "required": ["decisions", "rationale"],
+        "additionalProperties": False,
+    }
+
+
+# Compatibility/reference schema used by existing tests and singleton tooling. The actual
+# multi-market plan call now receives a causal schema built from CycleDecisionPlanInput.
+STRATEGIC_PLAN_SCHEMA: dict[str, Any] = _strategic_plan_schema(None)
+
+
+def build_strategic_plan_schema(plan_input: CycleDecisionPlanInput) -> dict[str, Any]:
+    """Bind Structured Outputs to the exact causal ``symbol + market_type`` universe.
+
+    The schema is a transport guard only. It does not rank, select or otherwise make a strategic
+    choice for the Agent. Pydantic and the post-LLM business validation below remain authoritative
+    fail-closed checks even if a provider ignores or misapplies the JSON Schema.
+    """
+
+    allowed_markets: list[tuple[str, SelectionMarketType]] = []
+    for item in plan_input.market_states:
+        if item.market_type is MarketType.SPOT:
+            market_type: SelectionMarketType = "SPOT"
+        elif item.market_type is MarketType.PERPETUAL:
+            market_type = "PERPETUAL"
+        else:
+            raise AgentContractViolationError(
+                "strategic plan causal universe contains a non-executable market type"
+            )
+        allowed_markets.append((item.symbol, market_type))
+    return _strategic_plan_schema(tuple(allowed_markets))
 
 
 class _StrategicThesisUpdatePayload(BaseModel):
@@ -215,6 +262,7 @@ class OpenAIMultiMarketDecisionProvider(OpenAIDecisionProvider):
         }
         self._last_tool_traces = ()
         input_text = _plan_input_text(plan_input)
+        plan_schema = build_strategic_plan_schema(plan_input)
         traces: tuple[AgentToolTrace, ...] = ()
 
         allow_tools = not plan_input.management_mode
@@ -225,7 +273,7 @@ class OpenAIMultiMarketDecisionProvider(OpenAIDecisionProvider):
                     model=self._model,
                     instructions=AGENT_SYSTEM_PROMPT,
                     input_text=input_text,
-                    schema=STRATEGIC_PLAN_SCHEMA,
+                    schema=plan_schema,
                     tool_registry=self._tool_registry,
                     max_tool_calls=self._max_tool_calls,
                 )
@@ -239,7 +287,7 @@ class OpenAIMultiMarketDecisionProvider(OpenAIDecisionProvider):
                 model=self._model,
                 instructions=AGENT_SYSTEM_PROMPT,
                 input_text=input_text,
-                schema=STRATEGIC_PLAN_SCHEMA,
+                schema=plan_schema,
             )
 
         payload = _parse_plan_output(raw_output)
@@ -446,4 +494,8 @@ def _reject_json_constant(value: str) -> None:
     raise ValueError(f"non-standard JSON constant is forbidden: {value}")
 
 
-__all__ = ["OpenAIMultiMarketDecisionProvider", "STRATEGIC_PLAN_SCHEMA"]
+__all__ = [
+    "OpenAIMultiMarketDecisionProvider",
+    "STRATEGIC_PLAN_SCHEMA",
+    "build_strategic_plan_schema",
+]

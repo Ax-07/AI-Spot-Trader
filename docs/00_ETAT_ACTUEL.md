@@ -1,87 +1,79 @@
 # 00 — État actuel
 
-## Référence de reprise — Batch 51.1 patch livré, intégration locale à valider
+## Référence de reprise — Batch 51.1.1 patch correctif livré, validation locale à faire
 
 ```text
 Repository                         : Ax-07/AI-Spot-Trader
 Branche                            : main
-HEAD GitHub vérifié                : e5887da5e8e6ebf0fa739a041c0226a6fed940dd
-Commit HEAD                        : feat: add strategic thesis observability
-Batch 50.1                         : INTÉGRÉ ET VALIDÉ
-Batch 50.2                         : INTÉGRÉ — feat: add strategic thesis observability
-Batch 51.1                         : PATCH LIVRÉ — intégration/validation repository à faire
+HEAD GitHub intégré vérifié        : e5887da5e8e6ebf0fa739a041c0226a6fed940dd
+Commit GitHub                      : feat: add strategic thesis observability
+État local de départ               : aeaf04f49aa103ad55410dbbdc60d37ed23ee060
+Parent de aeaf04f                  : e5887da5e8e6ebf0fa739a041c0226a6fed940dd
+Working tree au lancement          : propre
+Batch 51.1                         : commit local préservé
+Batch 51.1.1                       : patch correctif livré — intégration/validation à faire
 ```
 
-Les mentions précédentes indiquant que le Batch 50.2 restait « patch livré / intégration à faire » sont obsolètes : le HEAD GitHub courant contient bien l'observabilité des thèses stratégiques.
+## Batch 51.1.1 — durcissement du contrat Ollama
 
-## Batch 51.1 — Provider LLM local / Ollama
+Le smoke réel `OLLAMA / qwen3.5:9b` a confirmé le transport Structured Output mais a révélé qu'un modèle local pouvait inventer des marchés : le schema statique contraignait `market_type` mais pas le couple exact `(symbol, market_type)`. Le contrôle métier Agent refusait correctement le plan hors univers causal.
 
-Le patch 51.1 introduit une frontière explicite de transport LLM pour **le même Agent stratégique canonique**.
+Le correctif conserve ce contrôle et ajoute une première barrière structurée :
 
 ```text
-StrategicThesisContextDecisionProvider
+CycleDecisionPlanInput.market_states
         ↓
-MultiTimeframeDecisionProvider
+build_strategic_plan_schema(...)
         ↓
-OpenAIMultiMarketDecisionProvider  (nom legacy conservé)
+StructuredDecisionClient
         ↓
-StrategyInstructionsClient / StructuredDecisionClient
-        ├── OpenAIResponsesClient
-        └── OllamaStructuredDecisionClient
+OpenAIResponsesClient OU OllamaStructuredDecisionClient
         ↓
-validation Pydantic canonique
+Pydantic
+        ↓
+contrôle métier Agent
         ↓
 Risk Engine
-        ↓
-PaperBroker
 ```
 
-Configuration process/runtime :
+Décisions 51.1.1 :
+
+- schema dynamique lié aux couples exacts `symbol + market_type` ;
+- BUY/SELL conservent `proposed_quantity > 0`, HOLD conserve `null` ;
+- `thesis_update` reste inchangé ;
+- contrôle métier post-LLM conservé fail-closed ;
+- Ollama structuré envoie `think: false` ;
+- `message.content` est la seule sortie décisionnelle ;
+- toute clé `thinking` reçue est supprimée avant audit public ;
+- `LLM audit SUCCESS` décrit le succès transport/provider, pas l'acceptation canonique du plan Agent ;
+- `cycle_agent_timeout_seconds` doit dépasser le budget transport `ollama_timeout_seconds` réellement nécessaire ; aucune grosse valeur n'est hardcodée globalement.
+
+## Validation
+
+Exécuté dans l'environnement ChatGPT pour 51.1.1 :
 
 ```text
-AI_SPOT_TRADER_LLM_PROVIDER=OPENAI | OLLAMA
-AI_SPOT_TRADER_LLM_MODEL=gpt-5.6-luna | gpt-5.6-sol
-AI_SPOT_TRADER_OLLAMA_BASE_URL=http://localhost:11434
-AI_SPOT_TRADER_OLLAMA_MODEL=qwen3.5:9b
-AI_SPOT_TRADER_OLLAMA_TIMEOUT_SECONDS=60
+python -m py_compile sur les fichiers Python créés/modifiés : PASS
 ```
 
-Règles 51.1 :
+À exécuter dans le checkout réel après extraction :
 
-- `LLMProviderKind` distingue `OPENAI` et `OLLAMA` sans réutiliser le port domaine `LLMProvider` ;
-- `LLMModel` reste Luna/Sol afin de préserver la sémantique et les snapshots Campaign existants ;
-- le modèle Ollama est une chaîne configurable séparée ;
-- `OPENAI_API_KEY` n'est requise que lorsque `LLM_PROVIDER=OPENAI` ;
-- aucun fallback `OLLAMA -> OPENAI` ;
-- le client Ollama utilise `/api/chat` avec JSON Schema via `format` ;
-- la sortie locale traverse les mêmes parseurs/validations Pydantic que la sortie OpenAI ;
-- les tools read-only réutilisent le registre et le budget existants ;
-- le chat opérateur reste volontairement OpenAI-only en 51.1 et devient indisponible en mode LOCAL plutôt que de provoquer un fallback ;
-- Risk, Broker, Radar, mémoire de thèse, multi-timeframe et stratégie restent inchangés.
-
-L'observabilité LLM expose désormais provider, modèle, statut, type d'erreur et latence lorsque disponible, sans secret HTTP.
-
-## Validation réalisée dans l'environnement ChatGPT
-
-Exécuté réellement :
-
-```text
-python -m compileall (fichiers Python du patch)                    : PASS
-harnais isolé Ollama MockTransport (structured + tools + réseau)   : PASS
-harnais isolé OpenAI audit (SUCCESS/ERROR + latence)               : PASS
-git diff --cached --check sur staging du patch root-relative       : PASS
-```
-
-Non exécuté ici faute de checkout complet du repository et de serveur Ollama local :
-
-```text
+```powershell
+Push-Location backend
 python -m pytest -q
+Pop-Location
+
+Push-Location frontend
 pnpm typecheck
 pnpm test
-git diff --check dans le repository réel
-smoke/inférence réelle Ollama
+Pop-Location
+
+git diff --check
+git status --short
 ```
+
+Le vrai smoke Ollama `qwen3.5:9b` reste à refaire localement. Un audit LLM `SUCCESS` ne suffit pas à déclarer le cycle Agent réussi.
 
 ## Invariants inchangés
 
-Un seul Agent IA stratégique ; Kraken ; PAPER uniquement ; SPOT + PERPETUAL linéaire ; Risk Engine déterministe autorité finale ; aucune sortie LLM directement exécutable ; Radar informatif/priorisation ; même `CycleDecisionPlanInput`, même mémoire de thèse et même contexte multi-timeframe ; `BUY` / `SELL` / `HOLD` inchangés ; aucun look-ahead ; aucun secret versionné ; frontend non requis par le moteur.
+Un seul Agent IA stratégique ; PAPER ; SPOT + PERPETUAL selon l'univers causal ; aucun LIVE ; aucune sortie LLM directement exécutable ; aucun fallback Ollama vers OpenAI ; aucune chaîne de pensée détaillée persistée/exposée ; Risk Engine déterministe avec autorité finale ; frontend non requis par le moteur ; aucun secret versionné.

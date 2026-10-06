@@ -19,27 +19,67 @@ L'observabilité 49.4 et l'observabilité stratégique 50.2 sont strictement rea
 
 Le Batch 50.1 fournit la mémoire stratégique structurée des positions ouvertes. Cette mémoire n'est ni une conversation LLM ni une chaîne de pensée cachée. Elle est causale, bornée, durable et remise au **même** appel stratégique.
 
-Depuis le Batch 51.1, le moteur LLM est séparé du rôle de l'Agent : OpenAI et Ollama sont des transports interchangeables derrière la même frontière structurée. Aucun fallback silencieux d'Ollama vers OpenAI n'est permis.
+Depuis le Batch 51.1, ce même Agent peut utiliser `OPENAI` ou `OLLAMA` derrière `StructuredDecisionClient`, sans fallback silencieux. Le Batch 51.1.1 durcit le contrat Structured Outputs avec l'univers causal exact du cycle et interdit toute persistance de `message.thinking`.
 
 ## Référence courante
 
 ```text
-HEAD GitHub vérifié 51.1      : e5887da5e8e6ebf0fa739a041c0226a6fed940dd
-Commit                         : feat: add strategic thesis observability
-Batch 49.4 intégré             : 2e552cb — feat: add paper trading observability
-Batch 49.3 intégré             : d08cd31 — feat: expose causal radar analytics context to agent
-Batch 49.2 intégré             : f0d4f94 — feat: feed radar shortlist into agent universe
-Batch 49.1 intégré             : 3194fce — feat: activate perpetual paper trading
-Batch 50.1 intégré             : ebb859c4 — feat: add persistent strategic thesis memory
-Batch 50.2 intégré             : e5887da5 — feat: add strategic thesis observability
-Batch 51.1                     : patch livré — validation/intégration à faire
+HEAD GitHub intégré              : e5887da5e8e6ebf0fa739a041c0226a6fed940dd
+Commit GitHub                    : feat: add strategic thesis observability
+État local de départ 51.1        : aeaf04f49aa103ad55410dbbdc60d37ed23ee060
+Parent exact de aeaf04f          : e5887da5e8e6ebf0fa739a041c0226a6fed940dd
+Batch 50.2 intégré               : e5887da5 — feat: add strategic thesis observability
+Batch 51.1 local                 : aeaf04f — feat: add local Ollama LLM provider
+Batch 51.1.1                     : patch correctif livré — validation locale à faire
 ```
 
-L'ancien statut documentaire 50.2 « patch livré — validation/intégration à faire » est obsolète : `e5887da5` est le HEAD intégré.
+Le working tree communiqué au lancement de 51.1.1 est propre. `aeaf04f` n'est pas écrasé : le correctif 51.1.1 est construit au-dessus de cet état local.
 
 ---
 
-## Changelog — 2026-10-06 — Batch 51.1 Provider LLM local / Ollama — patch livré
+## Changelog — 2026-10-06 — Batch 51.1.1 durcissement du contrat Ollama — patch livré
+
+Base intégrée auditée : `e5887da5e8e6ebf0fa739a041c0226a6fed940dd`. État local préservé : `aeaf04f49aa103ad55410dbbdc60d37ed23ee060`.
+
+### Diagnostic confirmé
+
+Le schéma multi-marché 50.1/51.1 contraignait `action`, `market_type`, quantité et `thesis_update`, mais laissait `symbol` libre. Un provider pouvait donc produire un JSON Schema valide visant un marché absent de `CycleDecisionPlanInput.market_states`; le contrôle métier post-LLM refusait ensuite correctement ce plan avec `AgentContractViolationError`.
+
+### Architecture retenue
+
+- `build_strategic_plan_schema(plan_input)` construit un schema causal à partir des couples exacts `(symbol, market_type)` ;
+- chaque variante lie simultanément action, quantité et identité de marché, sans produit cartésien artificiel SPOT/PERPETUAL ;
+- le même schema dynamique est transmis via `StructuredDecisionClient` à OpenAI ou Ollama ;
+- Pydantic et le contrôle métier `key in allowed` restent présents après le Structured Output ;
+- aucune sélection stratégique déterministe n'est ajoutée.
+
+### Thinking Ollama
+
+Les appels structurés `/api/chat` transmettent explicitement `think: false`. `message.content` reste la seule sortie décisionnelle consommée. L'audit élimine défensivement toute clé `thinking` reçue malgré tout avant persistance/exposition.
+
+### Sémantique d'audit
+
+`LLM audit status=SUCCESS` signifie uniquement que l'appel provider/transport s'est terminé avec une réponse exploitable au niveau LLM. Il ne signifie pas que Pydantic, les contrôles métier Agent, le Risk Engine ou le Broker ont ensuite accepté la décision. Un cycle peut donc avoir un audit LLM `SUCCESS` puis échouer au stade `AGENT` ; ces deux faits ne sont pas contradictoires.
+
+### Timeouts
+
+`ollama_timeout_seconds` borne un appel transport Ollama. `cycle_agent_timeout_seconds` borne l'ensemble du stade Agent qui contient cet appel et ses validations. Pour Ollama, le budget Agent doit être strictement supérieur au budget transport réellement nécessaire, avec marge pour parsing/validation et éventuels tools. Le smoke observé à environ `50.7 s` rend une enveloppe Agent de `30–35 s` incohérente ; le batch ne hardcode pas une valeur globale et laisse la valeur Session/UX au futur 51.2.
+
+## ADR-387 — Le schema Structured Output est causal et dynamique
+
+**ADOPTÉ — patch Batch 51.1.1.** Le schema est dérivé de `CycleDecisionPlanInput.market_states`, mais le contrôle métier post-schema reste obligatoire et fail-closed.
+
+## ADR-388 — Les appels structurés Ollama désactivent le thinking applicatif
+
+**ADOPTÉ — patch Batch 51.1.1.** `think:false`; `message.content` uniquement; aucune chaîne de pensée détaillée dans l'audit public.
+
+## ADR-389 — SUCCESS dans l'audit LLM reste un état transport/provider
+
+**ADOPTÉ — patch Batch 51.1.1.** Aucune fusion avec le statut canonique du cycle Agent/Risk/Broker.
+
+---
+
+## Changelog — 2026-10-06 — Batch 51.1 Provider LLM local / Ollama — état local `aeaf04f`
 
 Base GitHub auditée : `e5887da5e8e6ebf0fa739a041c0226a6fed940dd` (`feat: add strategic thesis observability`).
 
@@ -119,7 +159,7 @@ Aucune capacité inexistante n'est simulée. Le smoke test réel du modèle inst
 
 ### Observabilité
 
-Le store LLM process-local existant est conservé. Chaque enregistrement expose désormais :
+Le store LLM process-local existant est conservé. Chaque enregistrement expose :
 
 ```text
 provider
@@ -139,43 +179,31 @@ Le nom `OpenAIMultiMarketDecisionProvider` est désormais trop spécifique, mais
 
 ### Validation ChatGPT du patch 51.1
 
-Exécuté réellement : `compileall` PASS ; harnais MockTransport Ollama structured/tools/network PASS ; harnais MockTransport OpenAI audit succès/erreur/latence PASS ; `git diff --cached --check` sur staging root-relative du patch PASS. La suite complète backend/frontend et une vraie inférence Ollama restent à exécuter dans le repository local.
+Validation historique du patch 51.1 : `compileall` PASS ; harnais MockTransport Ollama structured/tools/network PASS ; harnais MockTransport OpenAI audit succès/erreur/latence PASS ; `git diff --cached --check` sur staging root-relative PASS. La validation complète repository et la vraie inférence Ollama étaient restées locales.
 
 ## ADR-381 — Le provider LLM est distinct du modèle OpenAI historique
 
-**ADOPTÉ — patch Batch 51.1, intégration à valider.**
-
-`LLMProviderKind` porte `OPENAI|OLLAMA`. `LLMModel` reste Luna/Sol pour compatibilité des Campaigns et expériences historiques. Un modèle Ollama est une chaîne configurable séparée.
+**ADOPTÉ — état local `aeaf04f`.** `LLMProviderKind` porte `OPENAI|OLLAMA`. `LLMModel` reste Luna/Sol ; le modèle Ollama est une chaîne configurable séparée.
 
 ## ADR-382 — Le provider 51.1 est une configuration process/runtime
 
-**ADOPTÉ — patch Batch 51.1, intégration à valider.**
-
-Aucune migration Campaign n'est introduite dans 51.1. La sélection UX/persistée est reportée à 51.2 afin de définir explicitement une nouvelle version de configuration plutôt que de muter silencieusement les snapshots existants.
+**ADOPTÉ — état local `aeaf04f`.** Aucune migration Campaign n'est introduite dans 51.1. La sélection UX/persistée est reportée à 51.2.
 
 ## ADR-383 — Ollama réutilise la frontière StructuredDecisionClient
 
-**ADOPTÉ — patch Batch 51.1, intégration à valider.**
-
-Le provider local transforme `/api/chat` en texte JSON et laisse les validateurs Pydantic existants décider de la conformité métier. Aucun JSON local non validé n'atteint le domaine.
+**ADOPTÉ — état local `aeaf04f`.** Le provider local transforme `/api/chat` en texte JSON et laisse les validateurs existants décider de la conformité métier.
 
 ## ADR-384 — Aucun fallback Ollama vers OpenAI
 
-**ADOPTÉ — patch Batch 51.1, intégration à valider.**
-
-Une erreur locale reste une erreur locale. Le chat opérateur est indisponible en LOCAL pour 51.1 plutôt que de créer un chemin OpenAI caché.
+**ADOPTÉ — état local `aeaf04f`.** Une erreur locale reste une erreur locale. Le chat opérateur est indisponible sous Ollama en 51.1 plutôt que de créer un chemin OpenAI caché.
 
 ## ADR-385 — Les tools read-only sont adaptés, pas réimplémentés
 
-**ADOPTÉ — patch Batch 51.1, intégration à valider.**
-
-Ollama reçoit une projection de la définition des tools, puis l'exécution réutilise exclusivement `ReadOnlyToolRegistry` et ses limites déterministes.
+**ADOPTÉ — état local `aeaf04f`.** Ollama reçoit une projection de la définition des tools, puis l'exécution réutilise exclusivement `ReadOnlyToolRegistry` et ses limites déterministes.
 
 ## ADR-386 — Le nom OpenAIMultiMarketDecisionProvider reste une dette de compatibilité
 
-**ADOPTÉ — patch Batch 51.1, intégration à valider.**
-
-Le rôle est désormais provider-agnostique, mais le renommage est séparé pour éviter une migration mécanique sans valeur fonctionnelle dans ce batch.
+**ADOPTÉ — état local `aeaf04f`.** Le rôle est désormais provider-agnostique, mais le renommage est séparé pour éviter une migration mécanique sans valeur fonctionnelle dans ce batch.
 
 ---
 
@@ -281,6 +309,17 @@ Le cockpit Historique ajoute une section indépendante avec :
 
 Le frontend ne reconstruit aucune thèse et ne recalcule aucune règle stratégique.
 
+### Validation exécutée dans l'environnement ChatGPT
+
+```text
+python -m py_compile (fichiers Python du patch)                  : PASS
+pytest ciblé projection 50.2 avec contrats minimaux              : PASS — 9 passed
+node --test --experimental-strip-types strategic-theses.test.mjs : PASS — 3 passed
+tsc ciblé src/lib/strategic-theses.ts                            : PASS
+```
+
+La suite complète du repository, `pnpm typecheck`, le test frontend complet et `git diff --check` restent à exécuter après extraction dans le checkout réel.
+
 ## ADR-377 — 50.2 utilise un endpoint dédié, sans nouvelle persistence
 
 **ADOPTÉ — intégré via `e5887da5`.**
@@ -317,7 +356,7 @@ Le frontend formate les données du backend et ne reconstitue ni thèse, ni règ
 
 Commit intégré : `ebb859c4ed83aada1c0bf3edf17ece85336849b9` (`feat: add persistent strategic thesis memory`).
 
-Validation intégrée communiquée : `1217 passed, 2 warnings`; migration PostgreSQL `0008_strategic_thesis_state` appliquée.
+Validation intégrée communiquée : `1217 passed, 2 warnings`; migration PostgreSQL `0008 strategic_thesis_state` appliquée.
 
 ### Architecture 50.1
 
