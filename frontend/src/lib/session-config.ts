@@ -22,6 +22,31 @@ export const DEFAULT_MAX_DECISIONS_PER_CYCLE = 6;
 export const MAX_DECISIONS_PER_CYCLE_HARD_LIMIT = 20;
 export const DEFAULT_OLLAMA_MODEL = "qwen3.5:9b";
 export const DEFAULT_OLLAMA_TIMEOUT_SECONDS = 60;
+export const DEFAULT_AGENT_TIMEOUT_SECONDS = 35;
+export const OLLAMA_AGENT_TIMEOUT_MULTIPLIER = 2;
+
+export function recommendedOllamaAgentTimeoutSeconds(ollamaTimeoutSeconds: number): number {
+  if (!Number.isFinite(ollamaTimeoutSeconds) || ollamaTimeoutSeconds <= 0) {
+    throw new Error("Le timeout transport Ollama doit être strictement positif.");
+  }
+  return Math.max(
+    DEFAULT_AGENT_TIMEOUT_SECONDS,
+    Math.ceil(ollamaTimeoutSeconds * OLLAMA_AGENT_TIMEOUT_MULTIPLIER),
+  );
+}
+
+export function compatibleOllamaAgentTimeoutSeconds(
+  currentAgentTimeoutSeconds: number,
+  ollamaTimeoutSeconds: number,
+): number {
+  if (
+    Number.isFinite(currentAgentTimeoutSeconds) &&
+    currentAgentTimeoutSeconds > ollamaTimeoutSeconds
+  ) {
+    return currentAgentTimeoutSeconds;
+  }
+  return recommendedOllamaAgentTimeoutSeconds(ollamaTimeoutSeconds);
+}
 
 export const TRADING_STYLE_UI_METADATA = {
   SCALP: {

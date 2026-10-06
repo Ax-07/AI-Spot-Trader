@@ -18,19 +18,116 @@ Depuis 51.2, les nouvelles Sessions peuvent persister leur provider stratégique
 
 Depuis 51.3, les appels Ollama possèdent une observabilité live best-effort dans les logs backend : départ, succès/échec, corrélation Session/cycle, `call_id`, tentative et latence, puis résumé BUY/SELL/HOLD du plan validé. Aucun contenu décisionnel brut ou secret n'est journalisé par cette couche.
 
+Le Batch 51.4 proposé fait de la frontière UTC le trigger unique du scheduler CANDLE_CLOSE. Les données restent causales via `history_as_of()` dans le cycle ; le scheduler ne pré-résout plus Radar et ne bloque plus l'appel du runner sur les candles bootstrap. Le runtime normal rend INFO visibles pour Agent/Ollama/cadence tout en gardant `httpx`/`httpcore` et Kraken normal silencieux à INFO.
+
 ## Référence courante
 
 ```text
-HEAD GitHub intégré audité        : 36491d4caf1fcc3bb4a2ceb5e3bc418e566ee598
+HEAD GitHub intégré audité        : 5d24185ac1eefe9be3c21e31e62831228c73fea9
 Batch 51.1 intégré                : aeaf04f — feat: add local Ollama LLM provider
 Batch 51.1.1 intégré              : 7e2ce28 — fix: harden causal Ollama decision contract
 Batch 51.2 intégré                : 36491d4 — feat: configure LLM provider per session
-Batch 51.3                        : patch livré — non intégré
+Batch 51.3 intégré                : 5d24185 — feat: add live Ollama agent observability
+Batch 51.4                        : patch livré — non intégré
 ```
 
 ---
 
-## Changelog — 2026-10-06 — Batch 51.3 observabilité live Ollama — patch livré
+## Changelog — 2026-10-07 — Batch 51.4 scheduler CANDLE_CLOSE / logging runtime — patch livré
+
+### Diagnostic confirmé
+
+`ScheduledTradingEngine._run_candle_close_loop()` appelait `CandleCloseReadinessGate.wait_until_ready()` avant le runner. Le gate vérifiait une candle finale exacte pour tous les marchés reçus et retournait `False` dès qu'un seul `history_as_of()` levait une exception.
+
+`campaign_composition.py` lui fournissait `config.paper_executable_markets`. En Campaign dynamique Radar, ce tuple est le bootstrap ; l'univers réellement utilisé n'est résolu qu'ensuite dans `DynamicMarketTradingCycleRunner` à partir de Radar/Discovery, positions existantes et capacity. Le scheduler bloquait donc le cycle sur un proxy d'univers qu'il ne possède pas.
+
+`CandleCloseReadinessGate.last_error_type` n'était pas remonté par la boucle. Une erreur provider telle que `Kraken payload validation failed operation=OHLC stage=OHLC_NUMERIC` pouvait ainsi produire des polls silencieux puis la suppression d'une frontière, sans appel Agent. Le run manuel fonctionne parce qu'il appelle directement le runner et contourne ce gate.
+
+### Options comparées
+
+1. **Tous les bootstrap markets prêts** : rejeté ; c'est précisément le couplage défectueux.
+2. **Readiness sur l'univers Radar** : rejeté au niveau scheduler ; cela demanderait de dupliquer la résolution d'univers hors du runner canonique et créerait un risque de split-brain.
+3. **Frontière temporelle comme trigger, disponibilité dans les services causaux** : adopté.
+
+### Scheduler retenu
+
+En CANDLE_CLOSE, `CandleCloseSchedule` fournit une frontière UTC strictement future. À la frontière, le scheduler démarre exactement un cycle canonique. Il ne requête plus Kraken/candles et ne résout aucun marché.
+
+Après un cycle, la prochaine cible est recalculée depuis l'horloge. Un cycle long ou un réveil suffisamment tardif saute les frontières obsolètes au lieu de produire un catch-up burst.
+
+`CandleCloseReadinessGate` reste présent uniquement comme helper de diagnostic/test sur un ensemble de marchés explicitement connu ; il n'est plus composé dans le scheduler Campaign.
+
+### Causalité préservée
+
+`CandleStreamService.history_as_of()` reste l'autorité de disponibilité temporelle : `open_time`, `close_time`, `updated_at`, finalité et backfill sont tous filtrés relativement à `as_of`. Retirer le gate pré-cycle ne permet donc aucune lecture future.
+
+La disponibilité reste interprétée par les services consommateurs : le contexte multi-timeframe peut rester `AVAILABLE`, `PARTIAL` ou `MISSING`; une erreur technique provider produit un échec canonique auditable. Aucun fallback de donnée ou de marché n'est introduit, et la prochaine tentative automatique reste bornée par la politique de frontières du scheduler.
+
+### Observabilité scheduler
+
+Le scheduler journalise de manière bornée :
+
+```text
+scheduler_next_close
+scheduler_boundary_reached
+scheduler_readiness_validated mode=TEMPORAL_ONLY causal_data=DELEGATED_TO_CYCLE
+scheduler_cycle_started trigger=AUTO_CANDLE_CLOSE
+scheduler_cycle_completed
+scheduler_boundary_skipped reason=SCHEDULER_LATE|CYCLE_ELAPSED
+```
+
+Il n'existe plus de polling readiness dans le chemin production ; aucun log à 0,5 s ne peut donc spammer le terminal.
+
+### Logging runtime normal
+
+`create_app()` appelle une configuration de logging idempotente. Avec `log_level=INFO` :
+
+- `ai_spot_trader.agent.ollama` : INFO ;
+- `ai_spot_trader.agent.planner` : INFO ;
+- `ai_spot_trader.trading.cadence` : INFO ;
+- `httpx` / `httpcore` : WARNING ;
+- `ai_spot_trader.integrations.kraken` : WARNING.
+
+Les warnings/errors Kraken restent visibles ; les requêtes normales Kraken ne sont pas promues à INFO. Aucun prompt, payload brut, réponse LLM brute, secret ou CoT n'est ajouté.
+
+### Timeouts Ollama
+
+Le HEAD audité utilise un défaut transport Ollama de 60 s tandis que le configurateur initialisait le timeout Agent à 35 s. La validation backend 51.2 refusait déjà `Agent <= transport`, mais l'UX pouvait créer cette combinaison incohérente avant soumission.
+
+Le contrat backend reste inchangé : `cycle_agent_timeout_seconds` doit être strictement supérieur au timeout transport Ollama effectif. Le cockpit ajoute une recommandation dérivée `2 × transport` uniquement lorsque le passage vers Ollama rencontre une enveloppe Agent absente/invalide/incompatible. Ainsi le défaut 60 s propose 120 s sans coder en dur un couple 120/300. Une valeur Agent déjà supérieure est conservée. Cette recommandation ne garantit pas le budget d'une tool-loop multi-appels.
+
+### Validation dans l'environnement ChatGPT
+
+```text
+python -m py_compile (6 fichiers Python)                    : PASS
+pytest scheduler dans harness isolé                         : PASS — 26/26
+pytest configuration logging runtime                        : PASS — 2/2
+node tests session-config 51.2 + 51.4                       : PASS — 11/11
+parse/transpile TypeScript ciblé session-config + TSX       : PASS
+contrôle espaces finaux / arborescence de livraison         : PASS
+```
+
+La suite repository complète n'a pas été exécutée dans cet environnement, faute de checkout complet disponible. Elle reste obligatoire localement avec `pytest`, `pnpm typecheck`, `pnpm test`, `git diff --check` et un smoke réel Ollama CANDLE_CLOSE.
+
+## ADR-398 — CANDLE_CLOSE est un trigger temporel, pas un gate de disponibilité multi-marchés
+
+**ADOPTÉ — patch 51.4.** Le scheduler possède le temps ; les services du cycle possèdent les données et appliquent la causalité via `history_as_of()`.
+
+## ADR-399 — La résolution de l'univers Radar reste exclusivement dans le runner dynamique
+
+**ADOPTÉ — patch 51.4.** Le scheduler ne réplique ni Discovery, ni positions, ni capacity pour construire un pseudo-univers de readiness.
+
+## ADR-400 — Le logging runtime est ciblé par namespace
+
+**ADOPTÉ — patch 51.4.** Agent/Ollama/cadence sont visibles à INFO dans le lancement normal ; `httpx`/`httpcore` et Kraken restent à WARNING afin de conserver les anomalies sans bruit de requêtes normales.
+
+## ADR-401 — La recommandation timeout Ollama est dérivée, la validation backend reste stricte
+
+**ADOPTÉ — patch 51.4.** L'UI recommande `2 × transport` seulement lorsqu'elle doit corriger une enveloppe incompatible ; le backend conserve la règle de sûreté minimale `Agent > transport` et n'impose pas de couple fixe.
+
+---
+
+## Changelog — 2026-10-06 — Batch 51.3 observabilité live Ollama — intégré `5d24185`
 
 ### Diagnostic confirmé
 
@@ -86,15 +183,15 @@ La suite backend repository complète, `pnpm typecheck`, `pnpm test`, `git diff 
 
 ## ADR-395 — L'observabilité live Ollama reste transport-level et best-effort
 
-**ADOPTÉ — patch 51.3.** Les logs live s'appuient sur le transport canonique et `llm_audit_context`; aucune nouvelle persistance ni voie décisionnelle n'est créée.
+**ADOPTÉ — intégré 51.3.** Les logs live s'appuient sur le transport canonique et `llm_audit_context`; aucune nouvelle persistance ni voie décisionnelle n'est créée.
 
 ## ADR-396 — `call_id` est éphémère et les retries réutilisent le même identifiant
 
-**ADOPTÉ — patch 51.3.** Un appel logique Ollama conserve son `call_id` entre tentatives et incrémente `attempt`; un nouveau round/tool loop obtient un nouveau `call_id`. Rien n'est persisté pour ce besoin opérateur.
+**ADOPTÉ — intégré 51.3.** Un appel logique Ollama conserve son `call_id` entre tentatives et incrémente `attempt`; un nouveau round/tool loop obtient un nouveau `call_id`. Rien n'est persisté pour ce besoin opérateur.
 
 ## ADR-397 — Le résumé BUY/SELL/HOLD est émis uniquement après validation du plan
 
-**ADOPTÉ — patch 51.3.** Le résumé est dérivé du `CycleDecisionPlan` déjà retourné par le provider canonique. Il ne peut ni créer ni transformer une décision.
+**ADOPTÉ — intégré 51.3.** Le résumé est dérivé du `CycleDecisionPlan` déjà retourné par le provider canonique. Il ne peut ni créer ni transformer une décision.
 
 ---
 
@@ -126,8 +223,6 @@ provider absent legacy       -> Settings.llm_provider
 ```
 
 Le provider process n'écrase jamais un choix 51.2 explicite.
-
-`OPENAI_API_KEY`, secrets Kraken, `openai_base_url` et `ollama_base_url` restent des propriétés de `Settings`. `llm_model` reste Luna/Sol ; un modèle Ollama reste une chaîne indépendante.
 
 ### Absence de fallback
 

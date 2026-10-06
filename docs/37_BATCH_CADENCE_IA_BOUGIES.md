@@ -1,67 +1,35 @@
-# 37 — Batch cadence stratégique IA synchronisée aux bougies
+# 37 — Cadence stratégique IA synchronisée aux bougies
 
-## 1. Base auditée
+## 1. Historique et référence courante
+
+Le Batch 37 a introduit `CANDLE_CLOSE` sur une grille UTC avec `CandleCloseSchedule` et un garde de finalité pré-cycle. Son audit initial avait été réalisé sur `9fc6a4a15f1c44c8ff7b43a342ab8d74bbedb892`.
+
+Le Batch 51.4 réaudite cette architecture sur :
 
 ```text
 Repository : Ax-07/AI-Spot-Trader
 Branche    : main
-HEAD       : 9fc6a4a15f1c44c8ff7b43a342ab8d74bbedb892
-Commit     : ux: simplify financial terminology
+HEAD       : 5d24185ac1eefe9be3c21e31e62831228c73fea9
+Commit     : feat: add live Ollama agent observability
 ```
 
-Le Batch 36 est intégré. `docs/00_ETAT_ACTUEL.md` et `docs/09_ROADMAP_DEVELOPPEMENT.md` étaient obsolètes au démarrage du batch car ils pointaient encore sur `58b59ba...` et décrivaient le Batch 36 comme local.
+Cette mise à jour corrige la sémantique de readiness du scheduler sans créer de second moteur.
 
-## 2. Audit de l'existant
+## 2. Invariants
 
-### Confirmé
+- un seul `ScheduledTradingEngine` ;
+- le run manuel utilise toujours la même primitive `run_cycle()` ;
+- le runner canonique reste sérialisé ;
+- Market Discovery/Radar reste résolu dans `DynamicMarketTradingCycleRunner` ;
+- le scheduler ne décide jamais BUY/SELL/HOLD ;
+- Risk conserve l'autorité finale ;
+- PAPER uniquement ;
+- aucune donnée future n'est admise par les lectures causales ;
+- aucun replay en rafale de frontières manquées.
 
-- `CampaignConfiguration.trading_cadence_seconds` est persisté dans le snapshot Campaign.
-- `campaign_composition.py` transmet cette valeur au `TradingEngine`.
-- `TradingEngine` exécute un cycle puis attend `cadence_seconds` : la cadence historique est glissante et dépend donc de la durée du cycle.
-- le chemin multi-marchés courant produit un plan stratégique borné via le même Agent puis passe chaque décision séquentiellement dans Risk/Broker ;
-- Market Discovery appelle `refresh_if_due()` depuis le chemin du cycle dynamique lorsque nécessaire ; `watchlist_refresh_seconds` n'est pas un scheduler autonome ;
-- mark-to-market/monitoring est une boucle backend séparée et ne doit pas être ralentie ;
-- `CandleTimeframe` est déjà canonique ;
-- `CandleStreamService.history_as_of(...)` et `StrategicMultiTimeframeContextService` imposent déjà la causalité/no-look-ahead.
+## 3. Modes de cadence
 
-### Obsolète
-
-- le HEAD documentaire `58b59ba...` ;
-- le statut « Batch 36 local/non intégré » ;
-- l'affirmation du prompt de lancement « moteur SPOT uniquement » : le HEAD intégré supporte aussi PERPETUAL PAPER via le pipeline canonique. Le Batch 37 ne régresse donc pas cette capacité. FUTURE daté reste interdit.
-
-### Manquant avant le batch
-
-- une représentation explicite de la stratégie de scheduling ;
-- un alignement sur les frontières de candles ;
-- un garde de finalité avant déclenchement autonome ;
-- une UX lisible minutes/heures pour ce réglage ;
-- des tests dédiés à la non-dérive et à l'absence de catch-up.
-
-### À décider ultérieurement
-
-- cadence spéciale lorsqu'une position est ouverte ;
-- réaction événementielle intra-bougie ;
-- observabilité dédiée du retard entre clôture planifiée et démarrage effectif ;
-- politique de retry/alerte opérateur après indisponibilité très longue de candles.
-
-## 3. Architecture retenue
-
-Aucun second moteur n'est ajouté.
-
-```text
-CampaignConfiguration
-  trading_cadence_seconds
-  strategic_schedule?         # extension optionnelle
-
-ScheduledTradingEngine
-  ├─ INTERVAL      -> boucle historique TradingEngine
-  └─ CANDLE_CLOSE  -> CandleCloseSchedule
-                      -> CandleCloseReadinessGate
-                      -> runner canonique
-```
-
-### `strategic_schedule`
+`CampaignConfiguration.strategic_schedule` reste optionnel :
 
 ```json
 {
@@ -78,29 +46,73 @@ ou :
 }
 ```
 
-Le champ est optionnel. Son absence conserve le comportement historique.
+Une Campaign historique sans ce champ conserve le comportement `INTERVAL` historique et son payload canonique.
 
-Aucune migration DB et aucun changement de `paper-control-plane-config-v1` ne sont nécessaires, car les Campaigns stockent déjà le payload de configuration JSON.
+## 4. Architecture CANDLE_CLOSE après 51.4
 
-## 4. Compatibilité historique
-
-Pour une ancienne Campaign :
+Architecture retenue :
 
 ```text
-strategic_schedule absent
-=> effective_trading_cadence_mode = INTERVAL
-=> trading_cadence_seconds inchangé
-=> canonical_payload sans nouveau champ
-=> digest historique inchangé
+CampaignConfiguration
+  strategic_schedule=CANDLE_CLOSE
+  decision_timeframe
+        |
+        v
+CandleCloseSchedule              # grille UTC, trigger temporel
+        |
+        v
+ScheduledTradingEngine
+        |
+        v
+runner canonique unique
+  ├─ DynamicMarketTradingCycleRunner -> Radar/Discovery si dynamique
+  └─ MultiMarketTradingCycleRunner   -> univers statique
+        |
+        v
+services de contexte causaux
+  -> history_as_of(as_of=...)
+        |
+        v
+Agent -> Risk -> Broker PAPER
 ```
 
-Une Session historique rouverte par le cockpit garde ce champ absent tant que l'utilisateur ne choisit pas explicitement un nouveau mode. L'édition ne transforme donc pas silencieusement une ancienne Campaign.
+`CandleCloseReadinessGate` n'est plus composé dans ce chemin. Il reste un helper de diagnostic/test capable de vérifier une candle finale exacte sur un ensemble de marchés explicitement connu.
 
-## 5. Scheduling CANDLE_CLOSE
+## 5. Pourquoi le gate pré-cycle a été retiré du scheduler
 
-`CandleCloseSchedule` utilise la durée du `CandleTimeframe` canonique et une grille UTC.
+### Option 1 — readiness strict sur tous les bootstrap markets
 
-Exemple 5m :
+Rejetée. En Campaign dynamique, `paper_executable_markets` représente le bootstrap autorisé, pas nécessairement l'univers qui sera utilisé après Radar, positions existantes et capacity. Un seul marché bootstrap avec une erreur provider peut donc supprimer tout le cycle sans rapport avec l'univers stratégique réel.
+
+### Option 2 — readiness adapté à l'univers Radar
+
+Rejetée pour le scheduler. Connaître l'univers exact avant le cycle demanderait de répliquer ou déplacer hors du runner des responsabilités de Discovery, positions et capacity. Cela créerait deux résolutions d'univers et un risque de split-brain.
+
+### Option 3 — frontière temporelle comme trigger, données causales dans le cycle
+
+Adoptée. Le scheduler sait uniquement **quand** un cycle doit être tenté. Les services qui savent **quelles données** sont nécessaires vérifient leur disponibilité au moment où elles sont consommées.
+
+Cette séparation respecte l'architecture : Radar/déterministe fournit le contexte, le même Agent décide, Risk tranche.
+
+## 6. Causalité / no-look-ahead
+
+Retirer le gate pré-cycle ne retire aucune protection de causalité.
+
+`CandleStreamService.history_as_of()` :
+
+- ne retourne que les observations disponibles à `as_of` ;
+- filtre `open_time`, `close_time` et `updated_at` ;
+- n'admet une candle finale que si `close_time <= as_of` ;
+- rejette toute révision dont `updated_at > as_of` ;
+- backfill avec `before=as_of` puis applique les mêmes filtres avant merge.
+
+Les services consommateurs conservent leur contrat existant : le contexte multi-timeframe peut déclarer une série `AVAILABLE`, `PARTIAL` ou `MISSING`, tandis qu'une erreur technique provider remonte dans le chemin d'échec du cycle. Le scheduler ne remplace jamais une donnée, n'invente pas une candle et ne fait aucun fallback vers un autre marché/provider.
+
+## 7. Scheduling et absence de catch-up
+
+`CandleCloseSchedule.next_close_after()` retourne toujours une frontière strictement future.
+
+Pour 5 minutes :
 
 ```text
 12:00
@@ -109,160 +121,109 @@ Exemple 5m :
 12:15
 ```
 
-Au démarrage, la prochaine frontière est strictement postérieure à l'heure courante. Après un cycle, la prochaine cible est recalculée depuis l'horloge, pas depuis `fin_du_cycle + timeframe`.
+Règles :
 
-Conséquences :
+- démarrage à 12:00 -> première cible 12:05 ;
+- une frontière atteinte déclenche au maximum un cycle ;
+- après le cycle, la prochaine cible est recalculée depuis l'horloge murale ;
+- si un cycle long traverse une ou plusieurs frontières, elles sont sautées ;
+- si la boucle se réveille alors que la cible est déjà superseded par la frontière suivante, elle saute la cible obsolète au lieu de lancer une rafale ;
+- aucune dérive `fin_cycle + timeframe` ;
+- aucun replay historique au restart.
 
-- pas de dérive cumulative ;
-- pas de double cycle pour la même clôture ;
-- pas de replay de toutes les frontières manquées ;
-- après un cycle long, reprise sur la prochaine frontière future ;
-- après une indisponibilité de donnée, l'ancienne clôture peut être sautée plutôt que rejouée en rafale.
+## 8. Erreurs temporaires de candles/provider
 
-## 6. Finalité et causalité
+Avant 51.4, une exception `history_as_of()` dans le gate était convertie en `False`. La boucle pouvait repoller puis abandonner la frontière lorsque la suivante arrivait, sans jamais appeler le runner ; `last_error_type` n'était pas exposé par le scheduler.
 
-La frontière théorique ne suffit pas. `CandleCloseReadinessGate` demande au `CandleStreamService` canonique une lecture `history_as_of(...)` et vérifie une candle :
+Après 51.4, aucune requête candle/provider n'est effectuée par le scheduler. Si le cycle a besoin d'une donnée et rencontre une erreur Kraken/OHLC :
 
-- `is_final == true` ;
-- `close_time == target_close` ;
-- `updated_at <= observed_at`.
+1. le cycle est réellement démarré ;
+2. la partialité légitime reste explicitement représentée par les services de contexte, tandis qu'une erreur technique suit le chemin d'échec canonique/audit du cycle ;
+3. le scheduler journalise la fin `FAILED` et le type d'erreur disponible ;
+4. la prochaine tentative reste la prochaine frontière future ;
+5. aucun polling infini ni catch-up burst n'est créé.
 
-Une candle non finale ou une révision disponible seulement dans le futur ne peut pas débloquer le cycle.
+## 9. Radar dynamique
 
-Le garde ne calcule aucun signal et n'appelle aucun LLM.
+Le chemin `RADAR_SHORTLIST` reste inchangé dans son ownership :
 
-Le contexte Agent reste construit séparément par `StrategicMultiTimeframeContextService`. La bougie de décision sert uniquement de trigger temporel.
+```text
+cycle -> discovery.refresh_if_due()
+      -> shortlist Radar causale
+      -> positions existantes
+      -> capacity
+      -> univers effectif
+      -> contexte Radar + multi-timeframe + thèses
+      -> même Agent stratégique
+```
 
-## 7. Timeframes autorisés
+Le bootstrap n'est jamais promu silencieusement en univers stratégique de substitution lorsque Radar doit décider l'univers.
 
-La v1 du contrat de scheduling expose uniquement les timeframes stratégiques déjà canoniques :
+## 10. SPOT et PERPETUAL
+
+Le scheduler est indépendant du type de marché. Les providers de candles gardent leurs contrats canoniques :
+
+- SPOT : finalité fournie par les lignes OHLC Kraken après validation ;
+- PERPETUAL : finalité dérivée causalement par rapport à `before/as_of` dans le provider charts.
+
+Le warning `Kraken payload validation failed operation=OHLC stage=OHLC_NUMERIC` reste un WARNING provider et n'est ni masqué ni converti en readiness silencieuse.
+
+## 11. Run manuel et arrêt
+
+`ScheduledTradingEngine.allows_manual_cycle_while_running = True` reste inchangé. Le run manuel n'attend jamais une frontière CANDLE_CLOSE ; le runner canonique sérialise les cycles.
+
+L'attente jusqu'à la prochaine frontière utilise l'Event de stop. `stop()` interrompt donc toujours la boucle sans lancer de cycle.
+
+## 12. Observabilité scheduler 51.4
+
+Événements INFO/WARNING attendus, une seule fois par événement :
+
+```text
+scheduler_next_close ...
+scheduler_boundary_reached ...
+scheduler_readiness_validated mode=TEMPORAL_ONLY ... causal_data=DELEGATED_TO_CYCLE
+scheduler_cycle_started trigger=AUTO_CANDLE_CLOSE ...
+scheduler_cycle_completed ... status=...
+scheduler_boundary_skipped ... reason=SCHEDULER_LATE|CYCLE_ELAPSED
+```
+
+Aucun log n'est émis toutes les 0,5 s. Aucun payload Kraken brut, prompt, réponse LLM brute, secret ou thinking/CoT n'est journalisé.
+
+## 13. Timeframes autorisés
+
+La v1 conserve :
 
 ```text
 1m, 5m, 15m, 30m, 1h, 4h, 1d
 ```
 
-Validation par style :
+Mapping UX :
 
 ```text
-SCALP -> 1m / 5m / 15m / 30m
-SWING -> 1h / 4h / 1d
+SCALP -> 1m / 5m / 15m / 30m ; recommandation 5m
+SWING -> 1h / 4h / 1d          ; recommandation 4h
 ```
 
-Defaults UX :
+Ces valeurs restent des recommandations UX, pas des règles Risk.
 
-```text
-SCALP -> CANDLE_CLOSE 5m
-SWING -> CANDLE_CLOSE 4h
-```
+## 14. Tests de non-régression
 
-Ces defaults ne sont pas des règles Risk ou stratégie.
+Le Batch 51.4 ajoute une couverture ciblée pour :
 
-## 8. Run manuel et arrêt
+- grille UTC ;
+- frontière prête -> exactement un cycle ;
+- run manuel immédiat ;
+- arrêt pendant attente ;
+- erreur temporaire de donnée dans le cycle -> FAILED visible puis prochaine frontière ;
+- Radar dynamique non pré-gaté par bootstrap ;
+- SPOT/PERPETUAL au niveau des contrats candles ;
+- aucune double exécution ;
+- aucun catch-up burst ;
+- logs de scheduler bornés/non spammés ;
+- causalité `history_as_of()` inchangée.
 
-`ScheduledTradingEngine` hérite de `run_cycle()` sans modifier la primitive de cycle et expose explicitement `allows_manual_cycle_while_running = True`. Le runtime peut donc demander un cycle manuel pendant que le scheduler autonome attend une frontière.
+Dans l'environnement de livraison, le harness isolé du scheduler passe 26/26 et les tests ciblés de logging passent 2/2. La suite repository complète reste à exécuter sur le checkout utilisateur.
 
-Le runner canonique conserve son verrou de sérialisation : si un cycle automatique est déjà en cours, le cycle manuel attend ce verrou au lieu de s'exécuter en concurrence. Les moteurs qui n'optent pas pour cette capacité conservent le refus historique pendant RUNNING.
+## 15. Hors périmètre
 
-La boucle autonome attend sur l'Event de stop. `stop()` réveille aussi bien l'attente avant frontière que l'attente de finalité.
-
-## 9. Market Discovery, monitoring et Market Attention
-
-Le batch ne fusionne aucune cadence :
-
-- mark-to-market : continue indépendamment ;
-- cycle stratégique : INTERVAL ou CANDLE_CLOSE ;
-- Discovery : `refresh_if_due()` garde `watchlist_refresh_seconds` et est évalué dans le cycle dynamique ;
-- Market Attention : reste indépendant et informatif.
-
-Un cycle déclenché sur clôture peut donc comporter un appel Agent de planification et, si Discovery est due, un appel Agent supplémentaire de sélection de watchlist. Les tool loops peuvent également produire plusieurs appels fournisseur. L'UX ne promet donc pas « un appel OpenAI exact par bougie ».
-
-## 10. UX
-
-Le configurateur simple expose :
-
-```text
-Déclenchement des décisions IA
-- À la clôture d'une bougie
-- À intervalle fixe
-```
-
-En CANDLE_CLOSE :
-
-```text
-Bougie de décision : 5 minutes / 4 heures / ...
-Timeframes analysées : mapping du style
-Fréquence effective : après chaque clôture cible validée
-```
-
-En INTERVAL, la saisie simple utilise secondes/minutes/heures puis convertit vers `trading_cadence_seconds` pour le contrat backend.
-
-La configuration avancée conserve la valeur technique en secondes et explique qu'elle n'est pas utilisée pour cadencer le scheduler CANDLE_CLOSE.
-
-Changer seulement SCALP/SWING ne réécrit pas automatiquement le schedule. `Réappliquer les valeurs conseillées` est l'action explicite qui applique le default du style.
-
-## 11. Fichiers du batch
-
-Backend :
-
-```text
-backend/src/ai_spot_trader/domain/enums.py
-backend/src/ai_spot_trader/control_plane.py
-backend/src/ai_spot_trader/core/runtime.py
-backend/src/ai_spot_trader/trading/cadence.py
-backend/src/ai_spot_trader/trading/__init__.py
-backend/src/ai_spot_trader/campaign_composition.py
-backend/tests/test_trading_cadence.py
-backend/tests/test_control_plane_campaign_config.py
-```
-
-Frontend :
-
-```text
-frontend/src/lib/api/types.ts
-frontend/src/lib/session-config.ts
-frontend/src/lib/session-config.test.mjs
-frontend/src/components/cockpit/simple-configurator.tsx
-```
-
-Documentation :
-
-```text
-docs/00_ETAT_ACTUEL.md
-docs/01_PROJECT_MASTER.md
-docs/09_ROADMAP_DEVELOPPEMENT.md
-docs/10_DECISIONS_ET_CHANGELOG.md
-docs/37_BATCH_CADENCE_IA_BOUGIES.md
-```
-
-## 12. Tests dédiés ajoutés
-
-Backend :
-
-- alignements 1m, 5m, 15m, 30m, 1h, 4h, 1d ;
-- frontière strictement future au démarrage ;
-- cycle long sans dérive/catch-up ;
-- finalité exacte de la candle ;
-- rejet non-final/future revision ;
-- `run_cycle()` manuel immédiat ;
-- stop pendant l'attente ;
-- INTERVAL historique ;
-- cohérence des composants selon le mode ;
-- Campaign legacy sans schedule ;
-- roundtrip CANDLE_CLOSE/INTERVAL ;
-- validation timeframe/style ;
-- refus des champs inconnus.
-
-Frontend :
-
-- CANDLE_CLOSE 5m ;
-- INTERVAL explicite ;
-- omission legacy ;
-- compatibilité style/timeframe ;
-- default SCALP 5m ;
-- reconstruction d'une personnalisation ;
-- default/recommandation SWING 4h ;
-- non-régression des profils Risk/Discovery existants.
-
-## 13. Hors périmètre
-
-LIVE, ordres Kraken réels, cadence accélérée position ouverte, réaction intra-bougie, stop-loss/take-profit déterministes, signal Radar vers Agent, ranking technique, second Agent, second pipeline OHLC, HFT et modification de politique Risk restent hors périmètre.
+LIVE, second scheduler, second Agent, réaction intra-bougie, HFT, stop-loss/take-profit algorithmique, changement de Risk Policy et fallback de provider restent hors périmètre.

@@ -27,15 +27,18 @@ import type {
   TradingStyle,
 } from "@/lib/api/types";
 import {
+  DEFAULT_AGENT_TIMEOUT_SECONDS,
   DEFAULT_MARKET_DISCOVERY_POLICY,
   MAX_DECISIONS_PER_CYCLE_HARD_LIMIT,
   TRADING_STYLE_MAPPING_VERSION,
   TRADING_STYLE_UI_METADATA,
   buildSessionCampaignConfiguration,
+  compatibleOllamaAgentTimeoutSeconds,
   decisionTimeframeLabel,
   inferSessionRiskProfile,
   initialSessionLlmValues,
   initialSessionStyleValues,
+  recommendedOllamaAgentTimeoutSeconds,
   tradingStyleRecommendations,
   type LlmProvider,
   type SessionMarketSelectionMode,
@@ -203,7 +206,14 @@ export function SimpleConfigurator({
     config?.risk_allowed_pairs?.join("\n") ?? "",
   );
   const [marketTimeout, setMarketTimeout] = useState(numberString(config?.cycle_market_timeout_seconds ?? 20));
-  const [agentTimeout, setAgentTimeout] = useState(numberString(config?.cycle_agent_timeout_seconds ?? 35));
+  const [agentTimeout, setAgentTimeout] = useState(
+    numberString(
+      config?.cycle_agent_timeout_seconds ??
+        (initialLlm.llmProvider === "OLLAMA"
+          ? recommendedOllamaAgentTimeoutSeconds(initialLlm.ollamaTimeoutSeconds)
+          : DEFAULT_AGENT_TIMEOUT_SECONDS),
+    ),
+  );
   const [brokerTimeout, setBrokerTimeout] = useState(numberString(config?.cycle_broker_timeout_seconds ?? 5));
 
   const [catalogRefresh, setCatalogRefresh] = useState(
@@ -342,6 +352,16 @@ export function SimpleConfigurator({
   const runningEdit = session?.status === "RUNNING";
   const operationError = control.feedback?.tone === "error" ? control.feedback.message : null;
 
+  function chooseLlmProvider(provider: LlmProvider) {
+    setLlmProvider(provider);
+    if (provider !== "OLLAMA") return;
+    const transportSeconds = Number(ollamaTimeout);
+    if (!Number.isFinite(transportSeconds) || transportSeconds <= 0) return;
+    setAgentTimeout(
+      String(compatibleOllamaAgentTimeoutSeconds(Number(agentTimeout), transportSeconds)),
+    );
+  }
+
   function applyRecommendedStyleValues() {
     if (!tradingStyle) return;
     const recommendations = tradingStyleRecommendations(tradingStyle);
@@ -460,8 +480,8 @@ export function SimpleConfigurator({
             <div className="space-y-2">
               <p className="text-sm font-medium">Provider IA</p>
               <div className="grid gap-2 sm:grid-cols-2">
-                <ChoiceCard active={llmProvider === "OPENAI"} title="OpenAI" detail="Luna ou Sol. La clé reste exclusivement dans l’environnement backend." onClick={() => setLlmProvider("OPENAI")} />
-                <ChoiceCard active={llmProvider === "OLLAMA"} title="Ollama local" detail="Même Agent stratégique, transport local via l’infrastructure Ollama du backend." onClick={() => setLlmProvider("OLLAMA")} />
+                <ChoiceCard active={llmProvider === "OPENAI"} title="OpenAI" detail="Luna ou Sol. La clé reste exclusivement dans l’environnement backend." onClick={() => chooseLlmProvider("OPENAI")} />
+                <ChoiceCard active={llmProvider === "OLLAMA"} title="Ollama local" detail="Même Agent stratégique, transport local via l’infrastructure Ollama du backend." onClick={() => chooseLlmProvider("OLLAMA")} />
               </div>
             </div>
           </div>
@@ -491,7 +511,7 @@ export function SimpleConfigurator({
               </Field>
               <div className="md:col-span-2 rounded-lg border bg-background p-3 text-xs leading-relaxed text-muted-foreground">
                 <span className="font-medium text-foreground">Timeout Agent actuel : {agentTimeout || "—"} s.</span>
-                <span className="block mt-1">Le timeout Agent enveloppe tout le stade Agent ; une boucle de tools peut contenir plusieurs appels LLM. Aucune valeur n’est réécrite automatiquement lors d’un changement de provider.</span>
+                <span className="block mt-1">Le timeout Agent enveloppe tout le stade Agent ; une boucle de tools peut contenir plusieurs appels LLM. Lors du passage à Ollama, un timeout Agent incompatible est relevé vers une recommandation dérivée de 2× le budget transport ; une valeur déjà supérieure est conservée.</span>
               </div>
             </div>
           ) : null}
@@ -554,7 +574,7 @@ export function SimpleConfigurator({
               <ChoiceCard
                 active={effectiveScheduleMode === "CANDLE_CLOSE"}
                 title="À la clôture d’une bougie"
-                detail="Aligne le cycle sur la grille de la timeframe choisie, sans dérive liée à la durée du précédent appel IA."
+                detail="Aligne le cycle sur la grille UTC de la timeframe choisie ; les services du cycle appliquent ensuite leurs lectures causales history_as_of()."
                 onClick={chooseCandleCloseMode}
               />
               <ChoiceCard
@@ -567,7 +587,7 @@ export function SimpleConfigurator({
 
             {effectiveScheduleMode === "CANDLE_CLOSE" ? (
               <div className="grid gap-4 rounded-xl border bg-muted/20 p-4 md:grid-cols-2">
-                <Field label="Bougie de décision" hint="Le moteur attend la clôture réelle et la finalisation de la candle canonique ; il n’invente jamais une clôture.">
+                <Field label="Bougie de décision" hint="La clôture UTC déclenche le cycle ; aucune donnée future n’est admise, car les contextes consommés restent filtrés causalement par history_as_of().">
                   <select
                     className={inputClass}
                     value={decisionTimeframe ?? ""}
@@ -583,7 +603,7 @@ export function SimpleConfigurator({
                   <p className="font-medium">Fréquence effective</p>
                   <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                     {decisionTimeframe
-                      ? `Un cycle stratégique après chaque clôture ${decisionTimeframe}, dès que la bougie est finalisée.`
+                      ? `Un cycle stratégique à chaque frontière UTC ${decisionTimeframe}. Les contextes restent causaux et exposent explicitement leur disponibilité/partialité ; une erreur technique du cycle reste visible.`
                       : "Choisis une bougie de décision compatible avec le style."}
                   </p>
                   {styleMetadata ? <p className="mt-2 text-xs text-muted-foreground">Contexte Agent : {styleMetadata.timeframes.join(" · ")}.</p> : null}

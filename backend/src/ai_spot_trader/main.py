@@ -26,6 +26,7 @@ from ai_spot_trader.core.config import (
     get_settings,
 )
 from ai_spot_trader.core.control_plane_runtime import CampaignRuntimeManager
+from ai_spot_trader.core.logging import configure_runtime_logging
 from ai_spot_trader.core.runtime import (
     AppRuntime,
     PortfolioSnapshotSource,
@@ -78,6 +79,7 @@ def create_app(
     """Create FastAPI; market-data streams remain backend-owned and campaign-independent."""
 
     resolved_settings = settings or get_settings()
+    configure_runtime_logging(resolved_settings.log_level)
     injected_dependencies = (
         trading_engine,
         portfolio,
