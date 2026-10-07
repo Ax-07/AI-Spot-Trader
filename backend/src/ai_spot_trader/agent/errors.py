@@ -63,3 +63,15 @@ class LLMOutputValidationError(AgentError):
 
 class AgentContractViolationError(AgentError):
     """A validated strategic output violates an application-owned invariant."""
+
+
+class RecoverableLLMContractViolationError(AgentContractViolationError):
+    """The model response violated a recoverable strategic-output invariant.
+
+    This classification is intentionally narrower than ``AgentContractViolationError`` so callers
+    can retry model generation without retrying internal, causal or clock invariants.
+    """
+
+    def __init__(self, message: str, *, category: str) -> None:
+        super().__init__(message)
+        self.category = category

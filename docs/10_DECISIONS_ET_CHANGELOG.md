@@ -22,17 +22,80 @@ Depuis le Batch 51.4 intégré, la frontière UTC est le trigger unique du sched
 
 Depuis le Batch 51.5 intégré, le contrat multi-marchés renforce le grounding factuel des rationales/thèses et la cohérence quantitative de `proposed_quantity`. Les références de sizing restent descriptives et ne créent aucune nouvelle autorité : l'Agent propose toujours BUY/SELL/HOLD et le Risk Engine déterministe reste final.
 
+Le Batch 51.7 préparé ajoute uniquement pour Ollama une régénération corrective bornée des sorties stratégiques invalides et récupérables. Le parser reste strict, aucune stratégie n'est réparée côté backend, les retries réseau restent séparés, et OpenAI ne reçoit aucun appel supplémentaire par défaut.
+
 ## Référence courante
 
 ```text
-HEAD GitHub intégré audité        : 6cbae5535fbc480b73ffa06cd876ab48be22094d
+HEAD GitHub intégré audité        : 9fd8054213c2c6c7eb2e8429f288b1443ef70b94
+Clôture documentaire 51.5         : 9fd8054 — docs: close batch 51.5 Ollama grounding validation
 Batch 51.1 intégré                : aeaf04f — feat: add local Ollama LLM provider
 Batch 51.1.1 intégré              : 7e2ce28 — fix: harden causal Ollama decision contract
 Batch 51.2 intégré                : 36491d4 — feat: configure LLM provider per session
 Batch 51.3 intégré                : 5d24185 — feat: add live Ollama agent observability
 Batch 51.4 intégré                : 566e0ca — fix: restore automatic candle-close agent cycles
 Batch 51.5 intégré                : 6cbae55 — fix: ground strategic reasoning and sizing
+Batch 51.7                        : patch préparé — non intégré
 ```
+
+---
+
+## Changelog — 2026-10-07 — Batch 51.7 robustesse Structured Outputs Ollama — patch préparé
+
+### Diagnostic confirmé
+
+La validation du plan stratégique est située dans `agent/planner.py`, au-dessus du transport. `OllamaStructuredDecisionClient` possède déjà son retry réseau/HTTP transitoire ; y ajouter un retry de contenu aurait mélangé deux responsabilités distinctes.
+
+Les sorties récupérables observées sont imputables au modèle : JSON invalide, action/quantité invalide, dépassement de `max_decisions_per_cycle`, marché hors univers causal, doublon `symbol + market_type` et exigences de thèse structurée non respectées. Les invariants internes comme l'horloge décisionnelle ou la temporalité des tool traces restent immédiatement fail-closed.
+
+### Architecture retenue
+
+`RecoverableLLMContractViolationError` est une sous-classe dédiée d'`AgentContractViolationError`. Le planner peut ainsi distinguer les violations post-sortie régénérables des violations internes sans élargir un `except AgentContractViolationError` général.
+
+Pour le modèle Ollama canonique, une première sortie invalide déclenche exactement une seconde génération. Le feedback est un bloc `contract_regeneration` minimal et déterministe ajouté à l'input causal. Il ne contient ni réponse brute précédente, ni secret, ni chaîne de pensée, ni décision attendue.
+
+Aucune réparation déterministe n'est autorisée : pas de changement de signe, pas de déduplication, pas de troncature du plan, pas de conversion en HOLD. Le même Agent régénère intégralement son plan, qui repasse par la validation stricte complète.
+
+### OpenAI et transport réseau
+
+Le retry contractuel est Ollama-only dans ce batch. Le type canonique `ConfiguredModel = LLMModel | str` conserve `LLMModel` pour OpenAI et une chaîne de modèle locale pour Ollama ; OpenAI reste donc à zéro régénération automatique et aucun coût API additionnel n'est introduit.
+
+Une erreur réseau/HTTP/provider ne passe jamais dans le retry contractuel. Les retries de transport Ollama restent gérés par `retry_async()` avec leur politique, leur `call_id` et leur compteur `attempt` existants.
+
+### Observabilité
+
+Le planner émet de manière best-effort :
+
+```text
+agent_contract_regeneration_started   provider=OLLAMA session_id=... cycle_id=... attempt=1 max_attempts=1 reason=...
+agent_contract_regeneration_succeeded provider=OLLAMA session_id=... cycle_id=... attempt=1
+agent_contract_regeneration_failed    provider=OLLAMA session_id=... cycle_id=... attempt=1 reason=...
+```
+
+Chaque génération Ollama conserve son propre `call_id` transport, tandis que `session_id` et `cycle_id` restent identiques. Le deuxième enregistrement `llm_audit` contient le marqueur d'input `contract_regeneration`, ce qui permet de distinguer la correction sans changer le modèle de données de l'Inspecteur LLM.
+
+### Validation de livraison
+
+```text
+python -m py_compile fichiers Python 51.7          : PASS
+harness isolé classification/régénération          : PASS
+contrôle lignes Python > 100 caractères            : PASS
+contrôle espaces finaux                             : PASS
+```
+
+Le checkout repository complet n'étant pas disponible dans l'environnement de livraison, `pytest` repository et `git diff --check` restent à exécuter localement. Détail : `docs/51_7_ROBUSTESSE_STRUCTURED_OUTPUT_OLLAMA.md`.
+
+## ADR-402 — Le retry contractuel appartient au planner, pas au transport Ollama
+
+**ADOPTÉ — patch 51.7 préparé.** Le transport traite les erreurs réseau/provider ; le planner traite la conformité de la sortie stratégique. Les deux mécanismes restent bornés et indépendants.
+
+## ADR-403 — Une seule régénération Ollama, aucune réparation stratégique backend
+
+**ADOPTÉ — patch 51.7 préparé.** Une violation de sortie récupérable peut provoquer une seconde génération par le même Agent. Le backend ne transforme jamais la stratégie produite.
+
+## ADR-404 — OpenAI conserve zéro régénération contractuelle automatique en 51.7
+
+**ADOPTÉ — patch 51.7 préparé.** Le besoin traité est la robustesse du modèle local ; aucun coût OpenAI supplémentaire n'est ajouté sans décision ultérieure explicite.
 
 ---
 

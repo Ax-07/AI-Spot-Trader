@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import json
+import logging
 from decimal import Decimal
 from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from ai_spot_trader.agent.errors import AgentContractViolationError, LLMOutputValidationError
+from ai_spot_trader.agent.errors import (
+    AgentContractViolationError,
+    LLMOutputValidationError,
+    RecoverableLLMContractViolationError,
+)
+from ai_spot_trader.agent.llm_audit import current_llm_audit_context
 from ai_spot_trader.agent.prompt import AGENT_SYSTEM_PROMPT
 from ai_spot_trader.agent.provider import OpenAIDecisionProvider, ToolStructuredDecisionClient
-from ai_spot_trader.domain.enums import MarketType, TradingAction
+from ai_spot_trader.domain.enums import LLMModel, MarketType, TradingAction
 from ai_spot_trader.domain.models import AgentToolTrace, DecisionCandidate
 from ai_spot_trader.domain.planning import (
     CycleDecisionPlan,
@@ -23,6 +29,8 @@ from ai_spot_trader.domain.strategic_thesis import (
     StrategicThesisUpdate,
 )
 
+logger = logging.getLogger("ai_spot_trader.agent.planner")
+
 PositiveDecimal = Annotated[Decimal, Field(gt=0)]
 StrategicAction = Literal["BUY", "SELL", "HOLD"]
 SelectionMarketType = Literal["SPOT", "PERPETUAL"]
@@ -33,6 +41,8 @@ StrategicThesisStatusLiteral = Literal[
     "INVALIDATED",
     "COMPLETED",
 ]
+
+_OLLAMA_CONTRACT_REGENERATION_ATTEMPTS = 1
 
 _THESIS_UPDATE_OBJECT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -263,38 +273,63 @@ class OpenAIMultiMarketDecisionProvider(OpenAIDecisionProvider):
         self._last_tool_traces = ()
         input_text = _plan_input_text(plan_input)
         plan_schema = build_strategic_plan_schema(plan_input)
-        traces: tuple[AgentToolTrace, ...] = ()
-
         allow_tools = not plan_input.management_mode
-        if allow_tools and self._tool_registry is not None and self._max_tool_calls > 0:
-            tool_client = cast(ToolStructuredDecisionClient, self._client)
-            try:
-                loop_result = await tool_client.generate_structured_decision_with_tools(
-                    model=self._model,
-                    instructions=AGENT_SYSTEM_PROMPT,
-                    input_text=input_text,
-                    schema=plan_schema,
-                    tool_registry=self._tool_registry,
-                    max_tool_calls=self._max_tool_calls,
-                )
-            except Exception:
-                self._capture_partial_traces(tool_client)
-                raise
-            raw_output = loop_result.output_text
-            traces = loop_result.traces
-        else:
-            raw_output = await self._client.generate_structured_decision(
-                model=self._model,
-                instructions=AGENT_SYSTEM_PROMPT,
-                input_text=input_text,
-                schema=plan_schema,
-            )
 
-        payload = _parse_plan_output(raw_output)
-        if len(payload.decisions) > plan_input.max_decisions_per_cycle:
-            raise AgentContractViolationError(
-                "LLM decision plan exceeds max_decisions_per_cycle"
+        raw_output, traces = await self._generate_plan_output(
+            input_text=input_text,
+            plan_schema=plan_schema,
+            allow_tools=allow_tools,
+        )
+        self._last_tool_traces = traces
+        try:
+            payload = _parse_plan_output(raw_output)
+            _validate_recoverable_plan_contract(
+                payload,
+                plan_input=plan_input,
+                allowed=allowed,
+                managed=managed,
+                strategic_context_enabled=strategic_context_enabled,
             )
+        except (LLMOutputValidationError, RecoverableLLMContractViolationError) as exc:
+            if _contract_regeneration_budget(self._model) <= 0:
+                raise
+            category = _recoverable_error_category(exc)
+            _log_contract_regeneration_started(
+                plan_input=plan_input,
+                category=category,
+            )
+            corrective_input = _contract_regeneration_input_text(
+                plan_input,
+                category=category,
+            )
+            try:
+                raw_output, traces = await self._generate_plan_output(
+                    input_text=corrective_input,
+                    plan_schema=plan_schema,
+                    allow_tools=allow_tools,
+                )
+                self._last_tool_traces = traces
+                payload = _parse_plan_output(raw_output)
+                _validate_recoverable_plan_contract(
+                    payload,
+                    plan_input=plan_input,
+                    allowed=allowed,
+                    managed=managed,
+                    strategic_context_enabled=strategic_context_enabled,
+                )
+            except (LLMOutputValidationError, RecoverableLLMContractViolationError) as retry_exc:
+                _log_contract_regeneration_failed(
+                    plan_input=plan_input,
+                    category=_recoverable_error_category(retry_exc),
+                )
+                raise
+            except Exception as retry_exc:
+                _log_contract_regeneration_failed(
+                    plan_input=plan_input,
+                    category=type(retry_exc).__name__,
+                )
+                raise
+            _log_contract_regeneration_succeeded(plan_input=plan_input)
 
         created_at = self._clock.now()
         if created_at.tzinfo is None or created_at.utcoffset() is None:
@@ -309,33 +344,13 @@ class OpenAIMultiMarketDecisionProvider(OpenAIDecisionProvider):
                 "tool trace cannot contain data completed after the decision plan"
             )
 
-        seen: set[tuple[str, MarketType]] = set()
         decisions: list[DecisionCandidate] = []
         thesis_updates: list[StrategicThesisUpdate | None] = []
         for entry in payload.decisions:
             market_type = MarketType(entry.market_type)
-            key = (entry.symbol, market_type)
-            if key not in allowed:
-                raise AgentContractViolationError(
-                    "LLM decision targets a market outside the causal plan universe"
-                )
-            if key in seen:
-                raise AgentContractViolationError(
-                    "LLM decision plan contains a duplicate symbol + market_type"
-                )
             thesis_update = (
                 None if entry.thesis_update is None else entry.thesis_update.to_domain()
             )
-            if strategic_context_enabled:
-                if entry.action != "HOLD" and thesis_update is None:
-                    raise AgentContractViolationError(
-                        "BUY and SELL decisions require a structured strategic thesis update"
-                    )
-                if entry.action == "HOLD" and key in managed and thesis_update is None:
-                    raise AgentContractViolationError(
-                        "HOLD on an open position requires a structured strategic thesis review"
-                    )
-            seen.add(key)
             decisions.append(
                 DecisionCandidate(
                     decision_id=self._decision_id_factory(),
@@ -365,6 +380,199 @@ class OpenAIMultiMarketDecisionProvider(OpenAIDecisionProvider):
             rationale=payload.rationale,
             tool_traces=traces,
         )
+
+    async def _generate_plan_output(
+        self,
+        *,
+        input_text: str,
+        plan_schema: dict[str, Any],
+        allow_tools: bool,
+    ) -> tuple[str, tuple[AgentToolTrace, ...]]:
+        traces: tuple[AgentToolTrace, ...] = ()
+        if allow_tools and self._tool_registry is not None and self._max_tool_calls > 0:
+            tool_client = cast(ToolStructuredDecisionClient, self._client)
+            try:
+                loop_result = await tool_client.generate_structured_decision_with_tools(
+                    model=self._model,
+                    instructions=AGENT_SYSTEM_PROMPT,
+                    input_text=input_text,
+                    schema=plan_schema,
+                    tool_registry=self._tool_registry,
+                    max_tool_calls=self._max_tool_calls,
+                )
+            except Exception:
+                self._capture_partial_traces(tool_client)
+                raise
+            return loop_result.output_text, loop_result.traces
+        raw_output = await self._client.generate_structured_decision(
+            model=self._model,
+            instructions=AGENT_SYSTEM_PROMPT,
+            input_text=input_text,
+            schema=plan_schema,
+        )
+        return raw_output, traces
+
+
+def _validate_recoverable_plan_contract(
+    payload: _StrategicPlanPayload,
+    *,
+    plan_input: CycleDecisionPlanInput,
+    allowed: set[tuple[str, MarketType]],
+    managed: set[tuple[str, MarketType]],
+    strategic_context_enabled: bool,
+) -> None:
+    if len(payload.decisions) > plan_input.max_decisions_per_cycle:
+        raise RecoverableLLMContractViolationError(
+            "LLM decision plan exceeds max_decisions_per_cycle",
+            category="MAX_DECISIONS_PER_CYCLE",
+        )
+
+    seen: set[tuple[str, MarketType]] = set()
+    for entry in payload.decisions:
+        market_type = MarketType(entry.market_type)
+        key = (entry.symbol, market_type)
+        if key not in allowed:
+            raise RecoverableLLMContractViolationError(
+                "LLM decision targets a market outside the causal plan universe",
+                category="MARKET_OUTSIDE_CAUSAL_UNIVERSE",
+            )
+        if key in seen:
+            raise RecoverableLLMContractViolationError(
+                "LLM decision plan contains a duplicate symbol + market_type",
+                category="DUPLICATE_MARKET",
+            )
+        if strategic_context_enabled:
+            if entry.action != "HOLD" and entry.thesis_update is None:
+                raise RecoverableLLMContractViolationError(
+                    "BUY and SELL decisions require a structured strategic thesis update",
+                    category="MISSING_STRATEGIC_THESIS_UPDATE",
+                )
+            if entry.action == "HOLD" and key in managed and entry.thesis_update is None:
+                raise RecoverableLLMContractViolationError(
+                    "HOLD on an open position requires a structured strategic thesis review",
+                    category="MISSING_STRATEGIC_THESIS_REVIEW",
+                )
+        seen.add(key)
+
+
+def _contract_regeneration_budget(model: LLMModel | str) -> int:
+    """Enable one corrective generation only for the canonical Ollama model representation."""
+
+    # ``client_factory.ConfiguredModel`` is intentionally ``LLMModel | str``: OpenAI uses the
+    # explicit LLMModel enum while Ollama carries its local model name as a plain string. Keep the
+    # retry Ollama-only so OpenAI gains no extra call/cost from this batch.
+    if isinstance(model, LLMModel):
+        return 0
+    if isinstance(model, str) and model.strip():
+        return _OLLAMA_CONTRACT_REGENERATION_ATTEMPTS
+    return 0
+
+
+def _recoverable_error_category(
+    error: LLMOutputValidationError | RecoverableLLMContractViolationError,
+) -> str:
+    if isinstance(error, RecoverableLLMContractViolationError):
+        return error.category
+    message = str(error)
+    if "not valid JSON" in message or "output is empty" in message:
+        return "INVALID_JSON"
+    if "invalid action/quantity" in message:
+        return "INVALID_ACTION_OR_QUANTITY"
+    if "invalid action" in message:
+        return "INVALID_ACTION"
+    if "invalid strategic thesis update" in message:
+        return "INVALID_STRATEGIC_THESIS_UPDATE"
+    if "invalid decision list" in message:
+        return "INVALID_DECISION_LIST"
+    return "STRUCTURED_OUTPUT_SCHEMA"
+
+
+def _contract_regeneration_input_text(
+    plan_input: CycleDecisionPlanInput,
+    *,
+    category: str,
+) -> str:
+    payload = json.loads(_plan_input_text(plan_input))
+    payload["contract_regeneration"] = {
+        "protocol_version": "strategic-output-regeneration-v1",
+        "attempt": 1,
+        "reason": category,
+        "instruction": (
+            "La réponse précédente a été rejetée par le contrat de sortie. Régénérez intégralement "
+            "le plan à partir des mêmes faits causaux; ne tentez pas de corriger partiellement la "
+            "réponse précédente et n'inventez aucune décision attendue."
+        ),
+        "constraints": _contract_regeneration_constraints(category),
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _contract_regeneration_constraints(category: str) -> list[str]:
+    constraints = [
+        "Respecter strictement le JSON Schema fourni.",
+        "BUY et SELL utilisent proposed_quantity strictement positive; HOLD utilise null.",
+        "Chaque couple symbol + market_type est unique et appartient à l'univers causal fourni.",
+        "Ne jamais dépasser max_decisions_per_cycle.",
+        "Produire une réponse concise sans chaîne de pensée détaillée.",
+    ]
+    if category in {
+        "INVALID_STRATEGIC_THESIS_UPDATE",
+        "MISSING_STRATEGIC_THESIS_UPDATE",
+        "MISSING_STRATEGIC_THESIS_REVIEW",
+    }:
+        constraints.append(
+            "Respecter intégralement les exigences thesis_update/review du contexte stratégique."
+        )
+    return constraints
+
+
+def _log_contract_regeneration_started(
+    *,
+    plan_input: CycleDecisionPlanInput,
+    category: str,
+) -> None:
+    try:
+        context = current_llm_audit_context()
+        logger.warning(
+            "agent_contract_regeneration_started provider=OLLAMA session_id=%s cycle_id=%s "
+            "attempt=1 max_attempts=1 reason=%s",
+            "-" if context.session_id is None else str(context.session_id),
+            str(context.cycle_id or plan_input.cycle_id),
+            category,
+        )
+    except Exception:
+        pass
+
+
+def _log_contract_regeneration_succeeded(*, plan_input: CycleDecisionPlanInput) -> None:
+    try:
+        context = current_llm_audit_context()
+        logger.info(
+            "agent_contract_regeneration_succeeded provider=OLLAMA session_id=%s cycle_id=%s "
+            "attempt=1",
+            "-" if context.session_id is None else str(context.session_id),
+            str(context.cycle_id or plan_input.cycle_id),
+        )
+    except Exception:
+        pass
+
+
+def _log_contract_regeneration_failed(
+    *,
+    plan_input: CycleDecisionPlanInput,
+    category: str,
+) -> None:
+    try:
+        context = current_llm_audit_context()
+        logger.error(
+            "agent_contract_regeneration_failed provider=OLLAMA session_id=%s cycle_id=%s "
+            "attempt=1 reason=%s",
+            "-" if context.session_id is None else str(context.session_id),
+            str(context.cycle_id or plan_input.cycle_id),
+            category,
+        )
+    except Exception:
+        pass
 
 
 def _plan_input_text(plan_input: CycleDecisionPlanInput) -> str:
