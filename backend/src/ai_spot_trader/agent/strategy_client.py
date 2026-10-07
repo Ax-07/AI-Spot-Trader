@@ -3,6 +3,11 @@ from __future__ import annotations
 import json
 from typing import Any, Protocol, cast
 
+from ai_spot_trader.agent.grounding import (
+    FACTUAL_GROUNDING_GUARDRAIL,
+    STRATEGIC_SIZING_GUARDRAIL,
+    render_strategic_sizing_facts,
+)
 from ai_spot_trader.agent.position_management import build_position_management_context
 from ai_spot_trader.agent.prompt import (
     AGGRESSIVENESS_ACTIVITY_GUARDRAIL,
@@ -76,7 +81,8 @@ class StrategyInstructionsClient:
                 trading_style_context=trading_style,
                 execution_cost_context=execution_costs,
             )
-        if "strategic_plan_contract" in payload:
+        is_multi_market_plan = "strategic_plan_contract" in payload
+        if is_multi_market_plan:
             instructions = _compose_multi_market_plan_instructions(
                 strategy_prompt=self._strategy_prompt,
                 context=context,
@@ -92,13 +98,19 @@ class StrategyInstructionsClient:
                 trading_style_context=trading_style,
                 execution_cost_context=execution_costs,
             ).instructions
+
+        sections = [instructions]
+        if is_multi_market_plan:
+            sizing_section = render_strategic_sizing_facts(payload)
+            if sizing_section is not None:
+                sections.append(sizing_section)
         position_section = _position_management_section_from_payload(
             payload,
             execution_cost_context=execution_costs,
         )
-        if position_section is None:
-            return instructions
-        return f"{instructions}\n\n{position_section}"
+        if position_section is not None:
+            sections.append(position_section)
+        return "\n\n".join(sections)
 
     async def generate_structured_decision(
         self,
@@ -372,6 +384,8 @@ Regles protegees :
 - {AGGRESSIVENESS_ACTIVITY_GUARDRAIL}
 - {AGGRESSIVENESS_QUANTITY_GUARDRAIL}
 - {SIGNAL_QUALITY_GUARDRAIL}
+- {FACTUAL_GROUNDING_GUARDRAIL}
+- {STRATEGIC_SIZING_GUARDRAIL}
 - N'inventez aucun prix, solde, position, indicateur ou fait absent de l'input ou des tools read-only
   utilises pendant ce meme appel.
 - Aucune sortie LLM ne constitue un ordre Broker/Kraken. L'IA propose ; le Risk Engine autorise,
