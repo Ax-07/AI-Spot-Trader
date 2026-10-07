@@ -20,16 +20,31 @@ Depuis 51.3, les appels Ollama possèdent une observabilité live best-effort da
 
 Depuis le Batch 51.4 intégré, la frontière UTC est le trigger unique du scheduler CANDLE_CLOSE. Les données restent causales via `history_as_of()` dans le cycle ; le scheduler ne pré-résout plus Radar et ne bloque plus l'appel du runner sur les candles bootstrap. Le runtime normal rend INFO visibles pour Agent/Ollama/cadence tout en gardant `httpx`/`httpcore` et Kraken normal silencieux à INFO.
 
+Depuis le Batch 51.5 intégré, le contrat multi-marchés renforce le grounding factuel des rationales/thèses et la cohérence quantitative de `proposed_quantity`. Les références de sizing restent descriptives et ne créent aucune nouvelle autorité : l'Agent propose toujours BUY/SELL/HOLD et le Risk Engine déterministe reste final.
+
 ## Référence courante
 
 ```text
-HEAD GitHub intégré audité        : 566e0ca1a2170a18a06d1bd531ac3b2d118f6849
+HEAD GitHub intégré audité        : 6cbae5535fbc480b73ffa06cd876ab48be22094d
 Batch 51.1 intégré                : aeaf04f — feat: add local Ollama LLM provider
 Batch 51.1.1 intégré              : 7e2ce28 — fix: harden causal Ollama decision contract
 Batch 51.2 intégré                : 36491d4 — feat: configure LLM provider per session
 Batch 51.3 intégré                : 5d24185 — feat: add live Ollama agent observability
 Batch 51.4 intégré                : 566e0ca — fix: restore automatic candle-close agent cycles
+Batch 51.5 intégré                : 6cbae55 — fix: ground strategic reasoning and sizing
 ```
+
+---
+
+## Changelog — 2026-10-07 — Batch 51.5 grounding factuel / sizing Ollama — intégré `6cbae55`
+
+Le contrat stratégique multi-marchés exige désormais que les faits présentés dans les rationales et thèses proviennent de l'input causal ou d'un tool read-only du même appel. Un prix isolé ne suffit pas à affirmer tendance, momentum, volatilité, breakout, ratio inter-actifs ou fondamentaux. Les connaissances générales du modèle ne sont pas une source factuelle autorisée pour la décision.
+
+`proposed_quantity` est explicitement une quantité d'actif de base. Les références `SIZING_FACTS` calculent uniquement des repères arithmétiques à partir des prix et du portefeuille fournis afin d'aider l'Agent à garder `quantity × price`, notionnel et pourcentage cohérents. Elles ne sont ni une cible d'allocation ni une limite Risk ; aucun second moteur de sizing stratégique déterministe n'est introduit et le Risk Engine conserve l'autorité finale.
+
+La validation locale communiquée après intégration est : 39 tests ciblés PASS, suite backend complète `pytest -q` PASS, smoke réel de grounding Ollama PASS et smoke réel de sizing/Structured Output PASS. Le comportement fail-closed a également été observé sur des JSON tronqués/incomplets et sur un plan dépassant `max_decisions_per_cycle`, tous rejetés avant Risk/Broker.
+
+Pour `qwen3.5:9b` sur la configuration locale testée, le contexte `4096` s'est révélé trop serré pour certaines réponses longues après 51.5 ; `8192` a permis les smokes validés. Cette valeur est une recommandation opérationnelle locale, pas une règle universelle, pas un comportement codé et pas une limite du Risk Engine. `ollama ps` a observé environ `12 % CPU / 88 % GPU` sur la RTX 3060 Ti de test ; les latences mesurées étaient `15.11 s` pour le smoke grounding et `28.57 s` pour le smoke sizing.
 
 ---
 
