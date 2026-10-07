@@ -2,14 +2,14 @@
 
 ## Statut
 
-Patch préparé sur le HEAD GitHub `main` audité :
+Batch intégré et poussé sur `main` :
 
 ```text
-9fd8054213c2c6c7eb2e8429f288b1443ef70b94
-docs: close batch 51.5 Ollama grounding validation
+e1396dfc0ce01d583ed9769e4a461c92c3782c9d
+fix: regenerate invalid Ollama strategic outputs once
 ```
 
-Ce batch n'est pas déclaré intégré tant que le patch n'a pas été extrait, validé localement et commité par l'opérateur.
+Le HEAD pré-intégration audité était `9fd8054213c2c6c7eb2e8429f288b1443ef70b94` (`docs: close batch 51.5 Ollama grounding validation`).
 
 ## Diagnostic
 
@@ -157,18 +157,31 @@ contrôle lignes Python > 100 caractères                                       
 contrôle espaces finaux                                                                    : PASS
 ```
 
-Le checkout complet du repository n'est pas disponible dans cet environnement ; la suite `pytest` repository et `git diff --check` ne sont donc pas déclarés exécutés ici.
+Le checkout complet du repository n'était pas disponible dans l'environnement de livraison ; la suite repository n'y avait donc pas été déclarée exécutée.
 
-## Validation locale obligatoire après extraction
+## Validation locale post-intégration confirmée par l'opérateur
 
-```powershell
-Push-Location backend
-pytest -q tests/test_batch51_7_contract_regeneration.py tests/test_multi_market_provider.py tests/test_batch51_1_1_ollama_contract.py tests/test_batch51_3_ollama_live_logging.py
-pytest -q
-Pop-Location
-git diff --check
-git status --short
+Tests ciblés 51.7 et contrats associés :
+
+```text
+52 tests PASS
 ```
+
+Suite backend complète :
+
+```text
+pytest -q : PASS — 100 %
+```
+
+Contrôle Git :
+
+```text
+git diff --check : PASS
+```
+
+Les seuls avertissements observés sont deux dépréciations externes — Starlette/httpx et alias anyio `BlockingPortal` — ainsi que les messages Windows LF → CRLF. Aucun échec de test ni erreur de whitespace n'a été remonté.
+
+Le commit `e1396df` a ensuite été poussé sur `origin/main`.
 
 ## Invariants préservés
 

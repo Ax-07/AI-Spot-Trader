@@ -22,12 +22,12 @@ Depuis le Batch 51.4 intégré, la frontière UTC est le trigger unique du sched
 
 Depuis le Batch 51.5 intégré, le contrat multi-marchés renforce le grounding factuel des rationales/thèses et la cohérence quantitative de `proposed_quantity`. Les références de sizing restent descriptives et ne créent aucune nouvelle autorité : l'Agent propose toujours BUY/SELL/HOLD et le Risk Engine déterministe reste final.
 
-Le Batch 51.7 préparé ajoute uniquement pour Ollama une régénération corrective bornée des sorties stratégiques invalides et récupérables. Le parser reste strict, aucune stratégie n'est réparée côté backend, les retries réseau restent séparés, et OpenAI ne reçoit aucun appel supplémentaire par défaut.
+Depuis le Batch 51.7 intégré, Ollama dispose d'une régénération corrective bornée des sorties stratégiques invalides et récupérables. Le parser reste strict, aucune stratégie n'est réparée côté backend, les retries réseau restent séparés, et OpenAI ne reçoit aucun appel supplémentaire par défaut.
 
 ## Référence courante
 
 ```text
-HEAD GitHub intégré audité        : 9fd8054213c2c6c7eb2e8429f288b1443ef70b94
+HEAD GitHub intégré audité        : e1396dfc0ce01d583ed9769e4a461c92c3782c9d
 Clôture documentaire 51.5         : 9fd8054 — docs: close batch 51.5 Ollama grounding validation
 Batch 51.1 intégré                : aeaf04f — feat: add local Ollama LLM provider
 Batch 51.1.1 intégré              : 7e2ce28 — fix: harden causal Ollama decision contract
@@ -35,12 +35,12 @@ Batch 51.2 intégré                : 36491d4 — feat: configure LLM provider p
 Batch 51.3 intégré                : 5d24185 — feat: add live Ollama agent observability
 Batch 51.4 intégré                : 566e0ca — fix: restore automatic candle-close agent cycles
 Batch 51.5 intégré                : 6cbae55 — fix: ground strategic reasoning and sizing
-Batch 51.7                        : patch préparé — non intégré
+Batch 51.7 intégré                : e1396df — fix: regenerate invalid Ollama strategic outputs once
 ```
 
 ---
 
-## Changelog — 2026-10-07 — Batch 51.7 robustesse Structured Outputs Ollama — patch préparé
+## Changelog — 2026-10-07 — Batch 51.7 robustesse Structured Outputs Ollama — intégré `e1396df`
 
 ### Diagnostic confirmé
 
@@ -83,19 +83,27 @@ contrôle lignes Python > 100 caractères            : PASS
 contrôle espaces finaux                             : PASS
 ```
 
-Le checkout repository complet n'étant pas disponible dans l'environnement de livraison, `pytest` repository et `git diff --check` restent à exécuter localement. Détail : `docs/51_7_ROBUSTESSE_STRUCTURED_OUTPUT_OLLAMA.md`.
+Le checkout repository complet n'était pas disponible dans l'environnement de livraison. Après extraction et intégration, l'opérateur a validé localement :
+
+```text
+Tests ciblés 51.7 + contrats associés        : PASS — 52 tests
+Suite backend complète `pytest -q`            : PASS — 100 %
+`git diff --check`                            : PASS
+```
+
+Les seuls avertissements observés sont des dépréciations externes Starlette/httpx et anyio, ainsi que les messages Windows LF → CRLF. Détail : `docs/51_7_ROBUSTESSE_STRUCTURED_OUTPUT_OLLAMA.md`.
 
 ## ADR-402 — Le retry contractuel appartient au planner, pas au transport Ollama
 
-**ADOPTÉ — patch 51.7 préparé.** Le transport traite les erreurs réseau/provider ; le planner traite la conformité de la sortie stratégique. Les deux mécanismes restent bornés et indépendants.
+**ADOPTÉ — intégré 51.7 (`e1396df`).** Le transport traite les erreurs réseau/provider ; le planner traite la conformité de la sortie stratégique. Les deux mécanismes restent bornés et indépendants.
 
 ## ADR-403 — Une seule régénération Ollama, aucune réparation stratégique backend
 
-**ADOPTÉ — patch 51.7 préparé.** Une violation de sortie récupérable peut provoquer une seconde génération par le même Agent. Le backend ne transforme jamais la stratégie produite.
+**ADOPTÉ — intégré 51.7 (`e1396df`).** Une violation de sortie récupérable peut provoquer une seconde génération par le même Agent. Le backend ne transforme jamais la stratégie produite.
 
 ## ADR-404 — OpenAI conserve zéro régénération contractuelle automatique en 51.7
 
-**ADOPTÉ — patch 51.7 préparé.** Le besoin traité est la robustesse du modèle local ; aucun coût OpenAI supplémentaire n'est ajouté sans décision ultérieure explicite.
+**ADOPTÉ — intégré 51.7 (`e1396df`).** Le besoin traité est la robustesse du modèle local ; aucun coût OpenAI supplémentaire n'est ajouté sans décision ultérieure explicite.
 
 ---
 
